@@ -14,7 +14,8 @@
 # hence the NonFreeDep AntiFeature. The obvious from-source substitute, de.schliweb:tensorflow-lite-fdroid,
 # was tried and REJECTED: it miscomputes our Detoxify/ALBERT model (saturates every output to 0/1 on-device,
 # verified independent of the XNNPACK delegate), so it would make Knit block every message. See
-# .agents/context/distribution.md for the full evidence (and the SUSS false-positive on the bare 1.4.x line).
+# .agents/context/distribution.md for the full evidence (litert 1.3+ bundles Play AI Pack in the AAR, so the
+# scanner flag is legitimate, not a false positive).
 AntiFeatures:
   NonFreeDep:
     en-US: On-device content filtering uses Google's prebuilt TensorFlow Lite.
@@ -60,10 +61,12 @@ Builds:
     subdir: app
     gradle:
       - yes
-    # The source scanner flags litert (com.google.ai.edge.litert) as a prebuilt Google-Maven binary via the
-    # SUSS `litert:(2|1.[34])` signature, which wrongly matches our bare 1.4.x line, so this build hard-fails
-    # the scanner until that signature is narrowed upstream (fdroid-suss). litert is a deliberate, documented
-    # dependency (see AntiFeatures above); the from-source substitute was rejected (see the top comment).
+    # The source scanner flags litert (com.google.ai.edge.litert) via the SUSS `litert:(2|1.[34])` signature,
+    # and the flag is LEGITIMATE: litert 1.3+ bundles Google Play AI Pack in the AAR (AiPackModelProvider +
+    # com.google.android.play:ai-delivery), which the flat POM doesn't show. scanignore was removed at the
+    # reviewer's request (MR 43609), so this build hard-fails the scanner; the remedy (re-add scanignore under
+    # NonFreeDep, or drop the dep) is pending the reviewer. litert is a deliberate, documented dependency (see
+    # AntiFeatures above); the from-source substitute was rejected (see the top comment).
     output: build/outputs/apk/release/app-release-unsigned.apk
     # No `ndk:` line on purpose — the APK path needs no NDK (see distribution.md). Native-symbol
     # extraction is gated behind -Pknit.nativeSymbols=true and only runs for the Play AAB.

@@ -121,13 +121,20 @@ work, ours doesn't. So Knit keeps Google's litert and takes the F-Droid exceptio
 
 - **`AntiFeatures: NonFreeDep`** in fdroiddata — litert is Apache-2.0 but ships as a prebuilt binary
   F-Droid can't rebuild.
-- **No `scanignore`.** We first suppressed the flag with `scanignore: [app/build.gradle.kts]`, but reviewer
-  linsui asked us to drop it (MR 43609): the `suss` signature itself is the bug. Its `(2|1.[34])` regex
-  over-matches — `litert:1.3.x`/`1.4.x` resolve to `litert-api` alone (Apache-2.0, zero further deps), while
-  only `litert:2.x` pulls `litert-api:2.x → com.google.android.play:ai-delivery`, a real Play dep the group
-  otherwise misses. So the `2` arm is legitimate; the `1.[34]` arm is a false positive on our bare 1.4.2.
-  The fix belongs upstream (narrow the signature to `litert:2` in fdroid-suss); **until that lands the
-  fdroiddata build job stays red on this one scanner hit** by design, every other CI job green.
+- **`scanignore` removed — and the flag is legitimate, not a false positive.** We first suppressed it with
+  `scanignore: [app/build.gradle.kts]`; reviewer linsui asked us to drop it (MR 43609). I then argued the
+  `(2|1.[34])` signature was an over-broad false positive and was **wrong**: the flat POM misled me.
+  `litert:1.4.2 → litert-api:1.4.2 → ∅`, but the Play coupling is baked into the AAR, not the POM.
+  `litert/kotlin/BUILD` builds `litert` from `litert_kotlin_api`, which depends on
+  `com.google.android.play:ai-delivery` and ships `AiPackModelProvider.kt` ("a ModelProvider backed by
+  on-demand Google Play AI Pack", importing `com.google.android.play.core.aipacks`). That Kotlin API is
+  **new in 1.3.0** (the BUILD file 404s at v1.2.0), which is exactly why the signature starts at 1.3 — so
+  litert 1.3+ genuinely carries Play Core and the signature is correct. (The 2.x POM *does* surface it via
+  `litert-api:2.x → ai-delivery`; the 1.4.x POM doesn't, which is the trap.) **Mitigation:** we use only
+  `org.tensorflow.lite.Interpreter`, never the AI Pack provider, and R8 strips the dead provider, so the
+  shipped release dex has **zero `com.google.android.play` classes** — the dependency is Play-coupled but
+  the distributed APK isn't. **State: build red on this legitimate flag; remedy pending linsui** — either
+  NonFreeDep with a re-added `scanignore` as a documented exception, or a blocker. Not a false positive.
 - **`commit:` is the full 40-char hash**, not the `v2.2.1` tag (linsui's request — tags are mutable). No
   `sudo:` block either: the buildserver already has JDK 21 selected, so the manual install was redundant.
 - **`AutoUpdateMode: Version`** (bare, not `Version v%v`). Under `UpdateCheckMode: Tags` the metadata

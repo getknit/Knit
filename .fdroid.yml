@@ -57,11 +57,7 @@ MaintainerNotes: litert (com.google.ai.edge.litert:litert) is Google's prebuilt 
 Builds:
   - versionName: 2.2.2
     versionCode: 11
-    # Written as the tag here so this commit is self-consistent and buildable; the immediate follow-up
-    # commit swaps it for the full 40-char hash (linsui's request — tags are mutable), which is the form
-    # copied to fdroiddata. Same two-step as 2.2.1 (4a3a69f, then corrected in 87d89bb) — the hash cannot
-    # exist until the release commit does.
-    commit: v2.2.2
+    commit: 388c3120d4de1e19e002e31ae1aabe4970a2fed6
     subdir: app
     gradle:
       - yes

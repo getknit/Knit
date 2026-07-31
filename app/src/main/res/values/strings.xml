@@ -252,6 +252,13 @@
     <string name="verify_self">That\'s your own code.</string>
     <string name="verify_invalid">That\'s not a Knit contact code.</string>
 
+    <!-- QR scanner (camera) -->
+    <string name="scan_hint">Point the camera at the other person\'s code.</string>
+    <string name="scan_permission_denied">Knit needs camera access to scan a contact\'s code. You can turn it on in Settings.</string>
+    <string name="scan_open_settings">Open settings</string>
+    <string name="scan_no_camera">This device has no camera, so codes can\'t be scanned. You can still show your own code for someone else to scan.</string>
+    <string name="scan_camera_unavailable">The camera couldn\'t be opened. Close any other app using it and try again.</string>
+
     <!-- Diagnostics -->
     <string name="diagnostics_title">Diagnostics</string>
     <string name="diagnostics_self">This device</string>

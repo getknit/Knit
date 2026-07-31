@@ -47,9 +47,26 @@ litert = "1.4.2"
 # Kotlin-2.4 toolchain. Works on minSdk 29 (the platform XDH/Ed25519 APIs are API 33+, which is why we
 # don't use java.security directly).
 tink = "1.18.0"
-# QR identity verification: zxing-android-embedded scans; zxing core (pinned newer than the embedded
-# lib's transitive 3.4.1) generates the QR bitmap.
-zxingEmbedded = "4.3.0"
+# QR identity verification. zxing core is the pure-Java codec — it both *generates* the identity QR
+# (ui/image/QrCode.kt) and *decodes* camera frames (ui/scan/QrDecoder.kt). Being Android-free is what
+# keeps QrDecoder a plain-JVM unit-test target (see QrDecoderTest).
+#
+# The camera itself is CameraX. We do NOT use com.journeyapps:zxing-android-embedded: it was last
+# released Feb 2021, still drives the deprecated Camera1 API, and its decode loop runs on a bare
+# HandlerThread with no try/catch — a device whose camera HAL delivers a preview size/stride other than
+# the one it reported makes RawImageData.cropAndScale throw ArrayIndexOutOfBoundsException off the main
+# thread and kills the process. It has no seam to patch (BarcodeView.startDecoderThread is private).
+# See ADR 015. Constraints that pin CameraX 1.6.1 specifically — check ALL of these before bumping:
+#   - minCompileSdk=36. 1.5.x is 35; a future 1.7.x may demand 37, which we can't take (compileSdk 36.1,
+#     same ceiling that pins coreKtx 1.18.0 and lifecycle 2.10.0).
+#   - Its transitive floors are far below ours (lifecycle-livedata 2.3.1, core 1.3.2), so it applies no
+#     upgrade pressure to the pinned androidx graph.
+#   - camera-core ships prebuilt .so (libimage_processing_util_jni, libsurface_util_jni) for all four
+#     ABIs, 16 KB-page-aligned (LOAD align=0x4000) — the same requirement that pins litert to 1.4.x.
+#     Re-check with `readelf -lW` after any bump; a 4 KB-aligned .so won't load on 16 KB-page devices.
+#   - It ships its own consumer R8 rules, so keepRules/knit-r8.keep needs nothing for it.
+# NEVER add camera-mlkit-vision — it pulls GMS, which this app does not ship.
+cameraX = "1.6.1"
 zxingCore = "3.5.3"
 # On-device APK merge + re-sign for the offline "Share Knit app" flow when Knit was installed from Play
 # as an App Bundle (split APKs). ARSCLib merges the on-disk splits into one universal APK; apksig re-signs
@@ -176,8 +193,13 @@ coil-gif = { group = "io.coil-kt.coil3", name = "coil-gif", version.ref = "coil"
 
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
-zxing-android-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxingEmbedded" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxingCore" }
+
+# CameraX: the QR identity scanner's camera stack (see the cameraX version pin for the constraints).
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "cameraX" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "cameraX" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX" }
 
 # Offline "Share Knit app": merge on-device split (Play App Bundle) APKs into one universal APK (ARSCLib,
 # Maven Central) and re-sign it (apksig, google()). See the version notes above.

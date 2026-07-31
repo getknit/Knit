@@ -451,9 +451,16 @@ dependencies {
 
     // E2E encryption (Tink — Java + native, no Kotlin metadata / no Gradle plugin, like SQLCipher)
     implementation(libs.tink.android)
-    // QR identity verification (safety-number / QR verify screen)
-    implementation(libs.zxing.android.embedded)
+    // QR identity verification (safety-number / QR verify screen). zxing core is the pure-Java codec for
+    // both directions — it renders our identity QR (ui/image/QrCode.kt) and decodes camera frames
+    // (ui/scan/QrDecoder.kt). CameraX drives the camera; we own the analyze loop so a malformed frame can
+    // never throw off the main thread. See ADR 015 and the cameraX pin in the version catalog for why
+    // zxing-android-embedded was dropped.
     implementation(libs.zxing.core)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
 
     // Offline "Share Knit app": when installed from Play as an App Bundle, merge the on-device split
     // APKs into one universal APK (ARSCLib) and re-sign it (apksig). Both pure Java, no Kotlin metadata —

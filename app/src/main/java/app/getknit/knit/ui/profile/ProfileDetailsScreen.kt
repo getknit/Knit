@@ -1,6 +1,5 @@
 package app.getknit.knit.ui.profile
 
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,10 +50,9 @@ import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.FullscreenImageViewer
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.scan.QrScanner
 import app.getknit.knit.ui.verify.EncryptionSection
 import app.getknit.knit.ui.verify.PeerVerification
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -88,31 +86,34 @@ fun ProfileDetailsScreen(
         if (scanResult != null) viewModel.consumeScanResult()
     }
 
-    val scanLauncher =
-        rememberLauncherForActivityResult(ScanContract()) { result ->
-            result.contents?.let { viewModel.onScanned(it) }
-        }
-
-    ProfileDetailsScreenContent(
-        state = state,
-        snackbarHostState = snackbarHostState,
-        onBack = onBack,
-        // Tapping Message accepts any pending request from this peer (idempotent) before opening the DM,
-        // so answering a request from the sender's profile behaves like accepting it in the inbox.
-        onMessage = { id ->
-            viewModel.accept()
-            onMessage(id)
-        },
-        onScan = {
-            scanLauncher.launch(
-                ScanOptions().setBeepEnabled(false).setOrientationLocked(false),
-            )
-        },
-        onBlock = viewModel::block,
-        onUnblock = viewModel::unblock,
-        onMarkVerified = viewModel::markVerified,
-        onClearVerification = viewModel::clearVerification,
-    )
+    // The scanner takes over the whole screen rather than launching an Activity — see [QrScanner].
+    var scanning by remember { mutableStateOf(false) }
+    if (scanning) {
+        QrScanner(
+            onResult = {
+                scanning = false
+                viewModel.onScanned(it)
+            },
+            onCancel = { scanning = false },
+        )
+    } else {
+        ProfileDetailsScreenContent(
+            state = state,
+            snackbarHostState = snackbarHostState,
+            onBack = onBack,
+            // Tapping Message accepts any pending request from this peer (idempotent) before opening the
+            // DM, so answering a request from the sender's profile behaves like accepting it in the inbox.
+            onMessage = { id ->
+                viewModel.accept()
+                onMessage(id)
+            },
+            onScan = { scanning = true },
+            onBlock = viewModel::block,
+            onUnblock = viewModel::unblock,
+            onMarkVerified = viewModel::markVerified,
+            onClearVerification = viewModel::clearVerification,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

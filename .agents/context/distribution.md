@@ -85,6 +85,15 @@ Four inputs were deliberately de-machine-ified to keep it that way:
   `packaging { jniLibs { keepDebugSymbols += "**/*.so" } }` opts out of stripping explicitly on every
   machine. Measured cost: **+8 bytes** — every shipped `.so` is a third-party release build that upstream
   already stripped, so the strip step was always a no-op.
+- **Prebuilt `.so` are shipped verbatim, never stripped.** As of 2.2.2 the APK carries CameraX's
+  `libimage_processing_util_jni.so` + `libsurface_util_jni.so` (four ABIs, ~165 KB total) alongside the
+  existing LiteRT / SQLCipher / datastore / graphics-path natives — added when the QR scanner moved to
+  CameraX (ADR 015). They need no special handling: `packaging { jniLibs { keepDebugSymbols += "**/*.so" } }`
+  already opts every `.so` out of stripping, so the packaged bytes are identical with or without an NDK.
+  Verified on the 2.2.2 release APK — each `.so` is byte-for-byte the size in the upstream AAR, entry
+  timestamps normalized to `1981-01-01`, and all four ABIs present (which the release workflow also checks).
+  Any *new* native dependency must additionally be **16 KB-page-aligned** (`readelf -lW` → `LOAD
+  align=0x4000`); that requirement is why litert is pinned to 1.4.x and it was re-verified for CameraX.
 - **No JDK auto-download.** The `foojay-resolver-convention` plugin is deliberately absent from
   `settings.gradle.kts`, and the `toolchainUrl.*` lines are stripped from
   `gradle/gradle-daemon-jvm.properties`. Both would fetch an unpinned JDK from api.foojay.io. Gradle now
@@ -121,20 +130,22 @@ work, ours doesn't. So Knit keeps Google's litert and takes the F-Droid exceptio
 
 - **`AntiFeatures: NonFreeDep`** in fdroiddata — litert is Apache-2.0 but ships as a prebuilt binary
   F-Droid can't rebuild.
-- **`scanignore` removed — and the flag is legitimate, not a false positive.** We first suppressed it with
-  `scanignore: [app/build.gradle.kts]`; reviewer linsui asked us to drop it (MR 43609). I then argued the
-  `(2|1.[34])` signature was an over-broad false positive and was **wrong**: the flat POM misled me.
-  `litert:1.4.2 → litert-api:1.4.2 → ∅`, but the Play coupling is baked into the AAR, not the POM.
-  `litert/kotlin/BUILD` builds `litert` from `litert_kotlin_api`, which depends on
-  `com.google.android.play:ai-delivery` and ships `AiPackModelProvider.kt` ("a ModelProvider backed by
-  on-demand Google Play AI Pack", importing `com.google.android.play.core.aipacks`). That Kotlin API is
-  **new in 1.3.0** (the BUILD file 404s at v1.2.0), which is exactly why the signature starts at 1.3 — so
-  litert 1.3+ genuinely carries Play Core and the signature is correct. (The 2.x POM *does* surface it via
-  `litert-api:2.x → ai-delivery`; the 1.4.x POM doesn't, which is the trap.) **Mitigation:** we use only
-  `org.tensorflow.lite.Interpreter`, never the AI Pack provider, and R8 strips the dead provider, so the
-  shipped release dex has **zero `com.google.android.play` classes** — the dependency is Play-coupled but
-  the distributed APK isn't. **State: build red on this legitimate flag; remedy pending linsui** — either
-  NonFreeDep with a re-added `scanignore` as a documented exception, or a blocker. Not a false positive.
+- **`scanignore` removed — `(2|1.[34])` is an over-broad false positive on the published 1.x line, and the
+  fix is upstream.** We first suppressed the flag with `scanignore: [app/build.gradle.kts]`; reviewer linsui
+  asked us to drop it (MR 43609), which leaves the build red on the scanner. The catch: the *published*
+  `litert:1.3.x`/`1.4.x` AAR (byte-checked from `dl.google.com/android/maven2`) is just the plain
+  `org.tensorflow.lite` interpreter — the rebranded classic TFLite, 12 classes, Apache-2.0, **zero
+  `com.google.android.play` refs**. The `litert/kotlin/BUILD` target that *does* carry the Play coupling
+  (`AiPackModelProvider` + `com.google.android.play:ai-delivery`, added in 1.3.0) is real in the source
+  tree, but a git tag snapshots the whole monorepo including that in-progress Kotlin API — it publishes as
+  **`litert-api:2.x`**, never as `litert:1.3/1.4.x`. The coupling reaches litert only at 2.x, transitively:
+  `litert:2.x → litert-api:2.x → ai-delivery`. So `(2|1.[34])` both over-flags the interpreter line *and*
+  misses the real carrier `litert-api:2`. Fix submitted as **`fdroid/fdroid-suss!63`** (signature →
+  `litert(-api)?:2`: drop `1.[34]`, add the `litert-api` arm); one-line YAML change, CI green
+  (test/validate/lint/black), linsui accepted the finding ("Good catch"), pending merge. Once suss.json
+  regenerates our pinned `litert:1.4.2` stops matching and **43609 goes green with no `scanignore`**. (Even
+  without the fix the shipped APK is clean: we call only `org.tensorflow.lite.Interpreter` and R8 strips the
+  rest, so the release dex has zero Play classes regardless.)
 - **`commit:` is the full 40-char hash**, not the `v2.2.1` tag (linsui's request — tags are mutable). No
   `sudo:` block either: the buildserver already has JDK 21 selected, so the manual install was redundant.
 - **`AutoUpdateMode: Version`** (bare, not `Version v%v`). Under `UpdateCheckMode: Tags` the metadata

@@ -1,6 +1,5 @@
 package app.getknit.knit.ui.verify
 
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -20,7 +19,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -30,8 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.ui.preview.KnitPreview
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import app.getknit.knit.ui.scan.QrScanner
 import org.koin.androidx.compose.koinViewModel
 
 /**
@@ -66,21 +66,24 @@ fun VerifyContactScreen(
         if (scanResult != null) viewModel.consumeScanResult()
     }
 
-    val scanLauncher =
-        rememberLauncherForActivityResult(ScanContract()) { result ->
-            result.contents?.let { viewModel.onScanned(it) }
-        }
-
-    VerifyContactScreenContent(
-        myQrPayload = myQrPayload,
-        snackbarHostState = snackbarHostState,
-        onBack = onBack,
-        onScan = {
-            scanLauncher.launch(
-                ScanOptions().setBeepEnabled(false).setOrientationLocked(false),
-            )
-        },
-    )
+    // The scanner takes over the whole screen rather than launching an Activity — see [QrScanner].
+    var scanning by remember { mutableStateOf(false) }
+    if (scanning) {
+        QrScanner(
+            onResult = {
+                scanning = false
+                viewModel.onScanned(it)
+            },
+            onCancel = { scanning = false },
+        )
+    } else {
+        VerifyContactScreenContent(
+            myQrPayload = myQrPayload,
+            snackbarHostState = snackbarHostState,
+            onBack = onBack,
+            onScan = { scanning = true },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

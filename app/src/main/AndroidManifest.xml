@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Mesh transport plane 1: Wi-Fi Aware (NAN). On API 33+ discovery is location-free via
          NEARBY_WIFI_DEVICES (neverForLocation); on API 29-32 there is no such permission, so Wi-Fi Aware
@@ -40,9 +39,11 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
-    <!-- QR identity verification (scan a peer's key) -->
+    <!-- QR identity verification (scan a peer's key) — CameraX + zxing core, see ui/scan/. required=false
+         because a camera-less device can still *show* its own code for someone else to scan; the scanner
+         surfaces an explanatory message instead (QrScanner probes FEATURE_CAMERA_ANY at runtime). -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Always-on mesh foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -86,16 +87,6 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
-
-        <!-- ZXing's CaptureActivity (QR identity scanner) is declared android:screenOrientation="sensorLandscape"
-             in the library manifest, which forces the scanner into landscape. We scan with
-             setOrientationLocked(false) (ProfileDetailsScreen), so ZXing leaves the manifest orientation in
-             force rather than pinning the current one — override it to fullUser so the scanner opens in the
-             device's current orientation (typically portrait) and still rotates to landscape per auto-rotate. -->
-        <activity
-            android:name="com.journeyapps.barcodescanner.CaptureActivity"
-            android:screenOrientation="fullUser"
-            tools:replace="android:screenOrientation" />
 
         <service
             android:name=".mesh.MeshService"

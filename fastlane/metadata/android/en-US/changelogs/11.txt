@@ -1,0 +1,9 @@
+Fixes a crash in "Scan their code".
+
+The QR scanner has been rebuilt on CameraX. The library it used before could crash the app the moment
+the camera opened, on devices whose camera reports one frame size and delivers another — which is why it
+worked on some phones and not others. Decoding now happens in code that treats any unexpected frame as a
+frame without a code in it, so a scan can no longer take Knit down.
+
+The scanner also handles the camera permission properly now: if you decline it, or the device has no
+camera, you get an explanation instead of a blank screen. You can still show your own code either way.

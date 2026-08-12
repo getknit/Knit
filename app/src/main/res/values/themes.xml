@@ -1,5 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
-    <style name="Theme.Knit" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Launch theme. Everything the user actually reads is Compose (KnitTheme), which already tracks the
+         system dark theme via isSystemInDarkTheme() — but this theme paints the window *before* any Compose
+         frame exists: the API 31+ system splash screen, and the pre-31 starting window. Inherited unchanged,
+         Theme.Material.Light gives windowBackground = ?attr/colorBackground = #FAFAFA, so a cold launch on a
+         dark-themed device flashes a full-screen near-white (issue #2). Both background attributes therefore
+         point at the night-qualified @color/splash_background instead of the parent's light constant.
+         windowSplashScreenBackground is set explicitly rather than relying on the API 31+ splash falling back
+         to windowBackground — that fallback only holds while windowBackground is a plain color, and OEM
+         splash implementations vary. -->
+    <style name="Theme.Knit" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/splash_background</item>
+    </style>
 </resources>

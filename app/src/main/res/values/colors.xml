@@ -8,4 +8,9 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="colorAccent">#454551</color>
+
+    <!-- Launch-window background, drawn by the system before the first Compose frame (see themes.xml).
+         Keep in lockstep with KnitTheme's `background`/`surface` (ui/theme/Color.kt: BackgroundLight here,
+         BackgroundDark in values-night) so the handoff to Compose is seamless. -->
+    <color name="splash_background">#FFFFF8F6</color>
 </resources>

@@ -1,7 +1,7 @@
 name: ✨ Feature request
 description: Propose a feature or enhancement for Knit.
 title: "[Feature]: "
-labels: ["enhancement"]
+labels: ["enhancement", "needs-triage"]
 body:
   - type: markdown
     attributes:

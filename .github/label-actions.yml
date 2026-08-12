@@ -1,0 +1,106 @@
+# Canned replies and thread actions, keyed by label — https://github.com/dessant/label-actions
+# Consumed by .github/workflows/label-actions.yml (default config path for the action).
+#
+# The maintainer's triage decision IS the trigger: apply `needs-repro` and the bot asks for the
+# missing details; apply `upstream` and it explains and closes. Nothing here fires from an issue's
+# own content — .github/workflows/triage.yml only adds `area:` / `dist:` labels and never these.
+#
+# Tone follows CONTRIBUTING.md: Knit is best-effort, shipped as-is, and saying so plainly beats
+# silence. `{issue-author}` is a placeholder the action substitutes.
+#
+# Every entry is scoped under `issues:` so a label of the same name on a pull request does nothing.
+
+needs-repro:
+  issues:
+    comment: |
+      Thanks for the report, @{issue-author}. As filed this one can't be acted on — there isn't
+      enough detail to reproduce it.
+
+      Please add whichever of these you can:
+
+      - the **Knit version or commit** you're running
+      - **every device involved**, with its Android version and API level
+      - the **radios in use** — Wi-Fi Aware, BLE, or both
+
+      Real mesh behavior usually needs two or more physical devices to show up at all, so a
+      single-device report is often not reproducible by definition.
+
+      A `adb logcat` excerpt around the failure helps most. On a debug build, the headless bridge
+      dumps self id, transport health, and reachable peers:
+
+      ```
+      adb shell am broadcast -a app.getknit.knit.debug.STATE -p app.getknit.knit
+      ```
+
+      Without a reproduction this will be closed in a couple of weeks. That isn't a dismissal —
+      comment any time with the details and it can be reopened.
+
+upstream:
+  issues:
+    comment: |
+      Thanks for tracking this down, @{issue-author}. This looks like an Android platform or device
+      vendor issue rather than something Knit can fix in app code. Knit drives Wi-Fi Aware and
+      Bluetooth LE directly with no Google Play Services layer in between, so AOSP and firmware
+      behavior shows through to the user.
+
+      Closing, since there's no change to make in this repo. If a workaround turns out to be
+      possible on our side, comment here and it can be reopened.
+    close: true
+    close-reason: 'not planned'
+
+duplicate:
+  issues:
+    comment: |
+      Thanks, @{issue-author} — this is already tracked in the linked issue. Closing so the
+      discussion stays in one place.
+
+      Please add anything new over there. A "me too" with your device model and Android version is
+      genuinely useful: radio bugs often turn out to be vendor-specific.
+    close: true
+    close-reason: 'not planned'
+
+question:
+  issues:
+    comment: |
+      Thanks for asking, @{issue-author}. This reads as a usage question rather than a defect, so it
+      belongs in [Discussions](https://github.com/getknit/knit/discussions) — more people see it
+      there, and it stays findable for the next person with the same question.
+
+      Closing this issue; please repost it in Discussions. If it turns out to be a real bug, open a
+      bug report with reproduction steps.
+    close: true
+    close-reason: 'not planned'
+
+wontfix:
+  issues:
+    comment: |
+      Thanks for raising it, @{issue-author}. This isn't something that'll be taken on. Knit is a
+      best-effort hobby project shipped as-is, and part of keeping it maintainable is declining
+      scope — see the support expectations in
+      [`CONTRIBUTING.md`](https://github.com/getknit/knit/blob/main/CONTRIBUTING.md).
+
+      That's a capacity decision, not a judgment on the idea. Knit is GPL-3.0-or-later, so a fork
+      that takes it further is entirely welcome.
+    close: true
+    close-reason: 'not planned'
+
+deferred:
+  issues:
+    comment: |
+      Thanks, @{issue-author} — this is real, and it's deliberately deferred rather than overlooked.
+      The Roadmap in the [README](https://github.com/getknit/knit#readme) and `CONTRIBUTING.md`
+      cover what's parked and why.
+
+      Leaving this open as the tracking issue. No timeline attached, and it's exempt from the
+      stale bot.
+
+invalid:
+  issues:
+    comment: |
+      Thanks for writing in, @{issue-author}, but this doesn't describe something actionable in the
+      Knit codebase, so it's being closed.
+
+      If that's wrong, reopen with reproduction steps and the version/device details the bug form
+      asks for.
+    close: true
+    close-reason: 'not planned'

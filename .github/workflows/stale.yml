@@ -1,0 +1,75 @@
+name: Stale
+
+# Two independent sweeps, both issues-only.
+#
+# 1. `needs-repro` — an unreproducible report is not a backlog item. Marked stale after 10 days of
+#    silence and closed 4 days later (the ~2 weeks the needs-repro reply promises). Any comment
+#    clears the `stale` label and restarts the clock.
+# 2. Everything else — 90 days of silence, closed 14 days after that. This is the honest version of
+#    the CONTRIBUTING.md posture: issues may never be triaged, so an untouched tracker shouldn't
+#    imply someone is on it. Exempt: `pinned`, `deferred` (deliberately-parked roadmap scope, which
+#    the deferred canned reply promises is exempt), and `needs-repro` (owned by sweep 1).
+#
+# Pull requests are left alone entirely (`days-before-pr-stale: -1`) — auto-closing a contributor's
+# work on a project that already warns reviews may be slow would be hostile. `pull-requests: write`
+# is still granted because the action enumerates PRs before skipping them.
+#
+# Closes use `not_planned`, not `completed`, so they don't read as fixed.
+
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  needs-repro:
+    name: Sweep needs-repro
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          only-labels: 'needs-repro'
+          days-before-issue-stale: 10
+          days-before-issue-close: 4
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: 'stale'
+          close-issue-reason: 'not_planned'
+          stale-issue-message: |
+            No reproduction details have come in for 10 days, so this is being marked stale and will
+            close in 4 days.
+
+            Nothing is lost by that — comment with the version, devices, and radios involved and it
+            reopens. See the earlier comment for what to include.
+          close-issue-message: |
+            Closing as not reproducible. Comment with the missing details any time and this can be
+            reopened.
+
+  aged:
+    name: Sweep aged issues
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          exempt-issue-labels: 'pinned,deferred,needs-repro'
+          exempt-all-issue-milestones: true
+          days-before-issue-stale: 90
+          days-before-issue-close: 14
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: 'stale'
+          close-issue-reason: 'not_planned'
+          stale-issue-message: |
+            No activity here for 90 days. Knit is a best-effort hobby project shipped as-is, so an
+            issue sitting untouched usually means nobody got to it — not that it was rejected.
+
+            This will close in 14 days. If it still matters, say so and it stays open; a fresh
+            confirmation on a current build is the most useful bump.
+          close-issue-message: |
+            Closing for inactivity. Not a verdict on the report — comment if it's still happening on
+            a current build and this can be reopened.

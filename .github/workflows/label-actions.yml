@@ -1,0 +1,28 @@
+name: Label actions
+
+# Turns a triage label into a reply (and sometimes a close), per .github/label-actions.yml.
+#
+# Split from triage.yml on purpose: triage.yml *adds* `area:` labels from keywords and is allowed to
+# guess, while this workflow *speaks in the maintainer's name* and closes threads, so it only ever
+# fires on a label a human applied. Nothing here is content-triggered.
+#
+# `process-only: issues` keeps a same-named label on a pull request from triggering an issue reply.
+#
+# Pinned by commit SHA: this is a third-party action holding `issues: write` on a public repo.
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  action:
+    name: Apply label action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dessant/label-actions@65225c179d3b2502f6eda7b3d15101a3f412366b # v5.0.3
+        with:
+          process-only: issues

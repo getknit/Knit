@@ -42,15 +42,26 @@ fun releaseSigningCred(
             ?: System.getenv("KNIT_UPLOAD_$envSuffix")
     )?.takeIf { it.isNotBlank() }
 
-// Native-symbol extraction for the Play AAB, OFF by default. It is the one part of the release build that
-// depends on a tool outside the Gradle/AGP pin — the NDK's llvm-objcopy/llvm-strip — and AGP degrades
-// SILENTLY when the NDK is absent (it warns and ships the prebuilt .so unstripped). That makes the output
-// bytes a function of the *build machine*, which breaks the F-Droid reproducible-build contract: F-Droid
-// rebuilds this commit on their buildserver and byte-compares against the APK we publish, so "stripped
-// here, unstripped there" is a verification failure. Default OFF pins the APK to the no-strip path on every
-// machine (see packaging.jniLibs below); the Play release turns it back ON with -Pknit.nativeSymbols=true,
-// which is the only build that needs it (symbols ride in the AAB's BUNDLE-METADATA, not in an APK).
-val nativeSymbols = (project.findProperty("knit.nativeSymbols") as? String)?.toBoolean() == true
+// Native-symbol extraction: ON by default for the **AAB** (Play) path, OFF for the **APK** (F-Droid) path.
+//
+// It is the one part of the release build that depends on a tool outside the Gradle/AGP pin — the NDK's
+// llvm-objcopy/llvm-strip — and AGP degrades SILENTLY when the NDK is absent (it warns and ships the
+// prebuilt .so unstripped). That makes the output bytes a function of the *build machine*, which breaks
+// the F-Droid reproducible-build contract: F-Droid rebuilds this commit on their buildserver — which has
+// no NDK, and no `ndk:` line in .fdroid.yml — and byte-compares against the APK we publish, so "stripped
+// here, unstripped there" is a verification failure.
+//
+// Hence the split rather than a global default. Symbols ride in the AAB's BUNDLE-METADATA and never enter
+// an APK, so turning them on for `bundle*` costs the APK nothing, while `assembleRelease` stays NDK-free
+// and byte-identical on every machine (see packaging.jniLibs below). Keying off the requested task is what
+// makes that automatic: the Play AAB is cut by hand, and 2.2.2/vc11 shipped to open testing with **zero**
+// debug symbols because the flag was forgotten — the silent-degradation failure mode, one level up.
+//
+// `-Pknit.nativeSymbols=<bool>` still overrides in either direction: force it off for a bundle on a
+// machine with no NDK, or on for an APK build (don't — it un-pins the APK from the no-strip path).
+// startParameter is part of the configuration-cache key, so this re-resolves when the task list changes.
+val bundleRequested = gradle.startParameter.taskNames.any { it.contains("bundle", ignoreCase = true) }
+val nativeSymbols = (project.findProperty("knit.nativeSymbols") as? String)?.toBoolean() ?: bundleRequested
 
 android {
     namespace = "app.getknit.knit"
@@ -69,8 +80,8 @@ android {
     // up as an `android.ndkVersion …` build warning). Don't chase NDK releases on their own cadence — with
     // no native build there's nothing to gain. After bumping: `sdkmanager "ndk;<ver>"` on every build
     // machine + CI, then re-verify the .sym files land in the AAB's BUNDLE-METADATA (the failure is silent).
-    // Set ONLY on the Play path (-Pknit.nativeSymbols=true) so the default build needs no NDK at all —
-    // see the nativeSymbols comment above the android block.
+    // Set ONLY on the AAB path (any `bundle*` task, or -Pknit.nativeSymbols=true) so an APK build needs no
+    // NDK at all — see the nativeSymbols comment above the android block.
     if (nativeSymbols) ndkVersion = "28.2.13676358"
 
     defaultConfig {
@@ -157,8 +168,8 @@ android {
             // DWARF, so FULL (--only-keep-debug) yields near-empty .dbg (.dynsym NOBITS, 0 symbols) while
             // SYMBOL_TABLE keeps the real .dynsym (function names) — 444 FUNC syms for tflite vs 0. We have
             // no first-party native code; revisit FULL only if we ever ship our own -g-compiled .so.
-            // Gated on -Pknit.nativeSymbols=true (the Play bundleRelease invocation); off by default so the
-            // APK build is NDK-free and byte-identical everywhere — see the nativeSymbols comment up top.
+            // On by default for any `bundle*` task (the Play AAB); off for assembleRelease so the APK stays
+            // NDK-free and byte-identical everywhere — see the nativeSymbols comment up top.
             if (nativeSymbols) {
                 ndk {
                     debugSymbolLevel = "SYMBOL_TABLE"
@@ -217,12 +228,12 @@ android {
 
     packaging {
         jniLibs {
-            // With nativeSymbols off there is no NDK, and AGP's strip step then degrades SILENTLY (it
-            // warns and packages the .so as-is). Opt out of stripping *explicitly* instead, so the
-            // packaged bytes are identical whether or not the build machine happens to have an NDK —
+            // On the APK path nativeSymbols is off, so there is no NDK, and AGP's strip step then degrades
+            // SILENTLY (it warns and packages the .so as-is). Opt out of stripping *explicitly* instead, so
+            // the packaged bytes are identical whether or not the build machine happens to have an NDK —
             // that determinism is what makes F-Droid's rebuild-and-byte-compare verification possible.
             // Costs ~nothing in APK size: every .so we ship is a third-party release build (LiteRT,
-            // SQLCipher, datastore-shared-counter, graphics-path) that upstream already stripped.
+            // SQLCipher, datastore-shared-counter, graphics-path, CameraX) that upstream already stripped.
             if (!nativeSymbols) keepDebugSymbols += "**/*.so"
         }
     }

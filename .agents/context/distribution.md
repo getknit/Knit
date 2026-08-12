@@ -11,7 +11,7 @@ signing, `packaging`/`ndk` config, Git LFS, or anything that changes release-APK
 | Built by | us | **F-Droid's buildserver, from source** — then byte-compared against ours |
 | Shipped bytes | Google's (Play App Signing re-signs) | **ours**, verbatim |
 | Key | `knit-upload.jks` (upload key only) | `knit-dist.jks` (distribution key) |
-| Native symbols | yes, `-Pknit.nativeSymbols=true` | no |
+| Native symbols | yes (default on the `bundle*` path) | no |
 
 Play App Signing means the Play-installed app carries a certificate we do not hold, so a Play install and
 an F-Droid install can never share a signature. That is unavoidable and fine — but it makes the *off-Play*
@@ -79,17 +79,28 @@ Four inputs were deliberately de-machine-ified to keep it that way:
   difference (1 entry out of 185, identical APK size) between a host build and a rebuild of the same source
   inside `registry.gitlab.com/fdroid/fdroidserver:buildserver`, and it alone would fail verification.
 
-- **No NDK on the APK path.** `ndkVersion` and `ndk { debugSymbolLevel }` are gated behind
-  `-Pknit.nativeSymbols=true` (the Play `bundleRelease` invocation only). AGP's strip step degrades
-  *silently* when the NDK is absent, which would mean "stripped here, unstripped there". Instead
-  `packaging { jniLibs { keepDebugSymbols += "**/*.so" } }` opts out of stripping explicitly on every
-  machine. Measured cost: **+8 bytes** — every shipped `.so` is a third-party release build that upstream
+- **No NDK on the APK path.** `ndkVersion` and `ndk { debugSymbolLevel }` are keyed to the **AAB** path:
+  on for any `bundle*` task, off for `assembleRelease`. AGP's strip step degrades *silently* when the NDK
+  is absent, which would mean "stripped here, unstripped there". Instead
+  `packaging { jniLibs { keepDebugSymbols += "**/*.so" } }` opts out of stripping explicitly on the APK
+  path. Measured cost: **+8 bytes** — every shipped `.so` is a third-party release build that upstream
   already stripped, so the strip step was always a no-op.
+
+  The split (rather than one global default) is the whole point: symbols live in the AAB's
+  `BUNDLE-METADATA` and never enter an APK, so defaulting them on for `bundle*` costs the APK nothing,
+  while `assembleRelease` stays NDK-free and byte-identical on F-Droid's buildserver — which has no NDK,
+  and no `ndk:` line in `.fdroid.yml`. **Never make it a global default**; that reintroduces exactly the
+  machine-dependent stripping this section exists to prevent. `-Pknit.nativeSymbols=<bool>` overrides
+  either way (use `=false` to bundle on a machine without the NDK). Verified after the change: a plain
+  `assembleRelease` is entry-for-entry CRC-identical to the published, F-Droid-verified 2.2.2 APK, and a
+  plain `bundleRelease` carries symbols with no flag. It became a default because 2.2.2/vc11 shipped to
+  Play open testing with **zero** symbols — the flag was simply forgotten.
 - **Prebuilt `.so` are shipped verbatim, never stripped.** As of 2.2.2 the APK carries CameraX's
   `libimage_processing_util_jni.so` + `libsurface_util_jni.so` (four ABIs, ~165 KB total) alongside the
   existing LiteRT / SQLCipher / datastore / graphics-path natives — added when the QR scanner moved to
-  CameraX (ADR 015). They need no special handling: `packaging { jniLibs { keepDebugSymbols += "**/*.so" } }`
-  already opts every `.so` out of stripping, so the packaged bytes are identical with or without an NDK.
+  CameraX (ADR 015). They need no special handling on the APK path:
+  `packaging { jniLibs { keepDebugSymbols += "**/*.so" } }` opts every `.so` out of stripping there, so the
+  packaged APK bytes are identical with or without an NDK.
   Verified on the 2.2.2 release APK — each `.so` is byte-for-byte the size in the upstream AAR, entry
   timestamps normalized to `1981-01-01`, and all four ABIs present (which the release workflow also checks).
   Any *new* native dependency must additionally be **16 KB-page-aligned** (`readelf -lW` → `LOAD
@@ -208,5 +219,5 @@ Three things the workflow checks that no local build does:
 To build one by hand instead: `./gradlew :app:assembleRelease` with `keystore.properties` pointed at
 `knit-dist.jks`, then attach the APK under the filename the `Binaries:` URL expects.
 
-Play releases additionally pass `-Pknit.nativeSymbols=true` and use `knit-upload.jks`; see
+Play releases use `knit-upload.jks` (native symbols are on by default for `bundleRelease`); see
 `.private/` for the maintainer-only store workflow.

@@ -12,7 +12,8 @@ Your phones talk directly to each other over Wi-Fi Aware and Bluetooth LE, and r
 ![Transports](https://img.shields.io/badge/radios-Wi--Fi%20Aware%20%2B%20BLE-00BCD4)
 ![Encryption](https://img.shields.io/badge/DMs%20%26%20groups-E2E%20encrypted-2EA043?logo=signal&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
-![Version](https://img.shields.io/badge/version-2.1-FF6F61)
+![Version](https://img.shields.io/badge/version-2.2.2-FF6F61)
+[![Knit changelog on whatsnew.fyi](https://whatsnew.fyi/product/knit/badge.svg)](https://whatsnew.fyi/product/knit)
 
 </div>
 

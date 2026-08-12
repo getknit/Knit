@@ -5,13 +5,13 @@
       "source": "zaventh/dotagents-standard-skill",
       "sourceType": "github",
       "skillPath": "skills/dotagents-standard/SKILL.md",
-      "computedHash": "ec2f35f28b416fc16094c9c22b94fc6a4c178a613317daaec53213eb30fc02a8"
+      "computedHash": "ad5d53be3fa676758e6b2e207e774b946d4c23f12960625f6ee97b35d48195e7"
     },
     "kotlin-patterns": {
       "source": "affaan-m/ECC",
       "sourceType": "github",
       "skillPath": "skills/kotlin-patterns/SKILL.md",
-      "computedHash": "581e5e74aec1c33ba37209f24f6bca68ba6949d7549ab58c5bc6a75d0fca9d0d"
+      "computedHash": "13278a2dcaa94b4173e9dcb7de73e4272e2ed8422580735b3c01a67a0a9b2ef6"
     },
     "material-3": {
       "source": "hamen/material-3-skill",

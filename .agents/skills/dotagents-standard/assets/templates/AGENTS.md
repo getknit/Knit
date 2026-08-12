@@ -23,4 +23,19 @@ You are a <ROLE, e.g. "Senior TypeScript Engineer"> focused on <PRIORITIES, e.g.
 ## Capabilities
 
 - You may execute scripts under `.agents/skills/` to validate your work.
-- You may append durable decisions to `.agents/memory/decisions.md`.
+
+## Maintenance
+
+This file is a **router**, not a store. When you learn something durable — a decision, a
+standing rule, a preference, reference data — write it into `.agents/`. Not here, and not
+into host-specific agent memory (`~/.claude/`, or any tool-local memory feature): in-repo
+means committed, reviewable, and readable by every tool, on every machine.
+
+- A standing instruction that must always be obeyed → `.agents/rules/`
+- A decision, its rationale, a learned preference → `.agents/memory/`
+- Static reference data → `.agents/context/`
+
+Then add a routing line above **only** if no existing rule already points at that file.
+Never append the content itself to this file — that rebuilds the monolith this layout
+exists to prevent. If this file grows past roughly a screenful, content has leaked in:
+move it out.

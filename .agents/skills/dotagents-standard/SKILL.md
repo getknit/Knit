@@ -1,6 +1,6 @@
 ---
 name: dotagents-standard
-version: 0.1.0
+version: 0.2.0
 description: >-
   Set up, author, and navigate the dotagents standard — a slim AGENTS.md "router" at the
   repository root plus a hidden .agents/ directory (rules, context, memory, personas, skills,
@@ -137,6 +137,65 @@ When you start work in a repo that uses dotagents, practice disciplined progress
 anyway, complete the task, and then *improve the router* (add the routing rule) so it's found next
 time. Treat missing routing as a bug in the setup, not a dead end.
 
+## Writing context back (the append trap)
+
+The most common way a dotagents setup decays: an agent learns something durable and puts it
+somewhere convenient instead of somewhere correct. Two sinks compete with `.agents/`, and both
+lose the value:
+
+- **`AGENTS.md` itself** — it's already in context, so appending feels natural. Do it a few
+  times and the router *is* the monolith again, the exact failure this standard prevents.
+- **Host agent-memory** (Claude Code's `~/.claude/` memory, or any tool-local memory feature)
+  — silent, machine-local, never committed, invisible to every other tool and teammate. This
+  one is worse because nothing in the repo shows it happened.
+
+`.agents/` files aren't loaded until a routing rule pulls them in, so the pull toward both
+sinks is constant. Resist it deliberately.
+
+**`AGENTS.md` is a router, not a store.** The only thing you ever add to it is a *routing
+line*. Content — rules, decisions, preferences, reference data — goes in `.agents/`, in the
+repo, where it gets committed and every tool can read it.
+
+When you need to persist something, in order:
+
+1. **Classify it** with the taxonomy table above: rule, memory, context, or spec?
+2. **Write it to the matching `.agents/` file**, creating the file if needed. Match the format
+   already in use (the ADR heading style, the way existing rules are phrased).
+3. **Only then look at the router.** If a routing rule already points at that file, you're
+   done — leave `AGENTS.md` alone. If nothing points at it, add *one* conditional line with an
+   action verb, and nothing else.
+
+**Self-check before any `AGENTS.md` write:** is what I'm adding a *pointer*, or is it
+*content*? Content belongs in `.agents/`. If the file has grown past roughly a screenful
+(~50 lines), content has already leaked in — move it out.
+
+Worked example — "we chose Kysely over Drizzle because the generated SQL is more readable".
+The trap:
+
+```diff
+  # AGENTS.md
+  ## Context routing
+  - **If working on the data layer:** READ `.agents/context/schema.sql`.
++
++ ## Decisions
++ - 2026-07-31: chose Kysely over Drizzle — generated SQL is easier to read and the
++   query-builder ergonomics suit our reporting endpoints better.
+```
+
+A new section, growing every session, unreachable by any routing rule. What to do instead:
+
+```diff
+  # .agents/memory/decisions.md
++ ## ADR 004: Kysely over Drizzle
++ **Date:** 2026-07-31
++ **Decision:** Replace Drizzle with Kysely in the data layer.
++ **Rationale:** Generated SQL is easier to read; query-builder ergonomics suit the
++ reporting endpoints.
+```
+
+`AGENTS.md` is untouched — its routing table already says to CONSULT
+`.agents/memory/decisions.md`, so the new ADR is reachable with no router change.
+
 ## Implementing / migrating a setup
 
 To set up dotagents in a repo (or split up a monolithic context file):
@@ -149,8 +208,10 @@ To set up dotagents in a repo (or split up a monolithic context file):
    into small single-purpose files. Name files for their topic (`coding.md`, `schema.sql`,
    `decisions.md`), lowercase-with-hyphens for compound names (`database-migration/`).
 4. **Leave a tight router in `AGENTS.md`.** After the move, `AGENTS.md` should be roughly a
-   screenful: identity + a routing table + capabilities. If it's longer, you haven't moved enough
-   out.
+   screenful: identity + a routing table + capabilities + a short maintenance rule saying that
+   new context goes in `.agents/`, not in the router. If it's longer, you haven't moved enough
+   out. That maintenance rule is what keeps the file from silently refilling — see "Writing
+   context back" above.
 5. **Write conditional routing rules** that point to the moved files. A good rule states a
    *trigger* and an *action verb*: `**If touching auth:** READ .agents/context/auth-flow.md`. Avoid
    unconditional "always read everything" — that recreates the monolith.
@@ -184,6 +245,11 @@ You are a Senior Rust Engineer focused on safety and performance.
 
 ## Capabilities
 - You may execute scripts under `.agents/skills/` to validate your work.
+
+## Maintenance
+- Durable knowledge goes in `.agents/` (rules / memory / context) — never appended to this
+  file, never into host-local agent memory. Add a routing line here only if none points at
+  it yet.
 ```
 
 What makes routing rules good:

@@ -1,0 +1,75 @@
+name: Claude Code
+
+# On-demand assistant: mention `@claude` in an issue, a comment, or a PR review, or apply the
+# `claude` label to an issue, and Claude answers in-thread with the repo checked out.
+#
+# Deliberately ON-DEMAND ONLY. There is no "run on every new issue" trigger here — auto-triage would
+# spend tokens on spam and risks answering a Wi-Fi Aware or custody question confidently and wrongly
+# in public. Keyword labeling is triage.yml's job (free); diagnosis stays human-invoked.
+#
+# ACCESS: the action refuses to run for anyone without write access to the repo, so on this public
+# mirror a drive-by `@claude` from a stranger is a no-op. That is the cost ceiling — it is not
+# configurable here, and `allowed_bots` / `allowed_non_write_users` are deliberately left unset.
+#
+# CONTEXT: Claude Code reads CLAUDE.md, which imports the AGENTS.md router, so it picks up the
+# `.agents/` context library on its own. On pull requests the action restores CLAUDE.md and
+# `.claude/` from the base branch (PR-authored versions land in `.claude-pr/` for reference only).
+#
+# BUILD: the runner has no Android SDK and no JDK 21 setup, so Claude cannot compile or run the test
+# suite here — the appended system prompt says so, to stop it burning turns on `./gradlew`.
+# Compilation is ci.yml's job.
+#
+# PINNING: tag-pinned, unlike triage.yml / label-actions.yml / stale.yml which pin by commit SHA.
+# Those fire on events any stranger can raise; this one cannot run without repo write access, and
+# `@v1` is the ref upstream actively maintains — freezing it to a SHA would strand security fixes.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned, labeled]
+
+# One run per thread; a follow-up mention supersedes an in-flight answer.
+concurrency:
+  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    name: Respond
+    # Cheap pre-filter so the runner doesn't even start for unrelated comments. The action re-checks
+    # the trigger itself; this only saves queue time.
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'claude') ||
+      (github.event_name == 'issues' && github.event.action == 'assigned') ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push a `claude/` branch when asked to implement something
+      issues: write
+      pull-requests: write
+      id-token: write # required to exchange the OIDC token for the GitHub App token
+      actions: read # let Claude read CI results on PRs
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Subscription auth (generate locally with `claude setup-token`). Swap to
+          # `anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}` to bill the API instead.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          label_trigger: claude
+          claude_args: |
+            --max-turns 25
+            --append-system-prompt "You are running on a GitHub Actions runner for the Knit public mirror. There is NO Android SDK and NO configured JDK 21 here, so ./gradlew will not work — do not attempt to build, compile, or run the test suite; ci.yml does that. Read code, reason from AGENTS.md and the .agents/ context library, and answer in the thread. Knit is a best-effort hobby project shipped as-is: never promise a fix, a timeline, or a release. Mesh behavior (Wi-Fi Aware/NAN, BLE, custody convergence) usually cannot be confirmed without two or more physical devices — say when a claim is unverified rather than asserting it."

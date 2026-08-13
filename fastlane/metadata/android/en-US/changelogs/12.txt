@@ -1,0 +1,7 @@
+A themed launcher icon, and a launch screen that follows your device's light or dark theme.
+
+Knit's icon now supplies a monochrome layer, so on Android 13 and newer it takes on the colours of your
+themed-icon home screen instead of falling back to a generic shape.
+
+Starting Knit on a dark-themed device no longer flashes a white screen before the app appears. The
+launch screen now uses the same light or dark background as the rest of the app.

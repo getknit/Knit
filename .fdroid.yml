@@ -55,6 +55,13 @@ MaintainerNotes: litert (com.google.ai.edge.litert:litert) is Google's prebuilt 
   The 1.4.x line is Apache-2.0 and depends only on litert-api.
 
 Builds:
+  - versionName: 2.2.3
+    versionCode: 12
+    commit: v2.2.3
+    subdir: app
+    gradle:
+      - yes
+    output: build/outputs/apk/release/app-release-unsigned.apk
   - versionName: 2.2.2
     versionCode: 11
     commit: 388c3120d4de1e19e002e31ae1aabe4970a2fed6
@@ -91,5 +98,5 @@ Builds:
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
 UpdateCheckData: gradle.properties|knit\.versionCode=(\d+)|.|knit\.versionName=(.*)
-CurrentVersion: 2.2.2
-CurrentVersionCode: 11
+CurrentVersion: 2.2.3
+CurrentVersionCode: 12

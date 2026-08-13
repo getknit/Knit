@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-12T20:10:18Z
+  updated: 2026-08-13T02:38:41Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -18,10 +18,19 @@ document:
 
 # Knit changelog
 
-## Unreleased
+## [2.2.3](https://github.com/getknit/knit/releases/tag/v2.2.3) — 2026-08-13T02:38:41Z
 
-A monochrome launcher-icon layer, so the icon takes part in themed-icon colour schemes, and a launch
-splash whose background follows the system light/dark theme.
+> A themed launcher icon, and a launch screen that follows the system light/dark theme.
+
+### Added
+
+- The launcher icon supplies a monochrome layer, so on Android 13 and newer it takes part in themed-icon
+  colour schemes instead of falling back to a generic shape.
+
+### Fixed
+
+- Starting Knit on a dark-themed device no longer flashes a near-white screen before the app draws. The
+  launch window and splash background now track the system theme, in lockstep with the in-app colours.
 
 ## [2.2.2](https://github.com/getknit/knit/releases/tag/v2.2.2) — 2026-07-31T22:22:03Z
 

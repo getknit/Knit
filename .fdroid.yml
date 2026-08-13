@@ -57,7 +57,7 @@ MaintainerNotes: litert (com.google.ai.edge.litert:litert) is Google's prebuilt 
 Builds:
   - versionName: 2.2.3
     versionCode: 12
-    commit: v2.2.3
+    commit: 40691d508f9dc4b24d03c9e07e3edbe545228929
     subdir: app
     gradle:
       - yes

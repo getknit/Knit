@@ -125,13 +125,14 @@ unmoderated app that also fails byte-comparison. The `checkModerationModels` tas
 (`app/build.gradle.kts`, wired into `preBuild`) hard-fails on a stub or a sub-1 MB model so this can never
 regress silently.
 
-## The F-Droid source scanner flags TensorFlow Lite — and the from-source replacement is broken
+## The F-Droid source scanner flagged TensorFlow Lite — and the from-source replacement is broken
 
-F-Droid's source scanner (fdroidserver **master**, which its CI runs — not the older Debian package or a
-tagged release, whose scanner is *not* version-catalog-aware and won't reproduce this) resolves the
-`libs.litert` version-catalog alias to `com.google.ai.edge.litert:litert` and flags it as a prebuilt
-Google-Maven "usual suspect" (`suss` signature `com.google.ai.edge.litert:litert:(2|1.[34])`), which
-**hard-fails `fdroid build`**. The obvious fix — the from-source `de.schliweb:tensorflow-lite-fdroid`
+**Resolved upstream; kept because the litert decision it explains is permanent.** F-Droid's source scanner
+(fdroidserver **master**, which its CI runs — not the older Debian package or a tagged release, whose
+scanner is *not* version-catalog-aware and won't reproduce this) resolved the `libs.litert` version-catalog
+alias to `com.google.ai.edge.litert:litert` and flagged it as a prebuilt Google-Maven "usual suspect"
+(`suss` signature `com.google.ai.edge.litert:litert:(2|1.[34])`), which **hard-failed `fdroid build`**.
+The obvious fix — the from-source `de.schliweb:tensorflow-lite-fdroid`
 (what `org.fairscan.app` uses) — was tried on-device and **REJECTED**: its from-source TFLite 2.18.0
 miscomputes our Detoxify/ALBERT model, saturating every output to a binary `0`/`1` (clean text scores
 `1.0` on `severe_toxicity`) so it would block every message. Verified delegate-independent (identical with
@@ -139,11 +140,14 @@ XNNPACK on, off, and single-thread); Google's litert scores correctly (`0.00004`
 abuse). It is a fundamental op-level miscompute, not a config knob — `fairscan`'s OCR model happens to
 work, ours doesn't. So Knit keeps Google's litert and takes the F-Droid exception:
 
-- **`AntiFeatures: NonFreeDep`** in fdroiddata — litert is Apache-2.0 but ships as a prebuilt binary
-  F-Droid can't rebuild.
-- **`scanignore` removed — `(2|1.[34])` is an over-broad false positive on the published 1.x line, and the
-  fix is upstream.** We first suppressed the flag with `scanignore: [app/build.gradle.kts]`; reviewer linsui
-  asked us to drop it (MR 43609), which leaves the build red on the scanner. The catch: the *published*
+- **No `AntiFeatures: NonFreeDep` — it was proposed, then dropped.** litert is Apache-2.0 but ships as a
+  prebuilt binary F-Droid can't rebuild, so the metadata originally declared `NonFreeDep`. Once the scanner
+  signature was corrected upstream (below) there was nothing left to declare, and the block came out during
+  the new-app review; the merged fdroiddata file has no AntiFeatures. **Do not add it back** on a litert
+  bump within the 1.x line.
+- **`scanignore` removed — `(2|1.[34])` was an over-broad false positive on the published 1.x line, and the
+  fix went upstream.** We first suppressed the flag with `scanignore: [app/build.gradle.kts]`; reviewer
+  linsui asked us to drop it (MR 43609), which left the build red on the scanner. The catch: the *published*
   `litert:1.3.x`/`1.4.x` AAR (byte-checked from `dl.google.com/android/maven2`) is just the plain
   `org.tensorflow.lite` interpreter — the rebranded classic TFLite, 12 classes, Apache-2.0, **zero
   `com.google.android.play` refs**. The `litert/kotlin/BUILD` target that *does* carry the Play coupling
@@ -151,14 +155,15 @@ work, ours doesn't. So Knit keeps Google's litert and takes the F-Droid exceptio
   tree, but a git tag snapshots the whole monorepo including that in-progress Kotlin API — it publishes as
   **`litert-api:2.x`**, never as `litert:1.3/1.4.x`. The coupling reaches litert only at 2.x, transitively:
   `litert:2.x → litert-api:2.x → ai-delivery`. So `(2|1.[34])` both over-flags the interpreter line *and*
-  misses the real carrier `litert-api:2`. Fix submitted as **`fdroid/fdroid-suss!63`** (signature →
-  `litert(-api)?:2`: drop `1.[34]`, add the `litert-api` arm); one-line YAML change, CI green
-  (test/validate/lint/black), linsui accepted the finding ("Good catch"), pending merge. Once suss.json
-  regenerates our pinned `litert:1.4.2` stops matching and **43609 goes green with no `scanignore`**. (Even
-  without the fix the shipped APK is clean: we call only `org.tensorflow.lite.Interpreter` and R8 strips the
-  rest, so the release dex has zero Play classes regardless.)
-- **`commit:` is the full 40-char hash**, not the `v2.2.1` tag (linsui's request — tags are mutable). No
-  `sudo:` block either: the buildserver already has JDK 21 selected, so the manual install was redundant.
+  misses the real carrier `litert-api:2`. Fixed by **`fdroid/fdroid-suss!63`** (signature →
+  `litert(-api)?:2`: drop `1.[34]`, add the `litert-api` arm), **merged 2026-07-26**. suss.json regenerated,
+  our pinned `litert:1.4.2` stopped matching, and 43609 went green with no `scanignore` — all nine jobs,
+  verified 2026-07-31 — and merged. (Even before the fix the shipped APK was clean: we call only
+  `org.tensorflow.lite.Interpreter` and R8 strips the rest, so the release dex has zero Play classes
+  regardless.)
+- **`commit:` is the full 40-char hash**, not the tag (linsui's request — tags are mutable). No `sudo:`
+  block either: the buildserver already has JDK 21 selected, so the manual install was redundant. No
+  `output:` line either — fdroidserver locates the APK itself, and the review dropped the one we had.
 - **`AutoUpdateMode: Version`** (bare, not `Version v%v`). Under `UpdateCheckMode: Tags` the metadata
   schema forbids a format string (`^(None|Version( \+.+)?)$`); `Version v%v` is an `UpdateCheckMode: HTTP`
   construct and fails `check-jsonschema`. The tag itself is the version source.
@@ -178,14 +183,35 @@ GitHub Release. Prepare the commit first —
    `v<versionName>`** — fdroiddata's `Binaries:` URL expands `%v` to the *versionName*, so a `2.1` /
    `v2.1.0` mismatch breaks the binary lookup. (`AutoUpdateMode` is bare `Version` under `UpdateCheckMode:
    Tags` — see the F-Droid-scanner section below for why `Version v%v` is wrong there.)
-2. Update `CurrentVersion` / `CurrentVersionCode` and add a `Builds:` entry in `.fdroid.yml` (then copy it
-   to fdroiddata), and add `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt` — F-Droid scrapes
-   `fastlane/metadata/` straight from this repo at the built commit (descriptions, screenshots, changelog).
+2. Update `CurrentVersion` / `CurrentVersionCode` and add a `Builds:` entry in `.fdroid.yml`, and add
+   `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt` — F-Droid scrapes `fastlane/metadata/`
+   straight from this repo at the built commit (descriptions, screenshots, changelog).
 3. Tag `v<versionName>` and push it. The `preflight` job re-checks every one of the above and refuses the
    release if any disagrees, so a mistake costs a re-tag, not a bad artifact.
+4. Publish the draft Release, **then** open the fdroiddata MR (see below). Not before: `fdroid build`
+   fetches `Binaries:`, which 404s until the Release is public.
 
 The workflow ends at a **draft** Release: the `Binaries:` URL stays 404 until you click publish, which is
 the right state while fdroiddata still points at the previous version. Drop `--draft` to go straight out.
+
+### Keeping `.fdroid.yml` and fdroiddata in sync
+
+`.fdroid.yml` is the source of truth, but it is not copied verbatim — fdroidserver's canonical writer
+strips comments, so **comments are the only permitted difference**; every other byte must match the merged
+`metadata/app.getknit.knit.yml`. That invariant was silently broken once: the new-app review (MR 43609)
+dropped an `AntiFeatures` block, `MaintainerNotes` and every `output:` line, reordered `Categories`
+alphabetically, moved `AllowedAPKSigningKeys` after `Builds:`, put builds in ascending versionCode order,
+and pruned all but the newest build entry — none of which was mirrored back here until 2.2.3. So work in
+this direction: **update the fdroiddata file from `.fdroid.yml`, and reconcile `.fdroid.yml` to whatever
+the review actually merges.** Verify with
+
+```bash
+diff <(grep -v '^\s*#' .fdroid.yml | grep -v '^$') <(grep -v '^$' ../fdroiddata/metadata/app.getknit.knit.yml)
+```
+
+The update MR itself is a two-line-plus-entry change against current `master` (`Update Knit to <version>`,
+matching fdroiddata's own convention). `AutoUpdateMode: Version` means F-Droid's bot would eventually pick
+the tag up on its own; sending the MR just skips the wait.
 
 **GitHub Actions runs the copy of the workflow that exists at the tag**, so editing `release.yml` only
 affects tags cut afterwards. Fixing a workflow bug for an already-created tag means moving the tag.

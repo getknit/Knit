@@ -1,30 +1,25 @@
 # In-repo F-Droid metadata. Two jobs:
 #   1. Lets `fdroid build` build Knit straight from a checkout, so the buildserver recipe can be tested
 #      locally in F-Droid's own container before anything is submitted.
-#   2. Source of truth for `metadata/app.getknit.knit.yml` in fdroiddata — edit here, copy there, so the
-#      two cannot drift.
+#   2. Source of truth for `metadata/app.getknit.knit.yml` in fdroiddata — edit here, copy there.
+# Comments are the ONLY permitted difference: fdroidserver's canonical writer strips them, so everything
+# else must match the merged fdroiddata file field-for-field, in this order, or the two have drifted. They
+# did once — the new-app review (MR 43609) dropped an AntiFeatures block, MaintainerNotes and every
+# `output:` line, and reordered fields, none of which was mirrored back here until 2.2.3. Check with:
+#   diff <(grep -v '^\s*#' .fdroid.yml | grep -v '^$') <(grep -v '^$' ../fdroiddata/metadata/app.getknit.knit.yml)
 # Field reference: https://f-droid.org/docs/Build_Metadata_Reference/
 # Background and the reproducibility contract: .agents/context/distribution.md
 #
 # NOTE: a local `fdroid build` needs JDK 21 already present — settings.gradle.kts omits the foojay resolver,
 # so Gradle won't fetch one (it fails loudly). The F-Droid buildserver already has JDK 21 selected.
 
-# On-device content moderation runs Google's TensorFlow Lite (LiteRT) as a prebuilt native library
-# (com.google.ai.edge.litert). It is freely licensed (Apache-2.0) but not built from F-Droid's source —
-# hence the NonFreeDep AntiFeature. The obvious from-source substitute, de.schliweb:tensorflow-lite-fdroid,
-# was tried and REJECTED: it miscomputes our Detoxify/ALBERT model (saturates every output to 0/1 on-device,
-# verified independent of the XNNPACK delegate), so it would make Knit block every message. See
-# .agents/context/distribution.md for the full evidence (the published litert:1.4.x is the plain interpreter,
-# Play-free; the SUSS `1.[34]` arm is a false positive, fixed upstream at fdroid-suss!63).
-AntiFeatures:
-  NonFreeDep:
-    en-US: On-device content filtering uses Google's prebuilt TensorFlow Lite.
 # Validated against fdroiddata's config/categories.yml (108 categories — the old ~17-category list is long
 # gone). Deliberately NOT "Internet": Knit works without it, and filing an offline mesh messenger under
-# Internet misdescribes it. `fdroid lint` will reject any name not in that file.
+# Internet misdescribes it. `fdroid lint` will reject any name not in that file. Alphabetical, as the
+# canonical writer emits them.
 Categories:
-  - Messaging
   - Connectivity
+  - Messaging
   - Security
 License: GPL-3.0-or-later
 AuthorName: Jeffrey Walter Mixon
@@ -41,53 +36,40 @@ AutoName: Knit
 
 RepoType: git
 Repo: https://github.com/getknit/knit.git
-
 # Reproducible-build flow: F-Droid rebuilds the tagged commit, byte-compares against the APK below, and on
 # a match distributes OUR signed APK rather than re-signing with F-Droid's key. See distribution.md for why
 # that matters here (Knit's offline app-share hands peers this same APK).
 Binaries: https://github.com/getknit/knit/releases/download/v%v/knit-%v.apk
-AllowedAPKSigningKeys: b18a283d11797c2a84a008c1fcb9e1b864e7b4c3b301408f7a4a80624b0e631c
 
-# Durable note for fdroiddata maintainers (survives the MR merge, unlike the MR description).
-MaintainerNotes: litert (com.google.ai.edge.litert:litert) is Google's prebuilt TensorFlow Lite, declared
-  NonFreeDep because the from-source de.schliweb:tensorflow-lite-fdroid miscomputes this app's Detoxify/ALBERT
-  toxicity model (saturates every output to 0/1, verified on-device), which would make it flag every message.
-  The 1.4.x line is Apache-2.0 and depends only on litert-api.
-
+# No AntiFeatures block, and no `output:` or `ndk:` lines. On-device content moderation runs Google's
+# prebuilt TensorFlow Lite (com.google.ai.edge.litert), which the source scanner used to flag via the SUSS
+# signature `litert:(2|1.[34])` — an over-broad false positive on the published 1.x line, which is the plain
+# org.tensorflow.lite interpreter (Apache-2.0, zero Play refs). The real Play coupling (AiPackModelProvider
+# + com.google.android.play:ai-delivery) publishes as litert-api:2.x. Fixed upstream in fdroid-suss!63
+# (signature -> `litert(-api)?:2`, merged 2026-07-26), after which our pinned litert:1.4.2 stopped matching
+# and the NonFreeDep AntiFeature was dropped in review. Keep Google's litert: the from-source substitute
+# de.schliweb:tensorflow-lite-fdroid miscomputes our Detoxify/ALBERT model (saturates every output to 0/1
+# on-device, independent of the XNNPACK delegate), so it would make Knit block every message — full
+# evidence in distribution.md. `output:` is unnecessary because fdroidserver finds the APK itself, and the
+# APK path needs no NDK (native-symbol extraction defaults on only for `bundle*` tasks, i.e. the Play AAB).
+# `commit:` is the full 40-char hash, not the tag — the reviewer's request, since tags are mutable. Oldest
+# build first, as the canonical writer emits them.
 Builds:
-  - versionName: 2.2.3
-    versionCode: 12
-    commit: 40691d508f9dc4b24d03c9e07e3edbe545228929
-    subdir: app
-    gradle:
-      - yes
-    output: build/outputs/apk/release/app-release-unsigned.apk
   - versionName: 2.2.2
     versionCode: 11
     commit: 388c3120d4de1e19e002e31ae1aabe4970a2fed6
     subdir: app
     gradle:
       - yes
-    # Same litert SUSS false positive as 2.2.1 below — see that entry and the top comment. Expected to be
-    # moot here: fdroid-suss!63 (litert(-api)?:2) merged 2026-07-26, so litert:1.4.2 no longer matches.
-    output: build/outputs/apk/release/app-release-unsigned.apk
-  - versionName: 2.2.1
-    versionCode: 10
-    commit: 4a3a69f2f7088727e1b88513a830d02cd1357395
+
+  - versionName: 2.2.3
+    versionCode: 12
+    commit: 40691d508f9dc4b24d03c9e07e3edbe545228929
     subdir: app
     gradle:
       - yes
-    # The source scanner flags litert (com.google.ai.edge.litert) via the SUSS `litert:(2|1.[34])` signature.
-    # That is an over-broad FALSE POSITIVE on the published 1.x line: the shipped litert:1.4.x AAR is the plain
-    # org.tensorflow.lite interpreter (Apache-2.0, zero Play refs). The Play coupling (AiPackModelProvider +
-    # com.google.android.play:ai-delivery) lives in the litert/kotlin source target, which publishes as
-    # litert-api:2.x, not as litert:1.4.x. scanignore was removed at the reviewer's request (MR 43609), so this
-    # build stays red until the signature is fixed upstream (fdroid-suss!63: litert(-api)?:2). litert is a
-    # deliberate, documented dependency (see AntiFeatures above); the from-source substitute was rejected (see
-    # the top comment).
-    output: build/outputs/apk/release/app-release-unsigned.apk
-    # No `ndk:` line on purpose — the APK path needs no NDK (see distribution.md). Native-symbol
-    # extraction is gated behind -Pknit.nativeSymbols=true and only runs for the Play AAB.
+
+AllowedAPKSigningKeys: b18a283d11797c2a84a008c1fcb9e1b864e7b4c3b301408f7a4a80624b0e631c
 
 # versionCode/versionName live in gradle.properties and are read via providers.gradleProperty(), which
 # fdroidserver's build-file parser cannot evaluate. UpdateCheckData points it at the file instead — the

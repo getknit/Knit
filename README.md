@@ -47,6 +47,7 @@ dependency** and **end-to-end encryption** on direct and group messages.
 
 ## Contents
 
+- [Install](#-install)
 - [How it works](#how-it-works)
 - [Use it when](#-use-it-when)
 - [Features](#-features)
@@ -69,6 +70,40 @@ dependency** and **end-to-end encryption** on direct and group messages.
 > encrypted** — bodies, mentions, and image attachments are readable only by their intended recipients,
 > even though every message floods through relay devices. The public Nearby room is plaintext by design
 > (no fixed recipient set). See the [Security note](#-security-note).
+
+## 📥 Install
+
+Knit needs **Android 10 (API 29) or newer** — see [Requirements](#-requirements). Both channels ship the
+same app; pick one and stay on it (see the note below).
+
+<div align="center">
+
+[![Get it on Google Play](https://img.shields.io/badge/Google%20Play-Install-3DDC84?style=for-the-badge&logo=googleplay&logoColor=white)](https://play.google.com/store/apps/details?id=app.getknit.knit)
+[![Get it on F-Droid](https://img.shields.io/badge/F--Droid-Install-1976D2?style=for-the-badge&logo=fdroid&logoColor=white)](https://f-droid.org/packages/app.getknit.knit/)
+
+</div>
+
+- **Google Play** — open
+  [the listing](https://play.google.com/store/apps/details?id=app.getknit.knit) (or search *Knit* in the
+  Play Store app) and tap **Install**; updates arrive automatically.
+- **F-Droid** — install the [F-Droid client](https://f-droid.org/) and search for *Knit*, or open
+  [the package page](https://f-droid.org/packages/app.getknit.knit/) and tap **Download APK**. F-Droid
+  **rebuilds Knit from source and byte-compares** the result against our published release, then
+  distributes *our* signed APK verbatim — see [the reproducibility
+  contract](.agents/context/distribution.md).
+- **Direct APK** — the same F-Droid-verified, self-signed universal APK is attached to every
+  [GitHub Release](https://github.com/getknit/knit/releases), for sideloading without any store.
+- **From a nearby phone, no store or internet needed** — an installed copy of Knit can hand itself to
+  another device: **Install offline** in the app menu merges its installed splits into a universal APK,
+  re-signs it on-device, and sends it over Quick Share or Bluetooth. Open the received file on the other
+  phone and allow installing it.
+
+> [!IMPORTANT]
+> **Play and non-Play installs carry different signatures and can't upgrade one another.** Play App
+> Signing re-signs the app with Google's key, so switching between the Play build and the
+> F-Droid/APK/offline-shared build requires uninstalling first — **which erases your local message history
+> and identity key**. The F-Droid, GitHub-Release, and offline-shared APKs all share one signature, so
+> those three interoperate and update in place.
 
 ## How it works
 

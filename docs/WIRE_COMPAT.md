@@ -38,7 +38,9 @@ Each evolves independently; bump the right one:
   connection time, **unauthenticated** — a routing/degradation hint only, never a trust input.
 - **`RelayEnvelope.type` registry**: `chat`, `groupupdate`, `groupleave`, `profile`, `receipt`,
   `reaction`, `blobreq`, `keyreq`, `typing`.
-- **`EncEnvelope.v`**: the E2E crypto scheme (AES-GCM + HPKE wrap).
+- **`EncEnvelope.v`**: the E2E crypto scheme — `1` = static keys (AES-GCM + per-recipient HPKE wrap),
+  `2` = the DM epoch ratchet (AES-GCM under a derived key; `EncEnvelope.r` carries the ratchet header,
+  `keys` is empty — see `docs/FORWARD_SECRECY_RATCHET.md`).
 - **`MessageContent.v`**: the decrypted plaintext schema.
 
 ## Rules that keep changes additive
@@ -130,6 +132,22 @@ vectors (`GoldenVectorTest`) pin the definite-length bytes of every wire type + 
 future iOS codec has byte-exact fixtures. Also bundled: the two-way responder HELLO (`LinkHandshake`) so a
 link's peer identity is confirmed over the socket, not parsed from the (unauthenticated) discovery advert.
 
+**Precedent — an additive crypto-scheme bump (`EncEnvelope.v` 1 → 2, the DM epoch ratchet).** The whole
+forward-secrecy scheme (`docs/FORWARD_SECRECY_RATCHET.md`) shipped without touching a discovery marker,
+`Protocol.VERSION`, or any v1 byte: `EncEnvelope` gained the nullable `r: RatchetHeader?` (rule 1 — its
+`@ByteString` fields live inside the new `RatchetHeader`/`RatchetInit` types, honoring rule 1's
+exception), `ProfileContent` gained the nullable `prekey: PrekeyInfo?`, `MessageContent` gained the
+nullable `ctl` marker *inside* the ciphertext (same schema version — additive there too), and
+`Protocol.CAP_RATCHET` took the next capability bit. A v1-era build decodes a v2 envelope fine
+(`ignoreUnknownKeys` drops `r`), rejects it at the **version gate** (rule 5: drop-locally + count,
+still relay/carry — `canCarry` never looks at `v`), and keeps custodying it for peers that can read it.
+The v2 fixtures ride alongside the untouched v1 golden vectors in `GoldenVectorTest`; the
+old-decoder-ignores-`r` behavior is pinned in `WireSerializationTest`. Senders gate on the peer's
+pinned profile carrying **both** `CAP_RATCHET` and a `prekey` (one signed frame — no stale-capability
+window), so a v2 frame is only ever addressed to a build that can open it.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
-`MeshManager.decrypt`. New content schema ⇒ bump `MessageContent.MAX_SUPPORTED`.
+`MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean
+unknown-version drop into `DECRYPT_FAILED` noise). New content schema ⇒ bump
+`MessageContent.MAX_SUPPORTED`.

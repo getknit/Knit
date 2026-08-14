@@ -98,6 +98,52 @@ class GoldenVectorTest {
                 WireCodec.encodePayload(
                     EncEnvelope(nonce = bytes(12, 5), ct = bytes(48, 6), keys = listOf(WrappedKey(to = "bob", wk = bytes(80, 4)))),
                 ),
+            // v2 (epoch ratchet) additions — the v1 fixtures above must stay byte-identical forever.
+            "ratchetInit" to WireCodec.encodePayload(RatchetInit(eph = bytes(32, 7), pkid = 3, at = 1234L)),
+            "ratchetHeader" to
+                WireCodec.encodePayload(
+                    RatchetHeader(
+                        se = 2,
+                        ek = bytes(32, 8),
+                        pe = 1,
+                        n = 5,
+                        init = RatchetInit(eph = bytes(32, 7), pkid = 3, at = 1234L),
+                        flags = RatchetHeader.FLAG_RESET,
+                    ),
+                ),
+            "prekeyInfo" to WireCodec.encodePayload(PrekeyInfo(id = 7, pub = bytes(32, 9), sig = bytes(64, 11))),
+            // A v2 envelope: `v` present (non-default), `keys` the 1-byte empty array (`80`), `r` set.
+            "encEnvelopeV2" to
+                WireCodec.encodePayload(
+                    EncEnvelope(
+                        v = EncEnvelope.VERSION_RATCHET,
+                        nonce = bytes(12, 5),
+                        ct = bytes(48, 6),
+                        keys = emptyList(),
+                        r =
+                            RatchetHeader(
+                                se = 1,
+                                ek = bytes(32, 8),
+                                pe = 0,
+                                n = 0,
+                                init = RatchetInit(eph = bytes(32, 7), pkid = 3, at = 1234L),
+                            ),
+                    ),
+                ),
+            // The additive ProfileContent.prekey field, appended after the v1 fields.
+            "profileContentPrekey" to
+                WireCodec.encodePayload(
+                    ProfileContent(
+                        "Ann",
+                        "hiking",
+                        avatarHash = "av1",
+                        pubKey = "pk1",
+                        deviceTag = "dt1",
+                        protoVersion = 1,
+                        capabilities = 31L,
+                        prekey = PrekeyInfo(id = 7, pub = bytes(32, 9), sig = bytes(64, 11)),
+                    ),
+                ),
         )
 
     @Test
@@ -173,6 +219,26 @@ class GoldenVectorTest {
                     "d1d8dfe6edf4fb020910171e252c333a41484f646b65797381a262746f63626f6262776b5850040b121920272e353c434a51585f666d" +
                     "747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7" +
                     "eef5fc030a11181f262d",
+                "ratchetInit" to
+                    "a3636570685820070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e064706b6964036261741904d2",
+                "ratchetHeader" to
+                    "a66273650262656b5820080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae162706501616e0564696e6974" +
+                    "a3636570685820070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e064706b6964036261741904d265666c" +
+                    "61677301",
+                "prekeyInfo" to
+                    "a3626964076370756258200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe26373696758400b12192027" +
+                    "2e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1" +
+                    "a8afb6bdc4",
+                "encEnvelopeV2" to
+                    "a5617602656e6f6e63654c050c131a21282f363d444b526263745830060d141b222930373e454c535a61686f767d848b9299a0a7aeb5" +
+                    "bcc3cad1d8dfe6edf4fb020910171e252c333a41484f646b657973806172a56273650162656b5820080f161d242b323940474e555c63" +
+                    "6a71787f868d949ba2a9b0b7bec5ccd3dae162706500616e0064696e6974a3636570685820070e151c232a31383f464d545b62697077" +
+                    "7e858c939aa1a8afb6bdc4cbd2d9e064706b6964036261741904d2",
+                "profileContentPrekey" to
+                    "a8646e616d6563416e6e667374617475736668696b696e676a6176617461724861736863617631667075624b657963706b3169646576" +
+                    "696365546167636474316c70726f746f56657273696f6e016c6361706162696c6974696573181f667072656b6579a362696407637075" +
+                    "6258200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe26373696758400b121920272e353c434a51585f" +
+                    "666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4",
             )
 
         const val BUNDLE_ENCODED =

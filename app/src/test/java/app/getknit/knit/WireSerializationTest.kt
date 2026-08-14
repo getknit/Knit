@@ -8,7 +8,10 @@ import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
+import app.getknit.knit.mesh.protocol.RatchetHeader
+import app.getknit.knit.mesh.protocol.RatchetInit
 import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
@@ -18,6 +21,8 @@ import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.mesh.protocol.WrappedKey
 import app.getknit.knit.mesh.protocol.isStorable
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.cbor.ByteString
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -209,6 +214,87 @@ class WireSerializationTest {
         assertArrayEquals(nonce, decoded?.enc?.nonce)
         assertArrayEquals(ct, decoded?.enc?.ct)
         assertArrayEquals(wk, key?.wk)
+    }
+
+    @Test
+    fun ratchetV2EnvelopeRoundTripsWithRawBytes() {
+        val init = RatchetInit(eph = ByteArray(32) { 7 }, pkid = 4, at = 999L)
+        val content =
+            ChatContent(
+                enc =
+                    EncEnvelope(
+                        v = EncEnvelope.VERSION_RATCHET,
+                        nonce = byteArrayOf(1, 2, 3),
+                        ct = byteArrayOf(4, 5, 6, 7),
+                        keys = emptyList(),
+                        r = RatchetHeader(se = 3, ek = ByteArray(32) { 9 }, pe = 2, n = 17, init = init, flags = 0),
+                    ),
+            )
+        val decoded = WireCodec.decodePayload<ChatContent>(WireCodec.encodePayload(content))
+        val enc = requireNotNull(decoded?.enc)
+        assertEquals(EncEnvelope.VERSION_RATCHET, enc.v)
+        assertTrue(enc.keys.isEmpty())
+        val header = requireNotNull(enc.r)
+        assertEquals(3, header.se)
+        assertEquals(2, header.pe)
+        assertEquals(17, header.n)
+        assertArrayEquals(ByteArray(32) { 9 }, header.ek)
+        assertEquals(4, requireNotNull(header.init).pkid)
+        assertEquals(999L, requireNotNull(header.init).at)
+        assertArrayEquals(init.eph, requireNotNull(header.init).eph)
+    }
+
+    /** The pre-ratchet [EncEnvelope] shape, exactly as a v1-era build compiled it. */
+    @Serializable
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    private class EncEnvelopeV1Shape(
+        val v: Int = 1,
+        @ByteString val nonce: ByteArray,
+        @ByteString val ct: ByteArray,
+        val keys: List<WrappedKey>,
+    )
+
+    @Test
+    fun aV1ShapedDecoderIgnoresTheRatchetHeader() {
+        // What an old build does with a v2 envelope: `ignoreUnknownKeys` drops `r`, the envelope still
+        // decodes, and the version gate (not a parse error) is what rejects it — so it keeps relaying.
+        val v2 =
+            WireCodec.encodePayload(
+                EncEnvelope(
+                    v = EncEnvelope.VERSION_RATCHET,
+                    nonce = byteArrayOf(1),
+                    ct = byteArrayOf(2),
+                    keys = emptyList(),
+                    r = RatchetHeader(se = 1, ek = ByteArray(32), pe = 0, n = 0, init = RatchetInit(ByteArray(32), 1, 1L)),
+                ),
+            )
+        val seenByOldBuild = WireCodec.decodePayload<EncEnvelopeV1Shape>(v2)
+        assertEquals(EncEnvelope.VERSION_RATCHET, seenByOldBuild?.v)
+        assertTrue(requireNotNull(seenByOldBuild).keys.isEmpty())
+    }
+
+    @Test
+    fun aFutureV3EnvelopeStillDecodesForRelay() {
+        // The WIRE_COMPAT bump checklist's decode half: a higher version must never be a parse error
+        // (delivery drops it by the version gate; InboundPipelineTest covers the counting).
+        val future = EncEnvelope(v = 3, nonce = byteArrayOf(1), ct = byteArrayOf(2), keys = emptyList())
+        val decoded = WireCodec.decodePayload<ChatContent>(WireCodec.encodePayload(ChatContent(enc = future)))
+        assertEquals(3, decoded?.enc?.v)
+    }
+
+    @Test
+    fun profileContentPrekeySurvivesAndDecodesNullForOldFrames() {
+        val prekey = PrekeyInfo(id = 2, pub = ByteArray(32) { 5 }, sig = ByteArray(64) { 6 })
+        val decoded =
+            WireCodec.decodePayload<ProfileContent>(
+                WireCodec.encodePayload(ProfileContent(name = "Ann", status = "", prekey = prekey)),
+            )
+        assertEquals(2, decoded?.prekey?.id)
+        assertArrayEquals(prekey.pub, decoded?.prekey?.pub)
+        assertArrayEquals(prekey.sig, decoded?.prekey?.sig)
+
+        val old = WireCodec.decodePayload<ProfileContent>(WireCodec.encodePayload(ProfileContent(name = "Ann", status = "")))
+        assertNull(old?.prekey)
     }
 
     @Test

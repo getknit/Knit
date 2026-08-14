@@ -151,8 +151,10 @@ data class ChatContent(
  * (content hash of the avatar blob), [pubKey] (base64 [app.getknit.knit.mesh.crypto.PublicKeyBundle];
  * pins the peer's E2E key, and the nodeId must derive to it), and key-independent [deviceTag] for
  * block-list continuity. [protoVersion]/[capabilities] advertise the sender's protocol version and
- * feature bits (see [Protocol]) — additive, authenticated (the frame [sig] covers them), and currently
- * recorded for diagnostics only.
+ * feature bits (see [Protocol]) — additive, authenticated (the frame [sig] covers them); the
+ * `CAP_RATCHET` bit is a send-time input (v2 DM gating), the rest are diagnostics. [prekey] is the
+ * sender's current ratchet signed prekey (v2 session bootstrap); a *newer* profile carrying a null
+ * [prekey] clears the pin (the peer downgraded — outbound falls back to v1).
  */
 @Serializable
 data class ProfileContent(
@@ -163,6 +165,7 @@ data class ProfileContent(
     val deviceTag: String? = null,
     val protoVersion: Int? = null,
     val capabilities: Long? = null,
+    val prekey: PrekeyInfo? = null,
 )
 
 /** Content of a [FrameType.GROUP_LEAVE] frame: the group the (self-asserted) sender is leaving. */
@@ -292,6 +295,61 @@ class WrappedKey(
 )
 
 /**
+ * The X3DH-style session initiation attached to a v2 DM's [RatchetHeader] on **every** frame until the
+ * session confirms (any one of them may be the first to arrive): the initiator's ephemeral X25519 pub
+ * [eph], the responder signed-prekey id [pkid] it was derived against, and the session-establishment
+ * clock [at] (constant across re-sends; the receiver's replacement/idempotence anchor — see
+ * docs/FORWARD_SECRECY_RATCHET.md §7). The initiator's identity key is NOT repeated here: it is the
+ * `hpkePub` already pinned from their profile, which `verifyInbound` requires before any DM is
+ * processed. A plain `class` (see [WrappedKey]).
+ */
+@Serializable
+class RatchetInit(
+    @ByteString val eph: ByteArray,
+    val pkid: Int,
+    val at: Long,
+)
+
+/**
+ * The v2 epoch-ratchet header inside an [EncEnvelope] (crypto scheme v2 — docs/FORWARD_SECRECY_RATCHET.md).
+ * [se] is the sender's epoch number, [ek] the sender's epoch X25519 pub (the receiver's next DH base —
+ * carried on every frame because custody eviction makes any single frame's arrival unreliable), [pe]
+ * which of the *receiver's* epochs supplied the sender's DH base (0 = their signed prekey, only legal
+ * with [init] attached), and [n] the index in the epoch's forward-only message chain. [flags] bit 0
+ * marks a session reset request. Integrity needs no extra MAC: tampering changes the derived AEAD key,
+ * and the whole payload is under the frame signature. A plain `class` (see [WrappedKey]).
+ */
+@Serializable
+class RatchetHeader(
+    val se: Int,
+    @ByteString val ek: ByteArray,
+    val pe: Int,
+    val n: Int,
+    val init: RatchetInit? = null,
+    val flags: Int = 0,
+) {
+    companion object {
+        /** [flags] bit: this frame initiates a session *replacement* (reset request). */
+        const val FLAG_RESET = 0x1
+    }
+}
+
+/**
+ * A ratchet signed prekey as published in [ProfileContent.prekey]: the raw X25519 public key [pub],
+ * its monotonically increasing [id], and a detached Ed25519 signature [sig] by the owner's identity
+ * signing key over `RatchetCrypto.spkSigningBytes(id, pub)`. Detached — even though the profile frame
+ * signature also covers this field — so the prekey stays re-verifiable once stored apart from its
+ * frame (the peers table), and so a non-Knit implementation can verify one in isolation. A plain
+ * `class` (see [WrappedKey]).
+ */
+@Serializable
+class PrekeyInfo(
+    val id: Int,
+    @ByteString val pub: ByteArray,
+    @ByteString val sig: ByteArray,
+)
+
+/**
  * The end-to-end encryption envelope carried inside an encrypted [ChatContent]. A random per-message
  * content key encrypts the [app.getknit.knit.mesh.crypto.MessageContent] with AES-256-GCM into [ct]
  * under [nonce] (both raw byte strings — CBOR `@ByteString`, not base64: the envelope already rides a
@@ -301,6 +359,11 @@ class WrappedKey(
  * [sig] (which covers the whole [ChatContent] payload), so a wrapped key or ciphertext can't be replayed
  * into another message. A plain `class` (see [WrappedKey]) so the `@ByteString` fields don't inherit a
  * broken data-class `equals`.
+ *
+ * **v2 (DM epoch ratchet)**: the AEAD key is *derived* from ratchet state described by [r], never
+ * wrapped — [keys] is empty and [r] non-null. v1 ↔ v2 discrimination is [v] alone; [r] is additive
+ * (nullable, ignored by older builds) per docs/WIRE_COMPAT.md rule 1, with its `@ByteString` bytes
+ * living inside the new [RatchetHeader] type rather than as defaulted fields here (rule 1's exception).
  */
 @Serializable
 class EncEnvelope(
@@ -308,10 +371,18 @@ class EncEnvelope(
     @ByteString val nonce: ByteArray,
     @ByteString val ct: ByteArray,
     val keys: List<WrappedKey>,
+    val r: RatchetHeader? = null,
 ) {
     companion object {
-        /** Highest crypto-scheme version this build understands; a higher [v] is dropped on delivery. */
+        /**
+         * Highest crypto-scheme version this build understands; a higher [v] is dropped on delivery.
+         * Bumps to [VERSION_RATCHET] together with the v2 decrypt branch (docs/WIRE_COMPAT.md pairs
+         * the two) — until then an inbound v2 takes the clean unknown-version drop, not DECRYPT_FAILED.
+         */
         const val MAX_SUPPORTED_VERSION = 1
+
+        /** The DM epoch-ratchet scheme (docs/FORWARD_SECRECY_RATCHET.md); requires [r]. */
+        const val VERSION_RATCHET = 2
     }
 }
 

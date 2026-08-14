@@ -41,4 +41,14 @@ class MessageContentTest {
     fun decodingGarbageReturnsNullRatherThanThrowing() {
         assertNull(MessageContent.decode(byteArrayOf(1, 2, 3, 4)))
     }
+
+    @Test
+    fun theControlMarkerRoundTripsAndDefaultsToNull() {
+        // Additive field under the same schema version: a v1-era decoder ignores it, an ordinary
+        // message omits it (encodeDefaults = false), and a reset frame carries it inside the ciphertext.
+        val reset = MessageContent.decode(MessageContent(body = "", ctl = MessageContent.CTL_SESSION_RESET).encode())!!
+        assertEquals(MessageContent.CTL_SESSION_RESET, reset.ctl)
+        assertTrue(reset.isSupported())
+        assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.ctl)
+    }
 }

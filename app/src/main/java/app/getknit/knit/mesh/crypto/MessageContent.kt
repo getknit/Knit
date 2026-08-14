@@ -34,6 +34,11 @@ data class MessageContent(
     // Relies, like every field here, on cryptoCbor's `encodeDefaults = false` to stay off the wire when
     // null; do not enable encodeDefaults or every DM frame inflates with an empty reply.
     val replyTo: ReplyRef? = null,
+    // Control marker for ratchet session management (additive; [CTL_SESSION_RESET]). A non-null value
+    // means this frame is machinery, not conversation: it is never persisted as a message, never
+    // notified, never acked-as-a-message — see docs/FORWARD_SECRECY_RATCHET.md §7. Inside the
+    // ciphertext deliberately: a relay cannot distinguish a reset from an ordinary DM.
+    val ctl: Int? = null,
 ) {
     @OptIn(ExperimentalSerializationApi::class)
     fun encode(): ByteArray = cryptoCbor.encodeToByteArray(this)
@@ -47,6 +52,9 @@ data class MessageContent(
 
         /** Highest content schema version this build can read; a higher [v] is dropped on delivery. */
         const val MAX_SUPPORTED = 1
+
+        /** [ctl]: this frame requests a ratchet session reset (carries a fresh init; not a message). */
+        const val CTL_SESSION_RESET = 1
 
         @OptIn(ExperimentalSerializationApi::class)
         fun decode(bytes: ByteArray): MessageContent? = runCatching { cryptoCbor.decodeFromByteArray<MessageContent>(bytes) }.getOrNull()

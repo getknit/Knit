@@ -28,7 +28,11 @@ import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
+import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.mesh.crypto.b64d
+import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
+import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
+import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.protocol.BlobReqContent
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
@@ -99,6 +103,7 @@ class InboundPipeline(
     private val ackSync: AckSync,
     private val pendingInbound: PendingInbound,
     private val typingTracker: TypingTracker,
+    private val ratchet: RatchetSessions,
     private val originate: suspend (RelayEnvelope) -> Unit,
     private val flushPending: suspend (String) -> Unit,
     private val classifyText: suspend (String, String, Boolean) -> Boolean,
@@ -439,25 +444,131 @@ class InboundPipeline(
             deliverChat(env, content, me, conversationId)
             return
         }
+        // The already-have-it gate: custody re-serves the same ciphertext routinely (the 60s re-offer
+        // loop; the SeenSet is in-memory, 10 min, per mesh session), and decrypt used to run on every
+        // copy. Skipping it once the row exists is what lets the v2 ratchet actually DELETE used
+        // message keys (forward secrecy), and spares v1 an HPKE unwrap per re-serve. The ack still
+        // runs unconditionally — the receipt/vaccine semantics are untouched.
+        if (messages.exists(env.id)) {
+            acknowledge(env, me)
+            return
+        }
+        if (enc.v == EncEnvelope.VERSION_RATCHET) {
+            runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId) }.getOrElse {
+                Log.w(TAG, "drop v2 chat ${env.id}: ${it.message}")
+                metrics.onDropped(DropReason.DECRYPT_FAILED)
+            }
+            return
+        }
         val plain =
             runCatching { decrypt(env, enc, me) }.getOrElse {
                 Log.w(TAG, "drop encrypted chat ${env.id}: ${it.message}")
                 null
             } ?: return
+        deliverChat(env, plaintextContent(content, plain), me, conversationId, plain.attachmentKey)
+    }
+
+    /** The decrypted [MessageContent] substituted into the cleartext [ChatContent] shell for delivery. */
+    private fun plaintextContent(
+        content: ChatContent,
+        plain: MessageContent,
+    ): ChatContent =
+        content.copy(
+            body = plain.body,
+            mentions = plain.mentions,
+            attachmentHash = plain.attachmentHash,
+            attachmentMime = plain.attachmentMime,
+            enc = null,
+            replyTo = plain.replyTo,
+        )
+
+    /**
+     * The v2 (epoch-ratchet) decrypt-and-deliver. Two-phase against [RatchetSessions]' concurrency
+     * contract: a lock-free peek yields the plaintext for moderation/row-building, then the persist
+     * hook handed to [deliverChat] re-opens on fresh state and commits the ratchet delta atomically
+     * with the message row (`db.withTransaction` outer, session lock inner). Typed engine failures map
+     * to drop reasons — all delivery-local; the frame already custodied and will still relay.
+     */
+    @Suppress("ReturnCount") // a drop-reason gate ladder; early returns ARE the readable form (cf. decrypt)
+    private suspend fun decryptAndDeliverV2(
+        env: RelayEnvelope,
+        content: ChatContent,
+        enc: EncEnvelope,
+        me: String,
+        conversationId: String,
+    ) {
+        val wireHeader = enc.r
+        // v2 is DM-only; a group-addressed or header-less v2 envelope is malformed by construction.
+        if (wireHeader == null || env.group != null) {
+            metrics.onDropped(DropReason.RATCHET_BAD_HEADER)
+            return
+        }
+        val peerIkPub =
+            peers
+                .find(env.senderId)
+                ?.pubKey
+                ?.let { PublicKeyBundle.decode(it) }
+                ?.dhPublicKey()
+        if (peerIkPub == null) {
+            // Unreachable in practice: verifyInbound already required the pinned bundle.
+            metrics.onDropped(DropReason.NO_SENDER_KEY)
+            return
+        }
+        val thread = env.recipientId.orEmpty()
+        val aad = MessageCrypto.header(env.id, env.senderId, env.sentAt, thread)
+        val now = System.currentTimeMillis()
+        val peek = ratchet.peekOpen(me, env.senderId, peerIkPub, wireHeader, enc.nonce, enc.ct, aad, now)
+        if (peek !is RatchetEngine.OpenOutcome.Opened) {
+            onRatchetFailure(env, peek)
+            return
+        }
+        val plain = MessageContent.decode(peek.plaintext)
+        if (plain == null) {
+            metrics.onDropped(DropReason.DECRYPT_FAILED)
+            return
+        }
+        if (!plain.isSupported()) {
+            metrics.onDropped(DropReason.UNKNOWN_CONTENT_VERSION)
+            Log.w(TAG, "drop chat ${env.id}: unsupported content v=${plain.v}")
+            return
+        }
+        val commit: suspend (suspend () -> Unit) -> Boolean = { onOpened ->
+            db.withTransaction {
+                ratchet.commitOpen(me, env.senderId, peerIkPub, wireHeader, enc.nonce, enc.ct, aad, now, onOpened)
+            }
+        }
+        if (plain.ctl != null) {
+            // A control frame is ratchet machinery, not conversation: advance/commit the session state
+            // but never persist, notify, or ack it as a message. Reset handling lands with the
+            // reset-hardening phase; committing here already keeps the chain hole-free.
+            commit {}
+            return
+        }
         deliverChat(
             env,
-            content.copy(
-                body = plain.body,
-                mentions = plain.mentions,
-                attachmentHash = plain.attachmentHash,
-                attachmentMime = plain.attachmentMime,
-                enc = null,
-                replyTo = plain.replyTo,
-            ),
+            plaintextContent(content, plain),
             me,
             conversationId,
             plain.attachmentKey,
+            persist = { row -> commit { messages.save(row) } },
         )
+    }
+
+    /** Maps a typed v2 open failure to its drop reason (the reset heuristic lands with phase 6). */
+    private fun onRatchetFailure(
+        env: RelayEnvelope,
+        outcome: RatchetEngine.OpenOutcome,
+    ) {
+        val reason =
+            when (outcome) {
+                RatchetEngine.OpenOutcome.Failed.NO_SESSION -> DropReason.RATCHET_NO_SESSION
+                RatchetEngine.OpenOutcome.Failed.EPOCH_GONE -> DropReason.RATCHET_EPOCH_GONE
+                RatchetEngine.OpenOutcome.Failed.DUPLICATE -> DropReason.RATCHET_DUPLICATE
+                RatchetEngine.OpenOutcome.Failed.BAD_HEADER -> DropReason.RATCHET_BAD_HEADER
+                else -> DropReason.DECRYPT_FAILED
+            }
+        metrics.onDropped(reason)
+        Log.w(TAG, "drop v2 chat ${env.id}: $outcome")
     }
 
     /**
@@ -801,6 +912,9 @@ class InboundPipeline(
         me: String,
         conversationId: String,
         attachmentKey: String? = null,
+        // How the built row is persisted. The default is the plain idempotent upsert; the v2 ratchet
+        // path substitutes a hook that commits the ratchet delta + the row in one transaction.
+        persist: suspend (MessageEntity) -> Unit = { messages.save(it) },
     ) {
         // A real message from this sender supersedes any "typing" indicator for them in this thread — clear it
         // now (idempotent, and a no-op if they weren't shown as typing). Runs on re-delivery too, harmlessly.
@@ -810,7 +924,7 @@ class InboundPipeline(
         // The save below is an idempotent upsert, so only the notification needs gating.
         val isNew = !messages.exists(env.id)
         val hash = content.attachmentHash
-        messages.save(
+        persist(
             MessageEntity(
                 id = env.id,
                 senderId = env.senderId,
@@ -1045,6 +1159,7 @@ class InboundPipeline(
         // The stored avatarHash means "bytes are present locally": adopt the advertised hash only once
         // we hold its blob, otherwise keep the current avatar (if any) until the new one is fetched.
         val haveAvatar = advertised != null && blobStore.has(advertised)
+        val prekey = verifiedPrekey(content, pubKey, env.senderId)
         // The pinned key is guaranteed unchanged here (a differing key was refused above), so carrying
         // the prior [verified] state through the upsert is safe.
         peers.upsert(
@@ -1059,6 +1174,13 @@ class InboundPipeline(
                 protoVersion = content.protoVersion ?: existing?.protoVersion,
                 capabilities = content.capabilities ?: existing?.capabilities,
                 updatedAt = env.sentAt,
+                // The ratchet prekey rides the same LWW-accepted frame: adopt a verified one, and CLEAR
+                // the pin when this (newer) profile carries none — the peer downgraded, and keeping a
+                // stale prekey would black-hole v2 sends they can no longer open.
+                prekeyId = prekey?.id,
+                prekeyPub = prekey?.let { b64(it.pub) },
+                prekeySig = prekey?.let { b64(it.sig) },
+                prekeyProfileAt = prekey?.let { env.sentAt },
             ),
         )
         reclaimRemovedAvatarIfCleared(env.senderId, advertised, existing?.avatarHash)
@@ -1078,6 +1200,29 @@ class InboundPipeline(
             metrics.onFrameReplayed()
             onDeliver(it.wire, it.env, it.fromNodeId)
         }
+    }
+
+    /**
+     * Verifies a profile's ratchet [app.getknit.knit.mesh.protocol.PrekeyInfo] against the sender's
+     * (already self-certified) bundle: the detached Ed25519 signature must cover
+     * [RatchetCrypto.spkSigningBytes]. Returns null — treat as "no prekey" — on absence or any
+     * verification failure; a bad signature must not block the rest of the profile.
+     */
+    private fun verifiedPrekey(
+        content: ProfileContent,
+        pubKey: String,
+        senderId: String,
+    ): app.getknit.knit.mesh.protocol.PrekeyInfo? {
+        val prekey = content.prekey ?: return null
+        val bundle = PublicKeyBundle.decode(pubKey) ?: return null
+        val valid =
+            MessageCrypto.verify(bundle, prekey.sig, RatchetCrypto.spkSigningBytes(prekey.id, prekey.pub)) &&
+                prekey.pub.size == RatchetCrypto.KEY_BYTES
+        if (!valid) {
+            Log.w(TAG, "ignore prekey from $senderId: bad signature or shape")
+            return null
+        }
+        return prekey
     }
 
     /**

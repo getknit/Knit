@@ -374,12 +374,8 @@ class EncEnvelope(
     val r: RatchetHeader? = null,
 ) {
     companion object {
-        /**
-         * Highest crypto-scheme version this build understands; a higher [v] is dropped on delivery.
-         * Bumps to [VERSION_RATCHET] together with the v2 decrypt branch (docs/WIRE_COMPAT.md pairs
-         * the two) — until then an inbound v2 takes the clean unknown-version drop, not DECRYPT_FAILED.
-         */
-        const val MAX_SUPPORTED_VERSION = 1
+        /** Highest crypto-scheme version this build understands; a higher [v] is dropped on delivery. */
+        const val MAX_SUPPORTED_VERSION = 2
 
         /** The DM epoch-ratchet scheme (docs/FORWARD_SECRECY_RATCHET.md); requires [r]. */
         const val VERSION_RATCHET = 2

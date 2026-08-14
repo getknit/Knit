@@ -15,6 +15,7 @@ import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.settings.InboundSettings
 import app.getknit.knit.identity.IdentitySource
 import app.getknit.knit.identity.NodeId
@@ -22,6 +23,10 @@ import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.TinkInit
+import app.getknit.knit.mesh.crypto.b64
+import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
+import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
+import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.protocol.BlobReqContent
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
@@ -30,8 +35,11 @@ import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
 import app.getknit.knit.mesh.protocol.KeyReqContent
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
 import app.getknit.knit.mesh.protocol.Protocol
+import app.getknit.knit.mesh.protocol.RatchetHeader
+import app.getknit.knit.mesh.protocol.RatchetInit
 import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
@@ -40,8 +48,10 @@ import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
+import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
+import com.google.crypto.tink.hybrid.HpkePrivateKey
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -83,6 +93,8 @@ class InboundPipelineTest {
     private class Party(
         val crypto: MessageCrypto,
         val bundle: PublicKeyBundle,
+        /** The raw X25519 identity scalar (the extraction IdentityKeyStore.dhIdentityPrivate performs). */
+        val dhPriv: ByteArray,
     ) {
         val nodeId: String = NodeId.fromPublicKeyBundle(bundle.encoded)
 
@@ -100,7 +112,9 @@ class InboundPipelineTest {
         TinkInit.ensure()
         val hybrid = KeysetHandle.generateNew(KeyTemplates.get(HYBRID_TEMPLATE))
         val sig = KeysetHandle.generateNew(KeyTemplates.get("ED25519_RAW"))
-        return Party(MessageCrypto(hybrid, sig), PublicKeyBundle.fromPrivate(hybrid, sig))
+        val dhPriv =
+            (hybrid.primary.key as HpkePrivateKey).privateKeyBytes.toByteArray(InsecureSecretKeyAccess.get())
+        return Party(MessageCrypto(hybrid, sig), PublicKeyBundle.fromPrivate(hybrid, sig), dhPriv)
     }
 
     private class FakeIdentity(
@@ -193,6 +207,18 @@ class InboundPipelineTest {
         val ackSync = AckSync(transport, selfId = { self.nodeId }, signRaw = self.crypto::signRaw, metrics = metrics)
         val pendingInbound = PendingInbound(metrics = metrics)
         val typingTracker = TypingTracker(scope)
+
+        // Our side of the v2 epoch ratchet: a signed-prekey pair the fake "identity" serves, and the
+        // session service over the REAL Room-backed store (the in-memory DB above) — v2 tests exercise
+        // the actual applyOpen/commit SQL, not a fake.
+        val selfSpk = RatchetCrypto.generateKeyPair()
+        val ratchetStore = RatchetRepository(db.ratchetDao(), clock = { 5L })
+        val ratchet =
+            RatchetSessions(
+                store = ratchetStore,
+                dhIdentityPriv = { self.dhPriv },
+                spkPrivFor = { id -> if (id == SPK_ID) selfSpk.priv else null },
+            )
         val originated = mutableListOf<RelayEnvelope>()
         val flushed = mutableListOf<String>()
         var failClassify = false
@@ -241,6 +267,7 @@ class InboundPipelineTest {
                     ackSync = ackSync,
                     pendingInbound = pendingInbound,
                     typingTracker = typingTracker,
+                    ratchet = ratchet,
                     originate = { originated += it },
                     flushPending = { flushed += it },
                     classifyText = { _, _, _ -> if (failClassify) error("moderation boom") else false },
@@ -1587,7 +1614,244 @@ class InboundPipelineTest {
             assertFalse(rig.msgMap.containsKey("dmv"))
         }
 
+    // --- the v2 epoch-ratchet decrypt path ---
+
+    /** Author-side v2 ratchet: real engine state driving real wire frames at the pipeline. */
+    private inner class V2Author(
+        val party: Party,
+        private val rig: Rig,
+    ) {
+        private val engine = RatchetEngine()
+        private var session: RatchetEngine.SessionState
+
+        init {
+            val initiation =
+                engine.initiate(
+                    peerId = rig.self.nodeId,
+                    ownIkPriv = party.dhPriv,
+                    peerIkPub = rig.self.bundle.dhPublicKey(),
+                    peerSpk = RatchetEngine.PeerPrekey(id = SPK_ID, pub = rig.selfSpk.pub),
+                    now = 5L,
+                )
+            session = initiation.session
+        }
+
+        fun dm(
+            id: String,
+            body: String,
+            ctl: Int? = null,
+            mutateHeader: (RatchetHeader) -> RatchetHeader = { it },
+        ): RelayEnvelope {
+            val to = rig.self.nodeId
+            val aad = MessageCrypto.header(id, party.nodeId, 5L, to)
+            val plain = MessageContent(body = body, ctl = ctl).encode()
+            val sealed = checkNotNull(engine.seal(session, plain, aad, rig.selfSpk.pub, now = 5L))
+            session = sealed.session
+            val h = sealed.header
+            val header =
+                mutateHeader(
+                    RatchetHeader(
+                        se = h.se,
+                        ek = h.ek,
+                        pe = h.pe,
+                        n = h.n,
+                        init = h.init?.let { RatchetInit(eph = it.eph, pkid = it.pkid, at = it.at) },
+                        flags = h.flags,
+                    ),
+                )
+            return RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = party.nodeId,
+                sentAt = 5L,
+                recipientId = to,
+                payload =
+                    WireCodec.encodePayload(
+                        ChatContent(
+                            enc =
+                                EncEnvelope(
+                                    v = EncEnvelope.VERSION_RATCHET,
+                                    nonce = sealed.nonce,
+                                    ct = sealed.ct,
+                                    keys = emptyList(),
+                                    r = header,
+                                ),
+                        ),
+                    ),
+            )
+        }
+    }
+
+    @Test
+    fun aV2InitDmDecryptsPersistsAndEstablishesTheSession() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("v2-1", "ratchet hello"))
+
+            assertEquals("ratchet hello", rig.msgMap["v2-1"]?.body)
+            val session = rig.ratchetStore.session(alice.nodeId)
+            assertTrue(session != null && session.confirmed && !session.weAreInitiator)
+            assertEquals(1, rig.ratchetStore.recvEpoch(alice.nodeId, 1)?.next)
+            // The DM ack flooded back as usual.
+            assertTrue(rig.originated.any { it.type == FrameType.RECEIPT })
+        }
+
+    @Test
+    fun v2OutOfOrderDeliveryDrainsThroughSkippedKeys() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+            val m0 = author.dm("v2-m0", "first")
+            val m1 = author.dm("v2-m1", "second")
+
+            rig.deliver(alice, m1)
+            rig.deliver(alice, m0)
+
+            assertEquals("second", rig.msgMap["v2-m1"]?.body)
+            assertEquals("first", rig.msgMap["v2-m0"]?.body)
+            // The out-of-order key was stored, consumed, and removed.
+            assertEquals(null, rig.ratchetStore.skippedKey(alice.nodeId, 1, 0))
+        }
+
+    @Test
+    fun aReServedV2FrameShortCircuitsBeforeTheRatchetAndStillAcks() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+            val frame = author.dm("v2-r", "once")
+            rig.deliver(alice, frame)
+            val acksAfterFirst = rig.originated.count { it.type == FrameType.RECEIPT }
+
+            // Nuke the ratchet state entirely: if the re-serve reached the engine it would now fail and
+            // count a ratchet drop. The exists-gate must answer before any crypto runs.
+            rig.ratchetStore.deletePeer(alice.nodeId)
+            rig.deliver(alice, frame)
+
+            assertEquals("once", rig.msgMap["v2-r"]?.body)
+            assertEquals(acksAfterFirst + 1, rig.originated.count { it.type == FrameType.RECEIPT })
+            assertEquals(0L, rig.drops(DropReason.RATCHET_NO_SESSION))
+            assertEquals(0L, rig.drops(DropReason.DECRYPT_FAILED))
+        }
+
+    @Test
+    fun aV2EnvelopeWithoutItsHeaderIsBadHeaderNotACrash() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val env = rig.dmWithEnvVersion(alice, rig.self, id = "v2-bad", v = EncEnvelope.VERSION_RATCHET)
+
+            rig.deliver(alice, env)
+
+            assertEquals(1L, rig.drops(DropReason.RATCHET_BAD_HEADER))
+            assertFalse(rig.msgMap.containsKey("v2-bad"))
+        }
+
+    @Test
+    fun aV2FrameWithoutInitToAFreshDeviceIsNoSession() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+            // Strip the init and claim an established epoch — what a peer with stale session state sends.
+            val orphan =
+                author.dm("v2-orphan", "lost") { h ->
+                    RatchetHeader(se = h.se, ek = h.ek, pe = 1, n = h.n, init = null, flags = h.flags)
+                }
+
+            rig.deliver(alice, orphan)
+
+            assertEquals(1L, rig.drops(DropReason.RATCHET_NO_SESSION))
+            assertFalse(rig.msgMap.containsKey("v2-orphan"))
+        }
+
+    @Test
+    fun aCtlFrameAdvancesTheChainButNeverPersistsNotifiesOrAcks() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("v2-ctl", "", ctl = MessageContent.CTL_SESSION_RESET))
+
+            assertFalse(rig.msgMap.containsKey("v2-ctl"))
+            assertTrue(rig.originated.none { it.type == FrameType.RECEIPT })
+            // The session still advanced — the control frame's chain step is not a hole.
+            assertEquals(1, rig.ratchetStore.recvEpoch(alice.nodeId, 1)?.next)
+        }
+
+    // --- profile prekey pinning ---
+
+    private fun Rig.profileWithPrekey(
+        author: Party,
+        sentAt: Long,
+        prekey: PrekeyInfo?,
+    ): RelayEnvelope =
+        RelayEnvelope(
+            type = FrameType.PROFILE,
+            id = "prof-${author.nodeId}-$sentAt",
+            senderId = author.nodeId,
+            sentAt = sentAt,
+            payload =
+                WireCodec.encodePayload(
+                    ProfileContent(name = "Ann", status = "", pubKey = author.bundle.encoded, prekey = prekey),
+                ),
+        )
+
+    private fun signedPrekey(
+        author: Party,
+        id: Int = 7,
+    ): PrekeyInfo {
+        val pub = RatchetCrypto.generateKeyPair().pub
+        return PrekeyInfo(id = id, pub = pub, sig = author.crypto.signRaw(RatchetCrypto.spkSigningBytes(id, pub)))
+    }
+
+    @Test
+    fun aProfilePinsItsVerifiedPrekeyAndAForgedOneIsIgnored() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val good = signedPrekey(alice)
+
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 10L, prekey = good))
+            assertEquals(7, rig.peerMap[alice.nodeId]?.prekeyId)
+            assertEquals(b64(good.pub), rig.peerMap[alice.nodeId]?.prekeyPub)
+
+            // A newer profile with a tampered signature: profile applies, prekey pin is dropped (treated
+            // as "no prekey" — the field is independent of the rest of the profile).
+            val forged = PrekeyInfo(id = 8, pub = good.pub, sig = ByteArray(64))
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 11L, prekey = forged))
+            assertEquals(null, rig.peerMap[alice.nodeId]?.prekeyId)
+        }
+
+    @Test
+    fun aNewerProfileWithoutAPrekeyClearsThePin() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 10L, prekey = signedPrekey(alice)))
+            assertTrue(rig.peerMap[alice.nodeId]?.prekeyPub != null)
+
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 20L, prekey = null))
+
+            assertEquals(null, rig.peerMap[alice.nodeId]?.prekeyPub)
+            assertEquals("Ann", rig.peerMap[alice.nodeId]?.name)
+        }
+
     private companion object {
         const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"
+
+        /** The prekey id the Rig's fake identity serves (mirrors IdentityKeyStore.prekeyPrivFor). */
+        const val SPK_ID = 1
     }
 }

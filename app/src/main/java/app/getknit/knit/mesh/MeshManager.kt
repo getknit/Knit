@@ -24,6 +24,7 @@ import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.b64
+import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
@@ -83,6 +84,7 @@ class MeshManager(
     private val notifier: Notifier,
     private val textModeration: ScopedTextModerator,
     private val messageCrypto: MessageCrypto,
+    private val ratchet: RatchetSessions,
     private val scope: CoroutineScope,
     private val metrics: MeshMetrics,
     private val db: KnitDatabase,
@@ -187,6 +189,7 @@ class MeshManager(
             ackSync = ackSync,
             pendingInbound = pendingInbound,
             typingTracker = typingTracker,
+            ratchet = ratchet,
             originate = ::originateSigned,
             flushPending = ::flushPendingFor,
             classifyText = ::isTextFlagged,

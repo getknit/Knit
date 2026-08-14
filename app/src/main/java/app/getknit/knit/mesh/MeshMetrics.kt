@@ -41,6 +41,18 @@ enum class DropReason {
     /** An inbound profile whose key differs from the sender's already-pinned key — a pinned-key change
      *  is only reachable via a nodeId hash collision (impersonation), so we refuse it and keep the pin. */
     PIN_CHANGE_REFUSED,
+
+    /** A v2 (ratchet) DM with no session and no attached init — the peer assumes state we don't have. */
+    RATCHET_NO_SESSION,
+
+    /** A v2 DM referencing an own epoch or prekey private we no longer hold (retired/pruned/wiped). */
+    RATCHET_EPOCH_GONE,
+
+    /** A v2 DM whose chain index was already consumed and no skipped key is held — a benign re-delivery. */
+    RATCHET_DUPLICATE,
+
+    /** A v2 envelope with a structurally invalid ratchet header (missing `r`, bound violations, group-addressed). */
+    RATCHET_BAD_HEADER,
 }
 
 /**

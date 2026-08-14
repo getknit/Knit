@@ -13,12 +13,14 @@ import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.TinkInit
+import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
@@ -203,6 +205,12 @@ class MeshManagerTest {
                     notifier = notifier,
                     textModeration = textModeration,
                     messageCrypto = me.crypto,
+                    ratchet =
+                        RatchetSessions(
+                            store = RatchetRepository(db.ratchetDao(), clock = { now }),
+                            dhIdentityPriv = { ByteArray(32) { 1 } }, // send-path tests never derive
+                            spkPrivFor = { null },
+                        ),
                     scope = scope,
                     metrics = MeshMetrics(),
                     db = db,

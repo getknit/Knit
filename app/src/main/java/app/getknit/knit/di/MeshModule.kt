@@ -11,6 +11,7 @@ import app.getknit.knit.mesh.MeshTransport
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.bluetooth.BluetoothMeshTransport
 import app.getknit.knit.mesh.crypto.MessageCrypto
+import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.meshExceptionHandler
 import app.getknit.knit.mesh.power.PowerMonitor
 import app.getknit.knit.mesh.power.PowerStateSource
@@ -69,10 +70,23 @@ val meshModule =
             val keys = get<IdentityKeyStore>().keys()
             MessageCrypto(keys.hybridPrivate, keys.sigPrivate)
         }
+        // The DM epoch-ratchet session service (crypto scheme v2). Identity access is lambda-mediated so
+        // the service itself stays Android-free and plain-JVM-testable; the store is the Room-backed
+        // RatchetStore bound in appModule.
+        single {
+            val identityKeys = get<IdentityKeyStore>()
+            RatchetSessions(
+                store = get(),
+                dhIdentityPriv = identityKeys::dhIdentityPrivate,
+                spkPrivFor = identityKeys::prekeyPrivFor,
+            )
+        }
         // Constructor order: transport, messages, groups, reactions, peers, identity, settings, blobs,
-        // imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, scope, metrics, db.
+        // imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet, scope,
+        // metrics, db.
         single {
             MeshManager(
+                get(),
                 get(),
                 get(),
                 get(),

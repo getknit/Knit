@@ -15,6 +15,13 @@ Your phones talk directly to each other over Wi-Fi Aware and Bluetooth LE, and r
 ![Version](https://img.shields.io/badge/version-2.2.2-FF6F61)
 [![Knit changelog on whatsnew.fyi](https://whatsnew.fyi/product/knit/badge.svg)](https://whatsnew.fyi/product/knit)
 
+<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02_chat-nearby.png"
+     alt="Knit's Nearby broadcast room: a header reading &quot;Connected to 3 mesh nodes&quot;, message bubbles with an @-mention, emoji reactions, delivery ticks, and a photo attachment"
+     width="300">
+
+<sub>The public <b>Nearby</b> room, relayed over Wi-Fi Aware + BLE with no internet — mentions, reactions,
+delivery ticks, and image attachments included.</sub>
+
 </div>
 
 ---

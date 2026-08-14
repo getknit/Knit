@@ -630,11 +630,22 @@ reason to re-implement working, audited crypto against the platform APIs.
 **Identity keys** (`data/crypto/IdentityKeyStore`). Each device generates a Tink **hybrid** keypair
 (wraps content keys) and an **Ed25519** keypair (signs) on first run. The private keysets are
 serialized, AES-256-GCM-wrapped under a hardware AndroidKeyStore key (`KeystoreSecret`), and stored in
-`filesDir/identity.key` — deliberately **outside** the destructively-migrated DB, so the identity
-survives schema bumps (otherwise every migration would mint a new key and break pinning + stored
+`filesDir/identity.key` — deliberately **outside** the DB, so the identity survives anything that
+takes `knit.db` down (otherwise such an event would mint a new key and break pinning + stored
 ciphertext). The public bundle (`PublicKeyBundle`, base64) is advertised in `ProfileContent.pubKey`.
+The same file also holds the rotating **ratchet signed prekeys** (v2 DM bootstrap, below), so
+in-flight session initiations survive a DB loss too.
 
-**Per-message scheme** (static keys, no ratchet — see deferred work in §18), in `mesh/crypto`:
+**DMs — the epoch-rekey ratchet (crypto scheme v2, `EncEnvelope.v = 2`).** DMs between
+ratchet-capable builds are forward-secret: an X3DH-style bootstrap off the peer's published signed
+prekey establishes a per-pair session, and per-epoch X25519 rekeying + a forward-only message-key
+chain bound the exposure of any later key compromise to the epoch retention window. The full scheme —
+keys, derivations, epoch advance rules, races/replacement/reset, and the honest security claim — is
+specified in `docs/FORWARD_SECRECY_RATCHET.md`; the implementation is `mesh/crypto/ratchet/`
+(pure engine + session service) with state in the `ratchet_*` tables. Outbound v2 is gated on the
+peer's pinned profile advertising `CAP_RATCHET` plus a prekey; anything else falls back to v1.
+
+**Per-message scheme v1** (static keys — groups and pre-ratchet peers), in `mesh/crypto`:
 
 1. Generate a random content key; AES-256-GCM-encrypt the `MessageContent` (body + mentions +
    attachment refs) into `EncEnvelope.ct`.
@@ -763,8 +774,10 @@ before bumping anything that could pull in a newer Kotlin stdlib.
 - DM/group messages are E2E-encrypted (§14), but they still **flood** the whole mesh (only the
   addressed recipient(s) decrypt/ack) — so relays see *who is talking to whom and how much* (the
   cleartext `recipientId`/`group` roster and sizes), just not the contents.
-- **No forward secrecy:** E2E uses long-term static identity keys (no ratchet), so compromise of a
-  device's identity key would expose past intercepted messages.
+- **Forward secrecy is DM-only and epoch-granular:** DMs between current builds ratchet
+  (`docs/FORWARD_SECRECY_RATCHET.md`); **groups still use the static per-member wrap** (no group key
+  state yet), so compromise of a device's identity key would expose past intercepted *group* traffic,
+  and DM exposure is bounded by the epoch-priv retention window rather than zero.
 - **Reactions, receipts, and the broadcast room are cleartext** metadata (signed, but not encrypted).
   *(The key-request/retransmit path for a frame received before its sender's key is pinned is now
   implemented — `KeyExchange` + `PendingInbound`, §3.5.)*
@@ -775,6 +788,6 @@ before bumping anything that could pull in a newer Kotlin stdlib.
   destructive fallback). The identity key lives outside the DB, so it survives regardless. *(Pre-1.0 alpha
   builds churned through destructive v2…v22 bumps that rode the wire/crypto breaks; that history is
   collapsed — see `docs/WIRE_COMPAT.md`.)*
-- **Deferred by design:** true (targeted) DM routing, forward secrecy / a ratchet, encrypting
-  reactions/receipts/the broadcast room, a group key-gap retransmit, and a BLE connect-time gate on A2DP
-  audio contention (see `.agents/memory/roadmap.md`).
+- **Deferred by design:** true (targeted) DM routing, group forward secrecy (a group key state),
+  encrypting reactions/receipts/the broadcast room, a group key-gap retransmit, and a BLE connect-time
+  gate on A2DP audio contention (see `.agents/memory/roadmap.md`).

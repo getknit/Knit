@@ -47,13 +47,11 @@ object Protocol {
      * DM epoch-ratchet (crypto scheme v2, docs/FORWARD_SECRECY_RATCHET.md). Unlike the bits above this
      * one is a send-time input: outbound v2 requires the peer's pinned profile to carry it AND a valid
      * `ProfileContent.prekey` (they arrive on one signed frame — the stale-capability mitigation).
-     * NOT yet in [LOCAL_CAPABILITIES]: advertising flips on with the send path (receive-before-send
-     * rollout), so a build in the field is never told to expect v2 from one that can't produce it.
      */
     const val CAP_RATCHET = 0x10L
 
     /** This build's advertised capability bitfield. */
-    val LOCAL_CAPABILITIES: Long = CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD
+    val LOCAL_CAPABILITIES: Long = CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET
 
     private const val SEP = '|'
 

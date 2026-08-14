@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.crypto.ratchet
 
+import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.RatchetHeader
 import app.getknit.knit.mesh.protocol.RatchetInit
 import kotlinx.coroutines.sync.Mutex
@@ -102,6 +103,55 @@ class RatchetSessions(
             store.applyOpen(peerId, outcome.delta, headerSe = header.se, headerN = header.n)
             onOpened()
             true
+        }
+
+    /**
+     * Seals one outbound DM under the peer's session, creating it (X3DH against [peerSpk]) on first
+     * use and advancing epochs per the engine's rules. Runs read → seal → persist atomically under the
+     * session lock and returns the finished v2 [EncEnvelope]; the caller floods it and saves its own
+     * plaintext row afterwards (a crash between this commit and the flood is just a chain hole the
+     * receiver's skipped-key path absorbs — nothing received can be lost, unlike the open side).
+     *
+     * Returns null when no epoch base exists — an established session whose peer has since cleared its
+     * prekey and contributed no epoch, or a first send with [peerSpk] null. Callers treat null as
+     * "fall back to v1", which the peer can always read.
+     */
+    suspend fun sealDm(
+        peerId: String,
+        peerIkPub: ByteArray,
+        peerSpk: RatchetEngine.PeerPrekey?,
+        plaintext: ByteArray,
+        aad: ByteArray,
+        now: Long,
+    ): EncEnvelope? =
+        mutex.withLock {
+            val existing = store.session(peerId)
+            val initiation =
+                if (existing == null) {
+                    peerSpk ?: return@withLock null
+                    engine.initiate(peerId, dhIdentityPriv(), peerIkPub, peerSpk, now)
+                } else {
+                    null
+                }
+            val session = initiation?.session ?: existing ?: return@withLock null
+            val sealed = engine.seal(session, plaintext, aad, peerSpk?.pub, now) ?: return@withLock null
+            store.commitSend(sealed.session, initiation?.epoch ?: sealed.newLocalEpoch)
+            val h = sealed.header
+            EncEnvelope(
+                v = EncEnvelope.VERSION_RATCHET,
+                nonce = sealed.nonce,
+                ct = sealed.ct,
+                keys = emptyList(),
+                r =
+                    RatchetHeader(
+                        se = h.se,
+                        ek = h.ek,
+                        pe = h.pe,
+                        n = h.n,
+                        init = h.init?.let { RatchetInit(eph = it.eph, pkid = it.pkid, at = it.at) },
+                        flags = h.flags,
+                    ),
+            )
         }
 
     /** Retention GC passthrough (wired into the existing sweep loops). */

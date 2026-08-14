@@ -20,11 +20,15 @@ import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.TinkInit
+import app.getknit.knit.mesh.crypto.b64
+import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.protocol.WireCodec
@@ -181,6 +185,7 @@ class MeshManagerTest {
 
         val saved = mutableListOf<MessageEntity>()
         val now = 1_700_000_000_000L
+        val metrics = MeshMetrics()
         val manager: MeshManager
 
         init {
@@ -212,7 +217,7 @@ class MeshManagerTest {
                             spkPrivFor = { null },
                         ),
                     scope = scope,
-                    metrics = MeshMetrics(),
+                    metrics = metrics,
                     db = db,
                     clock = { now },
                 )
@@ -410,6 +415,112 @@ class MeshManagerTest {
             assertEquals(mentions, content.mentions)
             assertEquals(reply, content.replyTo)
         }
+
+    // --- the v2 (epoch-ratchet) send gate ---
+
+    /** Pins [p] as ratchet-capable: CAP_RATCHET advertised plus a pinned prekey, as handleProfile stores them. */
+    private fun Rig.pinRatchetCapable(
+        p: Party,
+        prekeyPub: ByteArray,
+    ) {
+        coEvery { peers.find(p.nodeId) } returns
+            PeerEntity(
+                nodeId = p.nodeId,
+                pubKey = p.bundle.encoded,
+                capabilities = Protocol.LOCAL_CAPABILITIES,
+                prekeyId = 1,
+                prekeyPub = b64(prekeyPub),
+                prekeyProfileAt = 1L,
+                updatedAt = 1L,
+            )
+    }
+
+    @Test
+    fun aDmToARatchetCapablePeerSealsV2() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+
+            assertTrue(rig.manager.sendChat("fs hello", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+
+            val content = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!
+            val enc = content.enc!!
+            assertEquals(EncEnvelope.VERSION_RATCHET, enc.v)
+            assertTrue(enc.keys.isEmpty())
+            val header = enc.r!!
+            assertEquals(1, header.se)
+            assertEquals(0, header.pe)
+            assertNotNull("the first frame carries the X3DH init", header.init)
+            assertEquals(1, header.init!!.pkid)
+            assertFalse("the stored row is not pendingKey", rig.saved.single().pendingKey)
+            assertEquals(1L, rig.metrics.snapshot().dmSealedV2)
+
+            // A second DM continues the chain in the same epoch, init still attached (unconfirmed).
+            assertTrue(rig.manager.sendChat("again", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+            val second = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().last().payload)!!.enc!!.r!!
+            assertEquals(1, second.se)
+            assertEquals(1, second.n)
+            assertNotNull(second.init)
+        }
+
+    @Test
+    fun aDmToAPeerWithoutTheCapabilityStaysV1() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pin(rig.bob) // pinned key, no capabilities, no prekey — a pre-ratchet build
+
+            assertTrue(rig.manager.sendChat("legacy", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+
+            val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
+            assertEquals(1, enc.v)
+            assertNull(enc.r)
+            assertTrue(enc.keys.isNotEmpty())
+            assertEquals(0L, rig.metrics.snapshot().dmSealedV2)
+        }
+
+    @Test
+    fun aCapableClaimWithoutAPrekeyFallsBackToV1AndCounts() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            // Capability bit without a pinned prekey — the stale/partial case the AND-gate exists for.
+            coEvery { rig.peers.find(rig.bob.nodeId) } returns
+                PeerEntity(
+                    nodeId = rig.bob.nodeId,
+                    pubKey = rig.bob.bundle.encoded,
+                    capabilities = Protocol.LOCAL_CAPABILITIES,
+                    updatedAt = 1L,
+                )
+
+            assertTrue(rig.manager.sendChat("careful", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+
+            val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
+            assertEquals(1, enc.v)
+            assertEquals(1L, rig.metrics.snapshot().dmSealedV1Fallback)
+        }
+
+    @Test
+    fun aGroupMessageStaysV1EvenWhenMembersAreRatchetCapable() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            val group = GroupInfo(id = "g-1", name = "Team", members = listOf(rig.me.nodeId, rig.bob.nodeId), createdBy = rig.me.nodeId)
+
+            assertTrue(rig.manager.sendChat("group text", group = group))
+            advanceUntilIdle()
+
+            val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
+            assertEquals(1, enc.v)
+            assertNull(enc.r)
+        }
+
+    @Test
+    fun theProfileAdvertisesTheRatchetCapabilityAndAVerifiablePrekey() {
+        assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_RATCHET != 0L)
+    }
 
     private companion object {
         const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"

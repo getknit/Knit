@@ -16,6 +16,7 @@ import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.replyRef
 import app.getknit.knit.data.message.withReply
+import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
@@ -24,13 +25,17 @@ import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.b64
+import app.getknit.knit.mesh.crypto.b64d
+import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReactionContent
@@ -320,7 +325,20 @@ class MeshManager(
             blobExchange.sweepExpired()
             keyExchange.retryMissing()
             ackSync.retryPending() // re-send broadcast/group ticks we still owe absent authors (+ age out old ones)
+            ratchet.sweep(clock()) // retire epoch privs / skipped keys — the ratchet's PFS window enforcement
+            rotatePrekeyIfDue()
         }
+    }
+
+    /**
+     * Rotates the ratchet signed prekey on its cadence (checked at start + every heal). A rotation bumps
+     * the persisted profileVersion — the same monotonic clock a profile edit uses — so the fresh prekey
+     * re-floods and replaces the custodied profile frame on every peer.
+     */
+    private suspend fun rotatePrekeyIfDue() {
+        if (!identity.rotatePrekeyIfDue(clock())) return
+        settings.setProfileVersion(maxOf(clock(), settings.profileVersion.first() + 1))
+        broadcastProfile()
     }
 
     /** Tears down and re-establishes the transport (e.g. after Bluetooth toggles back on). */
@@ -403,9 +421,7 @@ class MeshManager(
                 attachmentKey = sealedAttachment?.key,
                 replyTo = replyTo,
             )
-        val thread = group?.id ?: recipientId.orEmpty()
-        val header = MessageCrypto.header(id, me, sentAt, thread)
-        val envelope = messageCrypto.seal(content.encode(), header, recipientBundles(recipientId, group, me))
+        val envelope = sealEnvelopeFor(id, me, sentAt, recipientId, group, content)
         // Persist our own plaintext copy regardless, so the sender always sees their message. A DM whose
         // recipient key isn't known yet is flagged pendingKey so handleProfile can retransmit it when the
         // recipient's profile (carrying the key) finally arrives (groups stay unsent, as before).
@@ -470,6 +486,48 @@ class MeshManager(
             group = group,
             payload = WireCodec.encodePayload(content),
         )
+
+    /**
+     * The seal chokepoint for every encrypted chat (compose-time [sendChat] and flush-time
+     * [flushPendingFor]). A DM to a ratchet-capable peer — pinned profile advertising
+     * [Protocol.CAP_RATCHET], both on one signed frame with any prekey — goes **v2** (the epoch-ratchet
+     * session, created on first use); groups and everything else take the v1 static per-recipient wrap.
+     * A v2-eligible seal can still fall back to v1 (peer downgraded mid-session: prekey cleared and no
+     * epoch contributed), which every build reads. Null means nobody addressable holds a key at all —
+     * the caller parks the DM pendingKey.
+     */
+    private suspend fun sealEnvelopeFor(
+        id: String,
+        me: String,
+        sentAt: Long,
+        recipientId: String?,
+        group: GroupInfo?,
+        content: MessageContent,
+    ): EncEnvelope? {
+        val thread = group?.id ?: recipientId.orEmpty()
+        val aad = MessageCrypto.header(id, me, sentAt, thread)
+        if (group == null && recipientId != null && recipientId != me) {
+            val peer = peers.find(recipientId)
+            val bundle = peer?.pubKey?.let { PublicKeyBundle.decode(it) }
+            val capable = bundle != null && (peer.capabilities ?: 0L) and Protocol.CAP_RATCHET != 0L
+            if (capable) {
+                val sealed = ratchet.sealDm(recipientId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), content.encode(), aad, clock())
+                if (sealed != null) {
+                    metrics.onDmSealedV2()
+                    return sealed
+                }
+                metrics.onDmSealedV1Fallback()
+            }
+        }
+        return messageCrypto.seal(content.encode(), aad, recipientBundles(recipientId, group, me))
+    }
+
+    /** The peer's pinned, already-verified ratchet prekey (base64-decoded), or null when absent/garbled. */
+    private fun ratchetPrekeyOf(peer: PeerEntity?): RatchetEngine.PeerPrekey? {
+        val prekeyId = peer?.prekeyId ?: return null
+        val pub = peer.prekeyPub?.let { runCatching { b64d(it) }.getOrNull() } ?: return null
+        return RatchetEngine.PeerPrekey(id = prekeyId, pub = pub)
+    }
 
     /** Resolves the published key bundles for a DM recipient or a group's members (excluding us). */
     private suspend fun recipientBundles(
@@ -732,6 +790,10 @@ class MeshManager(
      */
     private fun seedOwnProfileCustody(session: CoroutineScope) {
         session.launch {
+            // Rotation check BEFORE seeding, so a due prekey mints now and the seeded frame (and any
+            // first-contact push) already carries it; also the startup ratchet retention sweep.
+            rotatePrekeyIfDue()
+            ratchet.sweep(clock())
             val env = currentProfileEnvelope()
             forwardSync.onSeen(sign(env), env, ForwardStore.ORIGIN_SELF)
         }
@@ -841,6 +903,9 @@ class MeshManager(
         // Persisted, so the profile frame's id + sentAt are stable across restarts — an unchanged profile
         // re-broadcasts as the *same* custodied frame instead of a new one, letting the digests converge.
         val version = settings.profileVersion.first()
+        // The current signed prekey rides every profile (v2 DM bootstrap) — its detached signature lets
+        // receivers verify it against the bundle even stored apart from this frame.
+        val spk = identity.currentPrekey(clock())
         val content =
             ProfileContent(
                 // Normalize/cap defensively: covers legacy values stored before the field gained a cap and
@@ -852,6 +917,7 @@ class MeshManager(
                 deviceTag = identity.deviceTag(),
                 protoVersion = Protocol.VERSION,
                 capabilities = Protocol.LOCAL_CAPABILITIES,
+                prekey = PrekeyInfo(id = spk.id, pub = spk.pub, sig = spk.sig),
             )
         return RelayEnvelope(
             type = FrameType.PROFILE,
@@ -933,9 +999,10 @@ class MeshManager(
                     attachmentKey = row.attachmentKey,
                     replyTo = row.replyRef(),
                 )
-            val header = MessageCrypto.header(row.id, me, row.sentAt, recipientId)
+            // The same chokepoint as sendChat: the re-seal happens at flush time under whatever session
+            // state exists NOW — v2 when the peer's just-pinned profile is ratchet-capable, else v1.
             val envelope =
-                messageCrypto.seal(content.encode(), header, recipientBundles(recipientId, null, me))
+                sealEnvelopeFor(row.id, me, row.sentAt, recipientId, group = null, content = content)
                     ?: return@forEach
             originateSigned(
                 chatEnvelope(

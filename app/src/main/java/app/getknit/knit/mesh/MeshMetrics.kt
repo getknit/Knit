@@ -101,6 +101,8 @@ class MeshMetrics {
     private val framesHeld = AtomicLong()
     private val framesReplayed = AtomicLong()
     private val receiptsResent = AtomicLong()
+    private val dmSealedV2 = AtomicLong()
+    private val dmSealedV1Fallback = AtomicLong()
 
     // Fixed key set → no allocation on the hot path, every reason always present.
     private val drops: Map<DropReason, AtomicLong> = DropReason.entries.associateWith { AtomicLong() }
@@ -182,6 +184,17 @@ class MeshMetrics {
         receiptsResent.incrementAndGet()
     }
 
+    /** An outbound DM sealed under the v2 epoch ratchet (forward-secret). */
+    fun onDmSealedV2() {
+        dmSealedV2.incrementAndGet()
+    }
+
+    /** A v2-eligible DM that fell back to the v1 static wrap (peer downgraded / no epoch base) — should
+     *  trend to zero as the installed base upgrades; a persistent count is the signal to investigate. */
+    fun onDmSealedV1Fallback() {
+        dmSealedV1Fallback.incrementAndGet()
+    }
+
     /** A Bluetooth L2CAP connect attempt to a peer failed for [reason] (see [ConnectFailReason]). */
     fun onBtConnectFailed(reason: ConnectFailReason) {
         connectFails.getValue(reason).incrementAndGet()
@@ -253,6 +266,8 @@ class MeshMetrics {
             framesHeld = framesHeld.get(),
             framesReplayed = framesReplayed.get(),
             receiptsResent = receiptsResent.get(),
+            dmSealedV2 = dmSealedV2.get(),
+            dmSealedV1Fallback = dmSealedV1Fallback.get(),
             btConnectFails = connectByReason.values.sum(),
             btConnectFailsByReason = connectByReason.filterValues { it > 0 },
             btLinksEstablished = btLinksEstablished.get(),
@@ -282,6 +297,8 @@ class MeshMetrics {
         val framesHeld: Long = 0,
         val framesReplayed: Long = 0,
         val receiptsResent: Long = 0,
+        val dmSealedV2: Long = 0,
+        val dmSealedV1Fallback: Long = 0,
         val btConnectFails: Long = 0,
         val btConnectFailsByReason: Map<ConnectFailReason, Long> = emptyMap(),
         val btLinksEstablished: Long = 0,

@@ -20,6 +20,11 @@ doc). **Don't start a deferred item without explicit direction.**
   the frozen wire/identity DTOs pinned unrenamed in `keepRules/knit-r8.keep` — and `FileKind`'s file-header
   token is decoupled from its enum constant name (`FileKind.wire`). See decisions ADR 012. Deferred: tighten
   the broad library `{ *; }` keeps to minimal targeted keeps (bigger size win, larger test surface).
+- **Forward secrecy for DMs is implemented** — the epoch-rekey ratchet (crypto scheme v2,
+  `docs/FORWARD_SECRECY_RATCHET.md`; ADR 016): X3DH-style bootstrap off a signed prekey published in the
+  profile, per-epoch X25519 rekeying, session state in the `ratchet_*` tables, capability-gated dual-stack
+  (v1 static wrap remains for groups and pre-ratchet peers, and inbound v1 is accepted forever). Also
+  supplies the `pairwiseRoot` export the future internet-relay scope derivation needs.
 
 ## Still deferred (by design)
 
@@ -37,6 +42,7 @@ doc). **Don't start a deferred item without explicit direction.**
 - **Group key-gap retransmit** — the group analogue of the DM `flushPendingFor`: a group message already
   floods to the members whose keys are known, so reaching a member whose key arrives *later* needs a fresh
   re-seal, not custody.
-- **E2E hardening** — forward secrecy / a ratchet (static keys only), **encrypting** reactions/receipts
-  (they are signed now but still flood as cleartext metadata), and encrypting the broadcast room. See
-  `context/e2e-encryption.md`.
+- **E2E hardening (what remains)** — **group** forward secrecy (a group key state: sender-key /
+  pairwise fan-out / MLS-lite — its own design doc; the DM ratchet shipped, see above), **encrypting**
+  reactions/receipts (they are signed now but still flood as cleartext metadata), and encrypting the
+  broadcast room. See `context/e2e-encryption.md`.

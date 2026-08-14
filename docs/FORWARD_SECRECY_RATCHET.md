@@ -193,7 +193,13 @@ skipped-key path absorbs.
   and **purge the peer's recv epochs + skipped keys** — their numbering restarts at 1. Old-era
   frames whose epoch numbers don't collide with new rows drain via `prevRoot`; colliding ones fail
   benignly (`DUPLICATE`/`AEAD_FAIL`) — anything delivered pre-wipe is exists-gated anyway, and the
-  reset re-seal (below) covers the undelivered.
+  reset re-seal (below) covers the undelivered. One carve-out (found by the randomized soak): a
+  **confirmed initiator with no recorded peer-init anchor** (`peerInitEphPub == null` — we won a race
+  without ever processing the loser's init) treats an init that *loses* the nodeId tiebreak as a
+  stale race remnant, never a replacement — adopting it would defect to the losing root while the
+  peer sits on the winning one, diverging permanently. A genuine wipe of the higher-id peer still
+  recovers: their undecryptable traffic trips our reset heuristic and our reset re-establishes.
+  Inbound replacements are additionally rate-limited (1/peer/h, the facade's `allowReplacement` gate).
 - **Reset request** (lands in the reset-hardening phase). Trigger: ≥3 distinct undecryptable-v2
   frame ids from a pinned peer (`RATCHET_NO_SESSION`/`RATCHET_EPOCH_GONE`), rate-limited to one per
   6 h (persisted). The request is an ordinary v2 DM carrying a fresh init, `flags = RESET`, and

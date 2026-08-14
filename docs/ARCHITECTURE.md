@@ -623,7 +623,7 @@ signed, and store-and-forward-carried).
 
 **Library.** Google **Tink** (`tink-android`) — HPKE/X25519 hybrid encryption, Ed25519 signatures,
 and AES-GCM. Originally chosen because the then-`minSdk 29` predated the platform `XDH`/`Ed25519` JCA
-algorithms (API 33+); the mesh transport since raised `minSdk` to 33, but Tink stays — it's a
+algorithms (API 33+); `minSdk` is 29 (the BLE co-plane lowered it back from the NAN-era 33), so Tink stays — it's a
 pure-runtime dep (no Gradle plugin) that can't perturb the bleeding-edge toolchain, and there's no
 reason to re-implement working, audited crypto against the platform APIs.
 

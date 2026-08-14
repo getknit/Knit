@@ -209,6 +209,21 @@ direction), key bundles, signatures over known keys, sealed/opened `EncEnvelope`
 safety-number/digest/alias derivations — validated by a JVM test and consumed verbatim by the future
 iOS test suite. Vectors are the single cheapest way to keep two codebases from drifting.
 
+### 2.3a The v2 epoch ratchet is CryptoKit-native by construction
+
+The DM forward-secrecy scheme (`docs/FORWARD_SECRECY_RATCHET.md`, `EncEnvelope.v = 2`) was designed
+against this port from day one: every primitive is X25519 / HKDF-SHA256 / Ed25519 / AES-256-GCM —
+all first-class in CryptoKit (`Curve25519.KeyAgreement`, `HKDF<SHA256>`, `Curve25519.Signing`,
+`AES.GCM`) — and every derivation is a labeled HKDF over raw 32-byte keys with no Tink shapes on the
+wire (the ratchet header carries bare X25519 pubs; message keys are derived, never wrapped). The
+normative surface an iOS implementation reproduces is exactly: the `knit/dm/v2/...` label set, the
+X3DH ikm layout (`0xFF*32 ‖ DH1 ‖ DH2 ‖ DH3`), the epoch info binding (`dir ‖ u32be(se) ‖ u32be(pe)`),
+the signed-prekey signing bytes, and the state rules in the design doc (epoch advance, monotone
+numbering, replacement/purge, the tiebreak). `RatchetCryptoTest` doubles as the cross-check — it
+re-derives everything through an independent RFC 5869 HKDF and pins RFC 7748 vectors — and the
+`GoldenVectorTest` v2 fixtures (`ratchetInit`, `ratchetHeader`, `prekeyInfo`, `encEnvelopeV2`,
+`profileContentPrekey`) are the byte-exact wire targets.
+
 ### 2.4 Convergence constants become cross-platform law
 
 The convergent-custody-quota invariant (see `.agents/rules/mesh.md` and `.agents/context/store-and-forward.md`) — every node must bound the carried set by

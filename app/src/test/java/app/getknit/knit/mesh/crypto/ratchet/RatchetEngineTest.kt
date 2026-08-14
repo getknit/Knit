@@ -366,6 +366,29 @@ class RatchetEngineTest {
         assertTrue(checkNotNull(a.session).confirmed)
     }
 
+    @Test
+    fun aLateRaceInitAfterConfirmationNeverDefectsToTheLosingRoot() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.initiate(NOW + 5_000)
+        val loserInit = b.seal("from b, losing root", NOW + 5_000)
+
+        // The race resolves entirely through A's frames: B adopts A's root and replies; A confirms
+        // WITHOUT ever having processed B's init (its idempotence anchor was never recorded).
+        b.open(a.seal("from a", NOW), NOW)
+        a.open(b.seal("reply under the winner", NOW), NOW)
+        assertTrue(checkNotNull(a.session).confirmed)
+        assertNull(checkNotNull(a.session).peerInitEphPub)
+        val winningRoot = checkNotNull(a.session).root
+
+        // B's original losing-root frame finally re-serves from custody, init timestamp NEWER than the
+        // session A confirmed. It must fail benignly — never replace the session both sides share.
+        val outcome = a.open(loserInit, NOW + 60_000)
+        assertTrue(outcome === OpenOutcome.Failed.AEAD_FAIL)
+        assertArrayEquals(winningRoot, checkNotNull(a.session).root)
+        assertTrue(checkNotNull(a.session).confirmed)
+    }
+
     // --- wipe and replacement ---
 
     @Test

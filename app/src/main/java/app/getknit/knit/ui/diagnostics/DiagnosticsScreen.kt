@@ -274,6 +274,15 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
         if (metrics.receiptsResent > 0) {
             MetricRow(stringResource(R.string.diagnostics_metric_receipts_resent), metrics.receiptsResent.toString())
         }
+        // Forward-secret DMs (the v2 epoch ratchet): how many sends ratcheted, and how many v2-eligible
+        // sends fell back to the static wrap — the fallback should trend to zero as peers upgrade, so a
+        // persistent count is the "investigate" signal. Shown only once a DM has been sealed either way.
+        if (metrics.dmSealedV2 > 0 || metrics.dmSealedV1Fallback > 0) {
+            MetricRow(stringResource(R.string.diagnostics_metric_dms_ratcheted), metrics.dmSealedV2.toString())
+            if (metrics.dmSealedV1Fallback > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_dms_v1_fallback), metrics.dmSealedV1Fallback.toString())
+            }
+        }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an
         // intermittent "can link one peer but not the second" is visible and attributable (RADIO vs other).
         if (metrics.btConnectFails > 0) {

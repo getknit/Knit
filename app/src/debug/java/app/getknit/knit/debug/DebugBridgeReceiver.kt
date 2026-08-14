@@ -724,6 +724,8 @@ class DebugBridgeReceiver :
             .put("framesHeld", snap.framesHeld)
             .put("framesReplayed", snap.framesReplayed)
             .put("receiptsResent", snap.receiptsResent)
+            .put("dmSealedV2", snap.dmSealedV2)
+            .put("dmSealedV1Fallback", snap.dmSealedV1Fallback)
             .put("nanServesPeak", snap.nanServesPeak)
             .put("nanAcceptsRefused", snap.nanAcceptsRefused)
             .put("nanIcmKeepaliveFailed", snap.nanIcmKeepaliveFailed)

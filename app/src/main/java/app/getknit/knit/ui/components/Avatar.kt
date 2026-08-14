@@ -84,7 +84,7 @@ fun Avatar(
     ) {
         // Show the avatar image when its blob is present; fall back to the initial letter otherwise.
         // "Otherwise" includes a *dangling* hash — one whose content-addressed blob is gone (GC'd, or
-        // lost to a destructive DB migration) while the hash itself lingers in DataStore. AsyncImage
+        // lost to a DB wipe) while the hash itself lingers in DataStore. AsyncImage
         // draws nothing on a failed load, so without the onError fallback a dangling hash renders a
         // permanently blank circle with no initial (the own-profile avatar hit this; a peer's hash is
         // null until known, so chat rows never did). Keyed on [avatarHash] so a fresh hash retries.

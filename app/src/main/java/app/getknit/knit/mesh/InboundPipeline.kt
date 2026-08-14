@@ -278,7 +278,7 @@ class InboundPipeline(
             // Our own frame looping back (a neighbor carried it and re-served it): verify against our identity's
             // own bundle, which we always have. We never pin our own key in `peers`, so without this branch a
             // re-served self frame fails the pinned-key lookup below and is dropped — and after a custody wipe
-            // (a destructive DB migration) we can then never re-carry our own sends, so the content digest never
+            // (a DB wipe) we can then never re-carry our own sends, so the content digest never
             // reconverges with peers who still hold them. Checked first: it out-ranks the PROFILE in-band path.
             env.senderId == identity.nodeId() -> {
                 PublicKeyBundle.decode(identity.publicKeyBundle())
@@ -315,7 +315,7 @@ class InboundPipeline(
             // A self frame — one of OUR own frames looping back, after a neighbor carried it and (once our SeenSet
             // window lapsed) re-served it — is authenticated like any other via [verifierBundle], which resolves
             // our identity's own bundle for it. It USED to be dropped here as a silent no-op ("we already have
-            // it"), but that assumption breaks after a destructive DB migration wipes custody: peers still hold
+            // it"), but that assumption breaks after a DB wipe empties custody: peers still hold
             // our sends and re-serve them, yet the drop stopped [onDeliver]'s carry from re-custodying them, so
             // the content digest never reconverged. Letting it through re-carries it; delivery is idempotent
             // ([deliverChat]'s isNew gate, own-message notifications already skipped), so a duplicate is harmless.

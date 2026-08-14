@@ -326,9 +326,11 @@ class RatchetEngine(
     /**
      * Applies the attached init (if any) to produce the session this frame should be read under plus
      * the ordered root candidates for a new-epoch derivation. Null means the frame is unreadable at
-     * the session level (no session and no usable init).
+     * the session level (no session and no usable init). Suppressions: a decision tree over init
+     * cases — early returns are the readable form, and hoisting branches out would scatter the one
+     * place session-resolution order is defined.
      */
-    @Suppress("ReturnCount") // a decision tree over init cases; early returns ARE the readable form
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     private fun resolveSession(
         ctx: OpenContext,
         header: FrameHeader,
@@ -368,6 +370,17 @@ class RatchetEngine(
         // A genuinely stale init (older than the session we already share) changes nothing.
         if (init.at <= session.establishedAt) return ResolvedSession(session, candidates)
         if (ctx.spkPrivForInit == null || !ctx.allowReplacement) return ResolvedSession(session, candidates)
+        // The confirmed-initiator race remnant: we won a both-initiate race WITHOUT ever processing the
+        // loser's init (their pre-adoption frames were all lost), so no idempotence anchor was recorded
+        // — and their init can re-serve from custody with a *newer* timestamp for a full TTL. An init
+        // that loses the nodeId tiebreak in this state is that remnant, never a replacement: adopting
+        // it would defect to the losing root while the peer sits on the winning one (both "confirmed",
+        // permanently diverged). A genuine wipe of the higher-id peer is still recovered — their
+        // undecryptable traffic trips OUR reset heuristic, and a reset init from us re-establishes.
+        val unanchoredRaceWinner = session.confirmed && session.weAreInitiator && session.peerInitEphPub == null
+        if (unanchoredRaceWinner && session.peerId > ctx.selfNodeId) {
+            return ResolvedSession(session, candidates)
+        }
         // Replacement (peer reset / re-init after losing state): their epoch numbering restarts at 1,
         // so our recv rows for the old numbering must go; the old root drains via prevRoot for any
         // still-in-flight old frames.

@@ -1,0 +1,433 @@
+package app.getknit.knit.mesh.crypto.ratchet
+
+import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine.OpenOutcome
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The epoch-ratchet state machine, driven through an in-memory two-party harness that persists deltas
+ * exactly the way `RatchetSessions` will (session snapshot, local/recv epoch maps, skipped keys). Every
+ * scenario the mesh forces — reordering, holes, duplicate re-serves, both-initiate races, wipe-and-reset
+ * — is a plain-JVM case here.
+ */
+class RatchetEngineTest {
+    private val engine = RatchetEngine()
+
+    private class Frame(
+        val header: RatchetEngine.FrameHeader,
+        val nonce: ByteArray,
+        val ct: ByteArray,
+    )
+
+    /** One device: identity + signed prekey + the stored ratchet state the facade would own. */
+    private inner class Side(
+        val nodeId: String,
+    ) {
+        val ik = RatchetCrypto.generateKeyPair()
+        var spk = RatchetCrypto.generateKeyPair()
+        var spkResolvable = true
+        var session: RatchetEngine.SessionState? = null
+        val localEpochs = mutableMapOf<Int, RatchetEngine.LocalEpoch>()
+        val recvEpochs = mutableMapOf<Int, RatchetEngine.RecvEpoch>()
+        val skipped = mutableMapOf<Pair<Int, Int>, ByteArray>()
+        lateinit var peer: Side
+        var lastDelta: RatchetEngine.OpenDelta? = null
+
+        fun initiate(now: Long) {
+            val initiation =
+                engine.initiate(peer.nodeId, ik.priv, peer.ik.pub, RatchetEngine.PeerPrekey(id = 1, pub = peer.spk.pub), now)
+            session = initiation.session
+            localEpochs[initiation.epoch.epoch] = initiation.epoch
+        }
+
+        fun seal(
+            plain: String,
+            now: Long,
+            force: Boolean = false,
+        ): Frame {
+            val result = checkNotNull(engine.seal(checkNotNull(session), plain.toByteArray(), AAD, peer.spk.pub, now, force))
+            session = result.session
+            result.newLocalEpoch?.let { localEpochs[it.epoch] = it }
+            return Frame(result.header, result.nonce, result.ct)
+        }
+
+        fun open(
+            frame: Frame,
+            now: Long,
+        ): OpenOutcome {
+            val ctx =
+                RatchetEngine.OpenContext(
+                    selfNodeId = nodeId,
+                    peerId = peer.nodeId,
+                    session = session,
+                    recvEpoch = recvEpochs[frame.header.se],
+                    skippedMsgKey = skipped[frame.header.se to frame.header.n],
+                    ownBasePriv = localEpochs[frame.header.pe]?.priv,
+                    ownIkPriv = ik.priv,
+                    peerIkPub = peer.ik.pub,
+                    spkPrivForInit =
+                        frame.header.init
+                            ?.takeIf { spkResolvable && it.pkid == 1 }
+                            ?.let { spk.priv },
+                )
+            val outcome = engine.open(ctx, frame.header, frame.nonce, frame.ct, AAD, now)
+            if (outcome is OpenOutcome.Opened) apply(outcome.delta, frame.header)
+            return outcome
+        }
+
+        private fun apply(
+            delta: RatchetEngine.OpenDelta,
+            header: RatchetEngine.FrameHeader,
+        ) {
+            lastDelta = delta
+            if (delta.purgePeerRecvState) {
+                recvEpochs.clear()
+                skipped.clear()
+            }
+            session = delta.session
+            delta.recvEpoch?.let { recvEpochs[it.epoch] = it }
+            delta.skippedInserts.forEach { skipped[it.epoch to it.idx] = it.msgKey }
+            if (delta.consumedSkippedIdx != null) skipped.remove(header.se to header.n)
+        }
+
+        /** A device wipe: ratchet state gone, identity + prekeys (identity.key) intact. */
+        fun wipe() {
+            session = null
+            localEpochs.clear()
+            recvEpochs.clear()
+            skipped.clear()
+        }
+    }
+
+    private fun pair(
+        firstId: String = "aaaaaaaa",
+        secondId: String = "bbbbbbbb",
+    ): Pair<Side, Side> {
+        val a = Side(firstId)
+        val b = Side(secondId)
+        a.peer = b
+        b.peer = a
+        return a to b
+    }
+
+    private fun text(outcome: OpenOutcome): String = String((outcome as OpenOutcome.Opened).plaintext)
+
+    // --- establishment ---
+
+    @Test
+    fun initFirstMessageAndReplyConfirmBothSides() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+
+        val first = a.seal("hello", NOW)
+        assertEquals(1, first.header.se)
+        assertEquals(0, first.header.pe)
+        assertNotNull(first.header.init)
+
+        assertEquals("hello", text(b.open(first, NOW)))
+        assertTrue(checkNotNull(b.session).confirmed)
+        assertFalse(checkNotNull(b.session).weAreInitiator)
+
+        val reply = b.seal("hi back", NOW)
+        assertEquals(1, reply.header.se)
+        assertEquals(1, reply.header.pe)
+        assertNull(reply.header.init)
+
+        assertEquals("hi back", text(a.open(reply, NOW)))
+        assertTrue(checkNotNull(a.session).confirmed)
+        assertNull(a.seal("post-confirm", NOW).header.init)
+    }
+
+    @Test
+    fun bothSidesDeriveTheSamePairwiseExportRoot() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("x", NOW), NOW)
+
+        assertArrayEquals(
+            RatchetCrypto.exportRoot(checkNotNull(a.session).root),
+            RatchetCrypto.exportRoot(checkNotNull(b.session).root),
+        )
+    }
+
+    // --- reordering, duplicates, holes ---
+
+    @Test
+    fun outOfOrderArrivalUsesSkippedKeysExactlyOnce() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        val m0 = a.seal("m0", NOW)
+        val m1 = a.seal("m1", NOW)
+        val m2 = a.seal("m2", NOW)
+
+        assertEquals("m2", text(b.open(m2, NOW)))
+        assertEquals(2, b.skipped.size)
+
+        assertEquals("m0", text(b.open(m0, NOW)))
+        assertEquals(1, b.skipped.size)
+        assertTrue(b.open(m0, NOW) === OpenOutcome.Failed.DUPLICATE)
+
+        assertEquals("m1", text(b.open(m1, NOW)))
+        assertTrue(b.skipped.isEmpty())
+    }
+
+    @Test
+    fun skippedKeyStillOpensAfterItsEpochRowWasSwept() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        val m0 = a.seal("m0", NOW)
+        b.open(a.seal("m1", NOW).also { a.seal("m2", NOW) }, NOW)
+
+        b.recvEpochs.clear()
+        assertEquals("m0", text(b.open(m0, NOW)))
+        assertTrue(b.recvEpochs.isEmpty())
+    }
+
+    @Test
+    fun aWhollyLostEpochLosesOnlyItself() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        a.seal("lost-0", NOW)
+        a.seal("lost-1", NOW)
+
+        val fresh = a.seal("epoch-2", NOW, force = true)
+        assertEquals(2, fresh.header.se)
+        assertEquals("epoch-2", text(b.open(fresh, NOW)))
+    }
+
+    // --- epoch advance rules ---
+
+    @Test
+    fun epochAdvancesAtTheMessageCountCap() {
+        val (a, _) = pair()
+        a.initiate(NOW)
+        repeat(RatchetEngine.MAX_EPOCH_MESSAGES) { assertEquals(1, a.seal("m$it", NOW).header.se) }
+        assertEquals(2, a.seal("overflow", NOW).header.se)
+    }
+
+    @Test
+    fun epochAdvancesAtTheAgeCap() {
+        val (a, _) = pair()
+        a.initiate(NOW)
+        assertEquals(1, a.seal("young", NOW).header.se)
+        assertEquals(2, a.seal("old", NOW + RatchetEngine.MAX_EPOCH_AGE_MS).header.se)
+    }
+
+    @Test
+    fun epochAdvancesOnTheFirstSendAfterAPeerContribution() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("hello", NOW), NOW)
+        a.open(b.seal("reply", NOW), NOW)
+
+        val healed = a.seal("healed", NOW)
+        assertEquals(2, healed.header.se)
+        assertEquals(1, healed.header.pe)
+        assertEquals("healed", text(b.open(healed, NOW)))
+    }
+
+    // --- typed failures ---
+
+    @Test
+    fun aFrameWithoutInitToAFreshDeviceIsNoSession() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("establish", NOW), NOW)
+        val confirmed = b.seal("no init attached", NOW)
+
+        val (_, stranger) = pair(firstId = a.nodeId, secondId = "cccccccc")
+        stranger.peer = b
+        assertTrue(stranger.open(confirmed, NOW) === OpenOutcome.Failed.NO_SESSION)
+    }
+
+    @Test
+    fun anInitAgainstAPrunedPrekeyIsEpochGone() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.spkResolvable = false
+        assertTrue(b.open(a.seal("hello", NOW), NOW) === OpenOutcome.Failed.EPOCH_GONE)
+    }
+
+    @Test
+    fun aFrameAgainstADeletedOwnEpochIsEpochGone() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("hello", NOW), NOW)
+        val reply = b.seal("reply", NOW)
+
+        a.localEpochs.clear()
+        assertTrue(a.open(reply, NOW) === OpenOutcome.Failed.EPOCH_GONE)
+    }
+
+    @Test
+    fun structurallyInvalidHeadersAreBadHeader() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        val frame = a.seal("hello", NOW)
+
+        val noInitAtPeZero =
+            Frame(RatchetEngine.FrameHeader(se = 1, ek = frame.header.ek, pe = 0, n = 0, init = null), frame.nonce, frame.ct)
+        assertTrue(b.open(noInitAtPeZero, NOW) === OpenOutcome.Failed.BAD_HEADER)
+
+        val overflowIndex =
+            Frame(
+                RatchetEngine.FrameHeader(
+                    se = 1,
+                    ek = frame.header.ek,
+                    pe = 0,
+                    n = RatchetEngine.MAX_EPOCH_MESSAGES,
+                    init = frame.header.init,
+                ),
+                frame.nonce,
+                frame.ct,
+            )
+        assertTrue(b.open(overflowIndex, NOW) === OpenOutcome.Failed.BAD_HEADER)
+    }
+
+    @Test
+    fun aTamperedCiphertextIsAeadFail() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        val frame = a.seal("hello", NOW)
+        val tampered = Frame(frame.header, frame.nonce, frame.ct.copyOf().also { it[0] = (it[0] + 1).toByte() })
+        assertTrue(b.open(tampered, NOW) === OpenOutcome.Failed.AEAD_FAIL)
+    }
+
+    // --- both-initiate race ---
+
+    @Test
+    fun bothInitiateRaceConvergesOnTheLowerNodeIdsSession() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.initiate(NOW)
+        val fromA = a.seal("from a", NOW)
+        val fromB = b.seal("from b", NOW)
+
+        // A (lower nodeId) wins on both ends: A keeps its root and archives B's; B adopts A's.
+        assertEquals("from b", text(a.open(fromB, NOW)))
+        assertTrue(checkNotNull(a.session).weAreInitiator)
+        assertNotNull(checkNotNull(a.session).prevRoot)
+
+        assertEquals("from a", text(b.open(fromA, NOW)))
+        assertTrue(checkNotNull(b.session).confirmed)
+        assertFalse(checkNotNull(b.session).weAreInitiator)
+        assertArrayEquals(checkNotNull(a.session).root, checkNotNull(b.session).root)
+
+        // Post-race traffic flows both ways under the winning root; epoch numbering stayed monotone.
+        val bNext = b.seal("under the winning root", NOW)
+        assertEquals(2, bNext.header.se)
+        assertEquals("under the winning root", text(a.open(bNext, NOW)))
+        assertTrue(checkNotNull(a.session).confirmed)
+        assertEquals("ack", text(b.open(a.seal("ack", NOW), NOW)))
+    }
+
+    @Test
+    fun raceLosersInFlightFramesStillDrainViaThePreviousRoot() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.initiate(NOW)
+        val early0 = b.seal("early 0", NOW)
+        val early1 = b.seal("early 1", NOW)
+
+        assertEquals("early 1", text(a.open(early1, NOW)))
+        b.open(a.seal("from a", NOW), NOW)
+
+        // A late copy of the loser-root epoch still opens: its receive chain was derived before the
+        // race resolved, and chains never need the root again.
+        assertEquals("early 0", text(a.open(early0, NOW)))
+    }
+
+    @Test
+    fun aReservedRaceInitNeverReplacesTheResolvedSession() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.initiate(NOW + 5_000)
+        val fromB = b.seal("from b", NOW + 5_000)
+        val fromA = a.seal("from a", NOW)
+
+        assertEquals("from b", text(a.open(fromB, NOW)))
+        assertEquals("from a", text(b.open(fromA, NOW)))
+        assertEquals("settle", text(a.open(b.seal("settle", NOW), NOW)))
+        assertTrue(checkNotNull(a.session).confirmed)
+        val rootAfterRace = checkNotNull(a.session).root
+
+        // The loser's init re-served from custody hours later. Its timestamp (NOW + 5s) is NEWER than
+        // the winning session's establishedAt (NOW), so a timestamp-based rule would treat it as a
+        // fresh replacement and wreck the session on every re-serve for the whole custody TTL; the
+        // ephemeral-key idempotence match must classify it as already-resolved instead.
+        val reServed = a.open(fromB, NOW + 60_000)
+        assertTrue(reServed === OpenOutcome.Failed.DUPLICATE)
+        assertArrayEquals(rootAfterRace, checkNotNull(a.session).root)
+        assertTrue(checkNotNull(a.session).confirmed)
+    }
+
+    // --- wipe and replacement ---
+
+    @Test
+    fun aWipedPeersReInitReplacesTheSessionAndPurgesStaleRecvState() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("before the wipe", NOW), NOW)
+        a.open(b.seal("reply", NOW), NOW)
+
+        a.wipe()
+        a.initiate(NOW + 10_000)
+        val reborn = a.seal("after the wipe", NOW + 10_000)
+
+        assertEquals("after the wipe", text(b.open(reborn, NOW + 10_000)))
+        assertTrue(checkNotNull(b.lastDelta).purgePeerRecvState)
+        assertEquals(NOW + 10_000, checkNotNull(b.session).establishedAt)
+        assertEquals(setOf(1), b.recvEpochs.keys)
+
+        // B's next send reaches the reborn A; B's own epoch numbering never reset.
+        val toReborn = b.seal("welcome back", NOW + 10_000)
+        assertTrue(toReborn.header.se >= 2)
+        assertEquals("welcome back", text(a.open(toReborn, NOW + 10_000)))
+    }
+
+    @Test
+    fun oldEraFramesDrainViaPrevRootWhenEpochNumbersDoNotCollide() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("establish", NOW), NOW)
+        a.seal("burn epoch 1", NOW)
+        val oldEra = a.seal("old era, epoch 2", NOW, force = true)
+
+        a.wipe()
+        a.initiate(NOW + 10_000)
+        b.open(a.seal("new era", NOW + 10_000), NOW + 10_000)
+
+        // The pre-wipe frame's epoch (2) does not collide with the new era's (1): the purged recv state
+        // forces a fresh derivation, which fails under the new root and succeeds under the draining one.
+        assertEquals("old era, epoch 2", text(b.open(oldEra, NOW + 10_000)))
+    }
+
+    @Test
+    fun oldEraFramesWhoseEpochNumberCollidesFailBenignly() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        val old0 = a.seal("old era, epoch 1, n=0", NOW)
+        val old1 = a.seal("old era, epoch 1, n=1", NOW)
+
+        a.wipe()
+        a.initiate(NOW + 10_000)
+        b.open(a.seal("new era, epoch 1", NOW + 10_000), NOW + 10_000)
+
+        // Both eras used se=1 and the new era owns the recv row now, so the old frames cannot decrypt:
+        // an index below the new chain's cursor reads as a duplicate, one at/above it fails the AEAD.
+        // Benign by design — anything delivered pre-wipe is skipped by the exists-gate upstream, and
+        // the reset path re-seals undelivered traffic; this asserts the failure is contained, not silent.
+        assertTrue(b.open(old0, NOW + 10_000) === OpenOutcome.Failed.DUPLICATE)
+        assertTrue(b.open(old1, NOW + 10_000) === OpenOutcome.Failed.AEAD_FAIL)
+    }
+
+    private companion object {
+        const val NOW = 1_700_000_000_000L
+        val AAD = "id|sender|1700000000000|thread".toByteArray()
+    }
+}

@@ -40,8 +40,10 @@
 -keep class app.getknit.knit.mesh.link.FileHeaderWire { *; }
 -keep class app.getknit.knit.mesh.link.DigestWire { *; }
 # At-rest device identity (filesDir/identity.key, CBOR): a key-name drift silently re-mints the nodeId and
-# breaks every peer's pinned key. Not wire, same blast radius — pin it too.
+# breaks every peer's pinned key. Not wire, same blast radius — pin it too. StoredPrekey rides the same
+# blob (ratchet signed-prekey privates; a drift would orphan peers' in-flight session initiations).
 -keep class app.getknit.knit.data.crypto.IdentityKeyStore$Stored { *; }
+-keep class app.getknit.knit.data.crypto.IdentityKeyStore$StoredPrekey { *; }
 
 # ---- Tink (E2E crypto) -----------------------------------------------------------------------------------
 # HIGHEST risk: HybridConfig/SignatureConfig register key managers reflectively (+ protobuf). A stripped

@@ -47,6 +47,12 @@ class PublicKeyBundle private constructor(
         keysetOf(HpkePublicKey.create(HPKE_PARAMS, Bytes.copyFrom(hpkePubBytes), null))
             .getPrimitive(RegistryConfiguration.get(), HybridEncrypt::class.java)
 
+    /**
+     * The raw 32-byte X25519 public key, for the v2 ratchet's X3DH derivations (the same key HPKE
+     * wraps to — reuse is safe, the ratchet's HKDF labels are domain-separated from RFC 9180's).
+     */
+    fun dhPublicKey(): ByteArray = hpkePubBytes.copyOf()
+
     /** A primitive that verifies signatures made by this peer's signing key. */
     fun verifier(): PublicKeyVerify =
         keysetOf(Ed25519PublicKey.create(Ed25519Parameters.Variant.NO_PREFIX, Bytes.copyFrom(sigPubBytes), null))

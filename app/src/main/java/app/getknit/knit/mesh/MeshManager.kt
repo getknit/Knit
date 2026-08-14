@@ -198,6 +198,7 @@ class MeshManager(
             originate = ::originateSigned,
             flushPending = ::flushPendingFor,
             classifyText = ::isTextFlagged,
+            resealUnacked = ::resealRecentDmsTo,
         )
 
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
@@ -990,37 +991,64 @@ class MeshManager(
         if (recipientId in settings.blockedNodeIds.first()) return
         val me = identity.nodeId()
         messages.pendingForRecipient(recipientId).forEach { row ->
-            val content =
-                MessageContent(
-                    body = row.body,
-                    mentions = MentionStore.decode(row.mentions),
+            if (resealAndFlood(row, recipientId, me)) messages.clearPending(row.id)
+        }
+    }
+
+    /**
+     * Re-seals our recent unacked DMs to [recipientId] under the CURRENT session state — the recovery
+     * half of an inbound ratchet **session reset**: a wiped peer can no longer open frames sealed to
+     * its dead session, but custody still carries them (≤ the 24 h TTL), so a fresh seal under the
+     * replacement session puts recoverable copies back on the mesh. Receiver-side idempotency (the
+     * exists-gate + upsert) makes duplicates harmless.
+     */
+    private suspend fun resealRecentDmsTo(recipientId: String) {
+        if (recipientId in settings.blockedNodeIds.first()) return
+        val me = identity.nodeId()
+        messages
+            .unackedDmsTo(recipientId, me, since = clock() - RESEAL_WINDOW_MS)
+            .forEach { row -> resealAndFlood(row, recipientId, me) }
+    }
+
+    /**
+     * Rebuilds one stored DM row's plaintext, seals it through the [sealEnvelopeFor] chokepoint under
+     * whatever session state exists NOW (v2 when the peer is ratchet-capable, else v1), and floods it
+     * under the ORIGINAL id/sentAt (so receivers dedup and the AEAD header matches). False when nobody
+     * addressable holds a key yet.
+     */
+    private suspend fun resealAndFlood(
+        row: MessageEntity,
+        recipientId: String,
+        me: String,
+    ): Boolean {
+        val content =
+            MessageContent(
+                body = row.body,
+                mentions = MentionStore.decode(row.mentions),
+                attachmentHash = row.attachmentHash,
+                attachmentMime = row.attachmentMime,
+                attachmentKey = row.attachmentKey,
+                replyTo = row.replyRef(),
+            )
+        val envelope =
+            sealEnvelopeFor(row.id, me, row.sentAt, recipientId, group = null, content = content)
+                ?: return false
+        originateSigned(
+            chatEnvelope(
+                row.id,
+                me,
+                row.sentAt,
+                recipientId,
+                group = null,
+                // Same cleartext-hash exposure as sendChat, so a re-sealed DM's image is custodied too.
+                ChatContent(
+                    enc = envelope,
                     attachmentHash = row.attachmentHash,
                     attachmentMime = row.attachmentMime,
-                    attachmentKey = row.attachmentKey,
-                    replyTo = row.replyRef(),
-                )
-            // The same chokepoint as sendChat: the re-seal happens at flush time under whatever session
-            // state exists NOW — v2 when the peer's just-pinned profile is ratchet-capable, else v1.
-            val envelope =
-                sealEnvelopeFor(row.id, me, row.sentAt, recipientId, group = null, content = content)
-                    ?: return@forEach
-            originateSigned(
-                chatEnvelope(
-                    row.id,
-                    me,
-                    row.sentAt,
-                    recipientId,
-                    group = null,
-                    // Same cleartext-hash exposure as sendChat, so a re-sealed pending DM's image is custodied too.
-                    ChatContent(
-                        enc = envelope,
-                        attachmentHash = row.attachmentHash,
-                        attachmentMime = row.attachmentMime,
-                    ),
                 ),
-            )
-            messages.clearPending(row.id)
-        }
+            ),
+        )
+        return true
     }
 
     /** Periodically logs a transmission snapshot so flood-suppression and byte savings are visible. */
@@ -1059,6 +1087,9 @@ class MeshManager(
         // Min spacing between first-contact profile floods (watchReachable): a burst of newcomers costs one
         // origination; custody + the per-link pushProfileTo cover anyone the coalesced flood skipped.
         const val PROFILE_REFLOOD_MIN_MS = 30_000L
+
+        /** How far back the post-reset DM re-seal reaches — the custody TTL (older frames left the mesh). */
+        const val RESEAL_WINDOW_MS = 24 * 60 * 60_000L
 
         /** Payload for a frame whose content lives entirely in the routing envelope (e.g. a group update). */
         val EMPTY_PAYLOAD = ByteArray(0)

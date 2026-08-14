@@ -221,6 +221,7 @@ class InboundPipelineTest {
             )
         val originated = mutableListOf<RelayEnvelope>()
         val flushed = mutableListOf<String>()
+        val resealed = mutableListOf<String>()
         var failClassify = false
         val pipeline: InboundPipeline
 
@@ -271,12 +272,30 @@ class InboundPipelineTest {
                     originate = { originated += it },
                     flushPending = { flushed += it },
                     classifyText = { _, _, _ -> if (failClassify) error("moderation boom") else false },
+                    resealUnacked = { resealed += it },
                 )
         }
 
         /** Pins [p]'s real key under its nodeId, as [handleProfile] would after receiving its profile. */
         fun pin(p: Party) {
             peerMap[p.nodeId] = PeerEntity(nodeId = p.nodeId, pubKey = p.bundle.encoded, updatedAt = 1L)
+        }
+
+        /** Pins [p] as ratchet-capable (CAP_RATCHET + a prekey), as [handleProfile] stores a v2 profile. */
+        fun pinRatchetCapable(
+            p: Party,
+            prekeyPub: ByteArray,
+        ) {
+            peerMap[p.nodeId] =
+                PeerEntity(
+                    nodeId = p.nodeId,
+                    pubKey = p.bundle.encoded,
+                    capabilities = Protocol.LOCAL_CAPABILITIES,
+                    prekeyId = 2,
+                    prekeyPub = b64(prekeyPub),
+                    prekeyProfileAt = 1L,
+                    updatedAt = 1L,
+                )
         }
 
         /** Signs [env] with [author]'s key and drives it through the pipeline (the common onDeliver call). */
@@ -1620,6 +1639,8 @@ class InboundPipelineTest {
     private inner class V2Author(
         val party: Party,
         private val rig: Rig,
+        /** The author's session-establishment clock (a later value models a wiped, re-initiating device). */
+        private val at: Long = 5L,
     ) {
         private val engine = RatchetEngine()
         private var session: RatchetEngine.SessionState
@@ -1631,7 +1652,7 @@ class InboundPipelineTest {
                     ownIkPriv = party.dhPriv,
                     peerIkPub = rig.self.bundle.dhPublicKey(),
                     peerSpk = RatchetEngine.PeerPrekey(id = SPK_ID, pub = rig.selfSpk.pub),
-                    now = 5L,
+                    now = at,
                 )
             session = initiation.session
         }
@@ -1788,6 +1809,81 @@ class InboundPipelineTest {
             assertTrue(rig.originated.none { it.type == FrameType.RECEIPT })
             // The session still advanced — the control frame's chain step is not a hole.
             assertEquals(1, rig.ratchetStore.recvEpoch(alice.nodeId, 1)?.next)
+        }
+
+    // --- session reset ---
+
+    @Test
+    fun repeatedUndecryptableFramesTriggerExactlyOneRateLimitedResetRequest() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val author = V2Author(alice, rig)
+
+            fun orphan(id: String) =
+                author.dm(id, "lost") { h -> RatchetHeader(se = h.se, ek = h.ek, pe = 1, n = h.n, init = null, flags = h.flags) }
+
+            rig.deliver(alice, orphan("o1"))
+            rig.deliver(alice, orphan("o2"))
+            assertTrue("below the distinct-frames threshold, no reset yet", rig.originated.isEmpty())
+
+            rig.deliver(alice, orphan("o3"))
+            val resets =
+                rig.originated.mapNotNull { WireCodec.decodePayload<ChatContent>(it.payload)?.enc?.r }.filter {
+                    it.flags and RatchetHeader.FLAG_RESET != 0
+                }
+            assertEquals(1, resets.size)
+            assertNotNull("the reset carries a fresh X3DH init", resets.single().init)
+
+            // More undecryptable traffic inside the rate-limit window must not fire again.
+            rig.deliver(alice, orphan("o4"))
+            val after =
+                rig.originated.mapNotNull { WireCodec.decodePayload<ChatContent>(it.payload)?.enc?.r }.count {
+                    it.flags and RatchetHeader.FLAG_RESET != 0
+                }
+            assertEquals(1, after)
+        }
+
+    @Test
+    fun anInboundResetReplacesTheSessionAndTriggersTheUnackedReseal() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            rig.deliver(alice, V2Author(alice, rig, at = 5L).dm("pre-wipe", "before"))
+            assertEquals(5L, rig.ratchetStore.session(alice.nodeId)?.establishedAt)
+
+            // Alice wipes and re-initiates: a fresh engine with a later establishment clock sends the
+            // reset control frame (what maybeRequestReset's counterpart produces on her side).
+            val reborn = V2Author(alice, rig, at = 60_000L)
+            rig.deliver(alice, reborn.dm("reset-1", "", ctl = MessageContent.CTL_SESSION_RESET))
+
+            assertEquals(60_000L, rig.ratchetStore.session(alice.nodeId)?.establishedAt)
+            assertEquals(listOf(alice.nodeId), rig.resealed)
+            assertFalse("a control frame is never persisted", rig.msgMap.containsKey("reset-1"))
+            val ackedIds =
+                rig.originated
+                    .filter { it.type == FrameType.RECEIPT }
+                    .mapNotNull { WireCodec.decodePayload<ReceiptContent>(it.payload)?.ackId }
+            assertFalse("a control frame is never acked (the pre-wipe DM's ack is fine)", "reset-1" in ackedIds)
+        }
+
+    @Test
+    fun aSecondReplacementInsideTheRateLimitWindowIsInert() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            rig.deliver(alice, V2Author(alice, rig, at = 5L).dm("est", "hello"))
+            rig.deliver(alice, V2Author(alice, rig, at = 60_000L).dm("r1", "", ctl = MessageContent.CTL_SESSION_RESET))
+            assertEquals(60_000L, rig.ratchetStore.session(alice.nodeId)?.establishedAt)
+
+            // A third session claim right away: the replacement gate holds the previous session.
+            rig.deliver(alice, V2Author(alice, rig, at = 120_000L).dm("r2", "", ctl = MessageContent.CTL_SESSION_RESET))
+
+            assertEquals(60_000L, rig.ratchetStore.session(alice.nodeId)?.establishedAt)
+            assertEquals(listOf(alice.nodeId), rig.resealed)
         }
 
     // --- profile prekey pinning ---

@@ -121,6 +121,13 @@ class RatchetEngine(
         val ownIkPriv: ByteArray,
         val peerIkPub: ByteArray,
         val spkPrivForInit: ByteArray?,
+        /**
+         * Whether a session-replacing init (newer `at`, unknown eph, on a resolved session) may be
+         * adopted this call. The caller rate-limits replacements (an attacker can't forge one — the
+         * frame is signed — but a buggy peer could churn); false makes the init inert, so the frame
+         * is judged under the existing roots only.
+         */
+        val allowReplacement: Boolean = true,
     )
 
     sealed interface OpenOutcome {
@@ -360,7 +367,7 @@ class RatchetEngine(
         if (!session.confirmed && session.weAreInitiator) return resolveRace(ctx, session, init, now)
         // A genuinely stale init (older than the session we already share) changes nothing.
         if (init.at <= session.establishedAt) return ResolvedSession(session, candidates)
-        if (ctx.spkPrivForInit == null) return ResolvedSession(session, candidates)
+        if (ctx.spkPrivForInit == null || !ctx.allowReplacement) return ResolvedSession(session, candidates)
         // Replacement (peer reset / re-init after losing state): their epoch numbering restarts at 1,
         // so our recv rows for the old numbering must go; the old root drains via prevRoot for any
         // still-in-flight old frames.

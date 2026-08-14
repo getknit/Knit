@@ -107,6 +107,9 @@ class InboundPipeline(
     private val originate: suspend (RelayEnvelope) -> Unit,
     private val flushPending: suspend (String) -> Unit,
     private val classifyText: suspend (String, String, Boolean) -> Boolean,
+    // Re-seals our recent unacked DMs to a peer whose ratchet session was just replaced (the recovery
+    // half of an inbound reset) — MeshManager.resealRecentDmsTo, lambda-mediated like originate.
+    private val resealUnacked: suspend (String) -> Unit = {},
 ) {
     // nodeId -> avatar hash a non-direct peer advertised but whose bytes we're still pulling, so a blob
     // arriving via the multi-hop BlobExchange can be attributed back to the peer that advertised it.
@@ -519,7 +522,7 @@ class InboundPipeline(
         val now = System.currentTimeMillis()
         val peek = ratchet.peekOpen(me, env.senderId, peerIkPub, wireHeader, enc.nonce, enc.ct, aad, now)
         if (peek !is RatchetEngine.OpenOutcome.Opened) {
-            onRatchetFailure(env, peek)
+            onRatchetFailure(env, peek, me, now)
             return
         }
         val plain = MessageContent.decode(peek.plaintext)
@@ -539,9 +542,11 @@ class InboundPipeline(
         }
         if (plain.ctl != null) {
             // A control frame is ratchet machinery, not conversation: advance/commit the session state
-            // but never persist, notify, or ack it as a message. Reset handling lands with the
-            // reset-hardening phase; committing here already keeps the chain hole-free.
-            commit {}
+            // but never persist, notify, or ack it as a message. A reset request's init rode the header
+            // and was adopted by the commit (session replaced); the recovery half re-seals our recent
+            // unacked DMs so the wiped peer gets back what custody still holds.
+            val committed = commit {}
+            if (committed && plain.ctl == MessageContent.CTL_SESSION_RESET) resealUnacked(env.senderId)
             return
         }
         deliverChat(
@@ -554,10 +559,16 @@ class InboundPipeline(
         )
     }
 
-    /** Maps a typed v2 open failure to its drop reason (the reset heuristic lands with phase 6). */
-    private fun onRatchetFailure(
+    /**
+     * Maps a typed v2 open failure to its drop reason, and — for the two shapes that mean "the peer
+     * assumes session state we don't have" (our DB wiped, or their epochs based on privs we retired) —
+     * feeds the reset heuristic, sending a rate-limited session reset request when it fires.
+     */
+    private suspend fun onRatchetFailure(
         env: RelayEnvelope,
         outcome: RatchetEngine.OpenOutcome,
+        me: String,
+        now: Long,
     ) {
         val reason =
             when (outcome) {
@@ -569,6 +580,51 @@ class InboundPipeline(
             }
         metrics.onDropped(reason)
         Log.w(TAG, "drop v2 chat ${env.id}: $outcome")
+        if (reason == DropReason.RATCHET_NO_SESSION || reason == DropReason.RATCHET_EPOCH_GONE) {
+            maybeRequestReset(env, me, now)
+        }
+    }
+
+    /**
+     * Sends a session reset request to [env]'s sender when the heuristic fires (≥3 distinct
+     * undecryptable frames, ≥6 h since the last request). The request is an ordinary v2 DM — fresh
+     * X3DH init in the header, `ctl = CTL_SESSION_RESET` inside the ciphertext — deliberately NOT a
+     * new frame type, so pre-ratchet relays custody it like any chat and it reaches an offline peer.
+     */
+    private suspend fun maybeRequestReset(
+        env: RelayEnvelope,
+        me: String,
+        now: Long,
+    ) {
+        if (!ratchet.noteUndecryptable(env.senderId, env.id, now)) return
+        val peer = peers.find(env.senderId) ?: return
+        if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return
+        val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return
+        val prekeyId = peer.prekeyId ?: return
+        val prekeyPub = peer.prekeyPub?.let { runCatching { b64d(it) }.getOrNull() } ?: return
+        val id = FrameId.new()
+        val aad = MessageCrypto.header(id, me, now, env.senderId)
+        val plaintext = MessageContent(body = "", ctl = MessageContent.CTL_SESSION_RESET).encode()
+        val sealed =
+            ratchet.sealResetDm(
+                peerId = env.senderId,
+                peerIkPub = bundle.dhPublicKey(),
+                peerSpk = RatchetEngine.PeerPrekey(id = prekeyId, pub = prekeyPub),
+                plaintext = plaintext,
+                aad = aad,
+                now = now,
+            ) ?: return
+        Log.w(TAG, "requesting ratchet session reset with ${env.senderId}")
+        originate(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                recipientId = env.senderId,
+                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+            ),
+        )
     }
 
     /**

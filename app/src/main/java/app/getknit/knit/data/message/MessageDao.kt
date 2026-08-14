@@ -43,6 +43,22 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE recipientId = :recipientId AND pendingKey = 1")
     suspend fun pendingForRecipient(recipientId: String): List<MessageEntity>
 
+    /**
+     * Our own recent DMs to [recipientId] that were flooded but never acked — the re-seal set when the
+     * peer resets its ratchet session (a wiped device can no longer open what we sealed to the old
+     * session, but custody still holds those frames; re-sealing under the fresh session recovers them).
+     * Bounded by [since] (the custody TTL) — anything older is gone from the mesh anyway.
+     */
+    @Query(
+        "SELECT * FROM messages WHERE recipientId = :recipientId AND senderId = :me " +
+            "AND received = 0 AND pendingKey = 0 AND sentAt >= :since",
+    )
+    suspend fun unackedDmsTo(
+        recipientId: String,
+        me: String,
+        since: Long,
+    ): List<MessageEntity>
+
     /** Clears the [MessageEntity.pendingKey] flag once a stuck DM has been sealed and flooded. */
     @Query("UPDATE messages SET pendingKey = 0 WHERE id = :id")
     suspend fun clearPending(id: String)

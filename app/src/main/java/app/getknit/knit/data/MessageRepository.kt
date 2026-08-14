@@ -36,6 +36,12 @@ class MessageRepository(
     /** Outgoing DMs to [recipientId] that are still awaiting the recipient's key before they can be sent. */
     suspend fun pendingForRecipient(recipientId: String): List<MessageEntity> = dao.pendingForRecipient(recipientId)
 
+    suspend fun unackedDmsTo(
+        recipientId: String,
+        me: String,
+        since: Long,
+    ): List<MessageEntity> = dao.unackedDmsTo(recipientId, me, since)
+
     /** Clears the pending-key flag once a stuck DM has finally been sealed and flooded. */
     suspend fun clearPending(id: String) = dao.clearPending(id)
 

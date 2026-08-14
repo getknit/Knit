@@ -30,6 +30,15 @@ class RatchetSessions(
 ) {
     private val mutex = Mutex()
 
+    /** Per-peer reset heuristic state: the distinct undecryptable frame ids seen (bounded LRU). */
+    private val undecryptable = HashMap<String, LinkedHashSet<String>>()
+
+    /** In-memory outbound rate-limit fallback for peers with no session row yet (NO_SESSION resets). */
+    private val lastResetSentAt = HashMap<String, Long>()
+
+    /** Inbound session-replacement rate limit (per peer): last accepted replacement/adoption. */
+    private val lastReplacementAt = HashMap<String, Long>()
+
     /** Maps the wire header DTO to the engine's wire-agnostic mirror. */
     private fun headerOf(r: RatchetHeader): RatchetEngine.FrameHeader =
         RatchetEngine.FrameHeader(
@@ -46,6 +55,7 @@ class RatchetSessions(
         peerId: String,
         peerIkPub: ByteArray,
         header: RatchetEngine.FrameHeader,
+        now: Long,
     ): RatchetEngine.OpenContext =
         RatchetEngine.OpenContext(
             selfNodeId = selfNodeId,
@@ -57,6 +67,10 @@ class RatchetSessions(
             ownIkPriv = dhIdentityPriv(),
             peerIkPub = peerIkPub,
             spkPrivForInit = header.init?.let { spkPrivFor(it.pkid) },
+            allowReplacement =
+                synchronized(lastReplacementAt) {
+                    now - (lastReplacementAt[peerId] ?: 0L) >= REPLACEMENT_MIN_INTERVAL_MS
+                },
         )
 
     /**
@@ -75,7 +89,7 @@ class RatchetSessions(
         now: Long,
     ): RatchetEngine.OpenOutcome {
         val header = headerOf(wireHeader)
-        return engine.open(contextFor(selfNodeId, peerId, peerIkPub, header), header, nonce, ct, aad, now)
+        return engine.open(contextFor(selfNodeId, peerId, peerIkPub, header, now), header, nonce, ct, aad, now)
     }
 
     /**
@@ -98,9 +112,15 @@ class RatchetSessions(
     ): Boolean =
         mutex.withLock {
             val header = headerOf(wireHeader)
-            val outcome = engine.open(contextFor(selfNodeId, peerId, peerIkPub, header), header, nonce, ct, aad, now)
+            val outcome = engine.open(contextFor(selfNodeId, peerId, peerIkPub, header, now), header, nonce, ct, aad, now)
             if (outcome !is RatchetEngine.OpenOutcome.Opened) return@withLock false
             store.applyOpen(peerId, outcome.delta, headerSe = header.se, headerN = header.n)
+            if (outcome.delta.purgePeerRecvState) {
+                // A replacement was adopted: start its rate-limit window and clear the reset heuristic —
+                // the session is fresh, old failures are moot.
+                synchronized(lastReplacementAt) { lastReplacementAt[peerId] = now }
+                synchronized(undecryptable) { undecryptable.remove(peerId) }
+            }
             onOpened()
             true
         }
@@ -154,6 +174,93 @@ class RatchetSessions(
             )
         }
 
+    /**
+     * Records an undecryptable v2 frame ([RatchetEngine.OpenOutcome.Failed.NO_SESSION] /
+     * [RatchetEngine.OpenOutcome.Failed.EPOCH_GONE]) from a pinned peer and decides whether a session
+     * reset is due: at least [RESET_DISTINCT_FRAMES] **distinct** frame ids (custody re-serves the same
+     * frame endlessly — one stuck frame must not trigger anything), and not more often than
+     * [RESET_MIN_INTERVAL_MS] per peer (persisted on the session row where one exists, so restarts
+     * don't bypass it; the in-memory fallback covers the no-session case).
+     */
+    suspend fun noteUndecryptable(
+        peerId: String,
+        frameId: String,
+        now: Long,
+    ): Boolean {
+        val distinct =
+            synchronized(undecryptable) {
+                val ids = undecryptable.getOrPut(peerId) { LinkedHashSet() }
+                ids.add(frameId)
+                while (ids.size > RESET_TRACKED_FRAMES) ids.remove(ids.first())
+                ids.size
+            }
+        if (distinct < RESET_DISTINCT_FRAMES) return false
+        val persisted = store.session(peerId)?.lastResetSentAt ?: 0L
+        val inMemory = synchronized(lastResetSentAt) { lastResetSentAt[peerId] ?: 0L }
+        return now - maxOf(persisted, inMemory) >= RESET_MIN_INTERVAL_MS
+    }
+
+    /**
+     * Seals a session **reset request**: a fresh X3DH initiation replacing any local session (the old
+     * root drains via prevRoot; our epoch numbering restarts, and the peer's replacement handling
+     * purges its stale rows), carrying [plaintext] (the `ctl` reset marker) with [RatchetHeader.FLAG_RESET].
+     * Also stamps the outbound rate limit. Null when the peer has no usable prekey.
+     */
+    suspend fun sealResetDm(
+        peerId: String,
+        peerIkPub: ByteArray,
+        peerSpk: RatchetEngine.PeerPrekey?,
+        plaintext: ByteArray,
+        aad: ByteArray,
+        now: Long,
+    ): EncEnvelope? =
+        mutex.withLock {
+            peerSpk ?: return@withLock null
+            val old = store.session(peerId)
+            val initiation = engine.initiate(peerId, dhIdentityPriv(), peerIkPub, peerSpk, now)
+            val session =
+                initiation.session.copy(
+                    prevRoot = old?.root,
+                    prevRootWeAreInitiator = old?.weAreInitiator ?: false,
+                    prevRootExpiresAt = if (old != null) now + RatchetEngine.PREV_ROOT_TTL_MS else 0L,
+                    lastResetSentAt = now,
+                )
+            val sealed = engine.seal(session, plaintext, aad, peerSpk.pub, now) ?: return@withLock null
+            store.commitSend(sealed.session, initiation.epoch)
+            synchronized(lastResetSentAt) { lastResetSentAt[peerId] = now }
+            synchronized(undecryptable) { undecryptable.remove(peerId) }
+            val h = sealed.header
+            EncEnvelope(
+                v = EncEnvelope.VERSION_RATCHET,
+                nonce = sealed.nonce,
+                ct = sealed.ct,
+                keys = emptyList(),
+                r =
+                    RatchetHeader(
+                        se = h.se,
+                        ek = h.ek,
+                        pe = h.pe,
+                        n = h.n,
+                        init = h.init?.let { RatchetInit(eph = it.eph, pkid = it.pkid, at = it.at) },
+                        flags = RatchetHeader.FLAG_RESET,
+                    ),
+            )
+        }
+
     /** Retention GC passthrough (wired into the existing sweep loops). */
     suspend fun sweep(now: Long) = mutex.withLock { store.sweep(now) }
+
+    companion object {
+        /** Distinct undecryptable frames from one peer before a reset request fires. */
+        const val RESET_DISTINCT_FRAMES = 3
+
+        /** Bound on the per-peer undecryptable-id LRU. */
+        const val RESET_TRACKED_FRAMES = 8
+
+        /** Outbound reset floor per peer (persisted on the session row). */
+        const val RESET_MIN_INTERVAL_MS = 6 * 60 * 60_000L
+
+        /** Inbound session-replacement floor per peer (in-memory). */
+        const val REPLACEMENT_MIN_INTERVAL_MS = 60 * 60_000L
+    }
 }

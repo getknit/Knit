@@ -21,7 +21,15 @@ import androidx.room.PrimaryKey
  *
  * [protoVersion]/[capabilities] are the peer's advertised protocol version and feature bits (see
  * [app.getknit.knit.mesh.protocol.Protocol]), learned (authenticated) from their profile frame; null
- * until a profile carrying them arrives. Recorded for diagnostics; not yet consumed for routing.
+ * until a profile carrying them arrives. `CAP_RATCHET` is consumed at send time (v2 DM gating); the
+ * rest are diagnostics.
+ *
+ * [prekeyId]/[prekeyPub]/[prekeySig] are the peer's current ratchet signed prekey (verified against
+ * the pinned [pubKey] before storing — see `InboundPipeline.handleProfile`), and [prekeyProfileAt] the
+ * `sentAt` of the profile frame that carried it (the last-writer-wins clock for prekey updates,
+ * including the null-prekey downgrade case). All null until a v2-capable profile arrives. The key
+ * bytes are base64 like [pubKey] — a `ByteArray` column would break this data class's equality, which
+ * Room's flow dedup relies on.
  */
 @Entity(tableName = "peers")
 data class PeerEntity(
@@ -35,4 +43,8 @@ data class PeerEntity(
     val protoVersion: Int? = null,
     val capabilities: Long? = null,
     val updatedAt: Long = 0L,
+    val prekeyId: Int? = null,
+    val prekeyPub: String? = null,
+    val prekeySig: String? = null,
+    val prekeyProfileAt: Long? = null,
 )

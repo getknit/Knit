@@ -2,8 +2,11 @@ package app.getknit.knit.data
 
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.driver.AndroidSQLiteDriver
+import androidx.sqlite.execSQL
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,25 +43,52 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v1) creates and opens from the exported JSON`() {
-        val version = 1 // KnitDatabase @Database(version = 1) — bump alongside the DB (its retention is CLASS,
+    fun `the current schema (v2) creates and opens from the exported JSON`() {
+        val version = 2 // KnitDatabase @Database(version = 2) — bump alongside the DB (its retention is CLASS,
         // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
         helper.createDatabase(version).close()
     }
 
-    // Template for the first post-v1 migration — uncomment and fill in once KnitDatabase bumps to v2 and
-    // KnitMigrations.ALL holds MIGRATION_1_2 (until then there is nothing to migrate):
-    //
-    // @Test
-    // fun `migrate 1 to 2 preserves peer rows`() {
-    //     helper.createDatabase(1).use { c ->
-    //         c.execSQL("INSERT INTO peers (nodeId, name, status, verified, updatedAt) VALUES ('n1','Ann','',0,0)")
-    //     }
-    //     helper.runMigrationsAndValidate(2, listOf(KnitMigrations.MIGRATION_1_2)).use { c ->
-    //         c.prepare("SELECT name FROM peers WHERE nodeId = 'n1'").use { s ->
-    //             assertTrue(s.step())
-    //             assertEquals("Ann", s.getText(0))
-    //         }
-    //     }
-    // }
+    @Test
+    fun `migrate 1 to 2 preserves existing rows and adds the ratchet schema`() {
+        // Seed a v1 database with the rows a real device would carry into the upgrade: a pinned peer and
+        // a message. runMigrationsAndValidate then applies MIGRATION_1_2 and validates the result against
+        // the exported v2 schema JSON (so the hand-written SQL can't drift from what Room generates).
+        helper.createDatabase(1).use { c ->
+            c.execSQL(
+                "INSERT INTO peers (nodeId, name, status, verified, updatedAt) VALUES ('n1','Ann','around',1,7)",
+            )
+            c.execSQL(
+                "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, mentions, " +
+                    "replyToHasAttachment, moderation, pendingKey, kind) " +
+                    "VALUES ('m1','n1','c1','hello',1,1,'[]',0,0,0,0)",
+            )
+        }
+        helper.runMigrationsAndValidate(2, listOf(KnitMigrations.MIGRATION_1_2)).use { c ->
+            c.prepare("SELECT name, verified FROM peers WHERE nodeId = 'n1'").use { s ->
+                assertTrue(s.step())
+                assertEquals("Ann", s.getText(0))
+                assertEquals(1L, s.getLong(1))
+            }
+            c.prepare("SELECT body FROM messages WHERE id = 'm1'").use { s ->
+                assertTrue(s.step())
+                assertEquals("hello", s.getText(0))
+            }
+            // The new prekey columns exist and default to null for a pre-upgrade peer.
+            c.prepare("SELECT prekeyId, prekeyPub FROM peers WHERE nodeId = 'n1'").use { s ->
+                assertTrue(s.step())
+                assertTrue(s.isNull(0))
+                assertTrue(s.isNull(1))
+            }
+            // The ratchet tables are present and empty.
+            c.prepare("SELECT COUNT(*) FROM ratchet_sessions").use { s ->
+                assertTrue(s.step())
+                assertEquals(0L, s.getLong(0))
+            }
+            c.prepare("SELECT COUNT(*) FROM ratchet_skipped_keys").use { s ->
+                assertTrue(s.step())
+                assertEquals(0L, s.getLong(0))
+            }
+        }
+    }
 }

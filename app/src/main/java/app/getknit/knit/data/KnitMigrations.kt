@@ -1,6 +1,8 @@
 package app.getknit.knit.data
 
 import androidx.room.migration.Migration
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.execSQL
 
 /**
  * The registry of tested schema migrations applied in [KnitDatabase.build].
@@ -9,21 +11,60 @@ import androidx.room.migration.Migration
  * version bump MUST add a [Migration] here — a missing one makes Room throw at open time (caught by
  * `KnitDatabaseMigrationTest`) instead of silently wiping user data. So this is the single place production
  * migrations live: keep it in lockstep with `@Database(version = …)` and the checked-in
- * `app/schemas/**/<version>.json`.
- *
- * Empty at launch. The first migration (`MIGRATION_1_2`) lands with the first post-launch schema change; use
- * the driver-based `migrate(SQLiteConnection)` override (matching the `KnitDatabaseMigrationTest` harness), e.g.:
- *
- * ```
- * val MIGRATION_1_2 = object : Migration(1, 2) {
- *     override fun migrate(connection: androidx.sqlite.SQLiteConnection) {
- *         connection.execSQL("ALTER TABLE peers ADD COLUMN nickname TEXT")
- *     }
- * }
- * ```
- * then add it to [ALL] and fill in the migration test template.
+ * `app/schemas/**/<version>.json`, using the driver-based `migrate(SQLiteConnection)` override (matching
+ * the `KnitDatabaseMigrationTest` harness), and fill in a migration-test case per bump.
  */
 object KnitMigrations {
-    /** All migrations, applied by Room in order. Empty until the first post-v1 schema change. */
-    val ALL: Array<Migration> = arrayOf()
+    /**
+     * v2 — the DM epoch ratchet (docs/FORWARD_SECRECY_RATCHET.md): four `ratchet_*` state tables plus
+     * the peer's published-prekey columns. Additive only; the SQL must stay byte-equivalent to what
+     * Room generates for `app/schemas/**/2.json` (validated by `runMigrationsAndValidate`).
+     */
+    val MIGRATION_1_2 =
+        object : Migration(1, 2) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `ratchet_sessions` (" +
+                        "`peerId` TEXT NOT NULL, `confirmed` INTEGER NOT NULL, `weAreInitiator` INTEGER NOT NULL, " +
+                        "`root` BLOB NOT NULL, `prevRoot` BLOB, `prevRootWeAreInitiator` INTEGER NOT NULL, " +
+                        "`prevRootExpiresAt` INTEGER NOT NULL, `establishedAt` INTEGER NOT NULL, `initEphPub` BLOB, " +
+                        "`initPkid` INTEGER NOT NULL, `peerInitEphPub` BLOB, `peerBasePub` BLOB, " +
+                        "`peerBaseEpoch` INTEGER NOT NULL, `sendEpoch` INTEGER NOT NULL, `sendEpochPub` BLOB, " +
+                        "`sendChainKey` BLOB, `sendCount` INTEGER NOT NULL, `sendEpochStartedAt` INTEGER NOT NULL, " +
+                        "`sendEpochBaseEpoch` INTEGER NOT NULL, `sendEpochExport` BLOB, `highestPeAcked` INTEGER NOT NULL, " +
+                        "`lastResetSentAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`peerId`))",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `ratchet_local_epochs` (" +
+                        "`peerId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `priv` BLOB NOT NULL, `pub` BLOB NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, PRIMARY KEY(`peerId`, `epoch`))",
+                )
+                connection.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ratchet_local_epochs_createdAt` ON `ratchet_local_epochs` (`createdAt`)",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `ratchet_recv_epochs` (" +
+                        "`peerId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `chainKey` BLOB NOT NULL, `next` INTEGER NOT NULL, " +
+                        "`lastUsedAt` INTEGER NOT NULL, PRIMARY KEY(`peerId`, `epoch`))",
+                )
+                connection.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ratchet_recv_epochs_lastUsedAt` ON `ratchet_recv_epochs` (`lastUsedAt`)",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `ratchet_skipped_keys` (" +
+                        "`peerId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `idx` INTEGER NOT NULL, `msgKey` BLOB NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, PRIMARY KEY(`peerId`, `epoch`, `idx`))",
+                )
+                connection.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ratchet_skipped_keys_createdAt` ON `ratchet_skipped_keys` (`createdAt`)",
+                )
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyId` INTEGER")
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyPub` TEXT")
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeySig` TEXT")
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyProfileAt` INTEGER")
+            }
+        }
+
+    /** All migrations, applied by Room in order. */
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
 }

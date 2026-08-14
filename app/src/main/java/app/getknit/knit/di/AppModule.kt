@@ -17,12 +17,14 @@ import app.getknit.knit.data.crypto.DatabaseKey
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.crypto.KeystoreSecret
 import app.getknit.knit.data.forward.ForwardRepository
+import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.demo.DemoComposer
 import app.getknit.knit.identity.AndroidDeviceIdSource
 import app.getknit.knit.identity.DeviceIdSource
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.ForwardStore
+import app.getknit.knit.mesh.crypto.ratchet.RatchetStore
 import app.getknit.knit.notifications.MessageNotifier
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.review.ReviewPrompter
@@ -71,6 +73,7 @@ val appModule =
         single { get<KnitDatabase>().groupDao() }
         single { get<KnitDatabase>().blobVerdictDao() }
         single { get<KnitDatabase>().forwardDao() }
+        single { get<KnitDatabase>().ratchetDao() }
         single { MessageRepository(get()) }
         single { PeerRepository(get()) }
         single { ReactionRepository(get(), get()) }
@@ -81,4 +84,7 @@ val appModule =
         // StoreDigest (from meshModule) so every carry-store mutation keeps the cue-plane content digest in sync,
         // plus the KnitDatabase so store/remove/sweep run their DB writes in a transaction under the repo mutex.
         single<ForwardStore> { ForwardRepository(get(), get(), get()) }
+        // DM epoch-ratchet session state (docs/FORWARD_SECRECY_RATCHET.md), in the encrypted DB so the
+        // ratchet advance commits in the same transaction as the message row it decrypted/sealed.
+        single<RatchetStore> { RatchetRepository(get()) }
     }

@@ -15,6 +15,7 @@ import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.settings.InboundSettings
 import app.getknit.knit.identity.IdentitySource
@@ -24,6 +25,8 @@ import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.TinkInit
 import app.getknit.knit.mesh.crypto.b64
+import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetEngine
+import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
@@ -32,7 +35,10 @@ import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
+import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
+import app.getknit.knit.mesh.protocol.GroupRatchetHeader
+import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.KeyReqContent
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.PrekeyInfo
@@ -58,6 +64,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -212,13 +219,20 @@ class InboundPipelineTest {
         // session service over the REAL Room-backed store (the in-memory DB above) — v2 tests exercise
         // the actual applyOpen/commit SQL, not a fake.
         val selfSpk = RatchetCrypto.generateKeyPair()
+        val ratchetMutex = Mutex()
         val ratchetStore = RatchetRepository(db.ratchetDao(), clock = { 5L })
         val ratchet =
             RatchetSessions(
                 store = ratchetStore,
                 dhIdentityPriv = { self.dhPriv },
                 spkPrivFor = { id -> if (id == SPK_ID) selfSpk.priv else null },
+                mutex = ratchetMutex,
             )
+
+        // The group (v3) facade over the REAL Room-backed store, sharing the DM facade's mutex exactly
+        // as production wiring does (seed adoption runs inside a DM commit under that one lock).
+        val groupRatchetStore = GroupRatchetRepository(db.groupRatchetDao())
+        val groupRatchet = GroupRatchetSessions(store = groupRatchetStore, mutex = ratchetMutex)
         val originated = mutableListOf<RelayEnvelope>()
         val flushed = mutableListOf<String>()
         val resealed = mutableListOf<String>()
@@ -269,6 +283,7 @@ class InboundPipelineTest {
                     pendingInbound = pendingInbound,
                     typingTracker = typingTracker,
                     ratchet = ratchet,
+                    groupRatchet = groupRatchet,
                     originate = { originated += it },
                     flushPending = { flushed += it },
                     classifyText = { _, _, _ -> if (failClassify) error("moderation boom") else false },
@@ -1818,11 +1833,12 @@ class InboundPipelineTest {
             id: String,
             body: String,
             ctl: Int? = null,
+            gk: GroupKeyPayload? = null,
             mutateHeader: (RatchetHeader) -> RatchetHeader = { it },
         ): RelayEnvelope {
             val to = rig.self.nodeId
             val aad = MessageCrypto.header(id, party.nodeId, 5L, to)
-            val plain = MessageContent(body = body, ctl = ctl).encode()
+            val plain = MessageContent(body = body, ctl = ctl, gk = gk).encode()
             val sealed = checkNotNull(engine.seal(session, plain, aad, rig.selfSpk.pub, now = 5L))
             session = sealed.session
             val h = sealed.header
@@ -2099,6 +2115,329 @@ class InboundPipelineTest {
 
             assertEquals(null, rig.peerMap[alice.nodeId]?.prekeyPub)
             assertEquals("Ann", rig.peerMap[alice.nodeId]?.name)
+        }
+
+    // --- v3 (group sender-key ratchet): seed adoption over real v2 ctl DMs + the group decrypt path ---
+
+    /** Drives a real [GroupRatchetEngine] as one group member authoring v3 frames toward the rig. */
+    private inner class V3GroupAuthor(
+        val party: Party,
+        private val groupId: String,
+        at: Long = 5L,
+    ) {
+        private val engine = GroupRatchetEngine()
+        var chain = engine.mint(groupId, party.nodeId, prevEpoch = 0, now = at)
+
+        fun seed() = GroupSeed(epoch = chain.epoch, seed = chain.seed, mintedAt = chain.mintedAt)
+
+        /** Models a device wipe: all chain state lost, numbering restarts at 1 with a fresh mint. */
+        fun wipeAndRemint(at: Long) {
+            chain = engine.mint(groupId, party.nodeId, prevEpoch = 0, now = at)
+        }
+
+        fun groupFrame(
+            group: GroupInfo,
+            id: String,
+            body: String,
+        ): RelayEnvelope {
+            val aad = MessageCrypto.header(id, party.nodeId, 5L, groupId)
+            val sealed = checkNotNull(engine.seal(chain, MessageContent(body = body).encode(), aad))
+            chain = sealed.chain
+            return RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = party.nodeId,
+                sentAt = 5L,
+                group = group,
+                payload =
+                    WireCodec.encodePayload(
+                        ChatContent(
+                            enc =
+                                EncEnvelope(
+                                    v = EncEnvelope.VERSION_GROUP_RATCHET,
+                                    nonce = sealed.nonce,
+                                    ct = sealed.ct,
+                                    keys = emptyList(),
+                                    g = GroupRatchetHeader(se = sealed.header.se, n = sealed.header.n),
+                                ),
+                        ),
+                    ),
+            )
+        }
+    }
+
+    /** Seeds the rig's group row + returns the wire GroupInfo, both from the derived id. */
+    private fun Rig.seedV3Group(vararg others: Party): GroupInfo {
+        val members = listOf(self.nodeId) + others.map { it.nodeId }
+        val id = Conversations.groupIdFor(members)
+        seedGroup(id, members = members, createdBy = others.first().nodeId)
+        return group(members = members, createdBy = others.first().nodeId)
+    }
+
+    @Test
+    fun aSeedCtlDmAdoptsTheChainAndIsNeverPersistedOrAcked() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedV3Group(alice)
+            val author = V3GroupAuthor(alice, group.id)
+
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed1", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            // The chain was adopted through the real ctl path…
+            assertEquals(1, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
+            // …the ctl frame was never persisted, notified, or acked as a message…
+            assertFalse(rig.msgMap.containsKey("seed1"))
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+            // …and an adoption ack rode back to the sender as an ordinary v2 ctl DM.
+            assertTrue(rig.originated.any { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+        }
+
+    @Test
+    fun aV3GroupFrameAfterItsSeedDecryptsAndDelivers() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedV3Group(alice)
+            val author = V3GroupAuthor(alice, group.id)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed1", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            rig.deliver(alice, author.groupFrame(group, id = "gm1", body = "sealed team hi"))
+
+            assertEquals("sealed team hi", rig.msgMap["gm1"]?.body)
+            assertEquals(group.id, rig.msgMap["gm1"]?.conversationId)
+        }
+
+    @Test
+    fun aV3FrameBeforeItsSeedDropsNoKeyAndStillCustodies() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedV3Group(alice)
+            val author = V3GroupAuthor(alice, group.id)
+
+            rig.deliver(alice, author.groupFrame(group, id = "gm-early", body = "too soon"))
+
+            assertFalse(rig.msgMap.containsKey("gm-early"))
+            assertEquals(1L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+            // Delivery-local: the frame still custodied for members who CAN read it.
+            assertTrue(rig.forwardStore.has("gm-early"))
+        }
+
+    @Test
+    fun outOfOrderV3FramesGapFillAndConsumeSkippedKeys() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedV3Group(alice)
+            val author = V3GroupAuthor(alice, group.id)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed1", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+            val frames = (0..2).map { author.groupFrame(group, id = "gm$it", body = "msg $it") }
+
+            rig.deliver(alice, frames[2])
+            rig.deliver(alice, frames[0])
+            rig.deliver(alice, frames[1])
+
+            assertEquals("msg 0", rig.msgMap["gm0"]?.body)
+            assertEquals("msg 1", rig.msgMap["gm1"]?.body)
+            assertEquals("msg 2", rig.msgMap["gm2"]?.body)
+            // Both banked keys were consumed on use.
+            assertTrue(rig.groupRatchetStore.skippedKeys(group.id, alice.nodeId, 1, 0).isEmpty())
+            assertTrue(rig.groupRatchetStore.skippedKeys(group.id, alice.nodeId, 1, 1).isEmpty())
+        }
+
+    @Test
+    fun aReServedV3FrameShortCircuitsAtTheExistsGate() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedV3Group(alice)
+            val author = V3GroupAuthor(alice, group.id)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed1", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+            val frame = author.groupFrame(group, id = "gm-r", body = "once")
+            rig.deliver(alice, frame)
+
+            rig.deliver(alice, frame)
+
+            assertEquals("once", rig.msgMap["gm-r"]?.body)
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_DUPLICATE))
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_AEAD_FAIL))
+        }
+
+    @Test
+    fun aReMintedSeedIsAdoptedAndTheOldEraStillDrains() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedV3Group(alice)
+            val author = V3GroupAuthor(alice, group.id)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed1", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+            val preWipe = author.groupFrame(group, id = "gm-old", body = "old era")
+
+            author.wipeAndRemint(at = 60_000L)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                    at = 60_000L,
+                ).dm("seed2", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+            rig.deliver(alice, author.groupFrame(group, id = "gm-new", body = "new era"))
+            rig.deliver(alice, preWipe)
+
+            // Both eras of epoch 1 decrypt: the re-mint on its fresh chain, the old frame on the drain.
+            assertEquals("new era", rig.msgMap["gm-new"]?.body)
+            assertEquals("old era", rig.msgMap["gm-old"]?.body)
+            assertEquals(2, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
+        }
+
+    @Test
+    fun aSeedFromANonMemberAdoptsNothing() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val carol = party()
+            rig.pin(alice)
+            rig.pin(carol)
+            val group = rig.seedV3Group(alice) // carol is NOT in the roster
+            val author = V3GroupAuthor(carol, group.id)
+
+            rig.deliver(
+                carol,
+                V2Author(
+                    carol,
+                    rig,
+                ).dm("seed-c", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            assertTrue(rig.groupRatchetStore.recvChains(group.id, carol.nodeId, 1).isEmpty())
+            // No adoption ⇒ no ack DM back to carol either.
+            assertFalse(rig.originated.any { it.type == FrameType.CHAT && it.recipientId == carol.nodeId })
+        }
+
+    @Test
+    fun aV3FrameForALeftGroupIsRefusedBeforeDecrypt() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val members = listOf(rig.self.nodeId, alice.nodeId)
+            val id = Conversations.groupIdFor(members)
+            rig.seedGroup(id, members = members, createdBy = alice.nodeId, left = true)
+            val group = rig.group(members = members, createdBy = alice.nodeId)
+            val author = V3GroupAuthor(alice, id)
+
+            rig.deliver(alice, author.groupFrame(group, id = "gm-left", body = "gone"))
+
+            assertFalse(rig.msgMap.containsKey("gm-left"))
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+        }
+
+    @Test
+    fun aGroupAddressedV2EnvelopeIsStillMalformed() =
+        runTest {
+            // v2 stays DM-only: a group-addressed v2 envelope drops as RATCHET_BAD_HEADER even now
+            // that v3 exists (regression pin on the decryptAndDeliverV2 gate).
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedV3Group(alice)
+            val env =
+                RelayEnvelope(
+                    type = FrameType.CHAT,
+                    id = "v2-grouped",
+                    senderId = alice.nodeId,
+                    sentAt = 5L,
+                    group = group,
+                    payload =
+                        WireCodec.encodePayload(
+                            ChatContent(
+                                enc =
+                                    EncEnvelope(
+                                        v = EncEnvelope.VERSION_RATCHET,
+                                        nonce = ByteArray(12),
+                                        ct = ByteArray(4),
+                                        keys = emptyList(),
+                                    ),
+                            ),
+                        ),
+                )
+
+            rig.deliver(alice, env)
+
+            assertEquals(1L, rig.drops(DropReason.RATCHET_BAD_HEADER))
+        }
+
+    @Test
+    fun aDmAddressedV3EnvelopeIsMalformed() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val env =
+                RelayEnvelope(
+                    type = FrameType.CHAT,
+                    id = "v3-dm",
+                    senderId = alice.nodeId,
+                    sentAt = 5L,
+                    recipientId = rig.self.nodeId,
+                    payload =
+                        WireCodec.encodePayload(
+                            ChatContent(
+                                enc =
+                                    EncEnvelope(
+                                        v = EncEnvelope.VERSION_GROUP_RATCHET,
+                                        nonce = ByteArray(12),
+                                        ct = ByteArray(4),
+                                        keys = emptyList(),
+                                        g = GroupRatchetHeader(se = 1, n = 0),
+                                    ),
+                            ),
+                        ),
+                )
+
+            rig.deliver(alice, env)
+
+            assertEquals(1L, rig.drops(DropReason.GROUP_RATCHET_BAD_HEADER))
+            assertFalse(rig.msgMap.containsKey("v3-dm"))
         }
 
     private companion object {

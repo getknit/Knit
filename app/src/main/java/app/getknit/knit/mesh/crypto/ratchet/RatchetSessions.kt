@@ -27,9 +27,10 @@ class RatchetSessions(
     private val dhIdentityPriv: () -> ByteArray,
     private val spkPrivFor: (Int) -> ByteArray?,
     private val engine: RatchetEngine = RatchetEngine(),
+    // THE ratchet lock — shared with GroupRatchetSessions (seed adoption runs inside a DM commit, so
+    // two locks would nest DM→group; one instance makes the order question vanish by construction).
+    private val mutex: Mutex = Mutex(),
 ) {
-    private val mutex = Mutex()
-
     /** Per-peer reset heuristic state: the distinct undecryptable frame ids seen (bounded LRU). */
     private val undecryptable = HashMap<String, LinkedHashSet<String>>()
 

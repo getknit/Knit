@@ -11,6 +11,7 @@ import app.getknit.knit.mesh.MeshTransport
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.bluetooth.BluetoothMeshTransport
 import app.getknit.knit.mesh.crypto.MessageCrypto
+import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.meshExceptionHandler
 import app.getknit.knit.mesh.power.PowerMonitor
@@ -19,9 +20,14 @@ import app.getknit.knit.mesh.wifiaware.WifiAwareTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
 import org.koin.android.ext.koin.androidContext
+import org.koin.core.qualifier.named
 import org.koin.dsl.module
 import java.io.File
+
+/** Qualifier for the single shared ratchet [Mutex] (DM + group session services). */
+private val ratchetMutex = named("ratchetMutex")
 
 val meshModule =
     module {
@@ -70,6 +76,9 @@ val meshModule =
             val keys = get<IdentityKeyStore>().keys()
             MessageCrypto(keys.hybridPrivate, keys.sigPrivate)
         }
+        // THE ratchet lock, shared by the DM and group session services: group seed adoption runs inside
+        // a DM commit, so one instance makes the lock-order question vanish by construction.
+        single(ratchetMutex) { Mutex() }
         // The DM epoch-ratchet session service (crypto scheme v2). Identity access is lambda-mediated so
         // the service itself stays Android-free and plain-JVM-testable; the store is the Room-backed
         // RatchetStore bound in appModule.
@@ -79,13 +88,17 @@ val meshModule =
                 store = get(),
                 dhIdentityPriv = identityKeys::dhIdentityPrivate,
                 spkPrivFor = identityKeys::prekeyPrivFor,
+                mutex = get(ratchetMutex),
             )
         }
+        // The group sender-key session service (crypto scheme v3, docs/GROUP_FORWARD_SECRECY.md).
+        single { GroupRatchetSessions(store = get(), mutex = get(ratchetMutex)) }
         // Constructor order: transport, messages, groups, reactions, peers, identity, settings, blobs,
-        // imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet, scope,
-        // metrics, db.
+        // imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet,
+        // groupRatchet, scope, metrics, db.
         single {
             MeshManager(
+                get(),
                 get(),
                 get(),
                 get(),

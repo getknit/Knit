@@ -440,14 +440,12 @@ class EncEnvelope(
 ) {
     companion object {
         /** Highest crypto-scheme version this build understands; a higher [v] is dropped on delivery. */
-        const val MAX_SUPPORTED_VERSION = 2
+        const val MAX_SUPPORTED_VERSION = 3
 
         /** The DM epoch-ratchet scheme (docs/FORWARD_SECRECY_RATCHET.md); requires [r]. */
         const val VERSION_RATCHET = 2
 
-        /** The group sender-key scheme (docs/GROUP_FORWARD_SECRECY.md); requires [g]. NOTE:
-         *  [MAX_SUPPORTED_VERSION] stays 2 until the v3 decrypt branch lands — WIRE_COMPAT's rule:
-         *  bump MAX and the branch together, or a clean unknown-version drop becomes DECRYPT_FAILED noise. */
+        /** The group sender-key scheme (docs/GROUP_FORWARD_SECRECY.md); requires [g]. */
         const val VERSION_GROUP_RATCHET = 3
     }
 }

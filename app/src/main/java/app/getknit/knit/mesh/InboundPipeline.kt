@@ -30,6 +30,8 @@ import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.mesh.crypto.b64d
+import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetEngine
+import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
@@ -39,6 +41,7 @@ import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
+import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
 import app.getknit.knit.mesh.protocol.KeyReqContent
 import app.getknit.knit.mesh.protocol.ProfileContent
@@ -104,12 +107,16 @@ class InboundPipeline(
     private val pendingInbound: PendingInbound,
     private val typingTracker: TypingTracker,
     private val ratchet: RatchetSessions,
+    private val groupRatchet: GroupRatchetSessions,
     private val originate: suspend (RelayEnvelope) -> Unit,
     private val flushPending: suspend (String) -> Unit,
     private val classifyText: suspend (String, String, Boolean) -> Boolean,
     // Re-seals our recent unacked DMs to a peer whose ratchet session was just replaced (the recovery
     // half of an inbound reset) — MeshManager.resealRecentDmsTo, lambda-mediated like originate.
     private val resealUnacked: suspend (String) -> Unit = {},
+    // Answers a member's CTL_GROUP_KEY_REQ by re-sealing our current group seeds to them —
+    // MeshManager.redistributeGroupKey (lands with the hardening phase), lambda-mediated like originate.
+    private val redistributeGroupKey: suspend (String, String) -> Unit = { _, _ -> },
 ) {
     // nodeId -> avatar hash a non-direct peer advertised but whose bytes we're still pulling, so a blob
     // arriving via the multi-hop BlobExchange can be attributed back to the peer that advertised it.
@@ -456,19 +463,30 @@ class InboundPipeline(
             acknowledge(env, me)
             return
         }
-        if (enc.v == EncEnvelope.VERSION_RATCHET) {
-            runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId) }.getOrElse {
-                Log.w(TAG, "drop v2 chat ${env.id}: ${it.message}")
-                metrics.onDropped(DropReason.DECRYPT_FAILED)
+        when (enc.v) {
+            EncEnvelope.VERSION_RATCHET -> {
+                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId) }.getOrElse {
+                    Log.w(TAG, "drop v2 chat ${env.id}: ${it.message}")
+                    metrics.onDropped(DropReason.DECRYPT_FAILED)
+                }
             }
-            return
+
+            EncEnvelope.VERSION_GROUP_RATCHET -> {
+                runCatching { decryptAndDeliverV3(env, content, enc, me, conversationId) }.getOrElse {
+                    Log.w(TAG, "drop v3 chat ${env.id}: ${it.message}")
+                    metrics.onDropped(DropReason.DECRYPT_FAILED)
+                }
+            }
+
+            else -> {
+                val plain =
+                    runCatching { decrypt(env, enc, me) }.getOrElse {
+                        Log.w(TAG, "drop encrypted chat ${env.id}: ${it.message}")
+                        null
+                    } ?: return
+                deliverChat(env, plaintextContent(content, plain), me, conversationId, plain.attachmentKey)
+            }
         }
-        val plain =
-            runCatching { decrypt(env, enc, me) }.getOrElse {
-                Log.w(TAG, "drop encrypted chat ${env.id}: ${it.message}")
-                null
-            } ?: return
-        deliverChat(env, plaintextContent(content, plain), me, conversationId, plain.attachmentKey)
     }
 
     /** The decrypted [MessageContent] substituted into the cleartext [ChatContent] shell for delivery. */
@@ -541,12 +559,7 @@ class InboundPipeline(
             }
         }
         if (plain.ctl != null) {
-            // A control frame is ratchet machinery, not conversation: advance/commit the session state
-            // but never persist, notify, or ack it as a message. A reset request's init rode the header
-            // and was adopted by the commit (session replaced); the recovery half re-seals our recent
-            // unacked DMs so the wiped peer gets back what custody still holds.
-            val committed = commit {}
-            if (committed && plain.ctl == MessageContent.CTL_SESSION_RESET) resealUnacked(env.senderId)
+            handleCtlDm(env, plain, me, now, commit)
             return
         }
         deliverChat(
@@ -557,6 +570,197 @@ class InboundPipeline(
             plain.attachmentKey,
             persist = { row -> commit { messages.save(row) } },
         )
+    }
+
+    /**
+     * Dispatches a decrypted v2 control DM. A control frame is ratchet machinery, not conversation:
+     * advance/commit the session state but never persist, notify, or ack it as a message. Group-key
+     * payloads commit their group state inside the SAME transaction/lock as the DM advance
+     * (adoptSeeds/onKeyAck are deliberately lock-free — the shared ratchet mutex is already held
+     * there). Post-commit actions (reset recovery, the adoption ack, a key-request answer) originate
+     * new frames and run strictly after, outside the transaction.
+     */
+    private suspend fun handleCtlDm(
+        env: RelayEnvelope,
+        plain: MessageContent,
+        me: String,
+        now: Long,
+        commit: suspend (suspend () -> Unit) -> Boolean,
+    ) {
+        var adoptedEpoch: Int? = null
+        val committed =
+            commit {
+                when (plain.ctl) {
+                    MessageContent.CTL_GROUP_KEY -> {
+                        adoptedEpoch = adoptGroupSeeds(env, plain, now)
+                    }
+
+                    MessageContent.CTL_GROUP_KEY_ACK -> {
+                        plain.gk?.let { gk ->
+                            gk.ackEpoch?.let { groupRatchet.onKeyAck(gk.groupId, env.senderId, it, now) }
+                        }
+                    }
+
+                    else -> {}
+                }
+            }
+        if (!committed) return
+        when (plain.ctl) {
+            MessageContent.CTL_SESSION_RESET -> {
+                resealUnacked(env.senderId)
+            }
+
+            MessageContent.CTL_GROUP_KEY -> {
+                adoptedEpoch?.let { ackGroupSeed(env.senderId, plain.gk?.groupId, it, me, now) }
+            }
+
+            MessageContent.CTL_GROUP_KEY_REQ -> {
+                plain.gk?.let { redistributeGroupKey(it.groupId, env.senderId) }
+            }
+
+            else -> {}
+        }
+    }
+
+    /**
+     * Adopts a `CTL_GROUP_KEY` distribution's seeds, gated on actually holding the group, not having
+     * left it, and the sender being in the effective roster (a departed member's stale distribution or
+     * a non-member's noise adopts nothing). Runs inside the v2 ctl commit — same transaction, shared
+     * lock already held. Returns the highest epoch worth acknowledging, or null.
+     */
+    private suspend fun adoptGroupSeeds(
+        env: RelayEnvelope,
+        plain: MessageContent,
+        now: Long,
+    ): Int? {
+        val gk = plain.gk ?: return null
+        if (gk.keys.isEmpty()) return null
+        val group = groups.find(gk.groupId) ?: return null
+        if (group.left || env.senderId !in GroupMembersStore.decode(group.members)) return null
+        return groupRatchet.adoptSeeds(gk.groupId, env.senderId, gk.keys, now)
+    }
+
+    /**
+     * Acknowledges an adopted seed distribution back to its sender (`CTL_GROUP_KEY_ACK` as an ordinary
+     * v2 ctl DM) so their outbox stops re-sending. Post-commit and best-effort: a lost ack just means a
+     * redundant, idempotent re-distribution later. The session that carried the distribution exists by
+     * construction, so `sealDm` needs no prekey here.
+     */
+    private suspend fun ackGroupSeed(
+        senderId: String,
+        groupId: String?,
+        epoch: Int,
+        me: String,
+        now: Long,
+    ) {
+        groupId ?: return
+        val bundle =
+            peers
+                .find(senderId)
+                ?.pubKey
+                ?.let { PublicKeyBundle.decode(it) } ?: return
+        val id = FrameId.new()
+        val aad = MessageCrypto.header(id, me, now, senderId)
+        val plaintext =
+            MessageContent(
+                body = "",
+                ctl = MessageContent.CTL_GROUP_KEY_ACK,
+                gk = GroupKeyPayload(groupId = groupId, ackEpoch = epoch),
+            ).encode()
+        val sealed = ratchet.sealDm(senderId, bundle.dhPublicKey(), peerSpk = null, plaintext = plaintext, aad = aad, now = now) ?: return
+        originate(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                recipientId = senderId,
+                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+            ),
+        )
+    }
+
+    /**
+     * The v3 (group sender-key) decrypt-and-deliver — [decryptAndDeliverV2]'s shape re-applied: a
+     * lock-free peek yields the plaintext for moderation/row-building, then the persist hook re-opens
+     * on fresh state and commits the chain delta atomically with the message row (`db.withTransaction`
+     * outer, the shared ratchet lock inner). Typed engine failures map to drop reasons — all
+     * delivery-local; the frame already custodied and will still relay. [reconcileGroup] already
+     * vetted the roster and membership before this runs.
+     */
+    @Suppress("ReturnCount") // a drop-reason gate ladder; early returns ARE the readable form (cf. decrypt)
+    private suspend fun decryptAndDeliverV3(
+        env: RelayEnvelope,
+        content: ChatContent,
+        enc: EncEnvelope,
+        me: String,
+        conversationId: String,
+    ) {
+        val wireHeader = enc.g
+        val groupId = env.group?.id
+        // v3 is group-only; a DM-addressed or header-less v3 envelope is malformed by construction.
+        if (wireHeader == null || groupId == null) {
+            metrics.onDropped(DropReason.GROUP_RATCHET_BAD_HEADER)
+            return
+        }
+        val aad = MessageCrypto.header(env.id, env.senderId, env.sentAt, groupId)
+        val now = System.currentTimeMillis()
+        val peek = groupRatchet.peekOpen(groupId, env.senderId, wireHeader, enc.nonce, enc.ct, aad, now)
+        if (peek !is GroupRatchetEngine.OpenOutcome.Opened) {
+            onGroupRatchetFailure(env, peek)
+            return
+        }
+        val plain = MessageContent.decode(peek.plaintext)
+        if (plain == null) {
+            metrics.onDropped(DropReason.DECRYPT_FAILED)
+            return
+        }
+        if (!plain.isSupported()) {
+            metrics.onDropped(DropReason.UNKNOWN_CONTENT_VERSION)
+            Log.w(TAG, "drop chat ${env.id}: unsupported content v=${plain.v}")
+            return
+        }
+        val commit: suspend (suspend () -> Unit) -> Boolean = { onOpened ->
+            db.withTransaction {
+                groupRatchet.commitOpen(groupId, env.senderId, wireHeader, enc.nonce, enc.ct, aad, now, onOpened)
+            }
+        }
+        if (plain.ctl != null) {
+            // Group machinery rides pairwise ctl DMs, never v3 group frames — but a ctl marker must
+            // keep its contract regardless of the envelope it arrived in: advance the chain, persist
+            // nothing, notify nothing, ack nothing.
+            commit {}
+            return
+        }
+        deliverChat(
+            env,
+            plaintextContent(content, plain),
+            me,
+            conversationId,
+            plain.attachmentKey,
+            persist = { row -> commit { messages.save(row) } },
+        )
+    }
+
+    /**
+     * Maps a typed v3 open failure to its drop reason. `NO_KEY` (seed never arrived) and `AEAD_FAIL`
+     * (stale/foreign mint era — the post-wipe signal) will feed the key-request heuristic when the
+     * hardening phase lands; today they only count.
+     */
+    private fun onGroupRatchetFailure(
+        env: RelayEnvelope,
+        outcome: GroupRatchetEngine.OpenOutcome,
+    ) {
+        val reason =
+            when (outcome) {
+                GroupRatchetEngine.OpenOutcome.Failed.NO_KEY -> DropReason.GROUP_RATCHET_NO_KEY
+                GroupRatchetEngine.OpenOutcome.Failed.DUPLICATE -> DropReason.GROUP_RATCHET_DUPLICATE
+                GroupRatchetEngine.OpenOutcome.Failed.BAD_HEADER -> DropReason.GROUP_RATCHET_BAD_HEADER
+                GroupRatchetEngine.OpenOutcome.Failed.AEAD_FAIL -> DropReason.GROUP_RATCHET_AEAD_FAIL
+                else -> DropReason.DECRYPT_FAILED
+            }
+        metrics.onDropped(reason)
+        Log.w(TAG, "drop v3 chat ${env.id}: $outcome")
     }
 
     /**

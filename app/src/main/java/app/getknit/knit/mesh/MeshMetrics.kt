@@ -57,6 +57,18 @@ enum class DropReason {
     /** A group frame whose roster failed vetting (unverifiable founding set, smuggled member, non-member
      *  sender, or an oversized roster) — see `InboundPipeline.vetRoster`. */
     GROUP_ROSTER_REFUSED,
+
+    /** A v3 group frame with no adopted seed for its (sender, epoch) — the seed DM hasn't arrived/was lost. */
+    GROUP_RATCHET_NO_KEY,
+
+    /** A v3 group frame whose chain index was already consumed — a benign custody re-delivery. */
+    GROUP_RATCHET_DUPLICATE,
+
+    /** A v3 envelope that is header-less, not group-addressed, or bound-violating — malformed by construction. */
+    GROUP_RATCHET_BAD_HEADER,
+
+    /** v3 key material present but wrong (stale/foreign mint era) — the post-wipe signal, never tamper. */
+    GROUP_RATCHET_AEAD_FAIL,
 }
 
 /**

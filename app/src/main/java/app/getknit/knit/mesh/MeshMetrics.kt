@@ -58,16 +58,16 @@ enum class DropReason {
      *  sender, or an oversized roster) — see `InboundPipeline.vetRoster`. */
     GROUP_ROSTER_REFUSED,
 
-    /** A v3 group frame with no adopted seed for its (sender, epoch) — the seed DM hasn't arrived/was lost. */
+    /** A group ratchet frame with no adopted seed for its (sender, epoch) — the seed DM hasn't arrived/was lost. */
     GROUP_RATCHET_NO_KEY,
 
-    /** A v3 group frame whose chain index was already consumed — a benign custody re-delivery. */
+    /** A group ratchet frame whose chain index was already consumed — a benign custody re-delivery. */
     GROUP_RATCHET_DUPLICATE,
 
-    /** A v3 envelope that is header-less, not group-addressed, or bound-violating — malformed by construction. */
+    /** A group-form envelope that is header-less, not group-addressed, or bound-violating — malformed by construction. */
     GROUP_RATCHET_BAD_HEADER,
 
-    /** v3 key material present but wrong (stale/foreign mint era) — the post-wipe signal, never tamper. */
+    /** Group key material present but wrong (stale/foreign mint era) — the post-wipe signal, never tamper. */
     GROUP_RATCHET_AEAD_FAIL,
 }
 
@@ -119,7 +119,7 @@ class MeshMetrics {
     private val receiptsResent = AtomicLong()
     private val dmSealedV2 = AtomicLong()
     private val dmSealedV1Fallback = AtomicLong()
-    private val groupSealedV3 = AtomicLong()
+    private val groupSealedRatchet = AtomicLong()
     private val groupSealedV1Fallback = AtomicLong()
     private val groupSeedsSent = AtomicLong()
     private val groupSeedsAdopted = AtomicLong()
@@ -215,12 +215,12 @@ class MeshMetrics {
         dmSealedV1Fallback.incrementAndGet()
     }
 
-    /** One outbound group message sealed under the v3 sender-key chain. */
-    fun onGroupSealedV3() {
-        groupSealedV3.incrementAndGet()
+    /** One outbound group message sealed under the sender-key chain (v2, group form). */
+    fun onGroupSealedRatchet() {
+        groupSealedRatchet.incrementAndGet()
     }
 
-    /** A v3-eligible group message that fell back to the v1 per-member wrap (seal returned null). */
+    /** A ratchet-eligible group message that fell back to the v1 per-member wrap (seal returned null). */
     fun onGroupSealedV1Fallback() {
         groupSealedV1Fallback.incrementAndGet()
     }
@@ -308,7 +308,7 @@ class MeshMetrics {
             receiptsResent = receiptsResent.get(),
             dmSealedV2 = dmSealedV2.get(),
             dmSealedV1Fallback = dmSealedV1Fallback.get(),
-            groupSealedV3 = groupSealedV3.get(),
+            groupSealedRatchet = groupSealedRatchet.get(),
             groupSealedV1Fallback = groupSealedV1Fallback.get(),
             groupSeedsSent = groupSeedsSent.get(),
             groupSeedsAdopted = groupSeedsAdopted.get(),
@@ -343,7 +343,7 @@ class MeshMetrics {
         val receiptsResent: Long = 0,
         val dmSealedV2: Long = 0,
         val dmSealedV1Fallback: Long = 0,
-        val groupSealedV3: Long = 0,
+        val groupSealedRatchet: Long = 0,
         val groupSealedV1Fallback: Long = 0,
         val groupSeedsSent: Long = 0,
         val groupSeedsAdopted: Long = 0,

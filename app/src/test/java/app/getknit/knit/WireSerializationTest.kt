@@ -295,12 +295,12 @@ class WireSerializationTest {
     }
 
     @Test
-    fun groupV3EnvelopeRoundTripsWithItsHeader() {
+    fun groupRatchetEnvelopeRoundTripsWithItsHeader() {
         val content =
             ChatContent(
                 enc =
                     EncEnvelope(
-                        v = EncEnvelope.VERSION_GROUP_RATCHET,
+                        v = EncEnvelope.VERSION_RATCHET,
                         nonce = byteArrayOf(1, 2, 3),
                         ct = byteArrayOf(4, 5, 6, 7),
                         keys = emptyList(),
@@ -308,14 +308,15 @@ class WireSerializationTest {
                     ),
             )
         val enc = requireNotNull(WireCodec.decodePayload<ChatContent>(WireCodec.encodePayload(content))?.enc)
-        assertEquals(EncEnvelope.VERSION_GROUP_RATCHET, enc.v)
+        assertEquals(EncEnvelope.VERSION_RATCHET, enc.v)
         assertTrue(enc.keys.isEmpty())
         assertNull(enc.r)
         assertEquals(4, requireNotNull(enc.g).se)
         assertEquals(129, requireNotNull(enc.g).n)
     }
 
-    /** The v2-era [EncEnvelope] shape (has `r`, predates `g`), exactly as a v2 build compiled it. */
+    /** An [EncEnvelope] decoder shape that predates `g` (an unreleased mid-branch build; also what pins
+     *  `ignoreUnknownKeys` for the field). */
     @Serializable
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     private class EncEnvelopeV2Shape(
@@ -327,24 +328,23 @@ class WireSerializationTest {
     )
 
     @Test
-    fun aV2ShapedDecoderIgnoresTheGroupHeader() {
-        // What a v2-era build does with a v3 envelope: `ignoreUnknownKeys` drops `g`, the envelope
-        // still decodes, and the version gate (not a parse error) rejects it — so it keeps relaying
-        // and custodying it for members that can read it.
-        val v3 =
+    fun aGShapelessDecoderIgnoresTheGroupHeader() {
+        // A decoder without the `g` field: `ignoreUnknownKeys` drops it and the envelope still
+        // decodes — the additive-field property every older shape relies on to keep relaying.
+        val groupForm =
             WireCodec.encodePayload(
                 EncEnvelope(
-                    v = EncEnvelope.VERSION_GROUP_RATCHET,
+                    v = EncEnvelope.VERSION_RATCHET,
                     nonce = byteArrayOf(1),
                     ct = byteArrayOf(2),
                     keys = emptyList(),
                     g = GroupRatchetHeader(se = 1, n = 0),
                 ),
             )
-        val seenByV2Build = WireCodec.decodePayload<EncEnvelopeV2Shape>(v3)
-        assertEquals(EncEnvelope.VERSION_GROUP_RATCHET, seenByV2Build?.v)
-        assertTrue(requireNotNull(seenByV2Build).keys.isEmpty())
-        assertNull(seenByV2Build.r)
+        val seenWithoutG = WireCodec.decodePayload<EncEnvelopeV2Shape>(groupForm)
+        assertEquals(EncEnvelope.VERSION_RATCHET, seenWithoutG?.v)
+        assertTrue(requireNotNull(seenWithoutG).keys.isEmpty())
+        assertNull(seenWithoutG.r)
     }
 
     @Test

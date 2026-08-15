@@ -4,7 +4,7 @@ import com.google.crypto.tink.subtle.Hkdf
 import java.security.SecureRandom
 
 /**
- * The primitive layer of the group sender-key ratchet (crypto scheme v3 — see
+ * The primitive layer of the group sender-key ratchet (crypto scheme v2's group form — see
  * docs/GROUP_FORWARD_SECRECY.md): per-sender epoch derivation from a random seed, and the same
  * forward-only message-key chain shape as the DM ratchet. Pure byte-array functions over Tink's
  * subtle HKDF, so everything runs unchanged under JVM unit tests and doubles as the normative

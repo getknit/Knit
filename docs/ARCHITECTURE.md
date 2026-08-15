@@ -318,7 +318,7 @@ data class BlobReqContent(hash)  ·  KeyReqContent(nodeIds)               // a g
 
 data class Mention(nodeId, name)                                    // canonical id + rendered @name span
 data class GroupInfo(id, name?, members, createdBy, photoHash?, photoUpdatedAt?)   // self-describing roster on every group frame
-class EncEnvelope(v=1, @ByteString nonce, @ByteString ct, keys, r?, g?)  // E2E envelope; keys = v1 wraps, r = v2 DM ratchet header, g = v3 group header
+class EncEnvelope(v=1, @ByteString nonce, @ByteString ct, keys, r?, g?)  // E2E envelope; keys = v1 wraps; v2: r = DM ratchet header, g = group sender-key header
 class WrappedKey(to, @ByteString wk)                               // content key wrapped to one recipient
 ```
 
@@ -645,8 +645,9 @@ specified in `docs/FORWARD_SECRECY_RATCHET.md`; the implementation is `mesh/cryp
 (pure engine + session service) with state in the `ratchet_*` tables. Outbound v2 is gated on the
 peer's pinned profile advertising `CAP_RATCHET` plus a prekey; anything else falls back to v1.
 
-**Groups — the sender-key ratchet (crypto scheme v3, `EncEnvelope.v = 3`).** Groups whose every
-member is group-ratchet-capable are forward-secret too: each member mints a random per-group epoch
+**Groups — the sender-key ratchet (crypto scheme v2, group form).** Groups whose every member is
+ratchet-capable are forward-secret too (the group form shares `EncEnvelope.v = 2` with the DM
+ratchet — both landed in one never-released bump; a group frame carries `g`, a DM `r`): each member mints a random per-group epoch
 seed driving a forward-only chain, distributes it pairwise inside v2 ctl DMs
 (`MessageContent.ctl = CTL_GROUP_KEY`), and seals group frames under a tiny `GroupRatchetHeader {se, n}`
 with no per-member wraps. Recovery (lost seeds, late members, wipes) is the seed outbox + proactive
@@ -692,7 +693,7 @@ peer's identity **QR** (`VerifyPayload` + ZXing) — which sets `verified` and s
 
 **Availability edge cases.** Sending requires the recipient's key: a DM composed before the recipient's
 key is known is saved `pendingKey` and re-sealed + flooded once the key arrives (`flushPendingFor`); for
-a v1-fallback group, members whose key is unknown are still skipped (the residual key-gap — §18); a v3
+a v1-fallback group, members whose key is unknown are still skipped (the residual key-gap — §18); a ratcheted
 group heals through the seed outbox + key-request loop instead (`docs/GROUP_FORWARD_SECRECY.md` §7).
 An inbound frame from a not-yet-pinned sender is dropped locally but **parked** in `PendingInbound` and
 recovered by a signed, point-to-point `keyreq` to neighbors (`KeyExchange`), then replayed once the
@@ -800,6 +801,6 @@ before bumping anything that could pull in a newer Kotlin stdlib.
   builds churned through destructive v2…v22 bumps that rode the wire/crypto breaks; that history is
   collapsed — see `docs/WIRE_COMPAT.md`.)*
 - **Deferred by design:** true (targeted) DM routing, encrypting reactions/receipts/the broadcast
-  room, the v1-fallback residual of the group key-gap retransmit (v3 groups heal via the seed
+  room, the v1-fallback residual of the group key-gap retransmit (ratcheted groups heal via the seed
   outbox + key-request loop), and a BLE connect-time gate on A2DP audio contention (see
   `.agents/memory/roadmap.md`).

@@ -141,17 +141,17 @@ class GoldenVectorTest {
                             ),
                     ),
                 ),
-            // v3 (group sender-key) additions — v1/v2 fixtures above stay byte-identical forever.
+            // Group sender-key (v2 group form) additions — earlier fixtures stay byte-identical forever.
             "groupSeed" to WireCodec.encodePayload(GroupSeed(epoch = 3, seed = bytes(32, 7), mintedAt = 1234L)),
             "groupKeyPayload" to
                 WireCodec.encodePayload(
                     GroupKeyPayload(groupId = "g-1", keys = listOf(GroupSeed(epoch = 3, seed = bytes(32, 7), mintedAt = 1234L))),
                 ),
-            // A v3 group envelope: `v` present, `keys` the 1-byte empty array, tiny `g` header, no `r`.
-            "encEnvelopeV3" to
+            // A group-form v2 envelope: `v` present, `keys` the 1-byte empty array, tiny `g` header, no `r`.
+            "encEnvelopeGroup" to
                 WireCodec.encodePayload(
                     EncEnvelope(
-                        v = EncEnvelope.VERSION_GROUP_RATCHET,
+                        v = EncEnvelope.VERSION_RATCHET,
                         nonce = bytes(12, 5),
                         ct = bytes(48, 6),
                         keys = emptyList(),
@@ -270,8 +270,8 @@ class GoldenVectorTest {
                 "groupKeyPayload" to
                     "a26767726f7570496463672d31646b65797381a36565706f63680364736565645820070e151c232a31383f464d545b626970777e85" +
                     "8c939aa1a8afb6bdc4cbd2d9e0686d696e74656441741904d2",
-                "encEnvelopeV3" to
-                    "a5617603656e6f6e63654c050c131a21282f363d444b526263745830060d141b222930373e454c535a61686f767d848b9299a0a7aeb5" +
+                "encEnvelopeGroup" to
+                    "a5617602656e6f6e63654c050c131a21282f363d444b526263745830060d141b222930373e454c535a61686f767d848b9299a0a7aeb5" +
                     "bcc3cad1d8dfe6edf4fb020910171e252c333a41484f646b657973806167a262736502616e1839",
                 "profileContentPrekey" to
                     "a8646e616d6563416e6e667374617475736668696b696e676a6176617461724861736863617631667075624b657963706b3169646576" +

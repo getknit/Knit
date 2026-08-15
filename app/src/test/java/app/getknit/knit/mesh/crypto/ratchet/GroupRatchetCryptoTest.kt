@@ -8,7 +8,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Pins the v3 group sender-key primitives (docs/GROUP_FORWARD_SECRECY.md) against an independent RFC
+ * Pins the group sender-key primitives (docs/GROUP_FORWARD_SECRECY.md) against an independent RFC
  * 5869 HKDF — the [RatchetCryptoTest] discipline. These vectors are the normative anchors for a
  * non-Tink (iOS CryptoKit) implementation.
  */

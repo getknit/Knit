@@ -507,7 +507,7 @@ class MeshManagerTest {
             assertEquals(1L, rig.metrics.snapshot().dmSealedV1Fallback)
         }
 
-    // --- the v3 (group sender-key) send gate ---
+    // --- the group sender-key send gate ---
 
     /** Pins [p] with [capabilities] and a prekey (the partially-capable cases the AND-gate exists for). */
     private fun Rig.pinWithCaps(
@@ -537,9 +537,9 @@ class MeshManagerTest {
             advanceUntilIdle()
 
             val frames = rig.sentChatFrames()
-            // The group frame sealed v3: derived key, empty wraps, the tiny sender-key header.
+            // The group frame sealed under the ratchet: derived key, empty wraps, the tiny sender-key header.
             val groupEnc = WireCodec.decodePayload<ChatContent>(frames.single { it.group != null }.payload)!!.enc!!
-            assertEquals(EncEnvelope.VERSION_GROUP_RATCHET, groupEnc.v)
+            assertEquals(EncEnvelope.VERSION_RATCHET, groupEnc.v)
             assertTrue(groupEnc.keys.isEmpty())
             assertNull(groupEnc.r)
             val header = checkNotNull(groupEnc.g)
@@ -548,7 +548,7 @@ class MeshManagerTest {
             // The minted epoch's seed rode ahead, pairwise, as a v2 ctl DM.
             val seedDm = frames.single { it.recipientId == rig.bob.nodeId }
             assertEquals(EncEnvelope.VERSION_RATCHET, WireCodec.decodePayload<ChatContent>(seedDm.payload)!!.enc!!.v)
-            assertEquals(1L, rig.metrics.snapshot().groupSealedV3)
+            assertEquals(1L, rig.metrics.snapshot().groupSealedRatchet)
             assertEquals(1L, rig.metrics.snapshot().groupSeedsSent)
             assertFalse("the stored group row is never pendingKey", rig.saved.single().pendingKey)
         }
@@ -569,7 +569,7 @@ class MeshManagerTest {
             val second = WireCodec.decodePayload<ChatContent>(frames.last { it.group != null }.payload)!!.enc!!.g!!
             assertEquals(1, second.se)
             assertEquals(1, second.n)
-            assertEquals(2L, rig.metrics.snapshot().groupSealedV3)
+            assertEquals(2L, rig.metrics.snapshot().groupSealedRatchet)
         }
 
     @Test
@@ -578,7 +578,12 @@ class MeshManagerTest {
             val rig = Rig(backgroundScope)
             val carol = party()
             rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
-            rig.pinWithCaps(carol, capabilities = Protocol.CAP_RATCHET) // v2-capable, not group-capable
+            // A pre-ratchet build's capability set (everything except CAP_RATCHET — one bit covers both
+            // ratchet forms now, so "DM-capable but not group-capable" cannot exist).
+            rig.pinWithCaps(
+                carol,
+                capabilities = Protocol.CAP_E2E or Protocol.CAP_GROUPS or Protocol.CAP_REACTIONS or Protocol.CAP_STORE_FORWARD,
+            )
             val group =
                 GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId, carol.nodeId), createdBy = rig.me.nodeId)
 
@@ -589,7 +594,7 @@ class MeshManagerTest {
             assertEquals(1, enc.v)
             assertNull(enc.g)
             assertEquals(2, enc.keys.size)
-            assertEquals(0L, rig.metrics.snapshot().groupSealedV3)
+            assertEquals(0L, rig.metrics.snapshot().groupSealedRatchet)
             // Ineligible (not eligible-but-fell-back): the fallback counter stays untouched — DM semantics.
             assertEquals(0L, rig.metrics.snapshot().groupSealedV1Fallback)
         }
@@ -608,7 +613,7 @@ class MeshManagerTest {
 
             val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
             assertEquals(1, enc.v)
-            // The v1 silent-skip of unpinned members is unchanged (their recovery plane is v3 + NACK,
+            // The v1 silent-skip of unpinned members is unchanged (their recovery plane is the ratchet + NACK,
             // or the key-gap roadmap note for pure-v1 groups).
             assertEquals(listOf(rig.bob.nodeId), enc.keys.map { it.to })
         }
@@ -666,7 +671,7 @@ class MeshManagerTest {
 
             assertEquals(1, rig.sentChatFrames().count { it.recipientId == rig.bob.nodeId })
             assertEquals(
-                EncEnvelope.VERSION_GROUP_RATCHET,
+                EncEnvelope.VERSION_RATCHET,
                 WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single { it.group != null }.payload)!!.enc!!.v,
             )
         }
@@ -674,7 +679,6 @@ class MeshManagerTest {
     @Test
     fun theProfileAdvertisesTheRatchetCapabilityAndAVerifiablePrekey() {
         assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_RATCHET != 0L)
-        assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_GROUP_RATCHET != 0L)
     }
 
     private companion object {

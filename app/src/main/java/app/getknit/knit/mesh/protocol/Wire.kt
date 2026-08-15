@@ -367,11 +367,11 @@ class PrekeyInfo(
 )
 
 /**
- * The v3 group sender-key header inside an [EncEnvelope] (crypto scheme v3 —
+ * The group sender-key header inside an [EncEnvelope] (crypto scheme v2, group form —
  * docs/GROUP_FORWARD_SECRECY.md): the sender's group epoch [se] and index [n] in that epoch's
  * forward-only message chain. Tiny by design — the groupId rides [RelayEnvelope.group], the sender on
  * the envelope, and the epoch seed itself never appears on a group frame (it travels pairwise inside
- * v2 ctl DMs, [app.getknit.knit.mesh.crypto.MessageContent] `CTL_GROUP_KEY`). Integrity needs no
+ * ctl DMs, [app.getknit.knit.mesh.crypto.MessageContent] `CTL_GROUP_KEY`). Integrity needs no
  * extra MAC: tampering changes the derived AEAD key, and the whole payload is under the frame
  * signature.
  */
@@ -420,14 +420,14 @@ data class GroupKeyPayload(
  * into another message. A plain `class` (see [WrappedKey]) so the `@ByteString` fields don't inherit a
  * broken data-class `equals`.
  *
- * **v2 (DM epoch ratchet)**: the AEAD key is *derived* from ratchet state described by [r], never
- * wrapped — [keys] is empty and [r] non-null. v1 ↔ v2 discrimination is [v] alone; [r] is additive
- * (nullable, ignored by older builds) per docs/WIRE_COMPAT.md rule 1, with its `@ByteString` bytes
- * living inside the new [RatchetHeader] type rather than as defaulted fields here (rule 1's exception).
- *
- * **v3 (group sender-key ratchet)**: same derived-key discipline for groups — [keys] empty, [g]
- * non-null, [r] absent. A v3 envelope is only legal group-addressed ([RelayEnvelope.group] set),
- * exactly as v2 is only legal as a DM.
+ * **v2 (the ratchet schemes — both landed in the same, never-released bump, so they share one
+ * version)**: the AEAD key is *derived* from ratchet state, never wrapped — [keys] is empty. The two
+ * forms are discriminated by addressing, not by [v]: a **DM** ([RelayEnvelope.recipientId] set)
+ * carries the epoch-ratchet header [r] (docs/FORWARD_SECRECY_RATCHET.md); a **group** frame
+ * ([RelayEnvelope.group] set) carries the sender-key header [g] (docs/GROUP_FORWARD_SECRECY.md).
+ * v1 ↔ v2 discrimination is [v] alone; [r]/[g] are additive (nullable, ignored by older builds) per
+ * docs/WIRE_COMPAT.md rule 1, with `@ByteString` bytes living inside the new [RatchetHeader]/
+ * [RatchetInit] types rather than as defaulted fields here (rule 1's exception).
  */
 @Serializable
 class EncEnvelope(
@@ -440,13 +440,10 @@ class EncEnvelope(
 ) {
     companion object {
         /** Highest crypto-scheme version this build understands; a higher [v] is dropped on delivery. */
-        const val MAX_SUPPORTED_VERSION = 3
+        const val MAX_SUPPORTED_VERSION = 2
 
-        /** The DM epoch-ratchet scheme (docs/FORWARD_SECRECY_RATCHET.md); requires [r]. */
+        /** The ratchet schemes (DM form requires [r]; group form requires [g] — see the class kdoc). */
         const val VERSION_RATCHET = 2
-
-        /** The group sender-key scheme (docs/GROUP_FORWARD_SECRECY.md); requires [g]. */
-        const val VERSION_GROUP_RATCHET = 3
     }
 }
 

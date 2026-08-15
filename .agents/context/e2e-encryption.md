@@ -20,18 +20,21 @@ advance rules, both-initiate races, replacement/reset, the honest security claim
 transaction-outer/mutex-inner), and the **pre-decrypt exists-gate** in `decryptAndDeliver` is what
 makes deleting used message keys safe under custody's routine re-serves.
 
-**v3 — groups, forward-secret (the sender-key ratchet).** The default between current builds:
-outbound v3 whenever EVERY other member's pinned profile advertises `Protocol.CAP_GROUP_RATCHET` +
-`CAP_RATCHET` + a prekey AND the epoch's seed seals v2 to every member — all-or-nothing per message,
+**v2, group form — groups, forward-secret (the sender-key ratchet).** Shares scheme version 2 with
+the DM ratchet (both landed in one never-released bump; the forms split on addressing — a group
+frame carries `EncEnvelope.g`, a DM `EncEnvelope.r`). The default between current builds: outbound
+group-form whenever EVERY other member's pinned profile advertises `CAP_RATCHET` + a prekey AND the
+epoch's seed seals to every member — all-or-nothing per message,
 any shortfall demotes that message to v1 (which every build reads), re-evaluated per send. Each member
 mints a random per-group epoch seed driving a forward-only chain (no DH — trust/freshness/healing are
 the pairwise v2 DM ratchet's, which carries the seeds as `MessageContent.ctl = CTL_GROUP_KEY` DMs);
-the v3 frame is `EncEnvelope.g = GroupRatchetHeader {se, n}` with empty `keys` (~10 B vs v1's ~500 B
-of wraps). Availability inverts v2's frame-self-sufficiency: a v3 frame needs its sender's seed DM
+the group frame is `EncEnvelope.g = GroupRatchetHeader {se, n}` with empty `keys` (~10 B vs v1's
+~500 B of wraps). Availability inverts the DM form's frame-self-sufficiency: a group frame needs its
+sender's seed DM
 first — recovery is the persistent seed outbox (`group_key_sends`, acked via `CTL_GROUP_KEY_ACK`),
 proactive re-sends (profile arrival / neighbor join / session reset), and the rate-limited
 `CTL_GROUP_KEY_REQ` key-request loop, which together subsume the old "group key-gap retransmit" gap
-for v3 traffic. Leave-rekey is atomic with the roster shrink and **eventual** (bounded by the signed
+for ratcheted groups. Leave-rekey is atomic with the roster shrink and **eventual** (bounded by the signed
 `groupleave` frame's convergence). Engine/facade: `GroupRatchetEngine`/`GroupRatchetSessions` (one
 shared ratchet mutex with the DM facade); state in the `group_*` tables; normative spec:
 **`docs/GROUP_FORWARD_SECRECY.md`**. The roster it distributes to is integrity-pinned
@@ -68,4 +71,4 @@ delivery gate, never a relay gate; see `docs/WIRE_COMPAT.md`).
 
 Still deferred for E2E (see `memory/roadmap.md`): encrypting reactions/receipts (signed now, but
 still flood as cleartext metadata), and encrypting the broadcast room. (Group forward secrecy shipped
-as crypto scheme v3 — above.)
+as the v2 group form — above.)

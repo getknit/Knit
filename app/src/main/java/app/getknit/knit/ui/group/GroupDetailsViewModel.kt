@@ -49,7 +49,7 @@ data class GroupDetailsUiState(
     val title: String,
     val photoHash: String?,
     val members: List<GroupMemberRow>,
-    // Display names of members whose pinned profile can't yet do the v3 group ratchet (missing
+    // Display names of members whose pinned profile can't yet do the group ratchet (missing
     // capability or prekey) — they pin the whole group's traffic at v1. Empty = forward secrecy active.
     // Mirrors MeshManager.groupRatchetEligible's per-member conditions against the same peers table.
     val fsBlockers: List<String> = emptyList(),
@@ -107,10 +107,8 @@ class GroupDetailsViewModel(
                     .filter { it != myId }
                     .filter { id ->
                         val peer = peersByNode[id]
-                        val caps = peer?.capabilities ?: 0L
                         peer?.pubKey == null ||
-                            caps and Protocol.CAP_GROUP_RATCHET == 0L ||
-                            caps and Protocol.CAP_RATCHET == 0L ||
+                            (peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L ||
                             peer.prekeyId == null ||
                             peer.prekeyPub == null
                     }.map { id -> displayNameFor(peersByNode[id]?.name, id) }

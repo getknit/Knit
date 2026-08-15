@@ -501,7 +501,7 @@ class MeshManager(
      * The seal chokepoint for every encrypted chat (compose-time [sendChat] and flush-time
      * [flushPendingFor]). A DM to a ratchet-capable peer — pinned profile advertising
      * [Protocol.CAP_RATCHET], both on one signed frame with any prekey — goes **v2** (the epoch-ratchet
-     * session, created on first use); a group whose every member is group-ratchet-eligible goes **v3**
+     * session, created on first use); a group whose every member is ratchet-eligible goes **v2 group form**
      * (the sender-key chain, minted on first use, its seed distributed pairwise before the frame
      * floods); everything else takes the v1 static per-recipient wrap. An eligible seal can still fall
      * back to v1 (peer downgraded mid-session; a member's seed unsendable), which every build reads.
@@ -531,21 +531,21 @@ class MeshManager(
             }
         }
         if (group != null && recipientId == null) {
-            sealGroupV3(group, me, content, aad)?.let { return it }
+            sealGroupRatchet(group, me, content, aad)?.let { return it }
         }
         return messageCrypto.seal(content.encode(), aad, recipientBundles(recipientId, group, me))
     }
 
     /**
-     * The v3 half of the group seal: all-or-nothing per message. Every other member must be
-     * group-ratchet-eligible ([groupRatchetEligible]) AND a mint's seed must seal to every member
+     * The ratchet half of the group seal: all-or-nothing per message. Every other member must be
+     * ratchet-eligible ([groupRatchetEligible]) AND a mint's seed must seal to every member
      * ([distributeGroupSeed] — v2-or-nothing, never a v1-wrapped seed); any shortfall returns null and
      * the whole message falls back to v1, which every build reads. Re-evaluated per send, so the group
      * upgrades the instant the last capable profile lands. A minted seed is distributed and its outbox
      * rows recorded BEFORE the group frame floods (first frames may still race their seed — benign:
      * NO_KEY now, the custody re-serve decrypts once the seed lands).
      */
-    private suspend fun sealGroupV3(
+    private suspend fun sealGroupRatchet(
         group: GroupInfo,
         me: String,
         content: MessageContent,
@@ -566,20 +566,18 @@ class MeshManager(
             metrics.onGroupSealedV1Fallback()
             return null
         }
-        metrics.onGroupSealedV3()
+        metrics.onGroupSealedRatchet()
         return sealed.env
     }
 
-    /** Whether every one of [members] has a pinned profile carrying [Protocol.CAP_GROUP_RATCHET],
-     *  [Protocol.CAP_RATCHET], and a valid prekey — the seed rides the DM ratchet, so DM-sealability
-     *  to every member is the prerequisite. */
+    /** Whether every one of [members] has a pinned profile carrying [Protocol.CAP_RATCHET] and a
+     *  valid prekey — the seed rides the DM ratchet, so DM-sealability to every member is the
+     *  prerequisite (one bit covers both ratchet forms; they ship together). */
     private suspend fun groupRatchetEligible(members: List<String>): Boolean =
         members.all { nodeId ->
             val peer = peers.find(nodeId) ?: return@all false
-            val caps = peer.capabilities ?: 0L
             peer.pubKey != null &&
-                caps and Protocol.CAP_GROUP_RATCHET != 0L &&
-                caps and Protocol.CAP_RATCHET != 0L &&
+                (peer.capabilities ?: 0L) and Protocol.CAP_RATCHET != 0L &&
                 ratchetPrekeyOf(peer) != null
         }
 

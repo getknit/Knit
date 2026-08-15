@@ -7,7 +7,7 @@ import androidx.room.Query
 import androidx.room.Upsert
 
 /**
- * Row-level operations for the group sender-key ratchet state (crypto scheme v3). Thin by rule
+ * Row-level operations for the group sender-key ratchet state (crypto scheme v2, group form). Thin by rule
  * (`.agents/rules/coding.md`): no `@Transaction` methods — atomicity lives at the repository callers'
  * `db.withTransaction`.
  */

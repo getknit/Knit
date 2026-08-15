@@ -2,7 +2,7 @@
 
 Status: **implemented** · plan approved 2026-08-14 · landed in phases (crypto core → wire → schema →
 receive → send → reset hardening → observability). The group scheme that builds on it is
-`docs/GROUP_FORWARD_SECRECY.md` (crypto scheme v3). This document is the normative spec for the v2 DM
+`docs/GROUP_FORWARD_SECRECY.md` (the v2 group form — both landed in this one unreleased bump). This document is the normative spec for the v2 DM
 crypto scheme; `mesh/crypto/ratchet/` is the reference implementation and
 `RatchetCryptoTest`/`RatchetEngineTest` are the executable anchors (an iOS/CryptoKit port implements
 this file, not the Kotlin).

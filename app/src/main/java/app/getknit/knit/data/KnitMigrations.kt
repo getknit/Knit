@@ -16,12 +16,15 @@ import androidx.sqlite.execSQL
  */
 object KnitMigrations {
     /**
-     * v2 — the DM epoch ratchet (docs/FORWARD_SECRECY_RATCHET.md): four `ratchet_*` state tables plus
-     * the peer's published-prekey columns. Additive only; the SQL must stay byte-equivalent to what
-     * Room generates for `app/schemas/**/2.json` (validated by `runMigrationsAndValidate`).
+     * v2 — the ratchet schemes (docs/FORWARD_SECRECY_RATCHET.md + docs/GROUP_FORWARD_SECRECY.md, one
+     * never-released bump): four `ratchet_*` DM-session tables, four `group_*` sender-key tables
+     * (send/recv chains, skipped keys, the seed outbox), and the peer's published-prekey columns.
+     * Additive only; the SQL must stay byte-equivalent to what Room generates for
+     * `app/schemas/**/2.json` (validated by `runMigrationsAndValidate`).
      */
     val MIGRATION_1_2 =
         object : Migration(1, 2) {
+            @Suppress("LongMethod") // a flat list of CREATE TABLE/INDEX statements; splitting would obscure the schema
             override fun migrate(connection: SQLiteConnection) {
                 connection.execSQL(
                     "CREATE TABLE IF NOT EXISTS `ratchet_sessions` (" +
@@ -58,22 +61,6 @@ object KnitMigrations {
                 connection.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_ratchet_skipped_keys_createdAt` ON `ratchet_skipped_keys` (`createdAt`)",
                 )
-                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyId` INTEGER")
-                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyPub` TEXT")
-                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeySig` TEXT")
-                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyProfileAt` INTEGER")
-            }
-        }
-
-    /**
-     * v3 — the group sender-key ratchet (docs/GROUP_FORWARD_SECRECY.md): four `group_*` state tables
-     * (our send chains, per-sender recv chains keyed by mint era, skipped keys, the seed outbox).
-     * Additive only; the SQL must stay byte-equivalent to what Room generates for
-     * `app/schemas/**/3.json` (validated by `runMigrationsAndValidate`).
-     */
-    val MIGRATION_2_3 =
-        object : Migration(2, 3) {
-            override fun migrate(connection: SQLiteConnection) {
                 connection.execSQL(
                     "CREATE TABLE IF NOT EXISTS `group_send_chains` (" +
                         "`groupId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `seed` BLOB NOT NULL, " +
@@ -107,9 +94,13 @@ object KnitMigrations {
                         "`sentAt` INTEGER NOT NULL, `ackedEpoch` INTEGER NOT NULL, `ackedAt` INTEGER NOT NULL, " +
                         "PRIMARY KEY(`groupId`, `memberId`))",
                 )
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyId` INTEGER")
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyPub` TEXT")
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeySig` TEXT")
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `prekeyProfileAt` INTEGER")
             }
         }
 
     /** All migrations, applied by Room in order. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
 }

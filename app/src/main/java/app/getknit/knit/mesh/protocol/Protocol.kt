@@ -44,22 +44,18 @@ object Protocol {
     const val CAP_STORE_FORWARD = 0x8L
 
     /**
-     * DM epoch-ratchet (crypto scheme v2, docs/FORWARD_SECRECY_RATCHET.md). Unlike the bits above this
-     * one is a send-time input: outbound v2 requires the peer's pinned profile to carry it AND a valid
-     * `ProfileContent.prekey` (they arrive on one signed frame — the stale-capability mitigation).
+     * The ratchet schemes — crypto scheme v2's DM form (docs/FORWARD_SECRECY_RATCHET.md) AND its group
+     * sender-key form (docs/GROUP_FORWARD_SECRECY.md); one bit because both ship in the same release
+     * (the group form folded into the unreleased v2 bump — a build with one always has both). Unlike
+     * the bits above this one is a send-time input: outbound v2 requires the pinned profile to carry
+     * it AND a valid `ProfileContent.prekey` (they arrive on one signed frame — the stale-capability
+     * mitigation); a group send requires that of EVERY other member (the epoch seeds ride the
+     * pairwise DM sessions).
      */
     const val CAP_RATCHET = 0x10L
 
-    /**
-     * Group sender-key ratchet (crypto scheme v3, docs/GROUP_FORWARD_SECRECY.md). A send-time input
-     * like [CAP_RATCHET]: outbound v3 requires EVERY other member's pinned profile to carry this bit,
-     * [CAP_RATCHET], and a valid prekey (the epoch seeds ride the pairwise v2 DM ratchet).
-     */
-    const val CAP_GROUP_RATCHET = 0x20L
-
     /** This build's advertised capability bitfield. */
-    val LOCAL_CAPABILITIES: Long =
-        CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_GROUP_RATCHET
+    val LOCAL_CAPABILITIES: Long = CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET
 
     private const val SEP = '|'
 

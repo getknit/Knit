@@ -7,7 +7,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * The session service for the group sender-key ratchet (crypto scheme v3,
+ * The session service for the group sender-key ratchet (crypto scheme v2's group form,
  * docs/GROUP_FORWARD_SECRECY.md): composes the pure [GroupRatchetEngine] with the persistent
  * [GroupRatchetStore]. Android-free, like [RatchetSessions], whose two-phase peek/commit contract it
  * copies verbatim.
@@ -47,7 +47,7 @@ class GroupRatchetSessions(
         )
 
     /**
-     * Phase one of a v3 decrypt: opens the frame against a state snapshot WITHOUT persisting anything.
+     * Phase one of a group decrypt: opens the frame against a state snapshot WITHOUT persisting anything.
      * The plaintext (on [GroupRatchetEngine.OpenOutcome.Opened]) is safe to hand to moderation/row-
      * building; the delta inside the outcome must be ignored — [commitOpen] re-derives it.
      */
@@ -156,7 +156,7 @@ class GroupRatchetSessions(
         memberId: String,
     ): GroupKeySendState? = store.keySend(groupId, memberId)
 
-    /** One sealed v3 group frame; [minted] non-null when this seal started a fresh epoch — the caller
+    /** One sealed group-form frame; [minted] non-null when this seal started a fresh epoch — the caller
      *  MUST distribute it to the roster (and record the outbox rows) before flooding the frame. */
     class SealedGroup(
         val env: EncEnvelope,
@@ -221,7 +221,7 @@ class GroupRatchetSessions(
         }
 
     /**
-     * Records an undecryptable v3 frame ([GroupRatchetEngine.OpenOutcome.Failed.NO_KEY] /
+     * Records an undecryptable group frame ([GroupRatchetEngine.OpenOutcome.Failed.NO_KEY] /
      * [GroupRatchetEngine.OpenOutcome.Failed.AEAD_FAIL]) and decides whether a key request toward that
      * sender is due: at least [REQUEST_DISTINCT_FRAMES] **distinct** frame ids (custody re-serves one
      * frame endlessly — a single stuck frame must not trigger anything), and not more often than
@@ -281,10 +281,10 @@ class GroupRatchetSessions(
     }
 }
 
-/** The v3 envelope for one sealed group frame (the seal side lands with the send phase). */
+/** The group-form v2 envelope for one sealed group frame. */
 internal fun GroupRatchetEngine.SealResult.toEnvelope(): EncEnvelope =
     EncEnvelope(
-        v = EncEnvelope.VERSION_GROUP_RATCHET,
+        v = EncEnvelope.VERSION_RATCHET,
         nonce = nonce,
         ct = ct,
         keys = emptyList(),

@@ -466,17 +466,19 @@ class InboundPipeline(
             acknowledge(env, me)
             return
         }
-        when (enc.v) {
-            EncEnvelope.VERSION_RATCHET -> {
-                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId) }.getOrElse {
-                    Log.w(TAG, "drop v2 chat ${env.id}: ${it.message}")
+        when {
+            // v2's two forms share the version and split on addressing (see EncEnvelope's kdoc):
+            // group-addressed carries the sender-key header `g`, a DM the epoch-ratchet header `r`.
+            enc.v == EncEnvelope.VERSION_RATCHET && env.group != null -> {
+                runCatching { decryptAndDeliverGroup(env, content, enc, me, conversationId) }.getOrElse {
+                    Log.w(TAG, "drop group ratchet chat ${env.id}: ${it.message}")
                     metrics.onDropped(DropReason.DECRYPT_FAILED)
                 }
             }
 
-            EncEnvelope.VERSION_GROUP_RATCHET -> {
-                runCatching { decryptAndDeliverV3(env, content, enc, me, conversationId) }.getOrElse {
-                    Log.w(TAG, "drop v3 chat ${env.id}: ${it.message}")
+            enc.v == EncEnvelope.VERSION_RATCHET -> {
+                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId) }.getOrElse {
+                    Log.w(TAG, "drop v2 chat ${env.id}: ${it.message}")
                     metrics.onDropped(DropReason.DECRYPT_FAILED)
                 }
             }
@@ -690,7 +692,7 @@ class InboundPipeline(
     }
 
     /**
-     * The v3 (group sender-key) decrypt-and-deliver — [decryptAndDeliverV2]'s shape re-applied: a
+     * The group-form (sender-key) decrypt-and-deliver — [decryptAndDeliverV2]'s shape re-applied: a
      * lock-free peek yields the plaintext for moderation/row-building, then the persist hook re-opens
      * on fresh state and commits the chain delta atomically with the message row (`db.withTransaction`
      * outer, the shared ratchet lock inner). Typed engine failures map to drop reasons — all
@@ -698,7 +700,7 @@ class InboundPipeline(
      * vetted the roster and membership before this runs.
      */
     @Suppress("ReturnCount") // a drop-reason gate ladder; early returns ARE the readable form (cf. decrypt)
-    private suspend fun decryptAndDeliverV3(
+    private suspend fun decryptAndDeliverGroup(
         env: RelayEnvelope,
         content: ChatContent,
         enc: EncEnvelope,
@@ -707,7 +709,7 @@ class InboundPipeline(
     ) {
         val wireHeader = enc.g
         val groupId = env.group?.id
-        // v3 is group-only; a DM-addressed or header-less v3 envelope is malformed by construction.
+        // The group form is group-only and header-required; anything else is malformed by construction.
         if (wireHeader == null || groupId == null) {
             metrics.onDropped(DropReason.GROUP_RATCHET_BAD_HEADER)
             return
@@ -735,7 +737,7 @@ class InboundPipeline(
             }
         }
         if (plain.ctl != null) {
-            // Group machinery rides pairwise ctl DMs, never v3 group frames — but a ctl marker must
+            // Group machinery rides pairwise ctl DMs, never sealed group frames — but a ctl marker must
             // keep its contract regardless of the envelope it arrived in: advance the chain, persist
             // nothing, notify nothing, ack nothing.
             commit {}
@@ -752,7 +754,7 @@ class InboundPipeline(
     }
 
     /**
-     * Maps a typed v3 open failure to its drop reason, and — for the two shapes that mean "the seed
+     * Maps a typed group-form open failure to its drop reason, and — for the two shapes that mean "the seed
      * this frame needs isn't here" (never arrived / lost, or a stale-era chain after the sender wiped)
      * — feeds the key-request heuristic, sending a rate-limited `CTL_GROUP_KEY_REQ` when it fires.
      */
@@ -772,7 +774,7 @@ class InboundPipeline(
                 else -> DropReason.DECRYPT_FAILED
             }
         metrics.onDropped(reason)
-        Log.w(TAG, "drop v3 chat ${env.id}: $outcome")
+        Log.w(TAG, "drop group ratchet chat ${env.id}: $outcome")
         if (reason == DropReason.GROUP_RATCHET_NO_KEY || reason == DropReason.GROUP_RATCHET_AEAD_FAIL) {
             maybeRequestGroupKey(env, groupId, me, now)
         }
@@ -795,7 +797,7 @@ class InboundPipeline(
         if (now - env.sentAt > GroupRatchetSessions.REQUEST_MAX_FRAME_AGE_MS) return
         if (!groupRatchet.noteUndecryptable(groupId, env.senderId, env.id, now)) return
         val peer = peers.find(env.senderId) ?: return
-        if ((peer.capabilities ?: 0L) and Protocol.CAP_GROUP_RATCHET == 0L) return
+        if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return
         val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return
         val prekey =
             peer.prekeyId?.let { pid ->

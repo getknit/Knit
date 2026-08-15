@@ -1,8 +1,8 @@
-# Forward secrecy for groups — the sender-key ratchet (crypto scheme v3)
+# Forward secrecy for groups — the sender-key ratchet (crypto scheme v2, group form)
 
 Status: **implemented** · plan approved 2026-08-14 · landed in phases (roster integrity → crypto core →
 wire → schema → receive → send/distribution → hardening → observability). This document is the
-normative spec for the v3 group crypto scheme; `mesh/crypto/ratchet/GroupRatchet*` is the reference
+normative spec for the group crypto scheme; `mesh/crypto/ratchet/GroupRatchet*` is the reference
 implementation and `GroupRatchetCryptoTest`/`GroupRatchetEngineTest` are the executable anchors (an
 iOS/CryptoKit port implements this file, not the Kotlin). The DM scheme it builds on is
 `docs/FORWARD_SECRECY_RATCHET.md` (v2, ADR 016).
@@ -34,7 +34,7 @@ review resolved it:
   (randomized-soak-hardened).
 
 **The trade to state as loudly as ADR 016 stated "no cumulative root chain": v2's survival property
-is that key material rides on every frame; sender-key inverts it.** A v3 group frame is undecryptable
+is that key material rides on every frame; sender-key inverts it.** A ratcheted group frame is undecryptable
 until a *separate* DM — with its own custody fate — delivers that sender's epoch seed. Availability
 is bought back with a persistent seed outbox, proactive re-sends, and a key-request loop (§7), but
 recovery is eventual, and so is leave-rekey (§6.1). Custody accelerates seed delivery; the outbox is
@@ -79,7 +79,7 @@ back to v1 for everyone (§5 gate).
 
 Like every ctl frame (ADR 016 precedent), a seed DM is an ordinary custodial chat frame on the wire
 — v1 relays flood and custody it for 24 h — and is never persisted, notified, or acked as a message.
-A pre-v3 build that decrypts one sees an unknown `ctl` and consumes it as a silent no-op (pinned by
+A build without the group scheme that decrypts one sees an unknown `ctl` and consumes it as a silent no-op (pinned by
 test), still advancing the pair's DM session. Receivers adopt idempotently: a re-served distribution
 matches on `(epoch, mintedAt)` and never rewinds the chain; adoption is gated on holding the group,
 not having left it, and the sender being in the pinned roster; adoption is rate-limited (§10) so
@@ -129,11 +129,13 @@ identifier on the wire.
 
 ## 5. Wire form (additive; see docs/WIRE_COMPAT.md)
 
-`EncEnvelope` v3 (same type, `MAX_SUPPORTED_VERSION = 3`; `keys = []` — the message key is derived,
-never wrapped; `r` has no v3 role):
+The group form **shares crypto scheme v2 with the DM ratchet** — both landed in one never-released
+bump, so there was no reason to spend a version number on the split (`MAX_SUPPORTED_VERSION` stays 2).
+The two forms are discriminated by addressing, not by `v`: a group-addressed v2 envelope carries `g`,
+a DM carries `r` (`keys = []` in both — the message key is derived, never wrapped):
 
 ```
-EncEnvelope { v = 3, nonce, ct, keys = [], g: GroupRatchetHeader }
+EncEnvelope { v = 2, nonce, ct, keys = [], g: GroupRatchetHeader }   // group-addressed
 GroupRatchetHeader { se: Int, n: Int }     // sender epoch + chain index; ~10 B vs v1's ~500 B of wraps
 ```
 
@@ -141,23 +143,24 @@ groupId rides `RelayEnvelope.group` and the sender on the envelope, both already
 header carries only what v1 didn't already say. Old builds decode the envelope (ignoring `g`), hit
 `v > MAX_SUPPORTED_VERSION`, and take the existing `UNKNOWN_ENVELOPE_VERSION`
 drop-locally-still-relay path; `canCarry` never inspects `v`, so mixed-version meshes carry and
-custody v3 exactly like v1/v2. A v3 envelope that is group-less (or a v2 envelope that is
-group-addressed) is malformed by construction.
+custody the group form exactly like everything else. A group-addressed envelope without `g` (or a
+DM-addressed one without `r`) is malformed by construction.
 
-Capability gating: `Protocol.CAP_GROUP_RATCHET = 0x20` (append-only). Outbound v3 requires, for
-**every** other member, a pinned authenticated profile carrying `CAP_GROUP_RATCHET`, `CAP_RATCHET`,
-and a valid `PrekeyInfo` (the seed rides the DM ratchet, so DM-sealability is a prerequisite), *and*
+Capability gating: `Protocol.CAP_RATCHET` covers **both** ratchet forms — they ship in the same
+release, so a second bit would never vary independently. Outbound group-form requires, for **every**
+other member, a pinned authenticated profile carrying `CAP_RATCHET` and a valid `PrekeyInfo` (the
+seed rides the DM ratchet, so DM-sealability is a prerequisite), *and*
 the current epoch's seed distributable to them. **All-or-nothing per message**: any ineligible
 member demotes that message (not the group) to v1, which every build reads; eligibility is
 re-evaluated per send, so a group upgrades the instant the last capable profile lands and downgrades
-if a member's newer profile clears its prekey. One abandoned pre-v3 install pins its groups at v1 —
+if a member's newer profile clears its prekey. One abandoned pre-ratchet install pins its groups at v1 —
 accepted for now (dual-seal is roadmap-listed and rejected for v1 of this feature: sealing v1
-alongside v3 voids FS against the straggler's static key anyway).
+alongside the ratchet voids FS against the straggler's static key anyway).
 
 ## 6. Receive ladder and delivery semantics
 
 The pre-decrypt exists-gate and two-phase peek/commit contract are unchanged from v2:
-`decryptAndDeliver` short-circuits ids already in `messages`; a v3 open runs lock-free `peekOpen`
+`decryptAndDeliver` short-circuits ids already in `messages`; a group open runs lock-free `peekOpen`
 (moderation classifies the plaintext before anything persists), then re-opens and commits the state
 delta atomically with the message row (`withTransaction` outer, the shared ratchet mutex inner).
 `GroupRatchetSessions` shares the **one** mutex with `RatchetSessions` — seed adoption runs inside
@@ -194,9 +197,9 @@ and keeps the leaver in their roster (and seed distribution) until the leave arr
 cannot do better without coordination it structurally lacks; stated here so nobody reads
 leave-rekey as instantaneous revocation.
 
-## 7. Key recovery (subsumes "group key-gap retransmit" for v3)
+## 7. Key recovery (subsumes "group key-gap retransmit" for ratcheted groups)
 
-Receiver side: ≥3 distinct undecryptable-v3 frame ids per `(group, sender)` (`NO_KEY`/`AEAD_FAIL`),
+Receiver side: ≥3 distinct undecryptable group-frame ids per `(group, sender)` (`NO_KEY`/`AEAD_FAIL`),
 each with `sentAt` within 48 h (a replayed ancient frame can't burn the budget), rate-limited to one
 request per (group, sender) per hour → send `ctl = CTL_GROUP_KEY_REQ` to that sender as a v2 DM
 (same guards as the DM reset heuristic: pinned profile, capability, prekey).

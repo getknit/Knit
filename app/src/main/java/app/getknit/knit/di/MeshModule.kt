@@ -91,7 +91,7 @@ val meshModule =
                 mutex = get(ratchetMutex),
             )
         }
-        // The group sender-key session service (crypto scheme v3, docs/GROUP_FORWARD_SECRECY.md).
+        // The group sender-key session service (crypto scheme v2's group form, docs/GROUP_FORWARD_SECRECY.md).
         single { GroupRatchetSessions(store = get(), mutex = get(ratchetMutex)) }
         // Constructor order: transport, messages, groups, reactions, peers, identity, settings, blobs,
         // imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet,

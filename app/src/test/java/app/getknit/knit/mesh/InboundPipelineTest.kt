@@ -229,7 +229,7 @@ class InboundPipelineTest {
                 mutex = ratchetMutex,
             )
 
-        // The group (v3) facade over the REAL Room-backed store, sharing the DM facade's mutex exactly
+        // The group-ratchet facade over the REAL Room-backed store, sharing the DM facade's mutex exactly
         // as production wiring does (seed adoption runs inside a DM commit under that one lock).
         val groupRatchetStore = GroupRatchetRepository(db.groupRatchetDao())
         val groupRatchet = GroupRatchetSessions(store = groupRatchetStore, mutex = ratchetMutex)
@@ -2121,10 +2121,10 @@ class InboundPipelineTest {
             assertEquals("Ann", rig.peerMap[alice.nodeId]?.name)
         }
 
-    // --- v3 (group sender-key ratchet): seed adoption over real v2 ctl DMs + the group decrypt path ---
+    // --- group sender-key ratchet (v2 group form): seed adoption over real ctl DMs + the group decrypt path ---
 
-    /** Drives a real [GroupRatchetEngine] as one group member authoring v3 frames toward the rig. */
-    private inner class V3GroupAuthor(
+    /** Drives a real [GroupRatchetEngine] as one group member authoring group-form frames toward the rig. */
+    private inner class GroupRatchetAuthor(
         val party: Party,
         private val groupId: String,
         at: Long = 5L,
@@ -2159,7 +2159,7 @@ class InboundPipelineTest {
                         ChatContent(
                             enc =
                                 EncEnvelope(
-                                    v = EncEnvelope.VERSION_GROUP_RATCHET,
+                                    v = EncEnvelope.VERSION_RATCHET,
                                     nonce = sealed.nonce,
                                     ct = sealed.ct,
                                     keys = emptyList(),
@@ -2172,7 +2172,7 @@ class InboundPipelineTest {
     }
 
     /** Seeds the rig's group row + returns the wire GroupInfo, both from the derived id. */
-    private fun Rig.seedV3Group(vararg others: Party): GroupInfo {
+    private fun Rig.seedRatchetGroup(vararg others: Party): GroupInfo {
         val members = listOf(self.nodeId) + others.map { it.nodeId }
         val id = Conversations.groupIdFor(members)
         seedGroup(id, members = members, createdBy = others.first().nodeId)
@@ -2185,8 +2185,8 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.seedV3Group(alice)
-            val author = V3GroupAuthor(alice, group.id)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
 
             rig.deliver(
                 alice,
@@ -2207,13 +2207,13 @@ class InboundPipelineTest {
         }
 
     @Test
-    fun aV3GroupFrameAfterItsSeedDecryptsAndDelivers() =
+    fun aGroupRatchetFrameAfterItsSeedDecryptsAndDelivers() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.seedV3Group(alice)
-            val author = V3GroupAuthor(alice, group.id)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
             rig.deliver(
                 alice,
                 V2Author(
@@ -2229,13 +2229,13 @@ class InboundPipelineTest {
         }
 
     @Test
-    fun aV3FrameBeforeItsSeedDropsNoKeyAndStillCustodies() =
+    fun aGroupRatchetFrameBeforeItsSeedDropsNoKeyAndStillCustodies() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.seedV3Group(alice)
-            val author = V3GroupAuthor(alice, group.id)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
 
             rig.deliver(alice, author.groupFrame(group, id = "gm-early", body = "too soon"))
 
@@ -2246,13 +2246,13 @@ class InboundPipelineTest {
         }
 
     @Test
-    fun outOfOrderV3FramesGapFillAndConsumeSkippedKeys() =
+    fun outOfOrderGroupFramesGapFillAndConsumeSkippedKeys() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.seedV3Group(alice)
-            val author = V3GroupAuthor(alice, group.id)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
             rig.deliver(
                 alice,
                 V2Author(
@@ -2275,13 +2275,13 @@ class InboundPipelineTest {
         }
 
     @Test
-    fun aReServedV3FrameShortCircuitsAtTheExistsGate() =
+    fun aReServedGroupFrameShortCircuitsAtTheExistsGate() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.seedV3Group(alice)
-            val author = V3GroupAuthor(alice, group.id)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
             rig.deliver(
                 alice,
                 V2Author(
@@ -2305,8 +2305,8 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.seedV3Group(alice)
-            val author = V3GroupAuthor(alice, group.id)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
             rig.deliver(
                 alice,
                 V2Author(
@@ -2342,8 +2342,8 @@ class InboundPipelineTest {
             val carol = party()
             rig.pin(alice)
             rig.pin(carol)
-            val group = rig.seedV3Group(alice) // carol is NOT in the roster
-            val author = V3GroupAuthor(carol, group.id)
+            val group = rig.seedRatchetGroup(alice) // carol is NOT in the roster
+            val author = GroupRatchetAuthor(carol, group.id)
 
             rig.deliver(
                 carol,
@@ -2359,7 +2359,7 @@ class InboundPipelineTest {
         }
 
     @Test
-    fun aV3FrameForALeftGroupIsRefusedBeforeDecrypt() =
+    fun aGroupRatchetFrameForALeftGroupIsRefusedBeforeDecrypt() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
@@ -2368,7 +2368,7 @@ class InboundPipelineTest {
             val id = Conversations.groupIdFor(members)
             rig.seedGroup(id, members = members, createdBy = alice.nodeId, left = true)
             val group = rig.group(members = members, createdBy = alice.nodeId)
-            val author = V3GroupAuthor(alice, id)
+            val author = GroupRatchetAuthor(alice, id)
 
             rig.deliver(alice, author.groupFrame(group, id = "gm-left", body = "gone"))
 
@@ -2377,14 +2377,14 @@ class InboundPipelineTest {
         }
 
     @Test
-    fun aGroupAddressedV2EnvelopeIsStillMalformed() =
+    fun aGroupAddressedEnvelopeWithoutTheGroupHeaderIsMalformed() =
         runTest {
-            // v2 stays DM-only: a group-addressed v2 envelope drops as RATCHET_BAD_HEADER even now
-            // that v3 exists (regression pin on the decryptAndDeliverV2 gate).
+            // A group-addressed v2 envelope routes to the group form, which requires `g`: header-less
+            // is malformed by construction (regression pin on the routing + gate).
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.seedV3Group(alice)
+            val group = rig.seedRatchetGroup(alice)
             val env =
                 RelayEnvelope(
                     type = FrameType.CHAT,
@@ -2408,11 +2408,11 @@ class InboundPipelineTest {
 
             rig.deliver(alice, env)
 
-            assertEquals(1L, rig.drops(DropReason.RATCHET_BAD_HEADER))
+            assertEquals(1L, rig.drops(DropReason.GROUP_RATCHET_BAD_HEADER))
         }
 
     @Test
-    fun aDmAddressedV3EnvelopeIsMalformed() =
+    fun aDmAddressedEnvelopeWithOnlyAGroupHeaderIsMalformed() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
@@ -2420,7 +2420,7 @@ class InboundPipelineTest {
             val env =
                 RelayEnvelope(
                     type = FrameType.CHAT,
-                    id = "v3-dm",
+                    id = "gdm",
                     senderId = alice.nodeId,
                     sentAt = 5L,
                     recipientId = rig.self.nodeId,
@@ -2429,7 +2429,7 @@ class InboundPipelineTest {
                             ChatContent(
                                 enc =
                                     EncEnvelope(
-                                        v = EncEnvelope.VERSION_GROUP_RATCHET,
+                                        v = EncEnvelope.VERSION_RATCHET,
                                         nonce = ByteArray(12),
                                         ct = ByteArray(4),
                                         keys = emptyList(),
@@ -2441,19 +2441,20 @@ class InboundPipelineTest {
 
             rig.deliver(alice, env)
 
-            assertEquals(1L, rig.drops(DropReason.GROUP_RATCHET_BAD_HEADER))
-            assertFalse(rig.msgMap.containsKey("v3-dm"))
+            // A DM routes to the DM form, which requires `r` — a stray `g` doesn't make it a group frame.
+            assertEquals(1L, rig.drops(DropReason.RATCHET_BAD_HEADER))
+            assertFalse(rig.msgMap.containsKey("gdm"))
         }
 
     @Test
-    fun threeDistinctUndecryptableV3FramesTriggerOneRateLimitedKeyRequest() =
+    fun threeDistinctUndecryptableGroupFramesTriggerOneRateLimitedKeyRequest() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
             rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub) // request needs cap + prekey
-            val group = rig.seedV3Group(alice)
-            val author = V3GroupAuthor(alice, group.id)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
 
             fun chatFramesToAlice() = rig.originated.count { it.type == FrameType.CHAT && it.recipientId == alice.nodeId }
             val fresh = System.currentTimeMillis() // the pipeline age-gates on the real clock
@@ -2483,8 +2484,8 @@ class InboundPipelineTest {
             val alice = party()
             rig.pin(alice)
             rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
-            val group = rig.seedV3Group(alice)
-            val author = V3GroupAuthor(alice, group.id)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
 
             repeat(4) { i ->
                 // sentAt = 1L: far past REQUEST_MAX_FRAME_AGE_MS relative to the pipeline's wall clock.
@@ -2501,7 +2502,7 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.seedV3Group(alice)
+            val group = rig.seedRatchetGroup(alice)
 
             rig.deliver(
                 alice,

@@ -263,7 +263,9 @@ crypto-scheme bump); context: `context/e2e-encryption.md`.
 
 ## 017. Group forward secrecy is a sender-key ratchet over the pairwise DM sessions (not pairwise fan-out, not MLS-lite)
 
-Status: Accepted (2026-08-14; DB v3, crypto scheme `EncEnvelope.v = 3`)
+Status: Accepted (2026-08-14; folded into the unreleased v2 bump — DB v2, `EncEnvelope.v = 2` group
+form (`g` header, split on addressing), `CAP_RATCHET` covering both forms — released version numbers
+are append-only, unreleased ones are still editable)
 
 Each member mints a random per-group epoch seed driving a forward-only chain
 (`GroupRatchetCrypto.deriveEpoch` binds groupId + senderId + epoch); the seed travels pairwise as a
@@ -272,11 +274,12 @@ epoch against one harvested static-key DM. No DH, no sessions, no cross-member c
 the property the mesh demands (no ordering, permanent custody holes), and it is why the alternatives
 lost — MLS-lite's shared epoch needs in-order commits (the ADR 016 root-chain wedge, times eight
 parties), and pairwise fan-out either breaks id-keyed dedup/receipts (N frame ids) or entangles every
-group message with N DM session lifecycles while still dying on session replacement. A v3 frame
+group message with N DM session lifecycles while still dying on session replacement. A ratcheted group frame
 carries only `GroupRatchetHeader {se, n}` (~10 B vs v1's ~500 B of wraps at the 8-member cap).
 
-The structural trade, stated as loudly as 016's "no cumulative root chain": **v2's key material rides
-on every frame; sender-key inverts that** — a v3 frame is unreadable until a separate DM with its own
+The structural trade, stated as loudly as 016's "no cumulative root chain": **the DM form's key
+material rides on every frame; sender-key inverts that** — a group frame is unreadable until a
+separate DM with its own
 custody fate delivers the seed. Availability is bought back with the persistent seed outbox
 (`group_key_sends` + `CTL_GROUP_KEY_ACK`), proactive re-sends (profile arrival, neighbor join,
 session reset — the only wipe-side seed plane, since ctl frames are never persisted), and the

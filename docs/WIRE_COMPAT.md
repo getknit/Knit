@@ -39,8 +39,9 @@ Each evolves independently; bump the right one:
 - **`RelayEnvelope.type` registry**: `chat`, `groupupdate`, `groupleave`, `profile`, `receipt`,
   `reaction`, `blobreq`, `keyreq`, `typing`.
 - **`EncEnvelope.v`**: the E2E crypto scheme — `1` = static keys (AES-GCM + per-recipient HPKE wrap),
-  `2` = the DM epoch ratchet (AES-GCM under a derived key; `EncEnvelope.r` carries the ratchet header,
-  `keys` is empty — see `docs/FORWARD_SECRECY_RATCHET.md`).
+  `2` = the ratchet schemes (AES-GCM under a derived key, `keys` empty; the DM form's header rides
+  `EncEnvelope.r` — `docs/FORWARD_SECRECY_RATCHET.md` — and the group sender-key form's rides
+  `EncEnvelope.g` — `docs/GROUP_FORWARD_SECRECY.md`; forms split on addressing, not on `v`).
 - **`MessageContent.v`**: the decrypted plaintext schema.
 
 ## Rules that keep changes additive
@@ -146,19 +147,24 @@ old-decoder-ignores-`r` behavior is pinned in `WireSerializationTest`. Senders g
 pinned profile carrying **both** `CAP_RATCHET` and a `prekey` (one signed frame — no stale-capability
 window), so a v2 frame is only ever addressed to a build that can open it.
 
-**Precedent — the second additive crypto-scheme bump (`EncEnvelope.v` 2 → 3, the group sender-key
-ratchet).** Same template re-applied (`docs/GROUP_FORWARD_SECRECY.md`): `EncEnvelope` gained the
-nullable `g: GroupRatchetHeader?` (two plain ints — no `@ByteString` at all this time),
-`MessageContent` gained the nullable `gk: GroupKeyPayload?` + three ctl values *inside* the
-ciphertext (`CTL_GROUP_KEY`/`_REQ`/`_ACK` — legal precisely because unknown ctl values were already
-consumed as silent no-ops, a property the v2 precedent shipped and this one leans on),
-`GroupInfo` gained the nullable `departed` list (the roster-integrity phase), and
-`Protocol.CAP_GROUP_RATCHET` took bit `0x20`. The epoch seeds themselves never touch a new wire
-surface: they ride *inside* ordinary v2 DM ctl frames, which v1 relays already custody (the ADR 016
-argument re-applied — a new frame type would not be custodial to old builds). Senders gate v3 on
-**every** other member's pinned profile carrying `CAP_GROUP_RATCHET` + `CAP_RATCHET` + a prekey;
-any ineligible member demotes that message to v1, so a v3 frame is only ever addressed to a roster
-that can open it.
+**Precedent — extending an UNRELEASED version instead of bumping (the group sender-key ratchet
+folded into v2).** Version numbers are only spent when a build that understands the old meaning has
+shipped; the v2 crypto scheme never left this branch, so the group scheme
+(`docs/GROUP_FORWARD_SECRECY.md`) rides the SAME `EncEnvelope.v = 2` rather than minting a v3 — the
+two forms split on addressing (a DM carries `r`, a group frame the new nullable
+`g: GroupRatchetHeader?` — two plain ints, no `@ByteString`), and `MAX_SUPPORTED_VERSION` stays 2.
+Likewise `Protocol.CAP_RATCHET` covers both forms (they ship together; a second bit would never vary
+independently) and the group state tables ride the same unreleased DB v2 migration. The additive
+fields still follow rule 1: `MessageContent` gained the nullable `gk: GroupKeyPayload?` + three ctl
+values *inside* the ciphertext (`CTL_GROUP_KEY`/`_REQ`/`_ACK` — legal precisely because unknown ctl
+values were already consumed as silent no-ops), and `GroupInfo` gained the nullable `departed` list
+(the roster-integrity phase). The epoch seeds themselves never touch a new wire surface: they ride
+*inside* ordinary v2 DM ctl frames, which v1 relays already custody (the ADR 016 argument
+re-applied — a new frame type would not be custodial to old builds). Senders gate the group form on
+**every** other member's pinned profile carrying `CAP_RATCHET` + a prekey; any ineligible member
+demotes that message to v1, so a ratcheted group frame is only ever addressed to a roster that can
+open it. **The rule this precedent adds: released version numbers are append-only; unreleased ones
+are still yours to edit.**
 
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in

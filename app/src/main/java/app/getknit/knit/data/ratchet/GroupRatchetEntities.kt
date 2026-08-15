@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.Index
 
 /**
- * One of OUR send epochs for a group (crypto scheme v3 — docs/GROUP_FORWARD_SECRECY.md). The [seed]
+ * One of OUR send epochs for a group (crypto scheme v2, group form — docs/GROUP_FORWARD_SECRECY.md). The [seed]
  * is retained while the epoch is current (re-distribution to members who lost it) or draining
  * (≤48 h past its successor's mint, for key-request recovery of custody re-serves) — **deleting these
  * rows is the sender-side forward-secrecy guarantee** (see `GroupRatchetRepository.sweep`). Key

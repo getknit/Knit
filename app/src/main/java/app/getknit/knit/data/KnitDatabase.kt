@@ -43,11 +43,11 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     //     rode the wire/crypto breaks) is collapsed; docs/WIRE_COMPAT.md keeps the historical break record.
     //     From v1 on, every @Database bump ships a tested KnitMigrations entry — a missing one throws at open
     //     time (caught by KnitDatabaseMigrationTest), never a silent wipe of a user's messages/custody/pins.
-    // v2: DM epoch-ratchet state (4 ratchet_* tables) + the peers prekey columns
-    //     (docs/FORWARD_SECRECY_RATCHET.md); migrated by KnitMigrations.MIGRATION_1_2.
-    // v3: group sender-key ratchet state (4 group_* tables: send/recv chains, skipped keys, the seed
-    //     outbox — docs/GROUP_FORWARD_SECRECY.md); migrated by KnitMigrations.MIGRATION_2_3.
-    version = 3,
+    // v2: the ratchet schemes, one never-released bump — DM epoch-ratchet state (4 ratchet_* tables),
+    //     group sender-key state (4 group_* tables: send/recv chains, skipped keys, the seed outbox),
+    //     and the peers prekey columns (docs/FORWARD_SECRECY_RATCHET.md +
+    //     docs/GROUP_FORWARD_SECRECY.md); migrated by KnitMigrations.MIGRATION_1_2.
+    version = 2,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without

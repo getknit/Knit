@@ -8,7 +8,7 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 import kotlinx.coroutines.flow.Flow
 
-/** Single source of truth for group chats (and, transactionally, their v3 ratchet state hooks). */
+/** Single source of truth for group chats (and, transactionally, their group-ratchet state hooks). */
 class GroupRepository(
     private val dao: GroupDao,
     private val messages: MessageRepository,

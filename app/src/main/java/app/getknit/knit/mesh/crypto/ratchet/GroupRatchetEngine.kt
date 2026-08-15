@@ -3,7 +3,8 @@ package app.getknit.knit.mesh.crypto.ratchet
 import app.getknit.knit.mesh.crypto.AesGcm
 
 /**
- * The group sender-key ratchet state machine (crypto scheme v3, docs/GROUP_FORWARD_SECRECY.md). Pure:
+ * The group sender-key ratchet state machine (crypto scheme v2's group form,
+ * docs/GROUP_FORWARD_SECRECY.md). Pure:
  * state comes in as immutable snapshots, changes go out as [SealResult]/[OpenOutcome] deltas the caller
  * persists (atomically with the message row — see `GroupRatchetSessions`); no IO, no Android,
  * randomness only through the injected seed source.
@@ -60,7 +61,7 @@ class GroupRatchetEngine(
         val createdAt: Long,
     )
 
-    /** Wire-agnostic mirror of the v3 group header (mapped to/from the CBOR DTO by the caller). */
+    /** Wire-agnostic mirror of the group ratchet header (mapped to/from the CBOR DTO by the caller). */
     class FrameHeader(
         val se: Int,
         val n: Int,

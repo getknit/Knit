@@ -645,13 +645,24 @@ class MeshManager(
      * live send chain, re-send the current seed if the outbox says this member hasn't acked it — the
      * "member's prekey arrived later" / partition-merge / wipe healing paths, floored per
      * (group, member) so profile re-floods and link flaps can't turn it into chatter.
+     *
+     * [force] bypasses the acked-epoch short-circuit and is passed ONLY by the session-reset path: a
+     * reset means the peer lost their DB, so an outbox row saying they acked our current epoch is
+     * exactly the stale state that would otherwise swallow the re-send — the wipe they just recovered
+     * from is what invalidated the ack (the ADR 017 "only wipe-side seed plane" contract). The
+     * per-(group, member) floor still applies either way, so a reset can't be a re-send amplifier.
+     * Internal for the same reason [redistributeGroupKey] is: the guard is unreachable end-to-end from
+     * a JVM rig (it needs an inbound reset through a full receive stack), so the test drives it directly.
      */
-    private suspend fun flushPendingGroupKeysFor(memberId: String) {
+    internal suspend fun flushPendingGroupKeysFor(
+        memberId: String,
+        force: Boolean = false,
+    ) {
         val me = identity.nodeId()
         groups.groupsWith(memberId).forEach { group ->
             val chain = groupRatchet.currentSeeds(group.groupId).firstOrNull() ?: return@forEach
             val outbox = groupRatchet.keySend(group.groupId, memberId)
-            if (outbox != null && outbox.ackedEpoch >= chain.epoch) return@forEach
+            if (!force && outbox != null && outbox.ackedEpoch >= chain.epoch) return@forEach
             if (!seedSendFloorOpen(group.groupId, memberId)) return@forEach
             val payload =
                 MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.groupId, keys = listOf(chain)))

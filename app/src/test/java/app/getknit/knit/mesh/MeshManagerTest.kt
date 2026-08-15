@@ -192,6 +192,10 @@ class MeshManagerTest {
         val saved = mutableListOf<MessageEntity>()
         val now = 1_700_000_000_000L
         val metrics = MeshMetrics()
+
+        // Hoisted so a test can pre-shape group-ratchet state (e.g. a stale outbox ack) around the
+        // manager's own send/flush paths — same instance the manager is wired with below.
+        val groupRatchet = GroupRatchetSessions(store = GroupRatchetRepository(db.groupRatchetDao()))
         val manager: MeshManager
 
         init {
@@ -222,7 +226,7 @@ class MeshManagerTest {
                             dhIdentityPriv = { ByteArray(32) { 1 } }, // send-path tests never derive
                             spkPrivFor = { null },
                         ),
-                    groupRatchet = GroupRatchetSessions(store = GroupRatchetRepository(db.groupRatchetDao())),
+                    groupRatchet = groupRatchet,
                     scope = scope,
                     metrics = metrics,
                     db = db,
@@ -682,6 +686,43 @@ class MeshManagerTest {
     fun theProfileAdvertisesTheRatchetCapabilityAndAVerifiablePrekey() {
         assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_RATCHET != 0L)
     }
+
+    @Test
+    fun aForcedFlushBypassesTheStaleAckGuardAfterAPeerWipe() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The wipe-recovery hole the branch review caught: bob acked our current epoch, then lost
+            // his DB. His session reset must get the seed re-sent, but our outbox row still says
+            // "acked" — only the forced (reset-path) flush may bypass that guard; the routine
+            // profile-arrival/neighbor-join paths must keep short-circuiting on it.
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            val group = GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId), createdBy = rig.me.nodeId)
+            coEvery { rig.groups.groupsWith(rig.bob.nodeId) } returns
+                listOf(
+                    GroupEntity(
+                        groupId = "g-1",
+                        name = "Team",
+                        members = GroupMembersStore.encode(group.members),
+                        createdBy = rig.me.nodeId,
+                        createdAt = 1L,
+                    ),
+                )
+            assertTrue(rig.manager.sendChat("mint", group = group)) // mints epoch 1 + distributes its seed
+            advanceUntilIdle()
+            rig.groupRatchet.onKeyAck("g-1", rig.bob.nodeId, 1, rig.now) // bob acked… then wiped
+            val seedsBefore = rig.sentChatFrames().count { it.recipientId == rig.bob.nodeId }
+
+            rig.manager.flushPendingGroupKeysFor(rig.bob.nodeId) // routine path: stale ack short-circuits
+            assertEquals(seedsBefore, rig.sentChatFrames().count { it.recipientId == rig.bob.nodeId })
+
+            rig.manager.flushPendingGroupKeysFor(rig.bob.nodeId, force = true) // the session-reset path
+            assertEquals(
+                "the forced flush must actually originate a seed DM",
+                seedsBefore + 1,
+                rig.sentChatFrames().count { it.recipientId == rig.bob.nodeId },
+            )
+            assertEquals(2L, rig.metrics.snapshot().groupSeedsSent)
+        }
 
     // --- sealed reactions (CTL_REACTION) ---
 

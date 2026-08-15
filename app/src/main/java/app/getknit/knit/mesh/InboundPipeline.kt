@@ -123,7 +123,8 @@ class InboundPipeline(
     private val redistributeGroupKey: suspend (String, String) -> Unit = { _, _ -> },
     // Re-sends unacked group seeds to a member whose profile/prekey just (re)arrived — the group
     // analogue of flushPending (MeshManager.flushPendingGroupKeysFor), lambda-mediated like originate.
-    private val flushGroupKeys: suspend (String) -> Unit = {},
+    // force = true bypasses the acked-epoch guard — reset-path only (the peer's pre-wipe ack is stale).
+    private val flushGroupKeys: suspend (memberId: String, force: Boolean) -> Unit = { _, _ -> },
     // Replays our own custody's undelivered group frames for a (group, sender) whose seed just
     // arrived (MeshManager.replayCustodiedGroupFrames) — the local half of the re-serve heal; a frame
     // WE custodied before its seed is never re-served by a peer (no digest divergence to cue it).
@@ -614,7 +615,10 @@ class InboundPipeline(
                 // our group epoch seeds — ctl frames are never persisted, so the DM re-seal alone would
                 // leave the wiped peer without our seeds forever (the only wipe-side seed plane).
                 resealUnacked(env.senderId)
-                flushGroupKeys(env.senderId)
+                // Forced: their outbox row may say they acked our current epoch, but the reset means
+                // that ack predates the wipe — without the bypass the flush silently no-ops and the
+                // peer black-holes group frames until our next natural mint (hours to days).
+                flushGroupKeys(env.senderId, true)
             }
 
             MessageContent.CTL_GROUP_KEY -> {
@@ -1730,7 +1734,7 @@ class InboundPipeline(
         // The sender's key is now pinned: retransmit any DMs to them that were stuck awaiting it, and
         // re-send any group epoch seeds their outbox still shows unacked (their prekey may be new).
         flushPending(env.senderId)
-        flushGroupKeys(env.senderId)
+        flushGroupKeys(env.senderId, false)
         // Cache this peer's verbatim signed profile so we can re-serve its key to a neighbor that asks, and
         // resolve any key request we (or a node we're relaying for) had outstanding for it.
         keyExchange.onProfilePinned(env.senderId, wire)

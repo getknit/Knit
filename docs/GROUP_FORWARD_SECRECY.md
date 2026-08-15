@@ -93,7 +93,11 @@ which stamps `ackedAt` and stops re-sends. Re-send triggers: an inbound key-requ
 member's profile/prekey arriving (`flushPendingGroupKeysFor`, the `flushPendingFor` analogue), a
 group member appearing as a neighbor with an unacked outbox row (the partition-merge accelerator),
 and a DM session reset/replacement with that member (ctl frames are never persisted, so
-`resealRecentDmsTo` cannot recover a seed — this hook is the only wipe-side seed plane).
+`resealRecentDmsTo` cannot recover a seed — this hook is the only wipe-side seed plane). The reset
+trigger is **forced**: it bypasses the outbox's acked-epoch short-circuit, because a reset means the
+peer lost their DB and any recorded ack of the current epoch predates the wipe — without the bypass
+the flush silently no-ops and the peer black-holes group frames until the sender's next natural mint
+(found by the post-ship branch review; the 15-minute re-distribution floor still applies).
 
 **The receive side has a matching local half** (found by the first on-device smoke): a group frame
 that arrives *before* its seed is dropped locally but still custodied by the receiver as a carrier —

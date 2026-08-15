@@ -239,7 +239,7 @@ class InboundPipelineTest {
         val flushed = mutableListOf<String>()
         val resealed = mutableListOf<String>()
         val redistributed = mutableListOf<Pair<String, String>>()
-        val groupKeysFlushed = mutableListOf<String>()
+        val groupKeysFlushed = mutableListOf<Pair<String, Boolean>>()
         val custodyReplays = mutableListOf<Pair<String?, String?>>()
         var failClassify = false
         val pipeline: InboundPipeline
@@ -295,7 +295,7 @@ class InboundPipelineTest {
                     classifyText = { _, _, _ -> if (failClassify) error("moderation boom") else false },
                     resealUnacked = { resealed += it },
                     redistributeGroupKey = { groupId, requester -> redistributed += groupId to requester },
-                    flushGroupKeys = { groupKeysFlushed += it },
+                    flushGroupKeys = { member, force -> groupKeysFlushed += member to force },
                     replayGroupCustody = { groupId, senderId -> custodyReplays += groupId to senderId },
                 )
         }
@@ -2755,7 +2755,11 @@ class InboundPipelineTest {
             rig.deliver(alice, V2Author(alice, rig, at = 60_000L).dm("rst", "", ctl = MessageContent.CTL_SESSION_RESET))
 
             assertEquals(listOf(alice.nodeId), rig.resealed)
-            assertEquals(listOf(alice.nodeId), rig.groupKeysFlushed)
+            // Forced: the peer's pre-wipe ack of our current epoch is exactly the stale outbox state
+            // that would otherwise swallow this re-send (the acked-epoch guard in
+            // MeshManager.flushPendingGroupKeysFor — bypass pinned there by
+            // aForcedFlushBypassesTheStaleAckGuardAfterAPeerWipe).
+            assertEquals(listOf(alice.nodeId to true), rig.groupKeysFlushed)
         }
 
     @Test

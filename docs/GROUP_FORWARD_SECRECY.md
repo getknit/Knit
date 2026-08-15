@@ -41,7 +41,9 @@ recovery is eventual, and so is leave-rekey (§6.1). Custody accelerates seed de
 the source of truth.
 
 Scope: **group chats only.** DMs stay v2; the Nearby broadcast room stays plaintext by design;
-receipts/reactions stay cleartext-signed (separate roadmap item). Groups keep their existing model:
+receipts/reactions stay cleartext-signed (separate roadmap item — since shipped as ctl values 5/6,
+`docs/ENCRYPTED_RECEIPTS_REACTIONS.md`; sealed group reactions are the one ctl riding this group
+form). Groups keep their existing model:
 fixed founding roster (≤8), no add, departure only by a member's own signed `groupleave` — enforced
 since the roster-integrity phase (`InboundPipeline.vetRoster`): the stored founding set only ever
 comes from a roster whose id **is** its hash, membership never grows, and only signed leaves shrink
@@ -260,7 +262,8 @@ must stay invisible); their inbound ctl frames die at the existing blocked gate 
 asymmetry, accepted because their messages are never surfaced anyway.
 
 Non-goals: per-message PFS; instantaneous revocation; dual-seal mixed groups; deniability changes;
-hiding group routing metadata; broadcast-room or receipts/reactions encryption (separate designs).
+hiding group routing metadata; broadcast-room encryption (separate design; receipts/reactions have
+since shipped sealed — `docs/ENCRYPTED_RECEIPTS_REACTIONS.md`).
 
 ## 10. Constants (convergence-relevant ones mirror custody's — change together or not at all)
 

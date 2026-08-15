@@ -86,6 +86,8 @@ class FakeMeshController : MeshController {
     override suspend fun sendReaction(
         messageId: String,
         emoji: String,
+        recipientId: String?,
+        group: GroupInfo?,
     ) {
         sentReactions += (messageId to emoji)
     }

@@ -43,9 +43,12 @@ doc). **Don't start a deferred item without explicit direction.**
   key-request loop subsumed this for ratchet-capable groups (docs/GROUP_FORWARD_SECRECY.md §7); the
   original gap — a member whose key arrives later never gets a re-seal — persists only for groups
   still pinned at v1 by a pre-ratchet member, and shrinks as capability floods.
-- **E2E hardening (what remains)** — **encrypting** reactions/receipts (they are signed now but still
-  flood as cleartext metadata) and encrypting the broadcast room. (Group forward secrecy shipped as
-  the v2 group form — the sender-key ratchet over the pairwise sessions, ADR 017,
-  docs/GROUP_FORWARD_SECRECY.md; it also supplies the per-sender `epochSeal` export the internet-relay
-  plane's group scopes need, with the shared group root deliberately deferred to that plane's design
-  doc.) See `context/e2e-encryption.md`.
+- **E2E hardening (what remains)** — encrypting the broadcast room (its fate is a deliberate
+  separate decision — an Internet-wide plaintext room is a different product question). Receipts and
+  reactions shipped sealed 2026-08-15 as v2 ctl frames (ADR 018,
+  docs/ENCRYPTED_RECEIPTS_REACTIONS.md — DM vaccine-purge retired for the sealed era; the residual is
+  the cleartext fallback toward pre-ratchet peers, counted by `receiptsSealedFallback`/
+  `reactionsSealedFallback`). (Group forward secrecy shipped as the v2 group form — the sender-key
+  ratchet over the pairwise sessions, ADR 017, docs/GROUP_FORWARD_SECRECY.md; it also supplies the
+  per-sender `epochSeal` export the internet-relay plane's group scopes need, with the shared group
+  root deliberately deferred to that plane's design doc.) See `context/e2e-encryption.md`.

@@ -3,6 +3,7 @@ package app.getknit.knit.mesh.crypto
 import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.ReactionPayload
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -101,5 +102,61 @@ class MessageContentTest {
 
         // An ordinary message carries no gk (encodeDefaults = false keeps it off the wire entirely).
         assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.gk)
+    }
+
+    @Test
+    fun theReceiptCtlRoundTripsWithItsAckId() {
+        val receipt =
+            MessageContent.decode(
+                MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = "m-42").encode(),
+            )!!
+        assertEquals(MessageContent.CTL_RECEIPT, receipt.ctl)
+        assertEquals("m-42", receipt.ack)
+        assertTrue(receipt.isSupported()) // additive fields, same schema version
+        assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.ack)
+    }
+
+    @Test
+    fun theReactionCtlRoundTripsIncludingRetraction() {
+        val reaction =
+            MessageContent.decode(
+                MessageContent(body = "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m-42", "👍")).encode(),
+            )!!
+        assertEquals(MessageContent.CTL_REACTION, reaction.ctl)
+        assertEquals("m-42", reaction.rp?.messageId)
+        assertEquals("👍", reaction.rp?.emoji)
+
+        // A retraction is emoji = null INSIDE a present rp — distinguishable from "no reaction payload"
+        // because rp itself is non-null (encodeDefaults = false omits the null emoji key, and a missing
+        // key decodes back to null; no reaction legitimately has no emoji, so the shape is unambiguous).
+        val retraction =
+            MessageContent.decode(
+                MessageContent(body = "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m-42")).encode(),
+            )!!
+        assertEquals("m-42", retraction.rp?.messageId)
+        assertNull(retraction.rp?.emoji)
+        assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.rp)
+    }
+
+    @Test
+    fun aPlainMessageEncodingIsByteIdenticalWithTheNewFieldsDefaulted() {
+        // WIRE_COMPAT rule 1 proof for the ack/rp additions: an ordinary message's bytes are unchanged
+        // by the new nullable fields (encodeDefaults = false), so pre-change golden vectors — and every
+        // deployed build's expectations — still hold. Pinned against the hand-computed CBOR of
+        // {"body": "hi"}: definite-length map, one text key, one text value.
+        val plain = MessageContent(body = "hi").encode()
+        assertTrue(
+            byteArrayOf(
+                0xA1.toByte(),
+                0x64,
+                'b'.code.toByte(),
+                'o'.code.toByte(),
+                'd'.code.toByte(),
+                'y'.code.toByte(),
+                0x62,
+                'h'.code.toByte(),
+                'i'.code.toByte(),
+            ).contentEquals(plain),
+        )
     }
 }

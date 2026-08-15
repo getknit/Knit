@@ -69,6 +69,14 @@ payload since first contact precedes any pin. `blobreq` stays unsigned. `EncEnve
 gate the crypto-scheme/content-schema versions (unknown ⇒ drop locally + count, but still relay — a
 delivery gate, never a relay gate; see `docs/WIRE_COMPAT.md`).
 
-Still deferred for E2E (see `memory/roadmap.md`): encrypting reactions/receipts (signed now, but
-still flood as cleartext metadata), and encrypting the broadcast room. (Group forward secrecy shipped
-as the v2 group form — above.)
+Receipts and reactions are sealed since ADR 018 (`docs/ENCRYPTED_RECEIPTS_REACTIONS.md`): both ride
+as `MessageContent.ctl` frames (`CTL_RECEIPT`/`CTL_REACTION`) inside ordinary v2 CHAT frames — DM
+form for receipts and DM reactions, group form for group reactions — falling back to the legacy
+cleartext frames (never v1: a pre-ratchet build would strip the unknown ctl and persist an empty
+bubble) toward incapable peers/groups, and staying cleartext in the broadcast room by design.
+Sealed receipts retire the carrier vaccine-purge: nobody can parse them, so delivered DMs age out of
+custody on the 24 h TTL uniformly (the recipient custodies its own inbound DMs and a cleartext ack
+self-vaccinates — both required for digest convergence, ADR 006).
+
+Still deferred for E2E (see `memory/roadmap.md`): encrypting the broadcast room (a deliberate
+separate decision).

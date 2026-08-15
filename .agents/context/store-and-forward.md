@@ -19,14 +19,24 @@ signed blob + signature (`CarriedFrame`); a fresh `WireEnvelope` (full `ttl`, `h
 it on re-serve, so it re-floods with a full hop budget when re-served much later (the signature covers
 neither ttl nor hops, which live in the unsigned wrapper).
 
-**DMs** are carried only when relayed *toward someone else* (gated `!isForMe` in `onDeliver`) and offered
-to any newcomer: the recipient delivers + acks, anyone else relays the frame onward. A **delivery receipt
-from the addressed recipient** purges the carried copy mesh-wide and tombstones its id
-(`ForwardSync.onAck`); because the ack must come *from* the DM's cleartext `recipientId`, a forged receipt
-can't evict an undelivered message — the same recipient check also gates `MeshManager.handleReceipt` →
-`markReceived` (fixing a prior tick-spoof where any signed receipt flipped the ✓✓). A DM receipt **floods**
-(`originateSigned`, `relay = true`) so it reaches the sender across hops *and* is custodied like any flood
-frame — delay-tolerant for free.
+**DMs** are carried by every node that sees them — **including the recipient** (the old `!isForMe`
+exclusion is gone, ADR 018): with sealed receipts nobody vaccine-purges, so if the recipient's digest
+never folded a delivered DM, every carrier would re-cue a re-serve of it for the full TTL. A DM
+receipt **floods** (`originateSigned`, `relay = true`) so it reaches the sender across hops and is
+custodied like any flood frame — delay-tolerant for free. Its form splits custody behavior
+(docs/ENCRYPTED_RECEIPTS_REACTIONS.md):
+
+- **Sealed receipt** (capable author: a `CTL_RECEIPT` v2 ctl chat frame, wire-indistinguishable from
+  conversation) — **no vaccine-purge anywhere** (a carrier can't read it); the delivered DM + the
+  receipt age out on the frame-global 24 h TTL uniformly on every node, like group/broadcast custody
+  always has. The rule keys on the frame's form, identical at every observer — that is what keeps
+  ADR 006 convergent.
+- **Cleartext receipt** (legacy fallback, accepted inbound forever) — purges the carried copy
+  mesh-wide and tombstones its id (`ForwardSync.onAck`), the recipient's own custody row included
+  (the ack path self-vaccinates after originating). Because the ack must come *from* the DM's
+  cleartext `recipientId`, a forged receipt can't evict an undelivered message — the same recipient
+  check gates `markReceived` (fixing a prior tick-spoof), and its null arm keeps the group/broadcast
+  best-effort tick working for the sealed form.
 
 **Delivery ticks for broadcast/group** have no single recipient, so their receipt is *not* flooded/custodied
 (an ack storm + custody bloat): it's a **unicast, point-to-point (`relay = false`) tick** the deliverer sends
@@ -38,8 +48,12 @@ best-effort over the coordination plane otherwise → kept) on every `onNeighbor
 or the entry ages out (24 h TTL, bounded, in-memory, self-repopulating on message re-serve like
 `KeyExchange`). One surviving receipt flips the ✓✓ ("**≥1 person received it**" — the intended broadcast
 semantic); `markReceived` and `ForwardSync.onAck` are idempotent/no-op for these, so duplicate retries are
-harmless and never evict custody. Surfaced in Diagnostics/`…debug.STATE` as `receiptsResent`; JVM-tested
-(`AckSyncTest`).
+harmless and never evict custody. A ratchet-capable author's tick is **sealed** (a `CTL_RECEIPT` ctl DM,
+still `relay = false`) — sealed **once** at `owe()` time and re-sent verbatim (sealing consumes a DM chain
+key; per-retry re-sealing would starve real DMs of the skipped-key budget), and too big for the ~255 B
+coordination plane, so it lands only over a live link (latency, not reachability — and deliberately never
+downgraded to cleartext, which would make the form an on-path link-state observable). Surfaced in
+Diagnostics/`…debug.STATE` as `receiptsResent` + `receiptsSealed`; JVM-tested (`AckSyncTest`).
 
 **Group messages** carry a cleartext member roster (`RelayEnvelope.group.members`) on every frame, so custody
 exploits it: a node carries a group message whether or not it is itself a member (for other members who

@@ -43,6 +43,7 @@ import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReactionContent
+import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.protocol.TypingContent
@@ -149,12 +150,15 @@ class MeshManager(
     // best-effort frame, so it's lost if the author isn't reachable at delivery time (the message converges via
     // custody, but the tick doesn't). AckSync remembers the ticks we owe and re-sends them — still unicast, never
     // flooded — until the author is reachable or the entry ages out. DM receipts stay on the flood+custody path.
+    // A ratchet-capable author's tick is sealed (once, cached — see AckSync's class doc); the lambda reads this
+    // manager's fields lazily at call time, the same deferred pattern as the pipeline's originate.
     private val ackSync =
         AckSync(
             transport = transport,
             selfId = { identity.nodeId() },
             signRaw = messageCrypto::signRaw,
             metrics = metrics,
+            sealTick = { authorId, ackId -> sealDeliveryTick(authorId, ackId) },
         )
 
     // Bounded in-memory buffer of frames dropped for a missing sender key: parked alongside the key
@@ -732,6 +736,47 @@ class MeshManager(
         return RatchetEngine.PeerPrekey(id = prekeyId, pub = pub)
     }
 
+    /**
+     * Seals the broadcast/group delivery tick for [ackId] as a `CTL_RECEIPT` ctl DM to [authorId],
+     * signed `relay = false` (point-to-point like the cleartext tick it replaces — never flooded or
+     * custodied), or null when the author can't read one (no pin / no CAP_RATCHET / seal failed) and
+     * AckSync falls back to the cleartext receipt. Deliberately NO blocked gate: a blocked author's
+     * broadcast/group message is still ticked (ADR 010 — blocking is local presentation and must stay
+     * invisible; the seed distribution takes the same posture). Sealing consumes a chain key, so
+     * AckSync calls this once per owed tick and re-sends the bytes verbatim.
+     */
+    private suspend fun sealDeliveryTick(
+        authorId: String,
+        ackId: String,
+    ): WireEnvelope? {
+        val peer = peers.find(authorId) ?: return null
+        if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return null
+        val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return null
+        val me = identity.nodeId()
+        val id = FrameId.new()
+        val now = clock()
+        val aad = MessageCrypto.header(id, me, now, authorId)
+        val plaintext = MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = ackId).encode()
+        val sealed =
+            ratchet.sealDm(authorId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, now)
+                ?: run {
+                    metrics.onReceiptSealedFallback()
+                    return null
+                }
+        metrics.onReceiptSealed()
+        return sign(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                recipientId = authorId,
+                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+            ),
+            relay = false,
+        )
+    }
+
     /** Resolves the published key bundles for a DM recipient or a group's members (excluding us). */
     private suspend fun recipientBundles(
         recipientId: String?,
@@ -815,17 +860,24 @@ class MeshManager(
     /**
      * Toggles this device's emoji reaction on [messageId] and floods the change. Tapping the emoji you
      * already chose retracts it; tapping a different one replaces it (one reaction per person). The
-     * change is stored optimistically and propagates as a `reaction` frame; `sentAt` is the wall clock
-     * used for last-writer-wins so concurrent reactors across the mesh converge.
+     * change is stored optimistically, then propagates **sealed** — a `CTL_REACTION` ctl chat frame —
+     * when the target conversation can carry one ([recipientId] = a capable DM peer, or [group] with
+     * every member ratchet-eligible), else as the legacy cleartext `reaction` frame (a broadcast-room
+     * target always: the room is plaintext by design). `sentAt` is the wall clock used for
+     * last-writer-wins so concurrent reactors across the mesh converge, whichever form each one rode.
      */
     override suspend fun sendReaction(
         messageId: String,
         emoji: String,
+        recipientId: String?,
+        group: GroupInfo?,
     ) {
         val me = identity.nodeId()
         val next = if (reactions.currentEmoji(messageId, me) == emoji) null else emoji
         val now = clock()
         reactions.apply(ReactionEntity(messageId, me, next, now))
+        if (sealReaction(messageId, next, me, now, recipientId, group)) return
+        if (recipientId != null || group != null) metrics.onReactionSealedFallback()
         originateSigned(
             RelayEnvelope(
                 type = FrameType.REACTION,
@@ -835,6 +887,81 @@ class MeshManager(
                 payload = WireCodec.encodePayload(ReactionContent(messageId, next)),
             ),
         )
+    }
+
+    /**
+     * Seals a DM/group-target reaction as a `CTL_REACTION` ctl frame (the sealed replacement for the
+     * mesh-wide cleartext `reaction` flood, which leaked who reacted with what to which message — to
+     * non-members included). A DM target rides the pairwise ratchet, a group target the sender-key
+     * chain via [sealGroupRatchet] (all-or-nothing eligibility, may mint + distribute a seed — exactly
+     * like a group chat). Returns false — caller floods the legacy cleartext frame — for a broadcast
+     * target (the room is plaintext by design), an incapable peer/group, or a failed seal. **Never
+     * v1-wraps a ctl** (a pre-ratchet build would decrypt it, strip the unknown field, and persist an
+     * empty bubble); the sealDm/sealGroupRatchet-direct path is the ctl-sender precedent.
+     */
+    private suspend fun sealReaction(
+        messageId: String,
+        emoji: String?,
+        me: String,
+        now: Long,
+        recipientId: String?,
+        group: GroupInfo?,
+    ): Boolean {
+        val content = MessageContent(body = "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload(messageId, emoji))
+        return when {
+            group != null -> sealGroupReaction(group, me, now, content)
+            recipientId != null && recipientId != me -> sealDmReaction(recipientId, me, now, content)
+            else -> false // broadcast target: the room is plaintext by design
+        }
+    }
+
+    private suspend fun sealGroupReaction(
+        group: GroupInfo,
+        me: String,
+        now: Long,
+        content: MessageContent,
+    ): Boolean {
+        val id = FrameId.new()
+        val sealed = sealGroupRatchet(group, me, content, MessageCrypto.header(id, me, now, group.id)) ?: return false
+        originateSigned(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                group = group,
+                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+            ),
+        )
+        metrics.onReactionSealed()
+        return true
+    }
+
+    private suspend fun sealDmReaction(
+        recipientId: String,
+        me: String,
+        now: Long,
+        content: MessageContent,
+    ): Boolean {
+        val peer = peers.find(recipientId)
+        val bundle = peer?.pubKey?.let { PublicKeyBundle.decode(it) }
+        val capable = bundle != null && (peer.capabilities ?: 0L) and Protocol.CAP_RATCHET != 0L
+        if (!capable) return false
+        val id = FrameId.new()
+        val aad = MessageCrypto.header(id, me, now, recipientId)
+        val sealed = ratchet.sealDm(recipientId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), content.encode(), aad, now) ?: return false
+        originateSigned(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                recipientId = recipientId,
+                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+            ),
+        )
+        metrics.onReactionSealed()
+        return true
     }
 
     /**
@@ -1273,6 +1400,8 @@ class MeshManager(
                         "keyReq=${s.keyRequestsSent} keyServed=${s.keysServed} keyRecovered=${s.keysRecovered} " +
                         "framesHeld=${s.framesHeld} framesReplayed=${s.framesReplayed} " +
                         "receiptsResent=${s.receiptsResent} " +
+                        "receiptsSealed=${s.receiptsSealed}/${s.receiptsSealedFallback} " +
+                        "reactionsSealed=${s.reactionsSealed}/${s.reactionsSealedFallback} " +
                         "filesNan=${s.filesSentNan} filesBt=${s.filesSentBt} bulkTimeouts=${s.nanBulkGraceTimeouts}",
                 )
             }

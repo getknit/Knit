@@ -147,6 +147,11 @@ class GoldenVectorTest {
                 WireCodec.encodePayload(
                     GroupKeyPayload(groupId = "g-1", keys = listOf(GroupSeed(epoch = 3, seed = bytes(32, 7), mintedAt = 1234L))),
                 ),
+            // Sealed receipts/reactions (crypto v2 ctl additions) — the reaction ctl's `rp` payload.
+            // Deliberately field-compatible with the cleartext ReactionContent (same names, same CBOR),
+            // so a port can reuse one codec; the retraction form pins emoji-absent = null = retract.
+            "reactionPayload" to WireCodec.encodePayload(ReactionPayload(messageId = "m1", emoji = "👍")),
+            "reactionPayloadRetraction" to WireCodec.encodePayload(ReactionPayload(messageId = "m1")),
             // A group-form v2 envelope: `v` present, `keys` the 1-byte empty array, tiny `g` header, no `r`.
             "encEnvelopeGroup" to
                 WireCodec.encodePayload(
@@ -233,6 +238,8 @@ class GoldenVectorTest {
                     "a462696463672d31676d656d626572738261616162696372656174656442796161686465706172746564816163",
                 "receiptContent" to "a16561636b4964626d31",
                 "reactionContent" to "a2696d6573736167654964626d3165656d6f6a6964f09f918d",
+                "reactionPayload" to "a2696d6573736167654964626d3165656d6f6a6964f09f918d",
+                "reactionPayloadRetraction" to "a1696d6573736167654964626d31",
                 "groupLeaveContent" to "a16767726f7570496463672d31",
                 "keyReqContent" to "a1676e6f64654964738261616162",
                 "blobReqContent" to "a16468617368626831",

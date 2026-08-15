@@ -279,12 +279,17 @@ per-type content:
   key** trust-on-first-use into `PeerEntity.pubKey` (a changed key resets `verified` — §14), merging so an
   unfetched avatar isn't clobbered; then **replay** any frames `PendingInbound` parked for that sender.
 - **`receipt`** → `markReceived(ackId)` (gated to the DM's `recipientId`) drives the ✓ tick and purges the
-  carried DM copy mesh-wide (`ForwardSync.onAck`). A DM's receipt floods and is custodied; a
-  **broadcast/group** receipt is a unicast, non-flooded, non-custodied tick the deliverer owes the author
-  and re-sends until it lands (`AckSync`) — delay-tolerant, so the ✓✓ isn't lost when the author was out of
-  range at delivery time. One surviving receipt flips it ("≥1 received"); `onAck` no-ops for it (no single
-  recipient), so retries never evict custody.
-- **`reaction`** → `ReactionRepository.apply(...)` (last-writer-wins, §6).
+  carried DM copy mesh-wide (`ForwardSync.onAck`). This is the **legacy cleartext form** — between
+  ratchet-capable builds a receipt is a sealed `CTL_RECEIPT` ctl chat frame instead, which flips the tick
+  without purging anywhere (ADR 018, §14): delivered DMs then age out of custody on the TTL uniformly.
+  A DM's receipt floods and is custodied either way; a **broadcast/group** receipt is a unicast,
+  non-flooded, non-custodied tick the deliverer owes the author and re-sends until it lands (`AckSync`,
+  sealed once + resent verbatim for capable authors) — delay-tolerant, so the ✓✓ isn't lost when the
+  author was out of range at delivery time. One surviving receipt flips it ("≥1 received"); `onAck`
+  no-ops for it (no single recipient), so retries never evict custody.
+- **`reaction`** → `ReactionRepository.apply(...)` (last-writer-wins, §6). Also the legacy cleartext form:
+  DM/group-target reactions between capable builds ride sealed (`CTL_REACTION`, DM or group form) into
+  the same table under the same LWW clock, so mixed-form races converge (ADR 018).
 - **`blobreq`** → `BlobExchange.onRequest(...)` (serve the blob or recurse the pull, §7). **`keyreq`** →
   `KeyExchange` re-serves the requested peer's profile verbatim or records the asker and recurses (the
   inbound key-recovery path — see `.agents/context/store-and-forward.md`).
@@ -656,6 +661,16 @@ members (eventual, bounded by the signed `groupleave`'s convergence). All-or-not
 non-capable member demotes that message to v1. Full scheme: `docs/GROUP_FORWARD_SECRECY.md` (ADR 017);
 implementation `GroupRatchetEngine`/`GroupRatchetSessions` with state in the `group_*` tables.
 
+**Receipts and reactions — sealed ctl frames (crypto scheme v2 addition).** Delivery receipts and
+reactions toward ratchet-capable targets ride as `MessageContent.ctl` control frames
+(`CTL_RECEIPT`/`CTL_REACTION`) inside ordinary v2 CHAT frames — wire-indistinguishable from
+conversation, never persisted/notified/acked as messages, falling back to the legacy cleartext
+frames for pre-ratchet targets (never to v1: an old build would strip the unknown ctl and persist an
+empty bubble) and staying cleartext in the broadcast room by design. Sealed receipts retire the
+carrier vaccine-purge — nobody can parse them, so delivered DMs age out of custody on the 24 h TTL
+uniformly (the recipient custodies its own inbound DMs, and a cleartext ack self-vaccinates; both
+keep ADR 006's digests convergent). Full scheme: `docs/ENCRYPTED_RECEIPTS_REACTIONS.md` (ADR 018).
+
 **Per-message scheme v1** (static keys — the fallback: pre-ratchet peers, mixed-capability groups), in `mesh/crypto`:
 
 1. Generate a random content key; AES-256-GCM-encrypt the `MessageContent` (body + mentions +
@@ -786,13 +801,16 @@ before bumping anything that could pull in a newer Kotlin stdlib.
 - DM/group messages are E2E-encrypted (§14), but they still **flood** the whole mesh (only the
   addressed recipient(s) decrypt/ack) — so relays see *who is talking to whom and how much* (the
   cleartext `recipientId`/`group` roster and sizes), just not the contents.
-- **Forward secrecy is DM-only and epoch-granular:** DMs between current builds ratchet
-  (`docs/FORWARD_SECRECY_RATCHET.md`); **groups still use the static per-member wrap** (no group key
-  state yet), so compromise of a device's identity key would expose past intercepted *group* traffic,
-  and DM exposure is bounded by the epoch-priv retention window rather than zero.
-- **Reactions, receipts, and the broadcast room are cleartext** metadata (signed, but not encrypted).
-  *(The key-request/retransmit path for a frame received before its sender's key is pinned is now
-  implemented — `KeyExchange` + `PendingInbound`, §3.5.)*
+- **Forward secrecy is epoch-granular, not per-message:** DMs between current builds ratchet
+  (`docs/FORWARD_SECRECY_RATCHET.md`) and fully-capable groups run the sender-key form
+  (`docs/GROUP_FORWARD_SECRECY.md`), so exposure is bounded by the epoch/seed retention windows
+  rather than zero; mixed-capability conversations fall back to the static v1 wrap until every
+  participant upgrades.
+- **The broadcast room is cleartext** by design (signed, not encrypted); receipts/reactions toward
+  pre-ratchet targets fall back to their cleartext frames (the shrinking v1 residual — sealed forms
+  are the default between current builds, ADR 018). *(The key-request/retransmit path for a frame
+  received before its sender's key is pinned is now implemented — `KeyExchange` + `PendingInbound`,
+  §3.5.)*
 - Receipts/relays add some flood overhead (reduced by overhear suppression); no per-recipient delivery
   state beyond the single ✓, and DMs have **no routing table** (they flood; store-and-forward carries
   undelivered ones).
@@ -800,7 +818,7 @@ before bumping anything that could pull in a newer Kotlin stdlib.
   destructive fallback). The identity key lives outside the DB, so it survives regardless. *(Pre-1.0 alpha
   builds churned through destructive v2…v22 bumps that rode the wire/crypto breaks; that history is
   collapsed — see `docs/WIRE_COMPAT.md`.)*
-- **Deferred by design:** true (targeted) DM routing, encrypting reactions/receipts/the broadcast
-  room, the v1-fallback residual of the group key-gap retransmit (ratcheted groups heal via the seed
-  outbox + key-request loop), and a BLE connect-time gate on A2DP audio contention (see
-  `.agents/memory/roadmap.md`).
+- **Deferred by design:** true (targeted) DM routing, encrypting the broadcast room, the v1-fallback
+  residuals (cleartext receipts/reactions toward pre-ratchet peers; the group key-gap retransmit for
+  v1-pinned groups — ratcheted groups heal via the seed outbox + key-request loop), and a BLE
+  connect-time gate on A2DP audio contention (see `.agents/memory/roadmap.md`).

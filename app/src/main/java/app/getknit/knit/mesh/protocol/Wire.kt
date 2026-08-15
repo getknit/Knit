@@ -410,6 +410,20 @@ data class GroupKeyPayload(
 )
 
 /**
+ * The `rp` payload for a `CTL_REACTION` ctl frame (rides inside the encrypted
+ * [app.getknit.knit.mesh.crypto.MessageContent], additive): the sealed replacement for the cleartext
+ * [ReactionContent] frame wherever a ratchet session (DM) or group chain (group form) can carry it —
+ * docs/ENCRYPTED_RECEIPTS_REACTIONS.md. Same semantics as the cleartext form: [emoji] null is a
+ * retraction, the reactor is the frame's senderId, and last-writer-wins convergence keys on the
+ * frame's `sentAt` (never on the frame id, which is fresh per emit).
+ */
+@Serializable
+data class ReactionPayload(
+    val messageId: String,
+    val emoji: String? = null,
+)
+
+/**
  * The end-to-end encryption envelope carried inside an encrypted [ChatContent]. A random per-message
  * content key encrypts the [app.getknit.knit.mesh.crypto.MessageContent] with AES-256-GCM into [ct]
  * under [nonce] (both raw byte strings — CBOR `@ByteString`, not base64: the envelope already rides a

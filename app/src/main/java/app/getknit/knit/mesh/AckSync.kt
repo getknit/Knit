@@ -28,10 +28,22 @@ import java.util.concurrent.ConcurrentHashMap
  * "≥1 person received it" tick needs, and [ForwardSync.onAck] is a no-op for a receipt whose acked message
  * has no DM recipient, so retries can never evict custody.
  *
+ * A **capable author gets a sealed tick instead** (docs/ENCRYPTED_RECEIPTS_REACTIONS.md): [sealTick]
+ * builds a v2 ctl chat frame (still `relay = false` — never flooded, never custodied) so the tick is
+ * indistinguishable from chat on the wire. Sealing consumes a ratchet chain key, so an owed tick is sealed
+ * **once**, at [owe] time, and every retry re-sends those bytes verbatim — a duplicate is router-deduped
+ * inside the author's SeenSet window and a benign RATCHET_DUPLICATE beyond it; re-sealing per retry would
+ * burn a key per heartbeat and starve real DMs of the receiver's skipped-key budget. One caveat rides with
+ * the sealed form: it outgrows the coordination plane's frame cap, so `fastSend` no-ops and it only lands
+ * over a live link — the entry just stays owed until one exists (the author needed radio proximity for
+ * fastSend anyway). Deliberately NOT downgraded to cleartext in that case: the form would become an
+ * on-path observable of link state.
+ *
  * In-memory and bounded (global [cap], per-entry [ttlMs]) like [KeyExchange]/[PendingInbound]: an unsent owed
  * tick self-repopulates when the message re-serves through the deliver path (which re-calls [owe]), so a
- * restart before convergence loses nothing durable. Pure (transport/identity/signer/clock injected) ⇒
- * unit-tested with [FakeLoopTransport] (see `AckSyncTest`).
+ * restart before convergence loses nothing durable — the replacement entry seals fresh, which is the same
+ * one-key-per-owed-tick budget. Pure (transport/identity/signer/clock injected) ⇒ unit-tested with
+ * [FakeLoopTransport] (see `AckSyncTest`).
  */
 class AckSync(
     private val transport: MeshTransport,
@@ -44,10 +56,17 @@ class AckSync(
     private val metrics: MeshMetrics = MeshMetrics(),
     private val ttlMs: Long = OWED_TTL_MS,
     private val cap: Int = OWED_CAP,
+    // Seals a CTL_RECEIPT ctl DM for (authorId, ackId), signed relay = false, or null when the author
+    // can't read one (falls back to the per-attempt cleartext receipt). Injected as a lambda so the
+    // MeshManager wiring stays cycle-free (the `originate` precedent); the default keeps this class —
+    // and every pre-existing test — cleartext-only.
+    private val sealTick: suspend (authorId: String, ackId: String) -> WireEnvelope? = { _, _ -> null },
 ) {
     private data class Owed(
         val authorId: String,
         val recordedAt: Long,
+        /** The once-sealed tick these retries re-send verbatim; null = cleartext form (built per attempt). */
+        val sealed: WireEnvelope? = null,
     )
 
     // messageId -> the author we owe a broadcast/group delivery tick, and when we recorded it (for the TTL).
@@ -65,9 +84,15 @@ class AckSync(
         val me = selfId()
         if (authorId == me) return
         sweep()
-        if (!owed.containsKey(messageId) && owed.size >= cap) evictOldest()
-        owed[messageId] = Owed(authorId, now())
-        if (attempt(me, messageId, authorId)) owed.remove(messageId) // sent over a live link → done
+        // A re-delivery re-owes an id we may already hold: keep the existing entry (and its cached
+        // seal) rather than sealing again — the one-key-per-owed-tick budget.
+        val entry =
+            owed[messageId] ?: run {
+                if (owed.size >= cap) evictOldest()
+                Owed(authorId, now(), sealed = sealTick(authorId, messageId))
+            }
+        owed[messageId] = entry
+        if (attempt(me, messageId, entry)) owed.remove(messageId) // sent over a live link → done
     }
 
     /**
@@ -77,8 +102,8 @@ class AckSync(
     suspend fun onNeighborAdded(peer: Peer) {
         if (owed.isEmpty()) return
         val me = selfId()
-        owed.filterValues { it.authorId == peer.nodeId }.keys.toList().forEach { messageId ->
-            attempt(me, messageId, peer.nodeId)
+        owed.filterValues { it.authorId == peer.nodeId }.toList().forEach { (messageId, entry) ->
+            attempt(me, messageId, entry)
             metrics.onReceiptResent()
             owed.remove(messageId)
         }
@@ -93,30 +118,34 @@ class AckSync(
         sweep()
         if (owed.isEmpty()) return
         val me = selfId()
-        owed.toMap().forEach { (messageId, entry) ->
-            val overLiveLink = attempt(me, messageId, entry.authorId)
+        // Oldest-first: the entries closest to their TTL get their retry before any newcomer's.
+        owed.toMap().entries.sortedBy { it.value.recordedAt }.forEach { (messageId, entry) ->
+            val overLiveLink = attempt(me, messageId, entry)
             metrics.onReceiptResent()
             if (overLiveLink) owed.remove(messageId)
         }
     }
 
     /**
-     * Send the receipt for [messageId] to [authorId]. Returns true if it went over a **live link** (routed to a
-     * child holding a data-path link to the author — reliable, so the owed entry can be dropped); false if it
-     * could only be best-effort fast-sent over the coordination plane (kept for a later retry).
+     * Send the tick for [messageId] to its author. A sealed entry re-sends its cached bytes verbatim; a
+     * cleartext one is rebuilt per attempt (fresh id, so the author's SeenSet never dedups a retry).
+     * Returns true if it went over a **live link** (routed to a child holding a data-path link to the
+     * author — reliable, so the owed entry can be dropped); false if it could only be best-effort
+     * fast-sent over the coordination plane (kept for a later retry — a no-op for the sealed form,
+     * which outgrows the coordination frame cap; see the class doc).
      */
     private suspend fun attempt(
         me: String,
         messageId: String,
-        authorId: String,
+        entry: Owed,
     ): Boolean {
-        val wire = receipt(me, messageId)
-        val linked = transport.neighbors.value.firstOrNull { it.nodeId == authorId }
+        val wire = entry.sealed ?: receipt(me, messageId)
+        val linked = transport.neighbors.value.firstOrNull { it.nodeId == entry.authorId }
         return if (linked != null) {
             transport.send(wire, linked)
             true
         } else {
-            transport.fastSend(wire, Peer(authorId))
+            transport.fastSend(wire, Peer(entry.authorId))
             false
         }
     }

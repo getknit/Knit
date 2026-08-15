@@ -17,6 +17,7 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
+import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.InboundSettings
 import app.getknit.knit.identity.IdentitySource
 import app.getknit.knit.identity.NodeId
@@ -47,6 +48,7 @@ import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.RatchetHeader
 import app.getknit.knit.mesh.protocol.RatchetInit
 import app.getknit.knit.mesh.protocol.ReactionContent
+import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.TypingContent
@@ -1846,11 +1848,14 @@ class InboundPipelineTest {
             body: String,
             ctl: Int? = null,
             gk: GroupKeyPayload? = null,
+            ack: String? = null,
+            rp: ReactionPayload? = null,
+            sentAt: Long = 5L,
             mutateHeader: (RatchetHeader) -> RatchetHeader = { it },
         ): RelayEnvelope {
             val to = rig.self.nodeId
-            val aad = MessageCrypto.header(id, party.nodeId, 5L, to)
-            val plain = MessageContent(body = body, ctl = ctl, gk = gk).encode()
+            val aad = MessageCrypto.header(id, party.nodeId, sentAt, to)
+            val plain = MessageContent(body = body, ctl = ctl, gk = gk, ack = ack, rp = rp).encode()
             val sealed = checkNotNull(engine.seal(session, plain, aad, rig.selfSpk.pub, now = 5L))
             session = sealed.session
             val h = sealed.header
@@ -1869,7 +1874,7 @@ class InboundPipelineTest {
                 type = FrameType.CHAT,
                 id = id,
                 senderId = party.nodeId,
-                sentAt = 5L,
+                sentAt = sentAt,
                 recipientId = to,
                 payload =
                     WireCodec.encodePayload(
@@ -2152,9 +2157,11 @@ class InboundPipelineTest {
             id: String,
             body: String,
             sentAt: Long = 5L,
+            ctl: Int? = null,
+            rp: ReactionPayload? = null,
         ): RelayEnvelope {
             val aad = MessageCrypto.header(id, party.nodeId, sentAt, groupId)
-            val sealed = checkNotNull(engine.seal(chain, MessageContent(body = body).encode(), aad))
+            val sealed = checkNotNull(engine.seal(chain, MessageContent(body = body, ctl = ctl, rp = rp).encode(), aad))
             chain = sealed.chain
             return RelayEnvelope(
                 type = FrameType.CHAT,
@@ -2212,6 +2219,220 @@ class InboundPipelineTest {
             coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
             // …and an adoption ack rode back to the sender as an ordinary v2 ctl DM.
             assertTrue(rig.originated.any { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+        }
+
+    @Test
+    fun aSealedDmReceiptFlipsTheTickWithoutPurgingCustody() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            // Our outbound DM to alice: known to messages (the forged-ack guard reads its recipient)
+            // and held in our own custody, exactly the state after a real send.
+            rig.msgMap["dm-out"] =
+                MessageEntity(id = "dm-out", senderId = rig.self.nodeId, recipientId = alice.nodeId, body = "", sentAt = 1L)
+            val outbound = rig.dmChat(rig.self, alice, id = "dm-out", body = "hi")
+            rig.forwardSync.onSeen(rig.self.sign(outbound), outbound, ForwardStore.ORIGIN_SELF)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("ctl-r1", "", ctl = MessageContent.CTL_RECEIPT, ack = "dm-out"))
+
+            // The tick flipped through the sealed path…
+            coVerify(exactly = 1) { rig.messages.markReceived("dm-out") }
+            // …but nothing vaccine-purged: a carrier can't read a sealed receipt, so nobody purges —
+            // the delivered DM ages out on the custody TTL uniformly (the retirement contract).
+            assertTrue(rig.forwardStore.has("dm-out"))
+            // And the ctl frame kept the machinery contract: no row, no notification, no ack-of-an-ack.
+            assertFalse(rig.msgMap.containsKey("ctl-r1"))
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun aDeliveredDmAcksSealedWhenTheAuthorIsCapable() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("v2-cap1", "hello"))
+
+            assertEquals("hello", rig.msgMap["v2-cap1"]?.body)
+            // The ack rode back sealed — an ordinary v2 ctl chat frame, never a cleartext RECEIPT…
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+            val ctlAck = rig.originated.single { it.type == FrameType.CHAT && it.recipientId == alice.nodeId }
+            // …custodial like any chat frame, so its sentAt must carry the wall clock (work item #16).
+            assertEquals(42L, ctlAck.sentAt)
+            assertEquals(1L, rig.metrics.snapshot().receiptsSealed)
+            // Sealed-era custody contract: the delivered DM stays in our own custody (nobody purges;
+            // it ages out on the TTL with every carrier's copy — that convergence IS the retirement).
+            assertTrue(rig.forwardStore.has("v2-cap1"))
+        }
+
+    @Test
+    fun anIncapableAuthorsDmGetsTheCleartextReceiptAndSelfVaccinates() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice) // pinned but NOT ratchet-capable — the legacy population
+            val env = rig.dmChat(alice, rig.self, id = "v1-dm1", body = "old style")
+
+            rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
+
+            assertEquals("old style", rig.msgMap["v1-dm1"]?.body)
+            // Cleartext receipt flooded (the old author's build can read nothing else)…
+            assertTrue(rig.originated.any { it.type == FrameType.RECEIPT })
+            // …and our own custody copy followed the same rule every carrier applies to that receipt:
+            // captured at delivery (we custody our own inbound DMs now), then vaccine-purged right out.
+            assertFalse(rig.forwardStore.has("v1-dm1"))
+            // The tombstone half: a stale carrier re-planting the delivered DM is refused.
+            rig.forwardSync.onSeen(alice.sign(env), env, ForwardStore.ORIGIN_RELAY)
+            assertFalse(rig.forwardStore.has("v1-dm1"))
+        }
+
+    @Test
+    fun aReServedDeliveredDmReAcksInTheSealedForm() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val author = V2Author(alice, rig)
+            val dm = author.dm("v2-re1", "again")
+
+            rig.deliver(alice, dm)
+            rig.deliver(alice, dm) // a custody re-serve after genuine divergence: exists-gate path
+
+            // Delivered once, re-acked per copy (the receipt custody is the recovery channel), both sealed.
+            assertEquals("again", rig.msgMap["v2-re1"]?.body)
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+            assertEquals(2L, rig.metrics.snapshot().receiptsSealed)
+        }
+
+    @Test
+    fun aSealedReceiptFromANonRecipientIsIgnored() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            // The acked DM is addressed to bob, not to alice — alice's receipt must not flip it.
+            rig.msgMap["dm-bob"] = MessageEntity(id = "dm-bob", senderId = rig.self.nodeId, recipientId = "bob", body = "", sentAt = 1L)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("ctl-r2", "", ctl = MessageContent.CTL_RECEIPT, ack = "dm-bob"))
+
+            coVerify(exactly = 0) { rig.messages.markReceived(any()) }
+        }
+
+    @Test
+    fun aSealedTickForAGroupMessageStillFlipsTheTick() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            // A group/broadcast message has no recipientId, so recipientOf is null — the null-allowing
+            // guard (mirroring the cleartext path) is what lets the sealed AckSync tick land.
+            rig.msgMap["gm-out"] = MessageEntity(id = "gm-out", senderId = rig.self.nodeId, conversationId = "g-1", body = "", sentAt = 1L)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("ctl-r3", "", ctl = MessageContent.CTL_RECEIPT, ack = "gm-out"))
+
+            coVerify(exactly = 1) { rig.messages.markReceived("gm-out") }
+        }
+
+    @Test
+    fun aSealedDmReactionAppliesAndRetractsWithTheFramesSentAtAsTheLwwClock() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("ctl-x1", "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m1", "👍"), sentAt = 7L))
+            rig.deliver(alice, author.dm("ctl-x2", "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m1"), sentAt = 9L))
+
+            // Same table, same LWW clock as the cleartext path: reactor = authenticated sender,
+            // updatedAt = the frame's signed sentAt; emoji null inside a present payload = retraction.
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", alice.nodeId, "👍", 7L)) }
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", alice.nodeId, null, 9L)) }
+            assertFalse(rig.msgMap.containsKey("ctl-x1"))
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun aSealedGroupReactionAppliesInsideTheChainCommit() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-x", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            rig.deliver(
+                alice,
+                author.groupFrame(
+                    group,
+                    id = "ctl-gx1",
+                    body = "",
+                    ctl = MessageContent.CTL_REACTION,
+                    rp = ReactionPayload("gm7", "🔥"),
+                    sentAt = 11L,
+                ),
+            )
+
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("gm7", alice.nodeId, "🔥", 11L)) }
+            // The chain advanced through the commit (n consumed), and the ctl kept its contract:
+            // never persisted, never notified, and no delivery tick owed for machinery.
+            assertFalse(rig.msgMap.containsKey("ctl-gx1"))
+            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+        }
+
+    @Test
+    fun aBlockedPeersSealedCtlDiesAtTheBlockedGate() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.settings.blocked.value = setOf(alice.nodeId)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("ctl-b1", "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m1", "👍")))
+
+            coVerify(exactly = 0) { rig.reactions.apply(any()) }
+        }
+
+    @Test
+    fun anUnknownCtlCodeAdvancesTheChainAndDoesNothing() =
+        runTest {
+            // The forward-compat contract that lets ctl values ship additively: a build without a code
+            // (a ratchet-era lab build seeing CTL_RECEIPT, or this build seeing a future 99) consumes
+            // the frame as a silent no-op — chain advanced, nothing persisted, notified, or acked.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+            val v2 = V2Author(alice, rig)
+            rig.deliver(
+                alice,
+                v2.dm("seed-u", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            rig.deliver(alice, author.groupFrame(group, id = "ctl-u1", body = "", ctl = 99))
+            rig.deliver(alice, v2.dm("ctl-u2", "", ctl = 99))
+            rig.deliver(alice, v2.dm("dm-after", "still alive"))
+
+            // Both forms advanced their state (the later DM opens against the same session), and the
+            // unknown ctl frames left no trace.
+            assertEquals("still alive", rig.msgMap["dm-after"]?.body)
+            assertFalse(rig.msgMap.containsKey("ctl-u1"))
+            assertFalse(rig.msgMap.containsKey("ctl-u2"))
+            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
         }
 
     @Test

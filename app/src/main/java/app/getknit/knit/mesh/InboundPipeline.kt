@@ -47,6 +47,7 @@ import app.getknit.knit.mesh.protocol.KeyReqContent
 import app.getknit.knit.mesh.protocol.ProfileContent
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReactionContent
+import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.TypingContent
@@ -159,19 +160,20 @@ class InboundPipeline(
         // to is dropped (not delivered locally). We still return normally so MeshRouter relays it
         // onward — other peers verify independently, and we don't become a propagation black hole.
         if (!verifyInbound(env, wire, fromNodeId)) return
-        // Carry a floodable frame we're relaying so we can re-offer it to a neighbor that joins later —
-        // store-and-forward. A DM is carried only when relaying it *toward* someone else (skip ones
-        // addressed to us — we're the destination, so deliver, don't carry); a group message is always
-        // carried, for other members who may be offline, whether or not we're a member ourselves; a
-        // broadcast-room message and the cleartext metadata frames (reaction/receipt/group-meta/profile,
-        // all recipient/group null) are always carried, so a passing phone backfills our ambient state.
-        // Runs before handleChat returns early and before the router schedules the relay, so the copy is
-        // durable pre-flood. Only flood frames (relay = true) are custodied — a point-to-point frame
-        // (relay = false, e.g. a broadcast/group delivery receipt) is delivered to its addressee and stops.
+        // Carry every floodable frame we see — store-and-forward, so we can re-offer it to a neighbor
+        // that joins later. That includes a DM addressed to US: with sealed receipts nobody vaccine-
+        // purges (a carrier can't read them), so the delivered DM stays live in every carrier's digest
+        // for its full TTL — if the recipient didn't hold it too, every digest exchange would re-cue a
+        // re-serve of a frame we already delivered (the exists-gate would re-ack it, ~every SeenSet
+        // lapse, forever). Holding our own copy is what makes digests converge; a cleartext ack still
+        // purges it right back out (see acknowledge's self-vaccinate). Group messages are carried for
+        // members who may be offline whether or not we're a member; broadcast + cleartext metadata
+        // frames back-fill ambient state. Runs before handleChat returns early and before the router
+        // schedules the relay, so the copy is durable pre-flood. Only flood frames (relay = true) are
+        // custodied — a point-to-point frame (relay = false, e.g. a broadcast/group delivery tick) is
+        // delivered to its addressee and stops.
         if (env.isStorable() && wire.relay) {
-            val isBroadcast = env.recipientId == null && env.group == null
-            val carry = isBroadcast || env.group != null || !Conversations.isForMe(env.recipientId, identity.nodeId())
-            if (carry) forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_RELAY)
+            forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_RELAY)
         }
         // Multi-hop coordination-plane fan-out: re-fan a small flood frame to our own neighbors so it spreads
         // across the mesh at message-plane speed (no data path), not just one hop from the originator. onDeliver
@@ -468,7 +470,9 @@ class InboundPipeline(
         // loop; the SeenSet is in-memory, 10 min, per mesh session), and decrypt used to run on every
         // copy. Skipping it once the row exists is what lets the v2 ratchet actually DELETE used
         // message keys (forward secrecy), and spares v1 an HPKE unwrap per re-serve. The ack still
-        // runs unconditionally — the receipt/vaccine semantics are untouched.
+        // runs unconditionally, in whatever form acknowledge picks — rare now that we custody our own
+        // inbound DMs (digests match, so a re-serve means genuine divergence, e.g. our copy was
+        // quota-evicted), and re-custody above already restored the row for the next exchange.
         if (messages.exists(env.id)) {
             acknowledge(env, me)
             return
@@ -585,12 +589,14 @@ class InboundPipeline(
     }
 
     /**
-     * Dispatches a decrypted v2 control DM. A control frame is ratchet machinery, not conversation:
+     * Dispatches a decrypted v2 control DM. A control frame is machinery, not conversation:
      * advance/commit the session state but never persist, notify, or ack it as a message. Group-key
      * payloads commit their group state inside the SAME transaction/lock as the DM advance
      * (adoptSeeds/onKeyAck are deliberately lock-free — the shared ratchet mutex is already held
-     * there). Post-commit actions (reset recovery, the adoption ack, a key-request answer) originate
-     * new frames and run strictly after, outside the transaction.
+     * there); sealed receipts/reactions (CTL_RECEIPT/CTL_REACTION) commit their row updates there
+     * too, so a crash never splits the chain advance from the tick/reaction it carried. Post-commit
+     * actions (reset recovery, the adoption ack, a key-request answer) originate new frames and run
+     * strictly after, outside the transaction.
      */
     private suspend fun handleCtlDm(
         env: RelayEnvelope,
@@ -600,22 +606,7 @@ class InboundPipeline(
         commit: suspend (suspend () -> Unit) -> Boolean,
     ) {
         var adoptedEpoch: Int? = null
-        val committed =
-            commit {
-                when (plain.ctl) {
-                    MessageContent.CTL_GROUP_KEY -> {
-                        adoptedEpoch = adoptGroupSeeds(env, plain, now)
-                    }
-
-                    MessageContent.CTL_GROUP_KEY_ACK -> {
-                        plain.gk?.let { gk ->
-                            gk.ackEpoch?.let { groupRatchet.onKeyAck(gk.groupId, env.senderId, it, now) }
-                        }
-                    }
-
-                    else -> {}
-                }
-            }
+        val committed = commit { adoptedEpoch = applyCtlInTxn(env, plain, now) }
         if (!committed) return
         when (plain.ctl) {
             MessageContent.CTL_SESSION_RESET -> {
@@ -640,6 +631,73 @@ class InboundPipeline(
 
             else -> {}
         }
+    }
+
+    /**
+     * The in-transaction half of a ctl DM — runs inside the ratchet commit (shared lock held, outer
+     * Room transaction open) so state the ctl carries lands atomically with the session advance.
+     * Returns the adopted seed epoch worth acknowledging (`CTL_GROUP_KEY` only), else null. An unknown
+     * code does nothing here — the commit still advances the chain, which is the additive-ctl contract.
+     */
+    private suspend fun applyCtlInTxn(
+        env: RelayEnvelope,
+        plain: MessageContent,
+        now: Long,
+    ): Int? {
+        when (plain.ctl) {
+            MessageContent.CTL_GROUP_KEY -> {
+                return adoptGroupSeeds(env, plain, now)
+            }
+
+            MessageContent.CTL_GROUP_KEY_ACK -> {
+                plain.gk?.let { gk ->
+                    gk.ackEpoch?.let { groupRatchet.onKeyAck(gk.groupId, env.senderId, it, now) }
+                }
+            }
+
+            MessageContent.CTL_RECEIPT -> {
+                applySealedReceipt(env, plain.ack)
+            }
+
+            MessageContent.CTL_REACTION -> {
+                applySealedReaction(env, plain.rp)
+            }
+
+            else -> {}
+        }
+        return null
+    }
+
+    /**
+     * Applies a sealed `CTL_RECEIPT`: flip the tick with the cleartext path's forged-ack guard (null
+     * recipient = a group/broadcast message keeps the best-effort tick — that IS the sealed group
+     * tick's shape). Deliberately NO [ForwardSync.onAck]: a carrier can't read a sealed receipt, so
+     * nobody vaccine-purges — the delivered message ages out of custody on the frame-global TTL
+     * uniformly on every node (docs/ENCRYPTED_RECEIPTS_REACTIONS.md). Runs inside the ctl commit.
+     */
+    private suspend fun applySealedReceipt(
+        env: RelayEnvelope,
+        ackId: String?,
+    ) {
+        ackId ?: return
+        val recipientOfAcked = messages.recipientOf(ackId)
+        if (recipientOfAcked == null || recipientOfAcked == env.senderId) {
+            messages.markReceived(ackId)
+        }
+    }
+
+    /**
+     * Applies a sealed `CTL_REACTION` (DM or group form): same LWW convergence as the cleartext frame
+     * (reactor = authenticated sender, clock = the frame's signed sentAt), committed atomically with
+     * the ratchet/chain advance. Orphan-permissive like the cleartext path — the target may not have
+     * arrived yet; the 24 h orphan reaper bounds junk.
+     */
+    private suspend fun applySealedReaction(
+        env: RelayEnvelope,
+        rp: ReactionPayload?,
+    ) {
+        rp ?: return
+        reactions.apply(ReactionEntity(rp.messageId, env.senderId, rp.emoji, env.sentAt))
     }
 
     /**
@@ -748,10 +806,14 @@ class InboundPipeline(
             }
         }
         if (plain.ctl != null) {
-            // Group machinery rides pairwise ctl DMs, never sealed group frames — but a ctl marker must
-            // keep its contract regardless of the envelope it arrived in: advance the chain, persist
-            // nothing, notify nothing, ack nothing.
-            commit {}
+            // A ctl marker keeps its contract regardless of the envelope it arrived in: advance the
+            // chain, persist nothing as a message, notify nothing, ack nothing. CTL_REACTION is the one
+            // ctl that legitimately rides the group form (a sealed group reaction, applied atomically
+            // with the chain delta); everything else here — group-key machinery on pairwise DMs, an
+            // unknown future value — commits the advance and does nothing.
+            commit {
+                if (plain.ctl == MessageContent.CTL_REACTION) applySealedReaction(env, plain.rp)
+            }
             return
         }
         deliverChat(
@@ -1416,24 +1478,27 @@ class InboundPipeline(
     }
 
     /**
-     * Sends a delivery receipt for [frame]. A DM addressed to us floods its receipt via the router
-     * ([originateSigned], relay = true) so it reaches the sender across multiple hops and is custodied like any
-     * flood frame (the recipient is the only one who acks). Broadcast and group messages have no single
-     * recipient, so the tick is best-effort: a **point-to-point** receipt (relay = false) is sent straight back
-     * to the author over the coordination plane ([MeshTransport.fastSend]), which needs no data path — so it
-     * works whether the message arrived via an NDP flood *or* a coordination-plane fast-fanout. (The old
-     * direct-neighbor NDP send silently dropped the fast-fanned case: with no live NDP link, `neighbors` is
-     * empty and the ack was never sent.) No-ops if the author isn't currently reachable.
+     * Sends a delivery receipt for [env]. A DM addressed to us answers with a **sealed** receipt when the
+     * author can read one (pinned bundle + CAP_RATCHET; an ordinary v2 ctl chat frame — flooded, custodied,
+     * indistinguishable from conversation on the wire), else the legacy cleartext receipt frame. The two
+     * forms deliberately diverge on custody (docs/ENCRYPTED_RECEIPTS_REACTIONS.md): a **cleartext** receipt
+     * vaccine-purges the delivered DM at every carrier that parses it — including us, via the self-vaccinate
+     * below, since we now custody our own inbound DMs; a **sealed** receipt purges nowhere (carriers can't
+     * read it), so the DM ages out of custody on the frame-global TTL uniformly on every node. Broadcast and
+     * group messages have no single recipient, so the tick is best-effort: a **point-to-point** receipt
+     * (relay = false) straight back to the author, remembered by AckSync and re-sent until it lands (or ages
+     * out) — the message itself converges via custody, but the tick otherwise had no delay-tolerance.
      */
     private suspend fun acknowledge(
         env: RelayEnvelope,
         me: String,
     ) {
         if (env.recipientId == me) {
-            // DM: flood so the receipt reaches the sender across hops and is custodied like any flood frame.
-            // sentAt is load-bearing for that custody: every store derives the frame-global expiry from it
-            // (sentAt + TTL, ADR 006), so an unset 0 computes a 1970 expiry and is refused dead-on-arrival
-            // at every node — the receipt then floods live but is never carried (work item #16).
+            if (sealDmReceipt(env, me)) return
+            // Legacy cleartext receipt. sentAt is load-bearing for its custody: every store derives the
+            // frame-global expiry from it (sentAt + TTL, ADR 006), so an unset 0 computes a 1970 expiry
+            // and is refused dead-on-arrival at every node — the receipt would flood live but never be
+            // carried (work item #16).
             val ack =
                 RelayEnvelope(
                     type = FrameType.RECEIPT,
@@ -1443,6 +1508,11 @@ class InboundPipeline(
                     payload = WireCodec.encodePayload(ReceiptContent(env.id)),
                 )
             originate(ack)
+            // Self-vaccinate: this cleartext receipt purges the delivered DM from every carrier that sees
+            // it, and our own custody copy must follow the identical rule (ADR 006 — a liveness rule that
+            // differs per node churns digests forever). onAck's recipient guard passes by construction
+            // (our row's recipientId is us) and tombstones the id against re-plants.
+            forwardSync.onAck(env.id, me)
         } else {
             // Broadcast/group: a unicast, point-to-point (relay = false) tick straight to the author — no NDP
             // required (a fast-fanned message gets its receipt too) and never flooded/custodied. Best-effort, so
@@ -1451,6 +1521,52 @@ class InboundPipeline(
             // range at delivery time.
             ackSync.owe(env.id, env.senderId)
         }
+    }
+
+    /**
+     * Seals a `CTL_RECEIPT` ctl DM for [env]'s author and floods it, or returns false when the author
+     * can't read one (no pinned bundle / no CAP_RATCHET — the caller falls back to the cleartext frame)
+     * or the seal itself fails (no session and no usable prekey). Never routes through the v1 wrap: a
+     * pre-ratchet build would decrypt a v1 ctl, strip the unknown field, and persist an empty bubble —
+     * ctl payloads are v2-only by construction (the sealDm-direct precedent of every other ctl sender).
+     * The session usually exists (we just opened the author's v2 DM); the prekey path covers a capable
+     * author whose DM arrived v1 (e.g. sent before our profile landed on their side).
+     */
+    private suspend fun sealDmReceipt(
+        env: RelayEnvelope,
+        me: String,
+    ): Boolean {
+        val peer = peers.find(env.senderId) ?: return false
+        if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return false
+        val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return false
+        val prekey =
+            peer.prekeyId?.let { pkid ->
+                peer.prekeyPub
+                    ?.let { runCatching { b64d(it) }.getOrNull() }
+                    ?.let { RatchetEngine.PeerPrekey(id = pkid, pub = it) }
+            }
+        val now = clock()
+        val id = FrameId.new()
+        val aad = MessageCrypto.header(id, me, now, env.senderId)
+        val plaintext = MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = env.id).encode()
+        val sealed =
+            ratchet.sealDm(env.senderId, bundle.dhPublicKey(), peerSpk = prekey, plaintext = plaintext, aad = aad, now = now)
+                ?: run {
+                    metrics.onReceiptSealedFallback()
+                    return false
+                }
+        originate(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                recipientId = env.senderId,
+                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+            ),
+        )
+        metrics.onReceiptSealed()
+        return true
     }
 
     /** Fires a "new message" notification for an inbound chat in [conversationId] (skips our own and empty messages). */

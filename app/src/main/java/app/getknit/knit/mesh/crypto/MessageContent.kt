@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.crypto
 
 import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReplyRef
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -35,15 +36,20 @@ data class MessageContent(
     // Relies, like every field here, on cryptoCbor's `encodeDefaults = false` to stay off the wire when
     // null; do not enable encodeDefaults or every DM frame inflates with an empty reply.
     val replyTo: ReplyRef? = null,
-    // Control marker for ratchet session management (additive; [CTL_SESSION_RESET],
-    // [CTL_GROUP_KEY], [CTL_GROUP_KEY_REQ], [CTL_GROUP_KEY_ACK]). A non-null value means this frame
-    // is machinery, not conversation: it is never persisted as a message, never notified, never
-    // acked-as-a-message — see docs/FORWARD_SECRECY_RATCHET.md §7. Inside the ciphertext
-    // deliberately: a relay cannot distinguish machinery from an ordinary DM. An unknown value is
-    // consumed as a silent no-op, which is what lets new ctl values ship additively.
+    // Control marker for ratchet session management and sealed metadata (additive;
+    // [CTL_SESSION_RESET], [CTL_GROUP_KEY], [CTL_GROUP_KEY_REQ], [CTL_GROUP_KEY_ACK],
+    // [CTL_RECEIPT], [CTL_REACTION]). A non-null value means this frame is machinery, not
+    // conversation: it is never persisted as a message, never notified, never acked-as-a-message —
+    // see docs/FORWARD_SECRECY_RATCHET.md §7. Inside the ciphertext deliberately: a relay cannot
+    // distinguish machinery from an ordinary DM. An unknown value is consumed as a silent no-op,
+    // which is what lets new ctl values ship additively.
     val ctl: Int? = null,
     // Group-key payload for the CTL_GROUP_KEY* values (additive; docs/GROUP_FORWARD_SECRECY.md §3).
     val gk: GroupKeyPayload? = null,
+    // Acked frame id for [CTL_RECEIPT] (additive; docs/ENCRYPTED_RECEIPTS_REACTIONS.md).
+    val ack: String? = null,
+    // Reaction payload for [CTL_REACTION] (additive; docs/ENCRYPTED_RECEIPTS_REACTIONS.md).
+    val rp: ReactionPayload? = null,
 ) {
     @OptIn(ExperimentalSerializationApi::class)
     fun encode(): ByteArray = cryptoCbor.encodeToByteArray(this)
@@ -69,6 +75,17 @@ data class MessageContent(
 
         /** [ctl]: [gk] acknowledges adopting the sender's seed ([GroupKeyPayload.ackEpoch]) — stops re-sends. */
         const val CTL_GROUP_KEY_ACK = 4
+
+        /**
+         * [ctl]: [ack] is a sealed delivery receipt for the named frame — the encrypted replacement
+         * for the cleartext receipt frame. Flips the sender's tick only; deliberately does NOT
+         * vaccine-purge custody (a carrier can't read it, so nobody purges — the delivered DM ages
+         * out on the custody TTL uniformly; docs/ENCRYPTED_RECEIPTS_REACTIONS.md).
+         */
+        const val CTL_RECEIPT = 5
+
+        /** [ctl]: [rp] is a sealed reaction (or retraction) — DM form or group form. */
+        const val CTL_REACTION = 6
 
         @OptIn(ExperimentalSerializationApi::class)
         fun decode(bytes: ByteArray): MessageContent? = runCatching { cryptoCbor.decodeFromByteArray<MessageContent>(bytes) }.getOrNull()

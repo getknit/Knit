@@ -166,6 +166,19 @@ demotes that message to v1, so a ratcheted group frame is only ever addressed to
 open it. **The rule this precedent adds: released version numbers are append-only; unreleased ones
 are still yours to edit.**
 
+**Precedent — the third additive `MessageContent` change (sealed receipts/reactions, ADR 018).**
+No new wire surface at all: `MessageContent` gained the nullable `ack: String?` and
+`rp: ReactionPayload?` plus two ctl values (`CTL_RECEIPT = 5`, `CTL_REACTION = 6`) — all inside the
+ciphertext, legal because unknown ctl values are consumed as chain-advancing silent no-ops (pinned by
+`anUnknownCtlCodeAdvancesTheChainAndDoesNothing`), and byte-invisible on ordinary messages
+(`encodeDefaults = false`; pinned by `aPlainMessageEncodingIsByteIdenticalWithTheNewFieldsDefaulted`).
+The cleartext `receipt`/`reaction` frame types stay accepted inbound forever; `ReactionPayload` is
+field-compatible with `ReactionContent` (same CBOR — `GoldenVectorTest` pins both, retraction form
+included). One semantic split rides on the ciphertext boundary rather than any wire field: carriers
+vaccine-purge on a cleartext receipt exactly as before but cannot on a sealed one, and the custody
+rule keys on that form (a property of the frame bytes, identical at every node) — see
+`docs/ENCRYPTED_RECEIPTS_REACTIONS.md` §4 for why that stays ADR 006-convergent.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

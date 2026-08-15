@@ -120,6 +120,10 @@ class MeshMetrics {
     private val receiptsResent = AtomicLong()
     private val dmSealedV2 = AtomicLong()
     private val dmSealedV1Fallback = AtomicLong()
+    private val receiptsSealed = AtomicLong()
+    private val receiptsSealedFallback = AtomicLong()
+    private val reactionsSealed = AtomicLong()
+    private val reactionsSealedFallback = AtomicLong()
     private val groupSealedRatchet = AtomicLong()
     private val groupSealedV1Fallback = AtomicLong()
     private val groupSeedsSent = AtomicLong()
@@ -216,6 +220,27 @@ class MeshMetrics {
         dmSealedV1Fallback.incrementAndGet()
     }
 
+    /** A delivery receipt sealed as a v2 ctl DM (no vaccine-purge — the sealed-era custody contract). */
+    fun onReceiptSealed() {
+        receiptsSealed.incrementAndGet()
+    }
+
+    /** A seal-eligible receipt whose sealDm failed (no session + no usable prekey) — sent cleartext instead. */
+    fun onReceiptSealedFallback() {
+        receiptsSealedFallback.incrementAndGet()
+    }
+
+    /** A reaction sealed as a v2 ctl frame (DM or group form). */
+    fun onReactionSealed() {
+        reactionsSealed.incrementAndGet()
+    }
+
+    /** A DM/group-target reaction that went out as the legacy cleartext frame (incapable peer/group or a
+     *  failed seal) — the "still walking naked in a private context" residual; broadcast never counts. */
+    fun onReactionSealedFallback() {
+        reactionsSealedFallback.incrementAndGet()
+    }
+
     /** One outbound group message sealed under the sender-key chain (v2, group form). */
     fun onGroupSealedRatchet() {
         groupSealedRatchet.incrementAndGet()
@@ -309,6 +334,10 @@ class MeshMetrics {
             receiptsResent = receiptsResent.get(),
             dmSealedV2 = dmSealedV2.get(),
             dmSealedV1Fallback = dmSealedV1Fallback.get(),
+            receiptsSealed = receiptsSealed.get(),
+            receiptsSealedFallback = receiptsSealedFallback.get(),
+            reactionsSealed = reactionsSealed.get(),
+            reactionsSealedFallback = reactionsSealedFallback.get(),
             groupSealedRatchet = groupSealedRatchet.get(),
             groupSealedV1Fallback = groupSealedV1Fallback.get(),
             groupSeedsSent = groupSeedsSent.get(),
@@ -344,6 +373,10 @@ class MeshMetrics {
         val receiptsResent: Long = 0,
         val dmSealedV2: Long = 0,
         val dmSealedV1Fallback: Long = 0,
+        val receiptsSealed: Long = 0,
+        val receiptsSealedFallback: Long = 0,
+        val reactionsSealed: Long = 0,
+        val reactionsSealedFallback: Long = 0,
         val groupSealedRatchet: Long = 0,
         val groupSealedV1Fallback: Long = 0,
         val groupSeedsSent: Long = 0,

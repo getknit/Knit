@@ -296,6 +296,21 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
             MetricRow(stringResource(R.string.diagnostics_metric_group_seeds_sent), metrics.groupSeedsSent.toString())
             MetricRow(stringResource(R.string.diagnostics_metric_group_seeds_adopted), metrics.groupSeedsAdopted.toString())
         }
+        // Sealed metadata (receipts/reactions as v2 ctl frames). Same fallback semantics as the pairs
+        // above: a persistent fallback count means some private-context receipt/reaction still walks
+        // the mesh cleartext (incapable peer, unsealable group).
+        if (metrics.receiptsSealed > 0 || metrics.receiptsSealedFallback > 0) {
+            MetricRow(stringResource(R.string.diagnostics_metric_receipts_sealed), metrics.receiptsSealed.toString())
+            if (metrics.receiptsSealedFallback > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_receipts_sealed_fallback), metrics.receiptsSealedFallback.toString())
+            }
+        }
+        if (metrics.reactionsSealed > 0 || metrics.reactionsSealedFallback > 0) {
+            MetricRow(stringResource(R.string.diagnostics_metric_reactions_sealed), metrics.reactionsSealed.toString())
+            if (metrics.reactionsSealedFallback > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_reactions_sealed_fallback), metrics.reactionsSealedFallback.toString())
+            }
+        }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an
         // intermittent "can link one peer but not the second" is visible and attributable (RADIO vs other).
         if (metrics.btConnectFails > 0) {

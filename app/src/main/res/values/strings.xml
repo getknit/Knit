@@ -289,6 +289,10 @@
     <string name="diagnostics_metric_groups_v1_fallback">Group messages sent legacy (v1)</string>
     <string name="diagnostics_metric_group_seeds_sent">Group epoch seeds sent</string>
     <string name="diagnostics_metric_group_seeds_adopted">Group epoch seeds adopted</string>
+    <string name="diagnostics_metric_receipts_sealed">Receipts sent sealed</string>
+    <string name="diagnostics_metric_receipts_sealed_fallback">Receipts sent cleartext (fallback)</string>
+    <string name="diagnostics_metric_reactions_sealed">Reactions sent sealed</string>
+    <string name="diagnostics_metric_reactions_sealed_fallback">Reactions sent cleartext (fallback)</string>
     <string name="diagnostics_metric_bt_connect_fails">BT connect failures</string>
     <string name="diagnostics_controls">Mesh controls</string>
     <string name="diagnostics_status_healthy">Mesh status: Healthy</string>

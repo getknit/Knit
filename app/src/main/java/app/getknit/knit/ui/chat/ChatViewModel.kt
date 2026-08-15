@@ -474,12 +474,21 @@ class ChatViewModel(
         _isSending.value = false
     }
 
-    /** Toggles the local user's [emoji] reaction on [messageId] (add / replace / remove) and floods it. */
+    /**
+     * Toggles the local user's [emoji] reaction on [messageId] (add / replace / remove) and floods it.
+     * Passes the thread context along, resolved the same way [send] does (re-read at send time), so a
+     * DM/group reaction rides sealed where the conversation supports it — the manager never re-derives
+     * the context from the message row.
+     */
     fun react(
         messageId: String,
         emoji: String,
     ) {
-        viewModelScope.launch { meshManager.sendReaction(messageId, emoji) }
+        viewModelScope.launch {
+            val group = if (isRoom) null else groups.find(conversationId)?.toGroupInfo()
+            val recipientId = if (isRoom || group != null) null else conversationId
+            meshManager.sendReaction(messageId, emoji, recipientId, group)
+        }
     }
 
     /**

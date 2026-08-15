@@ -17,6 +17,7 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
+import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
@@ -33,6 +34,7 @@ import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.Protocol
+import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.protocol.WireCodec
@@ -680,6 +682,140 @@ class MeshManagerTest {
     fun theProfileAdvertisesTheRatchetCapabilityAndAVerifiablePrekey() {
         assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_RATCHET != 0L)
     }
+
+    // --- sealed reactions (CTL_REACTION) ---
+
+    /** The REACTION routing envelopes the manager originated (the legacy cleartext form). */
+    private fun Rig.sentReactionFrames(): List<RelayEnvelope> =
+        transport.sent
+            .mapNotNull { WireCodec.decodeEnvelope(it.first.signed) }
+            .filter { it.type == FrameType.REACTION }
+            .distinctBy { it.id }
+
+    @Test
+    fun aDmReactionToACapablePeerRidesSealedNeverAsACleartextFrame() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+
+            rig.manager.sendReaction("m1", "👍", recipientId = rig.bob.nodeId)
+            advanceUntilIdle()
+
+            assertTrue("no cleartext reaction may leak the target/emoji", rig.sentReactionFrames().isEmpty())
+            val frame = rig.sentChatFrames().single()
+            assertEquals(rig.bob.nodeId, frame.recipientId)
+            val enc = WireCodec.decodePayload<ChatContent>(frame.payload)!!.enc!!
+            assertEquals(EncEnvelope.VERSION_RATCHET, enc.v)
+            assertTrue("the DM form carries the epoch-ratchet header", enc.r != null)
+            // The local row applied optimistically with the same LWW clock the frame carries.
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", rig.me.nodeId, "👍", rig.now)) }
+            assertEquals(1L, rig.metrics.snapshot().reactionsSealed)
+        }
+
+    @Test
+    fun aReactionToAnIncapablePeerFallsBackToTheCleartextFrame() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pin(rig.bob) // pinned, no CAP_RATCHET
+
+            rig.manager.sendReaction("m1", "👍", recipientId = rig.bob.nodeId)
+            advanceUntilIdle()
+
+            val reaction = rig.sentReactionFrames().single()
+            assertEquals("m1", WireCodec.decodePayload<ReactionContent>(reaction.payload)!!.messageId)
+            assertTrue(rig.sentChatFrames().isEmpty())
+            assertEquals(1L, rig.metrics.snapshot().reactionsSealedFallback)
+        }
+
+    @Test
+    fun aGroupReactionWithEveryMemberEligibleRidesTheGroupFormAndDistributesItsSeed() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            val group = GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId), createdBy = rig.me.nodeId)
+
+            rig.manager.sendReaction("gm1", "🔥", group = group)
+            advanceUntilIdle()
+
+            assertTrue(rig.sentReactionFrames().isEmpty())
+            val frames = rig.sentChatFrames()
+            // First reaction in the group mints the sender epoch: its seed ctl DM to bob + the group frame.
+            val groupFrame = frames.single { it.group != null }
+            val enc = WireCodec.decodePayload<ChatContent>(groupFrame.payload)!!.enc!!
+            assertEquals(EncEnvelope.VERSION_RATCHET, enc.v)
+            assertTrue("the group form carries the sender-key header", enc.g != null)
+            assertEquals(1, frames.count { it.recipientId == rig.bob.nodeId })
+            assertEquals(1L, rig.metrics.snapshot().reactionsSealed)
+        }
+
+    @Test
+    fun aGroupReactionWithAnIneligibleMemberFallsBackToTheCleartextFrame() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pin(rig.bob)
+            val group = GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId), createdBy = rig.me.nodeId)
+
+            rig.manager.sendReaction("gm1", "🔥", group = group)
+            advanceUntilIdle()
+
+            assertTrue(rig.sentChatFrames().isEmpty())
+            assertEquals(1, rig.sentReactionFrames().size)
+            assertEquals(1L, rig.metrics.snapshot().reactionsSealedFallback)
+        }
+
+    @Test
+    fun aBroadcastReactionStaysCleartextByDesignAndCountsNoFallback() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+
+            rig.manager.sendReaction("room1", "👍")
+            advanceUntilIdle()
+
+            assertEquals(1, rig.sentReactionFrames().size)
+            assertTrue(rig.sentChatFrames().isEmpty())
+            assertEquals(0L, rig.metrics.snapshot().reactionsSealedFallback)
+        }
+
+    @Test
+    fun aRetractionRidesTheSealedPathWithANullEmoji() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            coEvery { rig.reactions.currentEmoji("m1", rig.me.nodeId) } returns "👍" // same emoji → toggle off
+
+            rig.manager.sendReaction("m1", "👍", recipientId = rig.bob.nodeId)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", rig.me.nodeId, null, rig.now)) }
+            assertTrue(rig.sentReactionFrames().isEmpty())
+            assertEquals(1L, rig.metrics.snapshot().reactionsSealed)
+        }
+
+    @Test
+    fun aCtlReactionNeverFallsBackToTheV1Wrap() =
+        runTest(UnconfinedTestDispatcher()) {
+            // A capable-looking peer whose prekey is garbled: sealDm cannot bootstrap a session, and a
+            // ctl must NEVER take the v1 wrap (a pre-ratchet build would decrypt it, strip the unknown
+            // ctl field, and persist an empty bubble) — the fallback is the legacy cleartext frame.
+            val rig = Rig(backgroundScope)
+            coEvery { rig.peers.find(rig.bob.nodeId) } returns
+                PeerEntity(
+                    nodeId = rig.bob.nodeId,
+                    pubKey = rig.bob.bundle.encoded,
+                    capabilities = Protocol.LOCAL_CAPABILITIES,
+                    prekeyId = 1,
+                    prekeyPub = "not-base64!!!",
+                    prekeyProfileAt = 1L,
+                    updatedAt = 1L,
+                )
+
+            rig.manager.sendReaction("m1", "👍", recipientId = rig.bob.nodeId)
+            advanceUntilIdle()
+
+            assertTrue("no v1 EncEnvelope for a ctl payload, ever", rig.sentChatFrames().isEmpty())
+            assertEquals(1, rig.sentReactionFrames().size)
+            assertEquals(1L, rig.metrics.snapshot().reactionsSealedFallback)
+        }
 
     private companion object {
         const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"

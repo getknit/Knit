@@ -33,7 +33,9 @@ Three decisions were locked by the maintainer up front:
 
 Scope: **DMs only.** Groups keep the v1 per-member wrap (group key state is its own future design),
 the Nearby broadcast room stays plaintext by design, receipts/reactions stay cleartext-signed
-(their encryption is a separate roadmap item).
+(their encryption is a separate roadmap item). *(Both since landed in the same v2 train: the group
+form in `docs/GROUP_FORWARD_SECRECY.md`, sealed receipts/reactions as ctl values 5/6 in
+`docs/ENCRYPTED_RECEIPTS_REACTIONS.md` — the ctl registry grew, everything else here is unchanged.)*
 
 ## 2. Keys
 

@@ -19,6 +19,8 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.decodeBoundedFromBytes
 import app.getknit.knit.data.downscale
 import app.getknit.knit.data.forward.ForwardDao
+import app.getknit.knit.data.group.GroupEntity
+import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
@@ -182,6 +184,10 @@ class DebugBridgeReceiver :
 
                         ACTION_FLAGMSG -> {
                             handleFlagMsg(intent)
+                        }
+
+                        ACTION_MKGROUP -> {
+                            handleMkGroup(intent)
                         }
 
                         ACTION_REVIEW -> {
@@ -742,6 +748,40 @@ class DebugBridgeReceiver :
         message: String,
     ): JSONObject = JSONObject().put("status", status).put("message", message)
 
+    /**
+     * Creates (or reopens) a group locally from `--es members <comma-separated peer nodeIds>` (self is
+     * added automatically) — the [app.getknit.knit.ui.contacts.ContactsViewModel.createGroup] mechanics
+     * without the picker UI, which cannot express a 2-member group (one selection opens a DM). Purely
+     * local, exactly like UI creation: other members learn of the group from its first message. The
+     * reply carries the derived `groupId` for follow-up `SEND --es conv` calls.
+     */
+    private suspend fun handleMkGroup(intent: Intent): JSONObject {
+        val others =
+            intent
+                .getStringExtra("members")
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                .orEmpty()
+        if (others.isEmpty()) return reply("error", "missing --es members <nodeId,nodeId,...>")
+        val me = identity.nodeId()
+        val members = (others + me).distinct()
+        val groupId = Conversations.groupIdFor(members)
+        val existing = groups.find(groupId)
+        if (existing == null || existing.left) {
+            groups.upsert(
+                GroupEntity(
+                    groupId = groupId,
+                    name = intent.getStringExtra("name").orEmpty(),
+                    members = GroupMembersStore.encode(members),
+                    createdBy = me,
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+        }
+        return reply("ok", "group ready").put("groupId", groupId).put("members", members.size)
+    }
+
     private companion object {
         const val TAG = "KnitBridge"
 
@@ -758,6 +798,7 @@ class DebugBridgeReceiver :
         const val ACTION_HEAL = "app.getknit.knit.debug.HEAL"
         const val ACTION_REQNOTIF = "app.getknit.knit.debug.REQNOTIF"
         const val ACTION_FLAGMSG = "app.getknit.knit.debug.FLAGMSG"
+        const val ACTION_MKGROUP = "app.getknit.knit.debug.MKGROUP"
         const val ACTION_REVIEW = "app.getknit.knit.debug.REVIEW"
 
         const val EXTRA_TEXT = "text"

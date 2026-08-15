@@ -120,6 +120,10 @@ class InboundPipeline(
     // Re-sends unacked group seeds to a member whose profile/prekey just (re)arrived — the group
     // analogue of flushPending (MeshManager.flushPendingGroupKeysFor), lambda-mediated like originate.
     private val flushGroupKeys: suspend (String) -> Unit = {},
+    // Replays our own custody's undelivered group frames for a (group, sender) whose seed just
+    // arrived (MeshManager.replayCustodiedGroupFrames) — the local half of the re-serve heal; a frame
+    // WE custodied before its seed is never re-served by a peer (no digest divergence to cue it).
+    private val replayGroupCustody: suspend (String?, String?) -> Unit = { _, _ -> },
 ) {
     // nodeId -> avatar hash a non-direct peer advertised but whose bytes we're still pulling, so a blob
     // arriving via the multi-hop BlobExchange can be attributed back to the peer that advertised it.
@@ -620,7 +624,11 @@ class InboundPipeline(
             }
 
             MessageContent.CTL_GROUP_KEY -> {
-                adoptedEpoch?.let { ackGroupSeed(env.senderId, plain.gk?.groupId, it, me, now) }
+                adoptedEpoch?.let {
+                    ackGroupSeed(env.senderId, plain.gk?.groupId, it, me, now)
+                    // The seed (or its idempotent re-distribution) may unlock frames we already carry.
+                    plain.gk?.let { gk -> replayGroupCustody(gk.groupId, env.senderId) }
+                }
             }
 
             MessageContent.CTL_GROUP_KEY_REQ -> {

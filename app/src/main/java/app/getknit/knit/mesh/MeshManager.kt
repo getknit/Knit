@@ -207,6 +207,7 @@ class MeshManager(
             resealUnacked = ::resealRecentDmsTo,
             redistributeGroupKey = ::redistributeGroupKey,
             flushGroupKeys = ::flushPendingGroupKeysFor,
+            replayGroupCustody = ::replayCustodiedGroupFrames,
         )
 
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
@@ -336,6 +337,7 @@ class MeshManager(
             ackSync.retryPending() // re-send broadcast/group ticks we still owe absent authors (+ age out old ones)
             ratchet.sweep(clock()) // retire epoch privs / skipped keys — the ratchet's PFS window enforcement
             groupRatchet.sweep(clock()) // retire group chains / skipped keys — the group PFS window
+            replayUndeliveredGroupCustody() // re-try own-custody group frames whose seed arrived late
             rotatePrekeyIfDue()
         }
     }
@@ -671,6 +673,45 @@ class MeshManager(
         sendSeedDm(groupId, requesterId, payload, seeds.first().epoch, identity.nodeId())
     }
 
+    /**
+     * Re-enters our OWN custody's undelivered group chat frames through the inbound pipeline. A group
+     * frame that arrives before its sender's seed is dropped locally but still custodied by us as a
+     * carrier — and once WE hold it, no peer ever re-serves it (our digest already folds its id, so
+     * there is no divergence to cue a re-offer). The doc's "custody re-serve decrypts once the seed
+     * lands" therefore needs this local half: replay is idempotent (delivered frames stop at the
+     * pre-decrypt exists-gate; still-keyless ones re-count a NO_KEY drop, which is exactly what feeds
+     * the key-request heuristic that was otherwise starved). Fired on seed adoption for the matching
+     * (group, sender) — the instant heal — and from heal()/startup as the backstop.
+     */
+    private suspend fun replayCustodiedGroupFrames(
+        groupId: String?,
+        senderId: String?,
+    ) {
+        val me = identity.nodeId()
+        forwardStore
+            .liveFrames(clock())
+            .filter { frame ->
+                val env = frame.envelope
+                env.type == FrameType.CHAT &&
+                    env.group != null &&
+                    env.senderId != me &&
+                    (groupId == null || env.group.id == groupId) &&
+                    (senderId == null || env.senderId == senderId)
+            }.forEach { frame ->
+                if (messages.exists(frame.envelope.id)) return@forEach
+                // Replay bypasses the router (no second flood), exactly like PendingInbound's replay;
+                // onDeliver's verify/custody/ack steps are all idempotent.
+                pipeline.onDeliver(
+                    WireEnvelope(relay = false, sig = frame.sig, signed = frame.signed),
+                    frame.envelope,
+                    frame.envelope.senderId,
+                )
+            }
+    }
+
+    /** The heal/startup backstop: every undelivered group frame in custody, any group, any sender. */
+    private suspend fun replayUndeliveredGroupCustody() = replayCustodiedGroupFrames(groupId = null, senderId = null)
+
     /** Checks-and-stamps the per-(group, member) seed re-send floor. */
     private fun seedSendFloorOpen(
         groupId: String,
@@ -959,6 +1000,7 @@ class MeshManager(
             rotatePrekeyIfDue()
             ratchet.sweep(clock())
             groupRatchet.sweep(clock())
+            replayUndeliveredGroupCustody()
             val env = currentProfileEnvelope()
             forwardSync.onSeen(sign(env), env, ForwardStore.ORIGIN_SELF)
         }

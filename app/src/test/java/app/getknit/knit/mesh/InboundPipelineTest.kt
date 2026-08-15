@@ -238,6 +238,7 @@ class InboundPipelineTest {
         val resealed = mutableListOf<String>()
         val redistributed = mutableListOf<Pair<String, String>>()
         val groupKeysFlushed = mutableListOf<String>()
+        val custodyReplays = mutableListOf<Pair<String?, String?>>()
         var failClassify = false
         val pipeline: InboundPipeline
 
@@ -292,6 +293,7 @@ class InboundPipelineTest {
                     resealUnacked = { resealed += it },
                     redistributeGroupKey = { groupId, requester -> redistributed += groupId to requester },
                     flushGroupKeys = { groupKeysFlushed += it },
+                    replayGroupCustody = { groupId, senderId -> custodyReplays += groupId to senderId },
                 )
         }
 
@@ -2527,6 +2529,29 @@ class InboundPipelineTest {
 
             assertEquals(listOf(alice.nodeId), rig.resealed)
             assertEquals(listOf(alice.nodeId), rig.groupKeysFlushed)
+        }
+
+    @Test
+    fun aSeedAdoptionReplaysOurCustodyForThatGroupAndSender() =
+        runTest {
+            // A group frame that arrives before its seed is custodied by US — and a frame we already
+            // hold is never re-served by a peer (no digest divergence), so adoption must trigger the
+            // local replay half of the re-serve heal (found by the first on-device smoke).
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed1", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            assertEquals(listOf<Pair<String?, String?>>(group.id to alice.nodeId), rig.custodyReplays)
         }
 
     private companion object {

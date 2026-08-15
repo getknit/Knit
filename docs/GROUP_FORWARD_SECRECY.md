@@ -93,6 +93,16 @@ group member appearing as a neighbor with an unacked outbox row (the partition-m
 and a DM session reset/replacement with that member (ctl frames are never persisted, so
 `resealRecentDmsTo` cannot recover a seed — this hook is the only wipe-side seed plane).
 
+**The receive side has a matching local half** (found by the first on-device smoke): a group frame
+that arrives *before* its seed is dropped locally but still custodied by the receiver as a carrier —
+and a frame the receiver already holds is never re-served by a peer (its id is folded into the
+receiver's digest, so no divergence ever cues a re-offer). Seed adoption therefore replays the
+receiver's OWN custody for that (group, sender) through the inbound pipeline
+(`replayCustodiedGroupFrames`), and `heal()`/startup replay every undelivered custodied group frame
+as the backstop. Replay is idempotent — delivered frames stop at the pre-decrypt exists-gate, and
+still-keyless ones re-count a `NO_KEY` drop, which is exactly what keeps §7's request heuristic fed
+(a stuck frame would otherwise generate no signal at all).
+
 ## 4. Epochs and chains
 
 Each sender advances through numbered epochs per group; epoch `e`'s chain derives from its seed:

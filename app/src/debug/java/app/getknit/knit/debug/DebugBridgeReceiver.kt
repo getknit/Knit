@@ -16,6 +16,7 @@ import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.decodeBoundedFromBytes
 import app.getknit.knit.data.downscale
 import app.getknit.knit.data.forward.ForwardDao
@@ -115,6 +116,7 @@ class DebugBridgeReceiver :
     private val mesh: MeshController by inject()
     private val attachments: AttachmentStore by inject()
     private val messages: MessageRepository by inject()
+    private val reactions: ReactionRepository by inject()
     private val peers: PeerRepository by inject()
     private val groups: GroupRepository by inject()
     private val metrics: MeshMetrics by inject()
@@ -462,8 +464,14 @@ class DebugBridgeReceiver :
     private suspend fun handleReact(intent: Intent): JSONObject {
         val messageId = intent.getStringExtra(EXTRA_ID) ?: return reply("error", "missing 'id' extra")
         val emoji = intent.getStringExtra(EXTRA_EMOJI) ?: return reply("error", "missing 'emoji' extra")
-        mesh.sendReaction(messageId, emoji)
-        return reply("ok", "reacted $emoji to $messageId")
+        // Resolve the thread context from the stored row, exactly as ChatViewModel.react passes it —
+        // without it every bridge reaction is broadcast-shaped and rides the cleartext frame, which
+        // would make a sealed-reaction smoke test pass vacuously.
+        val conv = messages.conversationOf(messageId)
+        val group = conv?.takeIf { Conversations.kindFor(it) == ConversationKind.GROUP }?.let { groups.find(it)?.toGroupInfo() }
+        val recipientId = conv?.takeIf { group == null && Conversations.kindFor(it) == ConversationKind.DM }
+        mesh.sendReaction(messageId, emoji, recipientId, group)
+        return reply("ok", "reacted $emoji to $messageId").put("conversation", conv ?: "unknown")
     }
 
     /**
@@ -510,15 +518,21 @@ class DebugBridgeReceiver :
         return out
     }
 
-    private fun messagesJson(
+    private suspend fun messagesJson(
         rows: List<MessageEntity>,
         selfId: String,
         selfName: String,
         nameByNode: Map<String, String>,
     ): JSONArray {
+        // Per-message reaction rows (reactor -> emoji), so a smoke/soak run can verify a reaction
+        // APPLIED on the receiving device — the chips render on screen but don't surface any text to
+        // `uiautomator dump`, and the sealed forms otherwise have no machine-checkable landing signal.
+        val reactionsByMessage = reactions.observeReactions().first().groupBy { it.messageId }
         val arr = JSONArray()
         rows.forEach { m ->
             val from = if (m.senderId == selfId) selfName else nameByNode[m.senderId] ?: ""
+            val rx = JSONObject()
+            reactionsByMessage[m.id].orEmpty().forEach { r -> r.emoji?.let { rx.put(r.reactorNodeId, it) } }
             arr.put(
                 JSONObject()
                     .put("id", m.id)
@@ -528,6 +542,7 @@ class DebugBridgeReceiver :
                     .put("body", m.body)
                     .put("sentAt", m.sentAt)
                     .put("received", m.received)
+                    .put("reactions", rx)
                     .put("replyToId", m.replyToId ?: JSONObject.NULL)
                     .put("replyToAuthor", m.replyToAuthor ?: JSONObject.NULL)
                     .put("replyToSnippet", m.replyToSnippet ?: JSONObject.NULL),
@@ -734,6 +749,11 @@ class DebugBridgeReceiver :
             .put("groupSeedsSent", snap.groupSeedsSent)
             .put("groupSeedsAdopted", snap.groupSeedsAdopted)
             .put("dmSealedV1Fallback", snap.dmSealedV1Fallback)
+            .put("receiptsSealed", snap.receiptsSealed)
+            .put("receiptsSealedFallback", snap.receiptsSealedFallback)
+            .put("reactionsSealed", snap.reactionsSealed)
+            .put("reactionsSealedFallback", snap.reactionsSealedFallback)
+            .put("dropsByReason", JSONObject(snap.dropsByReason.mapKeys { it.key.name }))
             .put("nanServesPeak", snap.nanServesPeak)
             .put("nanAcceptsRefused", snap.nanAcceptsRefused)
             .put("nanIcmKeepaliveFailed", snap.nanIcmKeepaliveFailed)

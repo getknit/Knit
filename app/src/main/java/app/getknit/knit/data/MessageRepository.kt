@@ -31,6 +31,8 @@ class MessageRepository(
     /** The DM recipient of message [id], or null for a broadcast/group message or one we don't hold. */
     suspend fun recipientOf(id: String): String? = dao.recipientOf(id)
 
+    suspend fun conversationOf(id: String): String? = dao.conversationOf(id)
+
     suspend fun markReceived(id: String) = dao.markReceived(id)
 
     /** Outgoing DMs to [recipientId] that are still awaiting the recipient's key before they can be sent. */

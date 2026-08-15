@@ -29,6 +29,10 @@ interface MessageDao {
     @Query("SELECT recipientId FROM messages WHERE id = :id")
     suspend fun recipientOf(id: String): String?
 
+    /** The conversation the stored message [id] belongs to, or null when it isn't held. */
+    @Query("SELECT conversationId FROM messages WHERE id = :id")
+    suspend fun conversationOf(id: String): String?
+
     @Query("UPDATE messages SET received = 1 WHERE id = :id")
     suspend fun markReceived(id: String)
 

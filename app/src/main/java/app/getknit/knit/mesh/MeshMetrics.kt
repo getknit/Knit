@@ -54,8 +54,9 @@ enum class DropReason {
     /** A v2 envelope with a structurally invalid ratchet header (missing `r`, bound violations, group-addressed). */
     RATCHET_BAD_HEADER,
 
-    /** A group frame whose roster failed vetting (unverifiable founding set, smuggled member, non-member
-     *  sender, or an oversized roster) — see `InboundPipeline.vetRoster`. */
+    /** A group frame CLAIMING US whose roster failed vetting (unverifiable founding set, smuggled
+     *  member, non-founding sender, oversized roster) — see `InboundPipeline.vetRoster`. Frames for
+     *  groups we simply aren't in are refused silently (that is every relayed foreign-group frame). */
     GROUP_ROSTER_REFUSED,
 
     /** A group ratchet frame with no adopted seed for its (sender, epoch) — the seed DM hasn't arrived/was lost. */

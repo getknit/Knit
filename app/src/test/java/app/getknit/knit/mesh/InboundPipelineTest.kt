@@ -998,13 +998,14 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            // Roster does not include us → refused, nothing stored (the id itself derives honestly).
+            // Roster does not include us → not our group: refused silently (we are merely a carrier —
+            // this is every relayed foreign-group frame, so it must NOT pollute the drops dashboard).
             val group = rig.group(members = listOf(alice.nodeId), createdBy = alice.nodeId, name = "Secret")
 
             rig.deliver(alice, rig.groupUpdate(alice, group))
 
             assertNull(rig.groupMap[group.id])
-            assertEquals(1L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
+            assertEquals(0L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
         }
 
     @Test

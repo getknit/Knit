@@ -1039,11 +1039,21 @@ class InboundPipeline(
             db.withTransaction {
                 val existing = groups.find(group.id)
                 if (groupFrameRefused(group, senderId, existing, blocked)) return@withTransaction null
-                val roster = vetRoster(group, senderId, existing, me)
-                if (roster == null) {
-                    metrics.onDropped(DropReason.GROUP_ROSTER_REFUSED)
-                    return@withTransaction null
-                }
+                val roster =
+                    when (val verdict = vetRoster(group, senderId, existing, me)) {
+                        is RosterVerdict.Accept -> {
+                            verdict.members
+                        }
+
+                        RosterVerdict.NotOurs -> {
+                            return@withTransaction null
+                        }
+
+                        RosterVerdict.Refused -> {
+                            metrics.onDropped(DropReason.GROUP_ROSTER_REFUSED)
+                            return@withTransaction null
+                        }
+                    }
 
                 // The name is shared only when explicitly set; an unnamed (blank/null) frame never clears a name
                 // someone else set. Adopt an incoming name only if it's newer (last-writer-wins on sentAt).
@@ -1091,9 +1101,22 @@ class InboundPipeline(
             existing?.left == true ||
             (existing == null && group.createdBy in blocked)
 
+    /** [vetRoster]'s verdict: the roster to store, a **silent** not-ours refusal (we are merely a
+     *  carrier for someone else's group — the overwhelmingly common case on a relay path), or a
+     *  counted integrity refusal (a frame claiming us that fails the pin/derivation/sender rules). */
+    private sealed interface RosterVerdict {
+        data class Accept(
+            val members: List<String>,
+        ) : RosterVerdict
+
+        object NotOurs : RosterVerdict
+
+        object Refused : RosterVerdict
+    }
+
     /**
      * Vets an inbound self-describing roster against the pinned row and returns the **effective member
-     * list to store** — or null when the frame must be refused. The invariant: the stored founding set
+     * list to store** — or a refusing [RosterVerdict]. The invariant: the stored founding set
      * (members ∪ departed) only ever comes from a roster whose [GroupInfo.id] *is* the hash of that set
      * ([Conversations.groupIdFor]), so no member can smuggle an extra id in (they cannot forge a set
      * that derives to the pinned id) and none can hide one (a shrunk roster is accepted as a frame but
@@ -1121,11 +1144,15 @@ class InboundPipeline(
         senderId: String,
         existing: GroupEntity?,
         me: String,
-    ): List<String>? {
+    ): RosterVerdict {
         val incomingFounding = (group.members + group.departed.orEmpty()).distinct()
         val storedMembers = existing?.let { GroupMembersStore.decode(it.members) }.orEmpty()
         val storedDeparted = existing?.let { GroupMembersStore.decode(it.departed) }.orEmpty()
         val storedFounding = (storedMembers + storedDeparted).toSet()
+        // Not our group: nothing to vet and nothing to count — we relay and custody it regardless
+        // (delivery-side gating only). Checked against the pin when we hold one, else the frame.
+        val claimedFounding = if (existing != null) storedFounding else incomingFounding.toSet()
+        if (me !in claimedFounding) return RosterVerdict.NotOurs
         val withinPin = existing != null && storedFounding.containsAll(incomingFounding)
         val founding: Collection<String>
         val members: List<String>
@@ -1139,15 +1166,15 @@ class InboundPipeline(
                 incomingFounding.containsAll(storedFounding.toList()) &&
                     incomingFounding.size <= GroupInfo.MAX_MEMBERS &&
                     Conversations.groupIdFor(incomingFounding) == group.id
-            if (!verifiedSuperset) return null
+            if (!verifiedSuperset) return RosterVerdict.Refused
             founding = incomingFounding
             members = incomingFounding.filter { it !in storedDeparted }
         }
         // Us and the sender must both be founding members. Checked against the founding set, not the
         // frame's effective roster: a frame omitting us can't starve us out of our own group, and a
         // departed member's in-flight (pre-leave) frames still deliver.
-        if (me !in founding || senderId !in founding) return null
-        return members
+        if (me !in founding || senderId !in founding) return RosterVerdict.Refused
+        return RosterVerdict.Accept(members)
     }
 
     /**

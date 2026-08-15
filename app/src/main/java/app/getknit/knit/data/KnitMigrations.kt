@@ -65,6 +65,51 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v3 — the group sender-key ratchet (docs/GROUP_FORWARD_SECRECY.md): four `group_*` state tables
+     * (our send chains, per-sender recv chains keyed by mint era, skipped keys, the seed outbox).
+     * Additive only; the SQL must stay byte-equivalent to what Room generates for
+     * `app/schemas/**/3.json` (validated by `runMigrationsAndValidate`).
+     */
+    val MIGRATION_2_3 =
+        object : Migration(2, 3) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `group_send_chains` (" +
+                        "`groupId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `seed` BLOB NOT NULL, " +
+                        "`chainKey` BLOB NOT NULL, `count` INTEGER NOT NULL, `mintedAt` INTEGER NOT NULL, " +
+                        "`export` BLOB NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`groupId`, `epoch`))",
+                )
+                connection.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_group_send_chains_mintedAt` ON `group_send_chains` (`mintedAt`)",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `group_recv_chains` (" +
+                        "`groupId` TEXT NOT NULL, `senderId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, " +
+                        "`mintedAt` INTEGER NOT NULL, `chainKey` BLOB NOT NULL, `next` INTEGER NOT NULL, " +
+                        "`lastUsedAt` INTEGER NOT NULL, PRIMARY KEY(`groupId`, `senderId`, `epoch`, `mintedAt`))",
+                )
+                connection.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_group_recv_chains_lastUsedAt` ON `group_recv_chains` (`lastUsedAt`)",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `group_skipped_keys` (" +
+                        "`groupId` TEXT NOT NULL, `senderId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, " +
+                        "`mintedAt` INTEGER NOT NULL, `idx` INTEGER NOT NULL, `msgKey` BLOB NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, PRIMARY KEY(`groupId`, `senderId`, `epoch`, `mintedAt`, `idx`))",
+                )
+                connection.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_group_skipped_keys_createdAt` ON `group_skipped_keys` (`createdAt`)",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `group_key_sends` (" +
+                        "`groupId` TEXT NOT NULL, `memberId` TEXT NOT NULL, `sentEpoch` INTEGER NOT NULL, " +
+                        "`sentAt` INTEGER NOT NULL, `ackedEpoch` INTEGER NOT NULL, `ackedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`groupId`, `memberId`))",
+                )
+            }
+        }
+
     /** All migrations, applied by Room in order. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 }

@@ -17,6 +17,7 @@ import app.getknit.knit.data.crypto.DatabaseKey
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.crypto.KeystoreSecret
 import app.getknit.knit.data.forward.ForwardRepository
+import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.demo.DemoComposer
@@ -24,6 +25,7 @@ import app.getknit.knit.identity.AndroidDeviceIdSource
 import app.getknit.knit.identity.DeviceIdSource
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.ForwardStore
+import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 import app.getknit.knit.mesh.crypto.ratchet.RatchetStore
 import app.getknit.knit.notifications.MessageNotifier
 import app.getknit.knit.notifications.Notifier
@@ -74,6 +76,7 @@ val appModule =
         single { get<KnitDatabase>().blobVerdictDao() }
         single { get<KnitDatabase>().forwardDao() }
         single { get<KnitDatabase>().ratchetDao() }
+        single { get<KnitDatabase>().groupRatchetDao() }
         single { MessageRepository(get()) }
         single { PeerRepository(get()) }
         single { ReactionRepository(get(), get()) }
@@ -87,4 +90,6 @@ val appModule =
         // DM epoch-ratchet session state (docs/FORWARD_SECRECY_RATCHET.md), in the encrypted DB so the
         // ratchet advance commits in the same transaction as the message row it decrypted/sealed.
         single<RatchetStore> { RatchetRepository(get()) }
+        // Group sender-key ratchet state (docs/GROUP_FORWARD_SECRECY.md), same transactional posture.
+        single<GroupRatchetStore> { GroupRatchetRepository(get()) }
     }

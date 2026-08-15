@@ -16,6 +16,11 @@ import app.getknit.knit.data.message.MessageDao
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerDao
 import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.ratchet.GroupKeySendEntity
+import app.getknit.knit.data.ratchet.GroupRatchetDao
+import app.getknit.knit.data.ratchet.GroupRecvChainEntity
+import app.getknit.knit.data.ratchet.GroupSendChainEntity
+import app.getknit.knit.data.ratchet.GroupSkippedKeyEntity
 import app.getknit.knit.data.ratchet.RatchetDao
 import app.getknit.knit.data.ratchet.RatchetLocalEpochEntity
 import app.getknit.knit.data.ratchet.RatchetRecvEpochEntity
@@ -31,6 +36,8 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         GroupEntity::class, BlobVerdictEntity::class, ForwardEntity::class,
         RatchetSessionEntity::class, RatchetLocalEpochEntity::class,
         RatchetRecvEpochEntity::class, RatchetSkippedKeyEntity::class,
+        GroupSendChainEntity::class, GroupRecvChainEntity::class,
+        GroupSkippedKeyEntity::class, GroupKeySendEntity::class,
     ],
     // v1: frozen launch baseline. The pre-1.0 alpha schema churn (the old destructive v2…v22 bumps that
     //     rode the wire/crypto breaks) is collapsed; docs/WIRE_COMPAT.md keeps the historical break record.
@@ -38,7 +45,9 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     //     time (caught by KnitDatabaseMigrationTest), never a silent wipe of a user's messages/custody/pins.
     // v2: DM epoch-ratchet state (4 ratchet_* tables) + the peers prekey columns
     //     (docs/FORWARD_SECRECY_RATCHET.md); migrated by KnitMigrations.MIGRATION_1_2.
-    version = 2,
+    // v3: group sender-key ratchet state (4 group_* tables: send/recv chains, skipped keys, the seed
+    //     outbox — docs/GROUP_FORWARD_SECRECY.md); migrated by KnitMigrations.MIGRATION_2_3.
+    version = 3,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without
@@ -61,6 +70,8 @@ abstract class KnitDatabase : RoomDatabase() {
     abstract fun forwardDao(): ForwardDao
 
     abstract fun ratchetDao(): RatchetDao
+
+    abstract fun groupRatchetDao(): GroupRatchetDao
 
     companion object {
         /**

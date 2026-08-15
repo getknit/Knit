@@ -43,8 +43,8 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v2) creates and opens from the exported JSON`() {
-        val version = 2 // KnitDatabase @Database(version = 2) — bump alongside the DB (its retention is CLASS,
+    fun `the current schema (v3) creates and opens from the exported JSON`() {
+        val version = 3 // KnitDatabase @Database(version = 3) — bump alongside the DB (its retention is CLASS,
         // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
         helper.createDatabase(version).close()
     }
@@ -90,5 +90,39 @@ class KnitDatabaseMigrationTest {
                 assertEquals(0L, s.getLong(0))
             }
         }
+    }
+
+    @Test
+    fun `migrate 2 to 3 preserves ratchet state and adds the group ratchet schema`() {
+        // Seed a v2 database with a DM ratchet session (the state a real device carries into the
+        // upgrade); 2→3 must leave it untouched and add the four empty group_* tables.
+        helper.createDatabase(2).use { c ->
+            c.execSQL(
+                "INSERT INTO ratchet_sessions (peerId, confirmed, weAreInitiator, root, prevRootWeAreInitiator, " +
+                    "prevRootExpiresAt, establishedAt, initPkid, peerBaseEpoch, sendEpoch, sendCount, " +
+                    "sendEpochStartedAt, sendEpochBaseEpoch, highestPeAcked, lastResetSentAt, updatedAt) " +
+                    "VALUES ('p1', 1, 1, x'0102', 0, 0, 5, 1, 0, 2, 3, 5, 0, 1, 0, 9)",
+            )
+        }
+        helper.runMigrationsAndValidate(3, listOf(KnitMigrations.MIGRATION_2_3)).use { c ->
+            c.prepare("SELECT sendEpoch, sendCount FROM ratchet_sessions WHERE peerId = 'p1'").use { s ->
+                assertTrue(s.step())
+                assertEquals(2L, s.getLong(0))
+                assertEquals(3L, s.getLong(1))
+            }
+            // The group ratchet tables are present and empty.
+            for (table in listOf("group_send_chains", "group_recv_chains", "group_skipped_keys", "group_key_sends")) {
+                c.prepare("SELECT COUNT(*) FROM $table").use { s ->
+                    assertTrue(s.step())
+                    assertEquals(0L, s.getLong(0))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `the full chain 1 to 3 applies cleanly`() {
+        helper.createDatabase(1).close()
+        helper.runMigrationsAndValidate(3, KnitMigrations.ALL.toList()).close()
     }
 }

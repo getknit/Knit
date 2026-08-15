@@ -10,6 +10,8 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.group.GroupEntity
+import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
@@ -540,8 +542,9 @@ class MeshManagerTest {
             assertEquals(EncEnvelope.VERSION_GROUP_RATCHET, groupEnc.v)
             assertTrue(groupEnc.keys.isEmpty())
             assertNull(groupEnc.r)
-            assertEquals(1, groupEnc.g!!.se)
-            assertEquals(0, groupEnc.g!!.n)
+            val header = checkNotNull(groupEnc.g)
+            assertEquals(1, header.se)
+            assertEquals(0, header.n)
             // The minted epoch's seed rode ahead, pairwise, as a v2 ctl DM.
             val seedDm = frames.single { it.recipientId == rig.bob.nodeId }
             assertEquals(EncEnvelope.VERSION_RATCHET, WireCodec.decodePayload<ChatContent>(seedDm.payload)!!.enc!!.v)
@@ -608,6 +611,64 @@ class MeshManagerTest {
             // The v1 silent-skip of unpinned members is unchanged (their recovery plane is v3 + NACK,
             // or the key-gap roadmap note for pure-v1 groups).
             assertEquals(listOf(rig.bob.nodeId), enc.keys.map { it.to })
+        }
+
+    @Test
+    fun aKeyRequestReSendsCurrentSeedsOncePerFloor() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            val members = listOf(rig.me.nodeId, rig.bob.nodeId)
+            val group = GroupInfo(id = "g-1", members = members, createdBy = rig.me.nodeId)
+            coEvery { rig.groups.find("g-1") } returns
+                GroupEntity(
+                    groupId = "g-1",
+                    name = "",
+                    members = GroupMembersStore.encode(members),
+                    createdBy = rig.me.nodeId,
+                    createdAt = 1L,
+                )
+            assertTrue(rig.manager.sendChat("mint it", group = group))
+            advanceUntilIdle()
+
+            fun seedDmsToBob() = rig.sentChatFrames().count { it.recipientId == rig.bob.nodeId }
+            val afterMint = seedDmsToBob()
+
+            // A member's key request re-seals the current seeds…
+            rig.manager.redistributeGroupKey("g-1", rig.bob.nodeId)
+            advanceUntilIdle()
+            assertEquals(afterMint + 1, seedDmsToBob())
+
+            // …once per floor window (the fixed test clock keeps the window closed)…
+            rig.manager.redistributeGroupKey("g-1", rig.bob.nodeId)
+            advanceUntilIdle()
+            assertEquals(afterMint + 1, seedDmsToBob())
+
+            // …and a non-member's request re-seals nothing.
+            val outsider = party()
+            rig.manager.redistributeGroupKey("g-1", outsider.nodeId)
+            advanceUntilIdle()
+            assertEquals(0, rig.sentChatFrames().count { it.recipientId == outsider.nodeId })
+        }
+
+    @Test
+    fun seedsAreStillDistributedToBlockedMembers() =
+        runTest(UnconfinedTestDispatcher()) {
+            // ADR 010: blocking is local presentation only — withholding a seed would reveal the block
+            // through the blocked member's decrypt failures.
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            coEvery { rig.settings.blockedNodeIds } returns MutableStateFlow(setOf(rig.bob.nodeId))
+            val group = GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId), createdBy = rig.me.nodeId)
+
+            assertTrue(rig.manager.sendChat("still sealed", group = group))
+            advanceUntilIdle()
+
+            assertEquals(1, rig.sentChatFrames().count { it.recipientId == rig.bob.nodeId })
+            assertEquals(
+                EncEnvelope.VERSION_GROUP_RATCHET,
+                WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single { it.group != null }.payload)!!.enc!!.v,
+            )
         }
 
     @Test

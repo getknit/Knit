@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MentionStore
@@ -204,6 +205,7 @@ class MeshManager(
             flushPending = ::flushPendingFor,
             classifyText = ::isTextFlagged,
             resealUnacked = ::resealRecentDmsTo,
+            redistributeGroupKey = ::redistributeGroupKey,
             flushGroupKeys = ::flushPendingGroupKeysFor,
         )
 
@@ -333,6 +335,7 @@ class MeshManager(
             keyExchange.retryMissing()
             ackSync.retryPending() // re-send broadcast/group ticks we still owe absent authors (+ age out old ones)
             ratchet.sweep(clock()) // retire epoch privs / skipped keys — the ratchet's PFS window enforcement
+            groupRatchet.sweep(clock()) // retire group chains / skipped keys — the group PFS window
             rotatePrekeyIfDue()
         }
     }
@@ -627,10 +630,16 @@ class MeshManager(
         return true
     }
 
+    // (groupId, memberId) -> last seed (re-)send toward them, bounding every proactive plane (profile
+    // arrival, neighbor join, session reset) and the key-request responder to one send per floor window.
+    private val lastSeedSendAt = ConcurrentHashMap<Pair<String, String>, Long>()
+
     /**
-     * The group analogue of [flushPendingFor], fired when [memberId]'s profile (re)arrives: for every
-     * non-left group we share with a live send chain, re-send the current seed if the outbox says this
-     * member hasn't acked it — the "member's prekey arrived later" healing path.
+     * The group analogue of [flushPendingFor], fired when [memberId]'s profile (re)arrives, when they
+     * appear as a neighbor, and after their session reset: for every non-left group we share with a
+     * live send chain, re-send the current seed if the outbox says this member hasn't acked it — the
+     * "member's prekey arrived later" / partition-merge / wipe healing paths, floored per
+     * (group, member) so profile re-floods and link flaps can't turn it into chatter.
      */
     private suspend fun flushPendingGroupKeysFor(memberId: String) {
         val me = identity.nodeId()
@@ -638,10 +647,42 @@ class MeshManager(
             val chain = groupRatchet.currentSeeds(group.groupId).firstOrNull() ?: return@forEach
             val outbox = groupRatchet.keySend(group.groupId, memberId)
             if (outbox != null && outbox.ackedEpoch >= chain.epoch) return@forEach
+            if (!seedSendFloorOpen(group.groupId, memberId)) return@forEach
             val payload =
                 MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.groupId, keys = listOf(chain)))
             sendSeedDm(group.groupId, memberId, payload, chain.epoch, me)
         }
+    }
+
+    /**
+     * Answers a member's `CTL_GROUP_KEY_REQ` (the pipeline's redistributeGroupKey lambda): verify the
+     * requester is a current member of a non-left group, apply the per-(group, member) floor, and
+     * re-seal our **current + draining previous** seeds in one ctl DM. Deliberately NEVER advances the
+     * epoch — advance-on-request would hand any member a rekey-fan-out amplifier.
+     */
+    internal suspend fun redistributeGroupKey(
+        groupId: String,
+        requesterId: String,
+    ) {
+        val group = groups.find(groupId) ?: return
+        if (group.left || requesterId !in GroupMembersStore.decode(group.members)) return
+        val seeds = groupRatchet.currentSeeds(groupId)
+        if (seeds.isEmpty()) return
+        if (!seedSendFloorOpen(groupId, requesterId)) return
+        val payload = MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(groupId, keys = seeds))
+        sendSeedDm(groupId, requesterId, payload, seeds.first().epoch, identity.nodeId())
+    }
+
+    /** Checks-and-stamps the per-(group, member) seed re-send floor. */
+    private fun seedSendFloorOpen(
+        groupId: String,
+        memberId: String,
+    ): Boolean {
+        val key = groupId to memberId
+        val now = clock()
+        if (now - (lastSeedSendAt[key] ?: 0L) < SEED_RESEND_FLOOR_MS) return false
+        lastSeedSendAt[key] = now
+        return true
     }
 
     /** The peer's pinned, already-verified ratchet prekey (base64-decoded), or null when absent/garbled. */
@@ -714,8 +755,9 @@ class MeshManager(
     /**
      * Floods a signed `groupleave` frame announcing that we've left [groupId], so the remaining members
      * drop us from their roster and show a status notice. Sent on departure (before the local tombstone);
-     * the leaver is the signer, so a forged leave can't evict anyone else. Flooded once (not custodied),
-     * like [sendGroupUpdate].
+     * the leaver is the signer, so a forged leave can't evict anyone else. Custodied like any group frame
+     * (`FrameType.isCustodial`), so it reaches members offline at the moment of leaving — which is what
+     * bounds how *eventual* their leave-rekey is (docs/GROUP_FORWARD_SECRECY.md #6.1).
      */
     override suspend fun sendGroupLeave(groupId: String) {
         val me = identity.nodeId()
@@ -868,6 +910,7 @@ class MeshManager(
                     blobExchange.onNeighborAdded(peer) // re-ask for blobs we still need
                     keyExchange.onNeighborAdded(peer) // re-ask for keys we still need
                     ackSync.onNeighborAdded(peer) // re-send any broadcast/group delivery tick we owe it
+                    flushPendingGroupKeysFor(peer.nodeId) // re-send unacked group epoch seeds it never got
                 }
             }
         }
@@ -896,6 +939,7 @@ class MeshManager(
                     forwardSync.onNeighborAdded(it) // re-offer carried DMs addressed to / routable via it
                     keyExchange.onNeighborAdded(it) // re-ask the new neighbor for keys we're still missing
                     ackSync.onNeighborAdded(it) // re-send any broadcast/group delivery tick we owe it, over the link
+                    flushPendingGroupKeysFor(it.nodeId) // re-send unacked group epoch seeds (partition merge)
                 }
             }
         }
@@ -916,6 +960,7 @@ class MeshManager(
             // first-contact push) already carries it; also the startup ratchet retention sweep.
             rotatePrekeyIfDue()
             ratchet.sweep(clock())
+            groupRatchet.sweep(clock())
             val env = currentProfileEnvelope()
             forwardSync.onSeen(sign(env), env, ForwardStore.ORIGIN_SELF)
         }
@@ -1211,6 +1256,9 @@ class MeshManager(
 
         /** How far back the post-reset DM re-seal reaches — the custody TTL (older frames left the mesh). */
         const val RESEAL_WINDOW_MS = 24 * 60 * 60_000L
+
+        /** Per-(group, member) floor on proactive/responder seed re-sends (docs/GROUP_FORWARD_SECRECY.md #10). */
+        const val SEED_RESEND_FLOOR_MS = 15 * 60_000L
 
         /** Payload for a frame whose content lives entirely in the routing envelope (e.g. a group update). */
         val EMPTY_PAYLOAD = ByteArray(0)

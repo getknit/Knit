@@ -3,6 +3,8 @@ package app.getknit.knit.data
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.ratchet.GroupRatchetRepository
+import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetEngine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -16,7 +18,9 @@ import org.junit.Test
  * departed tombstone + status notice, all in one transaction) and `leave`/`delete` against the real DB.
  */
 class GroupRepositoryTest : RoomDbTest() {
-    private fun repo() = GroupRepository(db.groupDao(), MessageRepository(db.messageDao()), db)
+    private val groupRatchet by lazy { GroupRatchetRepository(db.groupRatchetDao(), clock = { 1L }) }
+
+    private fun repo() = GroupRepository(db.groupDao(), MessageRepository(db.messageDao()), db, groupRatchet)
 
     private val messages get() = db.messageDao()
 
@@ -49,6 +53,68 @@ class GroupRepositoryTest : RoomDbTest() {
             assertEquals(MessageEntity.KIND_MEMBER_LEFT, notice.kind)
             assertEquals("b", notice.senderId)
             assertEquals(100L, notice.sentAt)
+        }
+
+    @Test
+    fun `recordDeparture forces a rekey and drops the leaver's outbox row atomically`() =
+        runTest {
+            seedGroup("g", listOf("a", "b", "c"))
+            groupRatchet.commitSend(
+                GroupRatchetEngine.SendChain(
+                    groupId = "g",
+                    epoch = 1,
+                    seed = ByteArray(32),
+                    chainKey = ByteArray(32),
+                    count = 3,
+                    mintedAt = 1L,
+                    export = ByteArray(32),
+                ),
+            )
+            groupRatchet.markKeySent("g", "b", epoch = 1, at = 1L)
+            groupRatchet.markKeySent("g", "c", epoch = 1, at = 1L)
+
+            assertTrue(repo().recordDeparture("g", "b", leftAt = 100L))
+
+            // Send chains die with the departure — the next send mints a fresh epoch that the leaver
+            // never receives; the leaver stops being a distribution target, remaining members keep theirs.
+            assertNull(groupRatchet.sendChain("g"))
+            assertNull(groupRatchet.keySend("g", "b"))
+            assertEquals(1, groupRatchet.keySend("g", "c")?.sentEpoch)
+        }
+
+    @Test
+    fun `leave purges all group ratchet state`() =
+        runTest {
+            seedGroup("g", listOf("a", "b"))
+            groupRatchet.commitSend(
+                GroupRatchetEngine.SendChain(
+                    groupId = "g",
+                    epoch = 1,
+                    seed = ByteArray(32),
+                    chainKey = ByteArray(32),
+                    count = 0,
+                    mintedAt = 1L,
+                    export = ByteArray(32),
+                ),
+            )
+            groupRatchet.insertRecvChain(
+                GroupRatchetEngine.RecvChain(
+                    groupId = "g",
+                    senderId = "b",
+                    epoch = 1,
+                    mintedAt = 1L,
+                    chainKey = ByteArray(32),
+                    next = 0,
+                    lastUsedAt = 1L,
+                ),
+            )
+            groupRatchet.markKeySent("g", "b", epoch = 1, at = 1L)
+
+            repo().leave("g")
+
+            assertNull(groupRatchet.sendChain("g"))
+            assertTrue(groupRatchet.recvChains("g", "b", 1).isEmpty())
+            assertNull(groupRatchet.keySend("g", "b"))
         }
 
     @Test

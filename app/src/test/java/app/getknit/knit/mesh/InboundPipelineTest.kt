@@ -236,6 +236,8 @@ class InboundPipelineTest {
         val originated = mutableListOf<RelayEnvelope>()
         val flushed = mutableListOf<String>()
         val resealed = mutableListOf<String>()
+        val redistributed = mutableListOf<Pair<String, String>>()
+        val groupKeysFlushed = mutableListOf<String>()
         var failClassify = false
         val pipeline: InboundPipeline
 
@@ -288,6 +290,8 @@ class InboundPipelineTest {
                     flushPending = { flushed += it },
                     classifyText = { _, _, _ -> if (failClassify) error("moderation boom") else false },
                     resealUnacked = { resealed += it },
+                    redistributeGroupKey = { groupId, requester -> redistributed += groupId to requester },
+                    flushGroupKeys = { groupKeysFlushed += it },
                 )
         }
 
@@ -2139,15 +2143,16 @@ class InboundPipelineTest {
             group: GroupInfo,
             id: String,
             body: String,
+            sentAt: Long = 5L,
         ): RelayEnvelope {
-            val aad = MessageCrypto.header(id, party.nodeId, 5L, groupId)
+            val aad = MessageCrypto.header(id, party.nodeId, sentAt, groupId)
             val sealed = checkNotNull(engine.seal(chain, MessageContent(body = body).encode(), aad))
             chain = sealed.chain
             return RelayEnvelope(
                 type = FrameType.CHAT,
                 id = id,
                 senderId = party.nodeId,
-                sentAt = 5L,
+                sentAt = sentAt,
                 group = group,
                 payload =
                     WireCodec.encodePayload(
@@ -2438,6 +2443,89 @@ class InboundPipelineTest {
 
             assertEquals(1L, rig.drops(DropReason.GROUP_RATCHET_BAD_HEADER))
             assertFalse(rig.msgMap.containsKey("v3-dm"))
+        }
+
+    @Test
+    fun threeDistinctUndecryptableV3FramesTriggerOneRateLimitedKeyRequest() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub) // request needs cap + prekey
+            val group = rig.seedV3Group(alice)
+            val author = V3GroupAuthor(alice, group.id)
+
+            fun chatFramesToAlice() = rig.originated.count { it.type == FrameType.CHAT && it.recipientId == alice.nodeId }
+            val fresh = System.currentTimeMillis() // the pipeline age-gates on the real clock
+
+            // Two distinct undecryptable frames: heuristic not yet satisfied.
+            rig.deliver(alice, author.groupFrame(group, id = "nk1", body = "x", sentAt = fresh))
+            rig.deliver(alice, author.groupFrame(group, id = "nk2", body = "x", sentAt = fresh))
+            assertEquals(0, chatFramesToAlice())
+
+            // The third distinct id fires exactly one CTL_GROUP_KEY_REQ…
+            rig.deliver(alice, author.groupFrame(group, id = "nk3", body = "x", sentAt = fresh))
+            assertEquals(1, chatFramesToAlice())
+
+            // …and further undecryptable frames inside the floor add nothing.
+            rig.deliver(alice, author.groupFrame(group, id = "nk4", body = "x", sentAt = fresh))
+            rig.deliver(alice, author.groupFrame(group, id = "nk5", body = "x", sentAt = fresh))
+            rig.deliver(alice, author.groupFrame(group, id = "nk6", body = "x", sentAt = fresh))
+            assertEquals(1, chatFramesToAlice())
+        }
+
+    @Test
+    fun ancientUndecryptableFramesNeverBurnTheKeyRequestBudget() =
+        runTest {
+            // Replay of frames older than the age window (their epoch is legitimately swept everywhere)
+            // must not feed the heuristic — the custody dead-on-arrival guard applied to recovery.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val group = rig.seedV3Group(alice)
+            val author = V3GroupAuthor(alice, group.id)
+
+            repeat(4) { i ->
+                // sentAt = 1L: far past REQUEST_MAX_FRAME_AGE_MS relative to the pipeline's wall clock.
+                rig.deliver(alice, author.groupFrame(group, id = "old$i", body = "x", sentAt = 1L))
+            }
+
+            assertEquals(0, rig.originated.count { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+            assertTrue(rig.drops(DropReason.GROUP_RATCHET_NO_KEY) >= 4L)
+        }
+
+    @Test
+    fun aKeyRequestCtlInvokesTheRedistributionLambda() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedV3Group(alice)
+
+            rig.deliver(
+                alice,
+                V2Author(alice, rig).dm("req1", "", ctl = MessageContent.CTL_GROUP_KEY_REQ, gk = GroupKeyPayload(group.id)),
+            )
+
+            assertEquals(listOf(group.id to alice.nodeId), rig.redistributed)
+            assertFalse(rig.msgMap.containsKey("req1"))
+        }
+
+    @Test
+    fun aSessionResetAlsoReSendsGroupSeeds() =
+        runTest {
+            // ctl frames are never persisted, so resealRecentDmsTo can't recover a seed DM the wiped
+            // peer lost — the reset hook is the wipe-side seed plane.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("est", "hello"))
+            rig.deliver(alice, V2Author(alice, rig, at = 60_000L).dm("rst", "", ctl = MessageContent.CTL_SESSION_RESET))
+
+            assertEquals(listOf(alice.nodeId), rig.resealed)
+            assertEquals(listOf(alice.nodeId), rig.groupKeysFlushed)
         }
 
     private companion object {

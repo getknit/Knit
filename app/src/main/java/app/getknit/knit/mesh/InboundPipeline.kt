@@ -610,7 +610,11 @@ class InboundPipeline(
         if (!committed) return
         when (plain.ctl) {
             MessageContent.CTL_SESSION_RESET -> {
+                // The recovery half: re-seal our recent unacked DMs under the fresh session, and re-send
+                // our group epoch seeds — ctl frames are never persisted, so the DM re-seal alone would
+                // leave the wiped peer without our seeds forever (the only wipe-side seed plane).
                 resealUnacked(env.senderId)
+                flushGroupKeys(env.senderId)
             }
 
             MessageContent.CTL_GROUP_KEY -> {
@@ -712,7 +716,7 @@ class InboundPipeline(
         val now = System.currentTimeMillis()
         val peek = groupRatchet.peekOpen(groupId, env.senderId, wireHeader, enc.nonce, enc.ct, aad, now)
         if (peek !is GroupRatchetEngine.OpenOutcome.Opened) {
-            onGroupRatchetFailure(env, peek)
+            onGroupRatchetFailure(env, peek, groupId, me, now)
             return
         }
         val plain = MessageContent.decode(peek.plaintext)
@@ -748,13 +752,16 @@ class InboundPipeline(
     }
 
     /**
-     * Maps a typed v3 open failure to its drop reason. `NO_KEY` (seed never arrived) and `AEAD_FAIL`
-     * (stale/foreign mint era — the post-wipe signal) will feed the key-request heuristic when the
-     * hardening phase lands; today they only count.
+     * Maps a typed v3 open failure to its drop reason, and — for the two shapes that mean "the seed
+     * this frame needs isn't here" (never arrived / lost, or a stale-era chain after the sender wiped)
+     * — feeds the key-request heuristic, sending a rate-limited `CTL_GROUP_KEY_REQ` when it fires.
      */
-    private fun onGroupRatchetFailure(
+    private suspend fun onGroupRatchetFailure(
         env: RelayEnvelope,
         outcome: GroupRatchetEngine.OpenOutcome,
+        groupId: String,
+        me: String,
+        now: Long,
     ) {
         val reason =
             when (outcome) {
@@ -766,6 +773,52 @@ class InboundPipeline(
             }
         metrics.onDropped(reason)
         Log.w(TAG, "drop v3 chat ${env.id}: $outcome")
+        if (reason == DropReason.GROUP_RATCHET_NO_KEY || reason == DropReason.GROUP_RATCHET_AEAD_FAIL) {
+            maybeRequestGroupKey(env, groupId, me, now)
+        }
+    }
+
+    /**
+     * Sends a key request to [env]'s sender when the heuristic fires (≥3 distinct undecryptable
+     * frames within the age window, ≥1 h since the last request to them for this group). An ordinary
+     * v2 ctl DM (`CTL_GROUP_KEY_REQ`) — custodied by every relay, reaches an offline sender — answered
+     * by the responder's re-seal of their current seeds. Never triggers an epoch advance.
+     */
+    private suspend fun maybeRequestGroupKey(
+        env: RelayEnvelope,
+        groupId: String,
+        me: String,
+        now: Long,
+    ) {
+        // Age-gate (the custody dead-on-arrival guard, applied to the heuristic): a replayed ancient
+        // frame — whose epoch is legitimately swept everywhere — must not burn the request budget.
+        if (now - env.sentAt > GroupRatchetSessions.REQUEST_MAX_FRAME_AGE_MS) return
+        if (!groupRatchet.noteUndecryptable(groupId, env.senderId, env.id, now)) return
+        val peer = peers.find(env.senderId) ?: return
+        if ((peer.capabilities ?: 0L) and Protocol.CAP_GROUP_RATCHET == 0L) return
+        val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return
+        val prekey =
+            peer.prekeyId?.let { pid ->
+                peer.prekeyPub
+                    ?.let { runCatching { b64d(it) }.getOrNull() }
+                    ?.let { RatchetEngine.PeerPrekey(id = pid, pub = it) }
+            }
+        val id = FrameId.new()
+        val aad = MessageCrypto.header(id, me, now, env.senderId)
+        val plaintext = MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY_REQ, gk = GroupKeyPayload(groupId)).encode()
+        val sealed = ratchet.sealDm(env.senderId, bundle.dhPublicKey(), prekey, plaintext, aad, now) ?: return
+        Log.w(TAG, "requesting group key for $groupId from ${env.senderId}")
+        groupRatchet.markKeyRequested(groupId, env.senderId, now)
+        originate(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                recipientId = env.senderId,
+                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+            ),
+        )
     }
 
     /**

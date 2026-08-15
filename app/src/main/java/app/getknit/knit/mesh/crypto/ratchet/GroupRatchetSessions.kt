@@ -28,6 +28,12 @@ class GroupRatchetSessions(
     /** Adoption timestamps per (groupId, senderId) — the epoch-adoption rate limit's memory. */
     private val adoptionTimes = HashMap<Pair<String, String>, ArrayDeque<Long>>()
 
+    /** Key-request heuristic state per (groupId, senderId): distinct undecryptable frame ids (bounded LRU). */
+    private val undecryptable = HashMap<Pair<String, String>, LinkedHashSet<String>>()
+
+    /** Outbound key-request floor per (groupId, senderId). */
+    private val lastKeyRequestAt = HashMap<Pair<String, String>, Long>()
+
     private fun headerOf(g: GroupRatchetHeader): GroupRatchetEngine.FrameHeader = GroupRatchetEngine.FrameHeader(se = g.se, n = g.n)
 
     private suspend fun contextFor(
@@ -214,6 +220,43 @@ class GroupRatchetSessions(
             true
         }
 
+    /**
+     * Records an undecryptable v3 frame ([GroupRatchetEngine.OpenOutcome.Failed.NO_KEY] /
+     * [GroupRatchetEngine.OpenOutcome.Failed.AEAD_FAIL]) and decides whether a key request toward that
+     * sender is due: at least [REQUEST_DISTINCT_FRAMES] **distinct** frame ids (custody re-serves one
+     * frame endlessly — a single stuck frame must not trigger anything), and not more often than
+     * [KEY_REQUEST_MIN_INTERVAL_MS] per (group, sender). Check-only — [markKeyRequested] stamps the
+     * floor once the request actually went out (the DM noteUndecryptable/sealResetDm split).
+     */
+    fun noteUndecryptable(
+        groupId: String,
+        senderId: String,
+        frameId: String,
+        now: Long,
+    ): Boolean {
+        val key = groupId to senderId
+        val distinct =
+            synchronized(undecryptable) {
+                val ids = undecryptable.getOrPut(key) { LinkedHashSet() }
+                ids.add(frameId)
+                while (ids.size > REQUEST_TRACKED_FRAMES) ids.remove(ids.first())
+                ids.size
+            }
+        if (distinct < REQUEST_DISTINCT_FRAMES) return false
+        return synchronized(lastKeyRequestAt) { now - (lastKeyRequestAt[key] ?: 0L) >= KEY_REQUEST_MIN_INTERVAL_MS }
+    }
+
+    /** Stamps the outbound key-request floor and resets the heuristic (the request is on its way). */
+    fun markKeyRequested(
+        groupId: String,
+        senderId: String,
+        now: Long,
+    ) {
+        val key = groupId to senderId
+        synchronized(lastKeyRequestAt) { lastKeyRequestAt[key] = now }
+        synchronized(undecryptable) { undecryptable.remove(key) }
+    }
+
     /** Retention GC passthrough (wired into the existing sweep loops beside the DM facade's). */
     suspend fun sweep(now: Long) = mutex.withLock { store.sweep(now) }
 
@@ -223,6 +266,18 @@ class GroupRatchetSessions(
 
         /** The adoption rate limit's sliding window. */
         const val ADOPTION_WINDOW_MS = 24 * 60 * 60_000L
+
+        /** Distinct undecryptable frames per (group, sender) before a key request fires. */
+        const val REQUEST_DISTINCT_FRAMES = 3
+
+        /** Bound on the per-(group, sender) undecryptable-id LRU. */
+        const val REQUEST_TRACKED_FRAMES = 8
+
+        /** Outbound key-request floor per (group, sender) — cheaper + non-destructive vs the DM's 6 h reset. */
+        const val KEY_REQUEST_MIN_INTERVAL_MS = 60 * 60_000L
+
+        /** Frames older than this never feed the heuristic (mirrors custody's dead-on-arrival guard). */
+        const val REQUEST_MAX_FRAME_AGE_MS = 48 * 60 * 60_000L
     }
 }
 

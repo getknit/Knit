@@ -5,13 +5,15 @@ import app.getknit.knit.data.group.GroupDao
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 import kotlinx.coroutines.flow.Flow
 
-/** Single source of truth for group chats. */
+/** Single source of truth for group chats (and, transactionally, their v3 ratchet state hooks). */
 class GroupRepository(
     private val dao: GroupDao,
     private val messages: MessageRepository,
     private val db: KnitDatabase,
+    private val groupRatchet: GroupRatchetStore,
 ) {
     fun observeGroups(): Flow<List<GroupEntity>> = dao.observeAll()
 
@@ -57,6 +59,12 @@ class GroupRepository(
                     departed = GroupMembersStore.encode((departed + leaverId).distinct()),
                 ),
             )
+            // Leave-rekey (docs/GROUP_FORWARD_SECRECY.md #6.1), atomic with the roster shrink: drop our
+            // send chains so the next send mints a fresh epoch distributed to the REMAINING members only
+            // (the leaver reads nothing sealed after this commits), and drop the leaver's outbox row.
+            // Their recv chains drain via the 48h sweep — their pre-leave frames may still re-serve.
+            groupRatchet.deleteSendChains(groupId)
+            groupRatchet.deleteKeySend(groupId, leaverId)
             messages.save(
                 MessageEntity(
                     id = "leave:$groupId:$leaverId",
@@ -85,6 +93,8 @@ class GroupRepository(
         db.withTransaction {
             dao.markLeft(groupId)
             messages.deleteByConversation(groupId)
+            // All group ratchet state dies with our membership (chains, skipped keys, outbox).
+            groupRatchet.purgeGroup(groupId)
         }
     }
 
@@ -98,6 +108,8 @@ class GroupRepository(
         db.withTransaction {
             dao.deleteById(groupId)
             messages.deleteByConversation(groupId)
+            // A re-created group (via reconcileGroup) starts with clean ratchet state.
+            groupRatchet.purgeGroup(groupId)
         }
     }
 }

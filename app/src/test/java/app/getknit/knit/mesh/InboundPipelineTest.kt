@@ -516,20 +516,25 @@ class InboundPipelineTest {
             return WireEnvelope(relay = false, sig = ByteArray(0), signed = WireCodec.encodeEnvelope(env)) to env
         }
 
+        /** Builds a self-describing roster; [id] defaults to the real derivation over the founding set
+         *  (members ∪ departed), which `vetRoster` verifies on first sight. Pass an explicit id only to
+         *  model a forged or legacy-truncated frame. */
         fun group(
-            id: String,
             members: List<String>,
             createdBy: String,
+            id: String? = null,
             name: String? = null,
             photoHash: String? = null,
             photoUpdatedAt: Long? = null,
+            departed: List<String>? = null,
         ) = GroupInfo(
-            id = id,
+            id = id ?: Conversations.groupIdFor(members + departed.orEmpty()),
             name = name,
             members = members,
             createdBy = createdBy,
             photoHash = photoHash,
             photoUpdatedAt = photoUpdatedAt,
+            departed = departed,
         )
     }
 
@@ -927,11 +932,11 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.group("g-2", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Trip")
+            val group = rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Trip")
 
             rig.deliver(alice, rig.groupUpdate(alice, group, sentAt = 7L))
 
-            val stored = rig.groupMap["g-2"]
+            val stored = rig.groupMap[group.id]
             assertNotNull(stored)
             assertEquals("Trip", stored?.name)
             assertEquals(7L, stored?.nameUpdatedAt)
@@ -955,12 +960,12 @@ class InboundPipelineTest {
             val members = listOf(rig.self.nodeId, alice.nodeId)
 
             // An older rename (sentAt 5 < clock 10) must not win.
-            val stale = rig.group("g-3", members = members, createdBy = alice.nodeId, name = "Stale")
+            val stale = rig.group(members = members, createdBy = alice.nodeId, id = "g-3", name = "Stale")
             rig.deliver(alice, rig.groupUpdate(alice, stale, sentAt = 5L))
             assertEquals("Old", rig.groupMap["g-3"]?.name)
 
             // A newer rename (sentAt 20 >= 10) wins.
-            val newer = rig.group("g-3", members = members, createdBy = alice.nodeId, name = "Newer")
+            val newer = rig.group(members = members, createdBy = alice.nodeId, id = "g-3", name = "Newer")
             rig.deliver(alice, rig.groupUpdate(alice, newer, sentAt = 20L))
             assertEquals("Newer", rig.groupMap["g-3"]?.name)
             assertEquals(20L, rig.groupMap["g-3"]?.nameUpdatedAt)
@@ -972,12 +977,13 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            // Roster does not include us → refused, nothing stored.
-            val group = rig.group("g-4", members = listOf(alice.nodeId), createdBy = alice.nodeId, name = "Secret")
+            // Roster does not include us → refused, nothing stored (the id itself derives honestly).
+            val group = rig.group(members = listOf(alice.nodeId), createdBy = alice.nodeId, name = "Secret")
 
             rig.deliver(alice, rig.groupUpdate(alice, group))
 
-            assertNull(rig.groupMap["g-4"])
+            assertNull(rig.groupMap[group.id])
+            assertEquals(1L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
         }
 
     @Test
@@ -987,7 +993,7 @@ class InboundPipelineTest {
             val alice = party()
             rig.pin(alice)
             rig.seedGroup("g-5", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Gone", left = true)
-            val group = rig.group("g-5", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Back")
+            val group = rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, id = "g-5", name = "Back")
 
             rig.deliver(alice, rig.groupUpdate(alice, group, sentAt = 9L))
 
@@ -1003,11 +1009,166 @@ class InboundPipelineTest {
             rig.pin(alice)
             rig.settings.blocked.value = setOf("evil")
             // A non-blocked member (alice) relays the first frame for a group created by a blocked node.
-            val group = rig.group("g-6", members = listOf(rig.self.nodeId, "evil"), createdBy = "evil")
+            val group = rig.group(members = listOf(rig.self.nodeId, "evil", alice.nodeId), createdBy = "evil")
 
             rig.deliver(alice, rig.groupUpdate(alice, group))
 
-            assertNull(rig.groupMap["g-6"])
+            assertNull(rig.groupMap[group.id])
+        }
+
+    // --- Roster integrity (vetRoster): the pin, the derivation check, and the sender gate ---
+
+    @Test
+    fun aFirstSightGroupWithANonDerivedIdIsRefused() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            // Claims an id the roster does not derive to — an id forgery, refused before any pin exists.
+            val group = rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, id = "g-forged")
+
+            rig.deliver(alice, rig.groupUpdate(alice, group))
+
+            assertNull(rig.groupMap["g-forged"])
+            assertEquals(1L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
+        }
+
+    @Test
+    fun aPinnedRosterRefusesASmuggledMember() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val members = listOf(rig.self.nodeId, alice.nodeId)
+            val id = Conversations.groupIdFor(members)
+            rig.seedGroup(id, members = members, createdBy = alice.nodeId)
+            // A member re-broadcasts the roster with a sock puppet appended, keeping the pinned id: no set
+            // containing the puppet derives to that id, so the frame is refused outright.
+            val forged = rig.group(members = members + "puppet-node", createdBy = alice.nodeId, id = id)
+
+            rig.deliver(alice, rig.groupChat(alice, forged, id = "gm-smuggle", body = "hi"))
+
+            assertEquals(members, GroupMembersStore.decode(rig.groupMap[id]!!.members))
+            assertFalse("a frame with a smuggled member must not deliver", rig.msgMap.containsKey("gm-smuggle"))
+            assertEquals(1L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
+        }
+
+    @Test
+    fun aShrunkRosterIsAcceptedButNeverMutatesThePin() =
+        runTest {
+            // A frame whose roster omits bob (a "kick" attempt, or just a stale view) still delivers — but
+            // the stored roster keeps bob: membership shrinks only via his own signed groupleave.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val members = listOf(rig.self.nodeId, alice.nodeId, "bob-node")
+            val id = Conversations.groupIdFor(members)
+            rig.seedGroup(id, members = members, createdBy = alice.nodeId)
+            val shrunk = rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, id = id)
+
+            rig.deliver(alice, rig.groupChat(alice, shrunk, id = "gm-shrunk", body = "hi"))
+
+            assertEquals("hi", rig.msgMap["gm-shrunk"]?.body)
+            assertEquals(members, GroupMembersStore.decode(rig.groupMap[id]!!.members))
+        }
+
+    @Test
+    fun aFrameOmittingUsStillDeliversOncePinned() =
+        runTest {
+            // Anti-starvation: once pinned, membership is decided by the pin, not by whichever roster a
+            // frame happens to carry — a member can't cut us out by flooding rosters without us.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val members = listOf(rig.self.nodeId, alice.nodeId, "bob-node")
+            val id = Conversations.groupIdFor(members)
+            rig.seedGroup(id, members = members, createdBy = alice.nodeId)
+            val cutOut = rig.group(members = listOf(alice.nodeId, "bob-node"), createdBy = alice.nodeId, id = id)
+
+            rig.deliver(alice, rig.groupChat(alice, cutOut, id = "gm-cut", body = "still ours"))
+
+            assertEquals("still ours", rig.msgMap["gm-cut"]?.body)
+            assertEquals(members, GroupMembersStore.decode(rig.groupMap[id]!!.members))
+        }
+
+    @Test
+    fun aNonFoundingSenderIsRefused() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val carol = party()
+            rig.pin(alice)
+            rig.pin(carol)
+            val members = listOf(rig.self.nodeId, alice.nodeId)
+            val id = Conversations.groupIdFor(members)
+            rig.seedGroup(id, members = members, createdBy = alice.nodeId)
+            // carol (never a founding member) sends a chat carrying the true roster.
+            val group = rig.group(members = members, createdBy = alice.nodeId)
+
+            rig.deliver(carol, rig.groupChat(carol, group, id = "gm-outsider", body = "let me in"))
+
+            assertFalse(rig.msgMap.containsKey("gm-outsider"))
+            assertEquals(1L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
+        }
+
+    @Test
+    fun aFirstSightWithDepartedTombstonesVerifiesTheFoundingSet() =
+        runTest {
+            // The id derives over members ∪ departed, so a first sight after a departure verifies. The
+            // departed list is arithmetic only: bob stays in our effective roster until his own signed
+            // groupleave arrives (adopting another member's word for a departure would be a kick-forgery).
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group =
+                rig.group(
+                    members = listOf(rig.self.nodeId, alice.nodeId),
+                    createdBy = alice.nodeId,
+                    departed = listOf("bob-node"),
+                )
+
+            rig.deliver(alice, rig.groupUpdate(alice, group))
+
+            val stored = rig.groupMap[group.id]
+            assertNotNull(stored)
+            assertTrue(
+                "bob stays effective until his signed leave arrives",
+                "bob-node" in GroupMembersStore.decode(stored!!.members),
+            )
+            assertEquals(emptyList<String>(), GroupMembersStore.decode(stored.departed))
+        }
+
+    @Test
+    fun aVerifiedSupersetRepairsATruncatedPin() =
+        runTest {
+            // A pin first made from a legacy departed-less frame (founding truncated to the then-effective
+            // roster) heals when a full, self-verifying roster arrives.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val founding = listOf(rig.self.nodeId, alice.nodeId, "bob-node")
+            val id = Conversations.groupIdFor(founding)
+            rig.seedGroup(id, members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId)
+            val full = rig.group(members = founding, createdBy = alice.nodeId)
+
+            rig.deliver(alice, rig.groupUpdate(alice, full))
+
+            assertEquals(founding, GroupMembersStore.decode(rig.groupMap[id]!!.members))
+        }
+
+    @Test
+    fun anOversizedFoundingRosterIsRefusedOnFirstSight() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val members = listOf(rig.self.nodeId, alice.nodeId) + (1..7).map { "extra-$it" }
+            val group = rig.group(members = members, createdBy = alice.nodeId)
+
+            rig.deliver(alice, rig.groupUpdate(alice, group))
+
+            assertNull(rig.groupMap[group.id])
+            assertEquals(1L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
         }
 
     @Test
@@ -1019,7 +1180,6 @@ class InboundPipelineTest {
             coEvery { rig.blobStore.has("photoA") } returns true
             val group =
                 rig.group(
-                    "g-7",
                     members = listOf(rig.self.nodeId, alice.nodeId),
                     createdBy = alice.nodeId,
                     photoHash = "photoA",
@@ -1028,8 +1188,8 @@ class InboundPipelineTest {
 
             rig.deliver(alice, rig.groupUpdate(alice, group))
 
-            assertEquals("photoA", rig.groupMap["g-7"]?.photoHash)
-            assertEquals(100L, rig.groupMap["g-7"]?.photoUpdatedAt)
+            assertEquals("photoA", rig.groupMap[group.id]?.photoHash)
+            assertEquals(100L, rig.groupMap[group.id]?.photoUpdatedAt)
         }
 
     @Test
@@ -1041,7 +1201,6 @@ class InboundPipelineTest {
             // blobStore.has("photoB") defaults false → keep the old (null) photo but arm a pull.
             val group =
                 rig.group(
-                    "g-8",
                     members = listOf(rig.self.nodeId, alice.nodeId),
                     createdBy = alice.nodeId,
                     photoHash = "photoB",
@@ -1049,12 +1208,12 @@ class InboundPipelineTest {
                 )
 
             rig.deliver(alice, rig.groupUpdate(alice, group))
-            assertNull("photo not shown until its bytes arrive", rig.groupMap["g-8"]?.photoHash)
-            assertEquals(100L, rig.groupMap["g-8"]?.photoUpdatedAt)
+            assertNull("photo not shown until its bytes arrive", rig.groupMap[group.id]?.photoHash)
+            assertEquals(100L, rig.groupMap[group.id]?.photoUpdatedAt)
 
             // The pulled blob lands → adopt it onto the group now that the clock still matches.
             rig.pipeline.onObtained("photoB")
-            assertEquals("photoB", rig.groupMap["g-8"]?.photoHash)
+            assertEquals("photoB", rig.groupMap[group.id]?.photoHash)
         }
 
     @Test
@@ -1066,7 +1225,6 @@ class InboundPipelineTest {
             coEvery { rig.imageScreening.isImageFlagged("photoC") } returns true
             val group =
                 rig.group(
-                    "g-9",
                     members = listOf(rig.self.nodeId, alice.nodeId),
                     createdBy = alice.nodeId,
                     photoHash = "photoC",
@@ -1076,7 +1234,7 @@ class InboundPipelineTest {
             rig.deliver(alice, rig.groupUpdate(alice, group))
             rig.pipeline.onObtained("photoC")
 
-            assertNull("an explicit photo is dropped, not adopted", rig.groupMap["g-9"]?.photoHash)
+            assertNull("an explicit photo is dropped, not adopted", rig.groupMap[group.id]?.photoHash)
             coVerify { rig.blobs.deleteIfUnreferenced("photoC") }
         }
 
@@ -1222,8 +1380,8 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val group = rig.group("g-11", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Crew")
-            rig.settings.accepted.value = setOf("g-11") // an accepted group — not a stranger request
+            val group = rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Crew")
+            rig.settings.accepted.value = setOf(group.id) // an accepted group — not a stranger request
 
             rig.deliver(alice, rig.groupChat(alice, group, id = "gm1", body = "team hi"))
 
@@ -1239,7 +1397,7 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice) // key pinned (so it verifies) but the group is neither accepted nor one we've posted in
-            val group = rig.group("g-req", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Randos")
+            val group = rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Randos")
 
             rig.deliver(alice, rig.groupChat(alice, group, id = "gm-req", body = "join us"))
 
@@ -1256,7 +1414,7 @@ class InboundPipelineTest {
             rig.peerMap[alice.nodeId] =
                 PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, verified = true, updatedAt = 1L)
             val group =
-                rig.group("g-known", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Crew")
+                rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Crew")
 
             rig.deliver(alice, rig.groupChat(alice, group, id = "gm-known", body = "hey all"))
 
@@ -1275,7 +1433,6 @@ class InboundPipelineTest {
             rig.peerMap["bob-node"] = PeerEntity(nodeId = "bob-node", verified = true, updatedAt = 1L)
             val group =
                 rig.group(
-                    "g-mixed",
                     members = listOf(rig.self.nodeId, alice.nodeId, "bob-node"),
                     createdBy = alice.nodeId,
                     name = "Randos",
@@ -1424,10 +1581,10 @@ class InboundPipelineTest {
             val alice = party()
             rig.pin(alice)
             // We're a member of this group locally; we then blocked co-member alice.
-            val group = rig.group("g-blk", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = rig.self.nodeId)
-            rig.groupMap["g-blk"] =
+            val group = rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = rig.self.nodeId)
+            rig.groupMap[group.id] =
                 GroupEntity(
-                    groupId = "g-blk",
+                    groupId = group.id,
                     name = "",
                     members = GroupMembersStore.encode(listOf(rig.self.nodeId, alice.nodeId)),
                     createdBy = rig.self.nodeId,

@@ -8,14 +8,12 @@ import androidx.core.app.RemoteInput
 import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
-import app.getknit.knit.data.group.GroupEntity
-import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.MeshController
-import app.getknit.knit.mesh.protocol.GroupInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -107,17 +105,6 @@ class NotificationActionReceiver :
         settings.setLastReadAt(conv, newest ?: System.currentTimeMillis())
         notifier.clearConversation(conv)
     }
-
-    /** Rebuilds the self-describing [GroupInfo] from the local row (mirrors ChatViewModel's private helper). */
-    private fun GroupEntity.toGroupInfo(): GroupInfo =
-        GroupInfo(
-            id = groupId,
-            name = name.takeIf { it.isNotBlank() },
-            members = GroupMembersStore.decode(members),
-            createdBy = createdBy,
-            photoHash = photoHash,
-            photoUpdatedAt = photoUpdatedAt.takeIf { it > 0L },
-        )
 
     private companion object {
         const val TAG = "KnitNotifAction"

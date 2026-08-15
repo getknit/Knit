@@ -85,6 +85,17 @@ class GoldenVectorTest {
                         photoUpdatedAt = 42L,
                     ),
                 ),
+            // Additive `departed` (roster-integrity change): the departed-less "groupInfo" vector above
+            // must stay byte-identical forever; this pins the field's encoding when present.
+            "groupInfoDeparted" to
+                WireCodec.encodePayload(
+                    GroupInfo(
+                        id = "g-1",
+                        members = listOf("a", "b"),
+                        createdBy = "a",
+                        departed = listOf("c"),
+                    ),
+                ),
             "receiptContent" to WireCodec.encodePayload(ReceiptContent(ackId = "m1")),
             "reactionContent" to WireCodec.encodePayload(ReactionContent(messageId = "m1", emoji = "👍")),
             "groupLeaveContent" to WireCodec.encodePayload(GroupLeaveContent(groupId = "g-1")),
@@ -201,6 +212,8 @@ class GoldenVectorTest {
                 "groupInfo" to
                     "a662696463672d31646e616d65645465616d676d656d6265727382616161626963726561746564427961616970686f746f4861736863" +
                     "7068316e70686f746f557064617465644174182a",
+                "groupInfoDeparted" to
+                    "a462696463672d31676d656d626572738261616162696372656174656442796161686465706172746564816163",
                 "receiptContent" to "a16561636b4964626d31",
                 "reactionContent" to "a2696d6573736167654964626d3165656d6f6a6964f09f918d",
                 "groupLeaveContent" to "a16767726f7570496463672d31",

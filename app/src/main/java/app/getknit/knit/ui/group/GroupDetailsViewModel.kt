@@ -14,6 +14,7 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
@@ -123,21 +124,6 @@ class GroupDetailsViewModel(
         )
 
     /**
-     * The self-describing [GroupInfo] flooded on every group frame, built from the local row so each
-     * update re-asserts the current name **and** photo (both converge last-writer-wins, by their own
-     * clocks). Kept in sync with [app.getknit.knit.ui.chat.ChatViewModel]'s copy on the send path.
-     */
-    private fun GroupEntity.toInfo() =
-        GroupInfo(
-            id = groupId,
-            name = name.takeIf { it.isNotBlank() },
-            members = GroupMembersStore.decode(members),
-            createdBy = createdBy,
-            photoHash = photoHash,
-            photoUpdatedAt = photoUpdatedAt.takeIf { it > 0L },
-        )
-
-    /**
      * Renames this group: updates the local store immediately and floods a group-update frame so members
      * converge right away (no waiting for the next message). The name is last-writer-wins by timestamp.
      */
@@ -148,7 +134,7 @@ class GroupDetailsViewModel(
             val group = groups.find(groupId) ?: return@launch
             val updated = group.copy(name = trimmed, nameUpdatedAt = System.currentTimeMillis())
             groups.upsert(updated)
-            meshManager.sendGroupUpdate(updated.toInfo())
+            meshManager.sendGroupUpdate(updated.toGroupInfo())
         }
     }
 
@@ -182,7 +168,7 @@ class GroupDetailsViewModel(
             val oldHash = group.photoHash
             val updated = group.copy(photoHash = newHash, photoUpdatedAt = System.currentTimeMillis())
             groups.upsert(updated)
-            meshManager.sendGroupUpdate(updated.toInfo())
+            meshManager.sendGroupUpdate(updated.toGroupInfo())
             if (oldHash != null && oldHash != newHash) blobs.deleteIfUnreferenced(oldHash)
         }
     }

@@ -165,6 +165,17 @@ class WireSerializationTest {
         assertNull(decoded.photoUpdatedAt)
     }
 
+    @Test
+    fun groupDepartedTombstonesRoundTrip() {
+        // Additive `departed` (docs/WIRE_COMPAT.md rule 1): carried so the founding roster
+        // (members ∪ departed) stays derivable after a departure; absent decodes as null.
+        val env = envelope(group = GroupInfo("g", members = listOf("a", "b"), createdBy = "a", departed = listOf("c")))
+        assertEquals(listOf("c"), WireCodec.decodeEnvelope(WireCodec.encodeEnvelope(env))!!.group?.departed)
+
+        val without = envelope(group = GroupInfo("g", members = listOf("a", "b"), createdBy = "a"))
+        assertNull(WireCodec.decodeEnvelope(WireCodec.encodeEnvelope(without))!!.group?.departed)
+    }
+
     // --- per-type content payload round-trips ---
 
     @Test

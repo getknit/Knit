@@ -270,6 +270,14 @@ data class ReplyRef(
  * frame's sentAt that clocks [name], so a stale chat message re-asserting an old photo can't revert a
  * newer one. Both are additive nullable fields (see `docs/WIRE_COMPAT.md`): an old peer ignores them and
  * still relays the frame verbatim.
+ *
+ * [departed] (additive nullable, like the photo fields) lists members who have left, so the frame's
+ * *founding* roster — [members] ∪ [departed], the set [id] is derived from — stays reconstructible after
+ * a departure. Receivers verify that derivation before pinning a first-seen group and treat [departed]
+ * as arithmetic only: local leave tombstones grow solely from signed `groupleave` frames, never from this
+ * list (a member could otherwise "kick" someone by asserting they left). Null/absent on frames from
+ * pre-field builds; a first sight through such a frame after a departure is refused as unverifiable (the
+ * narrow trade documented in `InboundPipeline.vetRoster`).
  */
 @Serializable
 data class GroupInfo(
@@ -279,7 +287,16 @@ data class GroupInfo(
     val createdBy: String,
     val photoHash: String? = null,
     val photoUpdatedAt: Long? = null,
-)
+    val departed: List<String>? = null,
+) {
+    companion object {
+        /**
+         * Roster cap (founding members incl. the creator), enforced on inbound first sight as well as in
+         * the create UI — an unbounded wire roster would be an unbounded storage/fan-out surface.
+         */
+        const val MAX_MEMBERS = 8
+    }
+}
 
 /**
  * One recipient's copy of the per-message content key [wk] (raw HPKE-wrapped bytes), wrapped (Tink

@@ -19,8 +19,7 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.decodeBoundedFromBytes
 import app.getknit.knit.data.downscale
 import app.getknit.knit.data.forward.ForwardDao
-import app.getknit.knit.data.group.GroupEntity
-import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
@@ -33,7 +32,6 @@ import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.StoreDigest
-import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.review.ReviewPromptPolicy
@@ -739,17 +737,6 @@ class DebugBridgeReceiver :
         status: String,
         message: String,
     ): JSONObject = JSONObject().put("status", status).put("message", message)
-
-    /** Rebuilds the self-describing [GroupInfo] from the local row (mirrors ChatViewModel's private helper). */
-    private fun GroupEntity.toGroupInfo(): GroupInfo =
-        GroupInfo(
-            id = groupId,
-            name = name.takeIf { it.isNotBlank() },
-            members = GroupMembersStore.decode(members),
-            createdBy = createdBy,
-            photoHash = photoHash,
-            photoUpdatedAt = photoUpdatedAt.takeIf { it > 0L },
-        )
 
     private companion object {
         const val TAG = "KnitBridge"

@@ -15,6 +15,7 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
@@ -425,7 +426,7 @@ class ChatViewModel(
                             attachment,
                             mentions,
                             recipientId = null,
-                            group = group.toInfo(),
+                            group = group.toGroupInfo(),
                             replyTo = outgoingReply,
                         )
                     } else {
@@ -472,22 +473,6 @@ class ChatViewModel(
     fun onInputCleared() {
         _isSending.value = false
     }
-
-    /**
-     * The self-describing [GroupInfo] flooded on every group frame, built from the local row so each
-     * message/update re-asserts the current name **and** photo (both converge last-writer-wins, by their
-     * own clocks). Centralized so the chat-send, rename, and set-photo paths can't drift.
-     */
-    private fun GroupEntity.toInfo() =
-        GroupInfo(
-            id = groupId,
-            // Only a renamed group carries a shared name; unnamed groups stay locally-titled.
-            name = name.takeIf { it.isNotBlank() },
-            members = GroupMembersStore.decode(members),
-            createdBy = createdBy,
-            photoHash = photoHash,
-            photoUpdatedAt = photoUpdatedAt.takeIf { it > 0L },
-        )
 
     /** Toggles the local user's [emoji] reaction on [messageId] (add / replace / remove) and floods it. */
     fun react(

@@ -738,10 +738,16 @@ class InboundPipeline(
      * Brings the locally-stored group in line with a self-describing [group] roster carried on a frame
      * from [senderId] (stamped [sentAt]). Returns true when the group is active for us (so a chat frame
      * should be delivered), false when the frame must be ignored: blocked sender, a group we've left
-     * (never re-upserted, so a frame can't resurrect it), one we're not a member of, or a *new* group
+     * (never re-upserted, so a frame can't resurrect it), a roster [vetRoster] refuses, or a *new* group
      * whose creator we've blocked (covers the proxy case where a non-blocked member relays the first
      * frame carrying a blocked createdBy). The name is last-writer-wins on [sentAt] so concurrent renames
      * across the mesh converge.
+     *
+     * The roster itself is **pinned, never overwritten**: a frame can only establish a group whose id
+     * verifiably derives from its founding roster ([vetRoster]'s Adopt), and thereafter membership only
+     * shrinks, via signed `groupleave` frames ([GroupRepository.recordDeparture]) — group key state
+     * (docs/GROUP_FORWARD_SECRECY.md) distributes epoch seeds to exactly this roster, so its integrity
+     * is a security input, not presentation.
      */
     private suspend fun reconcileGroup(
         group: GroupInfo,
@@ -753,14 +759,19 @@ class InboundPipeline(
         // exclusive DB lock across a DataStore suspend would stall every other writer.
         val blocked = settings.blockedNodeIds.first()
         // find → refuse-check → upsert run in one transaction, re-reading `existing` inside, so the left-tombstone
-        // check and the wholesale upsert can't tear apart from a concurrent transactional GroupRepository.leave()/
+        // check and the upsert can't tear apart from a concurrent transactional GroupRepository.leave()/
         // delete(): otherwise a find that read left=false just before leave() commits would blind-upsert left=false
         // and resurrect the group. Returns the PhotoDecision on adoption (its bytes may still need pulling), or null
         // when the frame is refused.
         val photo =
             db.withTransaction {
                 val existing = groups.find(group.id)
-                if (groupFrameRefused(group, senderId, existing, me, blocked)) return@withTransaction null
+                if (groupFrameRefused(group, senderId, existing, blocked)) return@withTransaction null
+                val roster = vetRoster(group, senderId, existing, me)
+                if (roster == null) {
+                    metrics.onDropped(DropReason.GROUP_ROSTER_REFUSED)
+                    return@withTransaction null
+                }
 
                 // The name is shared only when explicitly set; an unnamed (blank/null) frame never clears a name
                 // someone else set. Adopt an incoming name only if it's newer (last-writer-wins on sentAt).
@@ -769,21 +780,16 @@ class InboundPipeline(
                 val keepClock = existing?.nameUpdatedAt ?: 0L
                 val takeIncoming = incomingName != null && sentAt >= keepClock
                 val decision = groupPhotoDecision(existing, group)
-                // Preserve our departure tombstone across the wholesale roster overwrite and re-subtract it, so a
-                // member who left stays gone even when this frame carries the stale pre-departure roster (a
-                // straggler who never saw the GroupLeaveFrame). The set only grows, so this can't re-add a leaver.
-                val keepDeparted = existing?.let { GroupMembersStore.decode(it.departed) }.orEmpty()
-                val effective = group.members.filter { it !in keepDeparted }
                 groups.upsert(
                     GroupEntity(
                         groupId = group.id,
                         name = if (takeIncoming) incomingName else keepName,
-                        members = GroupMembersStore.encode(effective),
+                        members = GroupMembersStore.encode(roster),
                         createdBy = group.createdBy,
                         createdAt = existing?.createdAt ?: sentAt,
                         nameUpdatedAt = if (takeIncoming) sentAt else keepClock,
                         left = false,
-                        departed = GroupMembersStore.encode(keepDeparted),
+                        departed = existing?.departed ?: GroupMembersStore.encode(emptyList()),
                         photoHash = decision.hash,
                         photoUpdatedAt = decision.clock,
                     ),
@@ -798,22 +804,79 @@ class InboundPipeline(
     }
 
     /**
-     * Whether an inbound group frame must be ignored: a blocked sender, a group we've left (never
-     * re-upserted so a frame can't resurrect it), one we're not a member of, or a *new* group whose
-     * creator we've blocked (covers the proxy case where a non-blocked member relays the first frame
-     * carrying a blocked createdBy).
+     * Whether an inbound group frame must be ignored on grounds other than its roster (that's
+     * [vetRoster]): a blocked sender, a group we've left (never re-upserted so a frame can't resurrect
+     * it), or a *new* group whose creator we've blocked (covers the proxy case where a non-blocked
+     * member relays the first frame carrying a blocked createdBy).
      */
     private fun groupFrameRefused(
         group: GroupInfo,
         senderId: String,
         existing: GroupEntity?,
-        me: String,
         blocked: Set<String>,
     ): Boolean =
         senderId in blocked ||
             existing?.left == true ||
-            !Conversations.isGroupMember(group.members, me) ||
             (existing == null && group.createdBy in blocked)
+
+    /**
+     * Vets an inbound self-describing roster against the pinned row and returns the **effective member
+     * list to store** — or null when the frame must be refused. The invariant: the stored founding set
+     * (members ∪ departed) only ever comes from a roster whose [GroupInfo.id] *is* the hash of that set
+     * ([Conversations.groupIdFor]), so no member can smuggle an extra id in (they cannot forge a set
+     * that derives to the pinned id) and none can hide one (a shrunk roster is accepted as a frame but
+     * never mutates the pin — departures happen only via signed `groupleave`).
+     *
+     * Three accepted shapes:
+     *  1. First sight (`existing == null`): the frame's founding roster (members ∪ [GroupInfo.departed])
+     *     must derive to the id, contain us and the sender, and respect [GroupInfo.MAX_MEMBERS]. A
+     *     first sight through a pre-`departed`-field build's frame *after* a departure is refused as
+     *     unverifiable — the narrow trade for making id forgery impossible; any current build's frame
+     *     (or any pre-departure frame) pins it.
+     *  2. Within the pin: the frame's founding roster ⊆ stored founding set. Stored members unchanged.
+     *  3. Verified superset: a self-verifying founding roster that *extends* the stored set repairs a
+     *     pin first made from a truncated frame (case 1's refusal healing itself once a full roster
+     *     arrives). Adopts the verified set minus our recorded departures.
+     *
+     * The incoming [GroupInfo.departed] list is arithmetic only (it completes the founding set for
+     * derivation); it is never merged into the stored tombstones — trusting it would let a member
+     * "kick" another by asserting they left. Cost: a departure we never saw the signed leave for keeps
+     * the leaver in our effective roster (leave-rekey is *eventual*, bounded by leave-frame
+     * convergence — docs/GROUP_FORWARD_SECRECY.md §security claim).
+     */
+    private fun vetRoster(
+        group: GroupInfo,
+        senderId: String,
+        existing: GroupEntity?,
+        me: String,
+    ): List<String>? {
+        val incomingFounding = (group.members + group.departed.orEmpty()).distinct()
+        val storedMembers = existing?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+        val storedDeparted = existing?.let { GroupMembersStore.decode(it.departed) }.orEmpty()
+        val storedFounding = (storedMembers + storedDeparted).toSet()
+        val withinPin = existing != null && storedFounding.containsAll(incomingFounding)
+        val founding: Collection<String>
+        val members: List<String>
+        if (withinPin) {
+            founding = storedFounding
+            members = storedMembers
+        } else {
+            // First sight, or a strict superset of our pin: acceptable only when the full founding set
+            // self-verifies — the id IS its hash, so only the true founding roster can pass.
+            val verifiedSuperset =
+                incomingFounding.containsAll(storedFounding.toList()) &&
+                    incomingFounding.size <= GroupInfo.MAX_MEMBERS &&
+                    Conversations.groupIdFor(incomingFounding) == group.id
+            if (!verifiedSuperset) return null
+            founding = incomingFounding
+            members = incomingFounding.filter { it !in storedDeparted }
+        }
+        // Us and the sender must both be founding members. Checked against the founding set, not the
+        // frame's effective roster: a frame omitting us can't starve us out of our own group, and a
+        // departed member's in-flight (pre-leave) frames still deliver.
+        if (me !in founding || senderId !in founding) return null
+        return members
+    }
 
     /**
      * Resolves a group's photo last-writer-wins on its own clock ([GroupInfo.photoUpdatedAt]), independent

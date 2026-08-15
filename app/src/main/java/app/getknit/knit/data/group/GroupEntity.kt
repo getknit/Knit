@@ -2,6 +2,7 @@ package app.getknit.knit.data.group
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import app.getknit.knit.mesh.protocol.GroupInfo
 import kotlinx.serialization.json.Json
 
 /**
@@ -49,6 +50,25 @@ data class GroupEntity(
     val photoHash: String? = null,
     val photoUpdatedAt: Long = 0L,
 )
+
+/**
+ * The self-describing [GroupInfo] flooded on every group frame, built from the local row so each
+ * message/update re-asserts the current name **and** photo (both converge last-writer-wins, by their own
+ * clocks) and carries the [GroupEntity.departed] tombstones that make the founding roster — the set the
+ * group id is derived from — reconstructible by a first-time receiver (see `InboundPipeline.vetRoster`).
+ * The one mapper for the chat-send, rename, set-photo, and notification-reply paths, so they can't drift.
+ */
+fun GroupEntity.toGroupInfo(): GroupInfo =
+    GroupInfo(
+        id = groupId,
+        // Only a renamed group carries a shared name; unnamed groups stay locally-titled.
+        name = name.takeIf { it.isNotBlank() },
+        members = GroupMembersStore.decode(members),
+        createdBy = createdBy,
+        photoHash = photoHash,
+        photoUpdatedAt = photoUpdatedAt.takeIf { it > 0L },
+        departed = GroupMembersStore.decode(departed).ifEmpty { null },
+    )
 
 /**
  * Encodes/decodes the [GroupEntity.members] JSON column. Its own [Json] instance (WireCodec's is

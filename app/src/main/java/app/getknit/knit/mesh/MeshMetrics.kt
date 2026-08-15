@@ -53,6 +53,10 @@ enum class DropReason {
 
     /** A v2 envelope with a structurally invalid ratchet header (missing `r`, bound violations, group-addressed). */
     RATCHET_BAD_HEADER,
+
+    /** A group frame whose roster failed vetting (unverifiable founding set, smuggled member, non-member
+     *  sender, or an oversized roster) — see `InboundPipeline.vetRoster`. */
+    GROUP_ROSTER_REFUSED,
 }
 
 /**

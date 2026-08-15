@@ -10,9 +10,9 @@ Your phones talk directly to each other over Wi-Fi Aware and Bluetooth LE, and r
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.4.0-7F52FF?logo=kotlin&logoColor=white)
 ![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)
 ![Transports](https://img.shields.io/badge/radios-Wi--Fi%20Aware%20%2B%20BLE-00BCD4)
-![Encryption](https://img.shields.io/badge/DMs%20%26%20groups-E2E%20encrypted-2EA043?logo=signal&logoColor=white)
+![Encryption](https://img.shields.io/badge/DMs%20%26%20groups-E2E%20%2B%20forward%20secrecy-2EA043?logo=signal&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
-![Version](https://img.shields.io/badge/version-2.2.2-FF6F61)
+![Version](https://img.shields.io/badge/version-2.2.3-FF6F61)
 [![Knit changelog on whatsnew.fyi](https://whatsnew.fyi/product/knit/badge.svg)](https://whatsnew.fyi/product/knit)
 
 <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02_chat-nearby.png"
@@ -47,10 +47,10 @@ dependency** and **end-to-end encryption** on direct and group messages.
 | **Category** | Offline / off-grid mesh messenger (proximity, peer-to-peer, delay-tolerant) |
 | **Platform** | Android 10+ (API 29), Kotlin + Jetpack Compose (Material 3) |
 | **Radios** | Wi-Fi Aware (NAN) **and** Bluetooth LE, running simultaneously — no Google Play services |
-| **Encryption** | E2E on 1:1 DMs & group chats (Tink HPKE/X25519 + AES-256-GCM + Ed25519); at-rest DB via SQLCipher |
+| **Encryption** | E2E on 1:1 DMs & group chats, forward-secret between current builds (X3DH-style bootstrap + epoch ratchet, AES-256-GCM, Ed25519); at-rest DB via SQLCipher |
 | **Works without** | Internet, cellular, Wi-Fi routers, accounts, phone numbers, or any server |
 | **License** | GPL-3.0-or-later — free and open source |
-| **Status** | v2.1, feature-complete for launch |
+| **Status** | v2.2.3 on Play and F-Droid; forward secrecy and sealed receipts/reactions landed on `main` |
 
 ## Contents
 
@@ -71,12 +71,16 @@ dependency** and **end-to-end encryption** on direct and group messages.
 - [License](#-license)
 
 > [!NOTE]
-> **Status — v2.1.** Feature-complete for launch: a **"Nearby" public broadcast room**, **1:1 direct
-> messages**, and **multi-member group chats**, with profiles (name / status / avatar), emoji
+> **Status — v2.2.3 on the stores.** Feature-complete: a **"Nearby" public broadcast room**, **1:1
+> direct messages**, and **multi-member group chats**, with profiles (name / status / avatar), emoji
 > reactions, @-mentions, and image attachments. **Direct and group messages are end-to-end
 > encrypted** — bodies, mentions, and image attachments are readable only by their intended recipients,
 > even though every message floods through relay devices. The public Nearby room is plaintext by design
 > (no fixed recipient set). See the [Security note](#-security-note).
+>
+> **Landed on `main`, not yet in a published release:** forward secrecy for DMs and group chats, and
+> encrypted delivery receipts and reactions. Both are described in the [Security
+> note](#-security-note) and ship in the next release.
 
 ## 📥 Install
 
@@ -149,17 +153,23 @@ Knit is built for situations where there's **no reliable network but people are 
   with only one of the two radios still meshes over that one.
 - **Broadcast room, 1:1 DMs, and group chats** — a conversation list and contact picker, message
   bubbles, relative timestamps, unread badges, and delivery ticks (✓ / ✓✓).
-- **End-to-end encryption** for DMs and groups — each message's body, mentions, and image attachment are
-  sealed with a fresh per-message key (AES-256-GCM), wrapped to each recipient (Tink HPKE/X25519), and
-  authenticated with an Ed25519 signature, so relays only ever carry ciphertext. Identity keypairs are
-  **hardware-backed** (AndroidKeyStore), advertised in profiles, pinned on first use (TOFU), and
-  confirmable out of band via a **safety-number / QR-code** verification screen.
+- **End-to-end encryption with forward secrecy** for DMs and groups — each message's body, mentions,
+  and image attachment are sealed with AES-256-GCM and authenticated with an Ed25519 signature, so
+  relays only ever carry ciphertext. Between current builds the keys rotate: a DM session bootstraps
+  from a signed prekey published in the peer's profile (X3DH-style, so the first message still needs
+  no round trip) and rekeys as the conversation turns over, and groups run a sender-key ratchet on top
+  of those sessions with each member driving their own chain. Message keys are dropped after use, so
+  recorded ciphertext stops being readable once its epoch ages out. Peers on older builds fall back to
+  the static-key scheme automatically. Identity keypairs are **hardware-backed** (AndroidKeyStore),
+  advertised in profiles, pinned on first use (TOFU), and confirmable out of band via a
+  **safety-number / QR-code** verification screen.
 - **Store-and-forward delivery** — a message whose recipient isn't in range is held in encrypted custody
   and re-offered when they (or a path to them) later come into range, so two phones that meet only
   briefly still backfill each other. A content-digest anti-entropy layer means an idle mesh does zero
   data-path work; a new message triggers a targeted sync only with the peers that need it.
 - **Reactions, @-mentions, and image attachments** — emoji reactions converge across the mesh
-  (last-writer-wins); mentions get a dedicated notification; images (GIF/JPEG/PNG/WebP) are
+  (last-writer-wins) and, in DMs and groups, travel encrypted alongside delivery receipts, shaped on
+  the wire like any other message; mentions get a dedicated notification; images (GIF/JPEG/PNG/WebP) are
   content-addressed and pulled on demand so the bytes don't ride the flood (encrypted attachments are
   addressed by ciphertext hash, so dedup/pull is unchanged).
 - **Profiles** — display name, status, and avatar flooded across the mesh; avatars transferred as files
@@ -308,9 +318,11 @@ the mesh; a store-and-forward layer also carries messages to recipients who come
 
 **Are messages encrypted?**
 1:1 direct messages and group chats are **end-to-end encrypted** (only the intended recipients can read
-the body, mentions, and image attachments; relays carry only ciphertext). The public "Nearby" broadcast
-room is plaintext by design, since it has no fixed recipient set. The local database is encrypted at
-rest with SQLCipher.
+the body, mentions, and image attachments; relays carry only ciphertext), and between phones on a
+current build they are **forward-secret**: the keys rotate as the conversation goes on and old ones are
+deleted, so recording traffic today and getting hold of a phone later does not open the older messages.
+Delivery receipts and reactions are encrypted too. The public "Nearby" broadcast room is plaintext by
+design, since it has no fixed recipient set. The local database is encrypted at rest with SQLCipher.
 
 **What phones does it support?**
 Android 10 (API 29) and newer, with Wi-Fi Aware and/or Bluetooth LE. Almost all phones have BLE; Wi-Fi
@@ -334,6 +346,13 @@ Google Play services dependency**, end-to-end encrypts DMs and groups, and needs
   flow, background survival, build-tooling decisions, and testing strategy.
 - [`docs/WIRE_COMPAT.md`](docs/WIRE_COMPAT.md) — the wire format's compatibility contract and break
   record; read before changing any wire type.
+- [`docs/FORWARD_SECRECY_RATCHET.md`](docs/FORWARD_SECRECY_RATCHET.md) — the DM ratchet: keys and
+  derivations, epoch advance rules, session races and reset, and an honest account of what a device
+  compromise still exposes.
+- [`docs/GROUP_FORWARD_SECRECY.md`](docs/GROUP_FORWARD_SECRECY.md) — the group sender-key scheme built
+  on those DM sessions, including seed distribution, recovery, and what a member's departure costs.
+- [`docs/ENCRYPTED_RECEIPTS_REACTIONS.md`](docs/ENCRYPTED_RECEIPTS_REACTIONS.md) — receipts and
+  reactions as sealed control frames, and the store-and-forward trade that came with them.
 - [`docs/CONTENT_MODERATION.md`](docs/CONTENT_MODERATION.md) — on-device abusive-text / explicit-image
   moderation: design, hook points, the bundled models, and Git LFS.
 
@@ -341,34 +360,55 @@ Google Play services dependency**, end-to-end encrypts DMs and groups, and needs
 
 **Implemented & verified:** broadcast room · 1:1 DMs · multi-member group chats · profiles · reactions ·
 mentions · attachments · at-rest DB encryption (SQLCipher) · **E2E encryption + identity verification**
-for DMs and groups · dual **Wi-Fi Aware + Bluetooth LE** transports behind `MeshTransport` (no GMS) ·
-**store-and-forward** delay-tolerant delivery · **key-request / retransmit** for messages received before
-a sender's key is known · on-device toxicity + NSFW moderation · offline app sharing.
+for DMs and groups · **forward secrecy** for both (an epoch ratchet for DMs, a sender-key ratchet for
+groups) · **encrypted delivery receipts and reactions** · dual **Wi-Fi Aware + Bluetooth LE** transports
+behind `MeshTransport` (no GMS) · **store-and-forward** delay-tolerant delivery · **key-request /
+retransmit** for messages received before a sender's key is known · on-device toxicity + NSFW moderation ·
+offline app sharing.
 
 **Explicitly deferred (don't start without direction):**
 
 - **True DM routing** — DMs currently flood the whole mesh and only the addressed recipient delivers/
   acks; targeted multi-hop routing is future work.
-- **Forward secrecy** — E2E uses long-term static identity keys (no ratchet), so compromise of a
-  device's identity key would expose past intercepted messages.
-- **Encrypting reactions, receipts, and the broadcast room** — these remain (signed) cleartext metadata.
+- **Encrypting the broadcast room** — the last cleartext plane, and as much a product question as a
+  crypto one: a room with no fixed recipient set has nobody in particular to encrypt to.
+
+**Being designed:** an optional Internet layer that would carry DMs and group messages between contacts
+you already have when no radio path exists, keeping the mesh's delay-tolerant behaviour and running
+through small relays that hold sealed frames without learning whose they are or what is in them. This is
+a design draft — nothing is implemented and no spec is published yet — and the app is built around
+proximity meshing either way.
 
 ## 🔐 Security note
 
 **Direct and group messages are end-to-end encrypted.** Each message's content (body, mentions, image
-attachment) is sealed with a fresh per-message key (AES-256-GCM); that key is wrapped to each recipient
-with hybrid public-key encryption (Tink HPKE/X25519), and the whole envelope is signed with the sender's
-Ed25519 key. Relays — which flood every message hop-by-hop — only ever see ciphertext, and only the
-addressed recipient(s) can decrypt. Each device's identity keypair is generated on first run and stored
-wrapped under a hardware-backed AndroidKeyStore key, outside the database.
+attachment) is sealed with AES-256-GCM and the whole envelope is signed with the sender's Ed25519 key.
+Relays, which flood every message hop-by-hop, only ever see ciphertext, and only the addressed
+recipient(s) can decrypt. Each device's identity keypair is generated on first run and stored wrapped
+under a hardware-backed AndroidKeyStore key, outside the database.
+
+**Between current builds the encryption is forward-secret.** A DM session starts from an X3DH-style
+handshake against a signed prekey the peer publishes in their profile, then rekeys per *epoch*: each
+side mints a fresh X25519 pair as the conversation turns over, and message keys are deleted once used.
+Group chats layer a sender-key ratchet on those DM sessions, so every member drives their own chain and
+distributes its seed inside sealed DMs. Taking a device's identity key therefore no longer opens the
+whole archive; what a compromise exposes is bounded by how long the ratchet keeps state, and
+[`docs/FORWARD_SECRECY_RATCHET.md`](docs/FORWARD_SECRECY_RATCHET.md) §9 and
+[`docs/GROUP_FORWARD_SECRECY.md`](docs/GROUP_FORWARD_SECRECY.md) §9 state exactly what stays
+recoverable and for how long. Delivery receipts and reactions are sealed the same way, so an observer
+cannot read when a DM landed or who reacted to what.
 
 Peers' keys are pinned on first use (TOFU); if a peer's key later changes, verification is reset and
 flagged. Confirm a contact's key out of band — compare the **safety number** in person or scan their
 **QR code** — to defend against a relay substituting keys.
 
-**Caveats:** the public **Nearby broadcast room is plaintext** by design (no fixed recipient set).
-Reactions and delivery receipts travel as **cleartext metadata** (signed, not encrypted). E2E uses
-**static keys — no forward secrecy** (see the roadmap). The at-rest database is encrypted with SQLCipher.
+**Caveats:** the public **Nearby broadcast room is plaintext** by design (no fixed recipient set), and
+its receipts and reactions stay cleartext with it. Forward secrecy is **epoch-granular, not
+per-message** — a bounded window of messages shares one compromise fate. A conversation with a phone
+that hasn't updated falls back to the older **static-key** scheme, which has none; one member on an old
+build pins a whole group to it, and a group's info screen says which scheme it is on. Relays still see
+who is talking to whom and how often, since DMs flood the mesh rather than being routed. The at-rest
+database is encrypted with SQLCipher.
 
 To report a vulnerability, see [`SECURITY.md`](SECURITY.md) — please **do not** open a public issue for
 security problems.

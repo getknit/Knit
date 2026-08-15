@@ -18,6 +18,29 @@ document:
 
 # Knit changelog
 
+## Unreleased
+
+> Forward secrecy for direct messages and group chats, and encrypted delivery receipts and reactions.
+
+### Added
+
+- Direct messages between updated phones are now forward-secret. Each conversation derives its own key
+  material from a prekey published in your profile, then re-keys as the conversation goes back and
+  forth, and drops the old keys. Someone who records traffic today and gets hold of a phone later
+  cannot read the earlier messages.
+- Group chats gain the same property. Every member drives their own key chain and hands its current
+  seed to the others inside encrypted direct messages. A group's info screen says whether the group is
+  running the new scheme or still waiting on somebody to update.
+- Delivery receipts and reactions are encrypted. Until now they crossed the mesh readable by any phone
+  relaying them, so an onlooker could tell when a message reached you, and who reacted to which
+  message with what. They now travel sealed and look like ordinary messages on the wire.
+
+### Changed
+
+- Chats with a phone on an older version keep working, on the previous encryption scheme. A group
+  falls back the same way while any one member has not updated, and moves over on its own once
+  everyone has.
+
 ## [2.2.3](https://github.com/getknit/knit/releases/tag/v2.2.3) — 2026-08-13T02:38:41Z
 
 > A themed launcher icon, and a launch screen that follows the system light/dark theme.

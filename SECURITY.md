@@ -27,12 +27,19 @@ there is no guaranteed acknowledgement or remediation timeline, but genuine repo
 Knit is experimental. Several properties are **intentional design trade-offs, not vulnerabilities** —
 they are documented and out of scope for reports:
 
-- **The public "Nearby" broadcast room is plaintext by design** (it has no fixed recipient set).
-- **Reactions and delivery receipts are cleartext metadata** — signed, but not encrypted.
-- **No forward secrecy:** E2E uses long-term static identity keys (no ratchet), so compromise of a
-  device's identity key can expose past intercepted messages.
+- **The public "Nearby" broadcast room is plaintext by design** (it has no fixed recipient set), and
+  its receipts and reactions stay cleartext with it.
+- **Forward secrecy is epoch-granular, not per-message.** DMs run an epoch ratchet
+  ([`docs/FORWARD_SECRECY_RATCHET.md`](docs/FORWARD_SECRECY_RATCHET.md)) and fully-updated groups a
+  sender-key ratchet over those sessions
+  ([`docs/GROUP_FORWARD_SECRECY.md`](docs/GROUP_FORWARD_SECRECY.md)), so a compromise exposes a
+  bounded window rather than everything ever sent. The window is real, though: §9 of each doc lists
+  the retention horizons that bound it.
+- **Conversations with pre-ratchet builds fall back to the static-key scheme**, which has no forward
+  secrecy, and one member on an old build pins a whole group to it. Receipts and reactions toward
+  those peers fall back to their cleartext form for the same reason.
 - **DMs currently flood the whole mesh** (only the addressed recipient delivers/acks); targeted
-  multi-hop routing is future work.
+  multi-hop routing is future work, so relays see who is talking to whom and how often.
 - **Trust-on-first-use (TOFU)** key pinning: a relay substituting keys before first contact is
   mitigated by out-of-band safety-number / QR verification, not prevented.
 

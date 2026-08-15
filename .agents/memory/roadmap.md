@@ -39,10 +39,13 @@ doc). **Don't start a deferred item without explicit direction.**
   interactive frames from bulk. DMs stay on L2CAP. See knit/knit-next#13.
 - **True DM routing** — DMs still flood; only the addressed recipient delivers/acks. Store-and-forward now
   *carries* undelivered DMs (`context/store-and-forward.md`), but there is still no routing table.
-- **Group key-gap retransmit** — the group analogue of the DM `flushPendingFor`: a group message already
-  floods to the members whose keys are known, so reaching a member whose key arrives *later* needs a fresh
-  re-seal, not custody.
-- **E2E hardening (what remains)** — **group** forward secrecy (a group key state: sender-key /
-  pairwise fan-out / MLS-lite — its own design doc; the DM ratchet shipped, see above), **encrypting**
-  reactions/receipts (they are signed now but still flood as cleartext metadata), and encrypting the
-  broadcast room. See `context/e2e-encryption.md`.
+- **Group key-gap retransmit (v1-fallback residual only)** — the v3 group ratchet's outbox +
+  key-request loop subsumed this for ratchet-capable groups (docs/GROUP_FORWARD_SECRECY.md §7); the
+  original gap — a member whose key arrives later never gets a re-seal — persists only for groups
+  still pinned at v1 by a pre-v3 member, and shrinks as capability floods.
+- **E2E hardening (what remains)** — **encrypting** reactions/receipts (they are signed now but still
+  flood as cleartext metadata) and encrypting the broadcast room. (Group forward secrecy shipped as
+  crypto scheme v3 — the sender-key ratchet over the pairwise v2 sessions, ADR 017,
+  docs/GROUP_FORWARD_SECRECY.md; it also supplies the per-sender `epochSeal` export the internet-relay
+  plane's group scopes need, with the shared group root deliberately deferred to that plane's design
+  doc.) See `context/e2e-encryption.md`.

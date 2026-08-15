@@ -137,6 +137,8 @@
     <string name="group_details_title">Group info</string>
     <string name="group_details_members">Members</string>
     <string name="group_details_view_photo">View photo</string>
+    <string name="group_details_fs_active">Messages here are sent with forward secrecy</string>
+    <string name="group_details_fs_waiting">Legacy encryption until %1$s updates Knit</string>
     <string name="blocked_users_title">Blocked users</string>
     <string name="blocked_users_empty">No blocked users</string>
     <string name="blocked_users_unblock">Unblock</string>
@@ -283,6 +285,10 @@
     <string name="diagnostics_metric_receipts_resent">Receipts re-sent</string>
     <string name="diagnostics_metric_dms_ratcheted">DMs sent forward-secret</string>
     <string name="diagnostics_metric_dms_v1_fallback">DMs sent legacy (v1)</string>
+    <string name="diagnostics_metric_groups_ratcheted">Group messages sent forward-secret</string>
+    <string name="diagnostics_metric_groups_v1_fallback">Group messages sent legacy (v1)</string>
+    <string name="diagnostics_metric_group_seeds_sent">Group epoch seeds sent</string>
+    <string name="diagnostics_metric_group_seeds_adopted">Group epoch seeds adopted</string>
     <string name="diagnostics_metric_bt_connect_fails">BT connect failures</string>
     <string name="diagnostics_controls">Mesh controls</string>
     <string name="diagnostics_status_healthy">Mesh status: Healthy</string>

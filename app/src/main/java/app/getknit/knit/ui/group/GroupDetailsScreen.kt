@@ -222,6 +222,20 @@ internal fun GroupDetailsScreenContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            // The v3 forward-secrecy status: active, or naming who pins the group at v1 — without this the
+            // silent fallback would be invisible in the field (docs/GROUP_FORWARD_SECRECY.md #5).
+            Text(
+                text =
+                    if (state.fsBlockers.isEmpty()) {
+                        stringResource(R.string.group_details_fs_active)
+                    } else {
+                        stringResource(R.string.group_details_fs_waiting, state.fsBlockers.joinToString())
+                    },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+
             HorizontalDivider()
 
             Column(

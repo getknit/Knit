@@ -20,6 +20,7 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.protocol.GroupInfo
+import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.normalizeSingleLine
 import app.getknit.knit.ui.util.computeAvatarCrop
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -48,6 +49,10 @@ data class GroupDetailsUiState(
     val title: String,
     val photoHash: String?,
     val members: List<GroupMemberRow>,
+    // Display names of members whose pinned profile can't yet do the v3 group ratchet (missing
+    // capability or prekey) — they pin the whole group's traffic at v1. Empty = forward secrecy active.
+    // Mirrors MeshManager.groupRatchetEligible's per-member conditions against the same peers table.
+    val fsBlockers: List<String> = emptyList(),
     // False once the group is left/deleted (its row is gone), so the screen can fall back to closing.
     val exists: Boolean = true,
 )
@@ -97,6 +102,18 @@ class GroupDetailsViewModel(
                         isSelf = id == myId,
                     )
                 }
+            val fsBlockers =
+                members
+                    .filter { it != myId }
+                    .filter { id ->
+                        val peer = peersByNode[id]
+                        val caps = peer?.capabilities ?: 0L
+                        peer?.pubKey == null ||
+                            caps and Protocol.CAP_GROUP_RATCHET == 0L ||
+                            caps and Protocol.CAP_RATCHET == 0L ||
+                            peer.prekeyId == null ||
+                            peer.prekeyPub == null
+                    }.map { id -> displayNameFor(peersByNode[id]?.name, id) }
             // Self first (rendered as "You"), then the others connected-first, then alphabetical — mirroring
             // the contact picker's ordering.
             val self = rows.firstOrNull { it.isSelf }
@@ -106,6 +123,7 @@ class GroupDetailsViewModel(
                     .sortedWith(compareByDescending<GroupMemberRow> { it.online }.thenBy { it.displayName.lowercase() })
             GroupDetailsUiState(
                 groupId = groupId,
+                fsBlockers = fsBlockers,
                 title =
                     groupTitle(
                         storedName = group?.name.orEmpty(),

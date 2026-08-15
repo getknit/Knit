@@ -283,6 +283,19 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
                 MetricRow(stringResource(R.string.diagnostics_metric_dms_v1_fallback), metrics.dmSealedV1Fallback.toString())
             }
         }
+        // Forward-secret group messages (the v3 sender-key ratchet) + their seed traffic. Same shape as
+        // the DM pair: the v1 fallback should trend to zero as members upgrade — a persistent count means
+        // some member is pinning the group at v1 (no capability, no prekey, or undeliverable seeds).
+        if (metrics.groupSealedV3 > 0 || metrics.groupSealedV1Fallback > 0) {
+            MetricRow(stringResource(R.string.diagnostics_metric_groups_ratcheted), metrics.groupSealedV3.toString())
+            if (metrics.groupSealedV1Fallback > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_groups_v1_fallback), metrics.groupSealedV1Fallback.toString())
+            }
+        }
+        if (metrics.groupSeedsSent > 0 || metrics.groupSeedsAdopted > 0) {
+            MetricRow(stringResource(R.string.diagnostics_metric_group_seeds_sent), metrics.groupSeedsSent.toString())
+            MetricRow(stringResource(R.string.diagnostics_metric_group_seeds_adopted), metrics.groupSeedsAdopted.toString())
+        }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an
         // intermittent "can link one peer but not the second" is visible and attributable (RADIO vs other).
         if (metrics.btConnectFails > 0) {

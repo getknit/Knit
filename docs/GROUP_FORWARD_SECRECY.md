@@ -1,6 +1,6 @@
 # Forward secrecy for groups — the sender-key ratchet (crypto scheme v3)
 
-Status: **implementing** · plan approved 2026-08-14 · lands in phases (roster integrity → crypto core →
+Status: **implemented** · plan approved 2026-08-14 · landed in phases (roster integrity → crypto core →
 wire → schema → receive → send/distribution → hardening → observability). This document is the
 normative spec for the v3 group crypto scheme; `mesh/crypto/ratchet/GroupRatchet*` is the reference
 implementation and `GroupRatchetCryptoTest`/`GroupRatchetEngineTest` are the executable anchors (an

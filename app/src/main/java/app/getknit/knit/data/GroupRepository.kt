@@ -22,6 +22,14 @@ class GroupRepository(
     suspend fun upsert(group: GroupEntity) = dao.upsert(group)
 
     /**
+     * The non-left groups whose effective roster contains [memberId] (the roster is a JSON column, so
+     * this filters in memory — bounded by the user's group count). Feeds the seed re-distribution
+     * triggers (docs/GROUP_FORWARD_SECRECY.md §3).
+     */
+    suspend fun groupsWith(memberId: String): List<GroupEntity> =
+        dao.allActive().filter { memberId in GroupMembersStore.decode(it.members) }
+
+    /**
      * Records that [leaverId] left [groupId] (from their own signed `groupleave` frame): drops them from
      * the roster, tombstones them in [GroupEntity.departed] so a straggler's stale full roster can't
      * re-add them, and inserts a "member left" status notice stamped [leftAt] (the frame's sentAt, for

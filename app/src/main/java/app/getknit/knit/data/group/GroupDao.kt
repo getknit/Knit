@@ -16,6 +16,9 @@ interface GroupDao {
     @Query("SELECT * FROM groups WHERE groupId = :groupId")
     suspend fun findById(groupId: String): GroupEntity?
 
+    @Query("SELECT * FROM groups WHERE left = 0")
+    suspend fun allActive(): List<GroupEntity>
+
     @Upsert
     suspend fun upsert(group: GroupEntity)
 

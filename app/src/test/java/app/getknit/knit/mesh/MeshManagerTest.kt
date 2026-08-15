@@ -505,24 +505,115 @@ class MeshManagerTest {
             assertEquals(1L, rig.metrics.snapshot().dmSealedV1Fallback)
         }
 
+    // --- the v3 (group sender-key) send gate ---
+
+    /** Pins [p] with [capabilities] and a prekey (the partially-capable cases the AND-gate exists for). */
+    private fun Rig.pinWithCaps(
+        p: Party,
+        capabilities: Long,
+    ) {
+        coEvery { peers.find(p.nodeId) } returns
+            PeerEntity(
+                nodeId = p.nodeId,
+                pubKey = p.bundle.encoded,
+                capabilities = capabilities,
+                prekeyId = 1,
+                prekeyPub = b64(RatchetCrypto.generateKeyPair().pub),
+                prekeyProfileAt = 1L,
+                updatedAt = 1L,
+            )
+    }
+
     @Test
-    fun aGroupMessageStaysV1EvenWhenMembersAreRatchetCapable() =
+    fun aGroupWithAllCapableMembersSealsV3AndDistributesTheSeed() =
         runTest(UnconfinedTestDispatcher()) {
             val rig = Rig(backgroundScope)
             rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
             val group = GroupInfo(id = "g-1", name = "Team", members = listOf(rig.me.nodeId, rig.bob.nodeId), createdBy = rig.me.nodeId)
 
-            assertTrue(rig.manager.sendChat("group text", group = group))
+            assertTrue(rig.manager.sendChat("group fs", group = group))
+            advanceUntilIdle()
+
+            val frames = rig.sentChatFrames()
+            // The group frame sealed v3: derived key, empty wraps, the tiny sender-key header.
+            val groupEnc = WireCodec.decodePayload<ChatContent>(frames.single { it.group != null }.payload)!!.enc!!
+            assertEquals(EncEnvelope.VERSION_GROUP_RATCHET, groupEnc.v)
+            assertTrue(groupEnc.keys.isEmpty())
+            assertNull(groupEnc.r)
+            assertEquals(1, groupEnc.g!!.se)
+            assertEquals(0, groupEnc.g!!.n)
+            // The minted epoch's seed rode ahead, pairwise, as a v2 ctl DM.
+            val seedDm = frames.single { it.recipientId == rig.bob.nodeId }
+            assertEquals(EncEnvelope.VERSION_RATCHET, WireCodec.decodePayload<ChatContent>(seedDm.payload)!!.enc!!.v)
+            assertEquals(1L, rig.metrics.snapshot().groupSealedV3)
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsSent)
+            assertFalse("the stored group row is never pendingKey", rig.saved.single().pendingKey)
+        }
+
+    @Test
+    fun aSecondGroupSendReusesTheChainWithoutRedistributing() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            val group = GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId), createdBy = rig.me.nodeId)
+
+            assertTrue(rig.manager.sendChat("one", group = group))
+            assertTrue(rig.manager.sendChat("two", group = group))
+            advanceUntilIdle()
+
+            val frames = rig.sentChatFrames()
+            assertEquals("one seed DM total — the chain is reused", 1, frames.count { it.recipientId == rig.bob.nodeId })
+            val second = WireCodec.decodePayload<ChatContent>(frames.last { it.group != null }.payload)!!.enc!!.g!!
+            assertEquals(1, second.se)
+            assertEquals(1, second.n)
+            assertEquals(2L, rig.metrics.snapshot().groupSealedV3)
+        }
+
+    @Test
+    fun aGroupWithAnIncapableMemberFallsBackToV1Entirely() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            val carol = party()
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            rig.pinWithCaps(carol, capabilities = Protocol.CAP_RATCHET) // v2-capable, not group-capable
+            val group =
+                GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId, carol.nodeId), createdBy = rig.me.nodeId)
+
+            assertTrue(rig.manager.sendChat("mixed", group = group))
             advanceUntilIdle()
 
             val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
             assertEquals(1, enc.v)
-            assertNull(enc.r)
+            assertNull(enc.g)
+            assertEquals(2, enc.keys.size)
+            assertEquals(0L, rig.metrics.snapshot().groupSealedV3)
+            // Ineligible (not eligible-but-fell-back): the fallback counter stays untouched — DM semantics.
+            assertEquals(0L, rig.metrics.snapshot().groupSealedV1Fallback)
+        }
+
+    @Test
+    fun anUnpinnedMemberKeepsTheGroupV1AndIsSkippedFromTheWraps() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            val ghost = party() // never pinned — no profile ever arrived
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            val group =
+                GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId, ghost.nodeId), createdBy = rig.me.nodeId)
+
+            assertTrue(rig.manager.sendChat("who's there", group = group))
+            advanceUntilIdle()
+
+            val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
+            assertEquals(1, enc.v)
+            // The v1 silent-skip of unpinned members is unchanged (their recovery plane is v3 + NACK,
+            // or the key-gap roadmap note for pure-v1 groups).
+            assertEquals(listOf(rig.bob.nodeId), enc.keys.map { it.to })
         }
 
     @Test
     fun theProfileAdvertisesTheRatchetCapabilityAndAVerifiablePrekey() {
         assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_RATCHET != 0L)
+        assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_GROUP_RATCHET != 0L)
     }
 
     private companion object {

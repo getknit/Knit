@@ -119,6 +119,10 @@ class MeshMetrics {
     private val receiptsResent = AtomicLong()
     private val dmSealedV2 = AtomicLong()
     private val dmSealedV1Fallback = AtomicLong()
+    private val groupSealedV3 = AtomicLong()
+    private val groupSealedV1Fallback = AtomicLong()
+    private val groupSeedsSent = AtomicLong()
+    private val groupSeedsAdopted = AtomicLong()
 
     // Fixed key set → no allocation on the hot path, every reason always present.
     private val drops: Map<DropReason, AtomicLong> = DropReason.entries.associateWith { AtomicLong() }
@@ -211,6 +215,26 @@ class MeshMetrics {
         dmSealedV1Fallback.incrementAndGet()
     }
 
+    /** One outbound group message sealed under the v3 sender-key chain. */
+    fun onGroupSealedV3() {
+        groupSealedV3.incrementAndGet()
+    }
+
+    /** A v3-eligible group message that fell back to the v1 per-member wrap (seal returned null). */
+    fun onGroupSealedV1Fallback() {
+        groupSealedV1Fallback.incrementAndGet()
+    }
+
+    /** One epoch-seed ctl DM originated toward a member (distributions + re-sends). */
+    fun onGroupSeedSent() {
+        groupSeedsSent.incrementAndGet()
+    }
+
+    /** One fresh recv chain adopted from a member's seed distribution. */
+    fun onGroupSeedAdopted() {
+        groupSeedsAdopted.incrementAndGet()
+    }
+
     /** A Bluetooth L2CAP connect attempt to a peer failed for [reason] (see [ConnectFailReason]). */
     fun onBtConnectFailed(reason: ConnectFailReason) {
         connectFails.getValue(reason).incrementAndGet()
@@ -284,6 +308,10 @@ class MeshMetrics {
             receiptsResent = receiptsResent.get(),
             dmSealedV2 = dmSealedV2.get(),
             dmSealedV1Fallback = dmSealedV1Fallback.get(),
+            groupSealedV3 = groupSealedV3.get(),
+            groupSealedV1Fallback = groupSealedV1Fallback.get(),
+            groupSeedsSent = groupSeedsSent.get(),
+            groupSeedsAdopted = groupSeedsAdopted.get(),
             btConnectFails = connectByReason.values.sum(),
             btConnectFailsByReason = connectByReason.filterValues { it > 0 },
             btLinksEstablished = btLinksEstablished.get(),
@@ -315,6 +343,10 @@ class MeshMetrics {
         val receiptsResent: Long = 0,
         val dmSealedV2: Long = 0,
         val dmSealedV1Fallback: Long = 0,
+        val groupSealedV3: Long = 0,
+        val groupSealedV1Fallback: Long = 0,
+        val groupSeedsSent: Long = 0,
+        val groupSeedsAdopted: Long = 0,
         val btConnectFails: Long = 0,
         val btConnectFailsByReason: Map<ConnectFailReason, Long> = emptyMap(),
         val btLinksEstablished: Long = 0,

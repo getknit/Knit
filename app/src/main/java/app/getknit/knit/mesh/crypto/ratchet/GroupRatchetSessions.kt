@@ -84,12 +84,19 @@ class GroupRatchetSessions(
             true
         }
 
+    /** What one `CTL_GROUP_KEY` distribution amounted to: the highest epoch worth acknowledging
+     *  (null ⇒ nothing to ack) and how many chains were freshly derived (0 for a pure re-serve). */
+    class AdoptResult(
+        val ackEpoch: Int?,
+        val freshChains: Int,
+    )
+
     /**
-     * Adopts the seeds of one inbound `CTL_GROUP_KEY` distribution and returns the highest epoch worth
-     * acknowledging (null ⇒ nothing to ack). Idempotent per (epoch, mintedAt): a custody re-serve
-     * re-acks (the sender's outbox converges even if the first ack was lost) without touching chain
-     * position. New adoptions are rate-limited to [MAX_ADOPTIONS_PER_DAY] per (group, sender) — the
-     * skipped-key-pump bound; legitimate advances (count, age, leave, wipe) fit under it.
+     * Adopts the seeds of one inbound `CTL_GROUP_KEY` distribution. Idempotent per (epoch, mintedAt):
+     * a custody re-serve re-acks (the sender's outbox converges even if the first ack was lost)
+     * without touching chain position. New adoptions are rate-limited to [MAX_ADOPTIONS_PER_DAY] per
+     * (group, sender) — the skipped-key-pump bound; legitimate advances (count, age, leave, wipe) fit
+     * under it.
      *
      * **Lock-free by design**: runs inside the v2 DM `commitOpen`'s `onOpened`, i.e. already under the
      * shared ratchet lock and the caller's transaction. The membership/left gating happens in the
@@ -100,26 +107,88 @@ class GroupRatchetSessions(
         senderId: String,
         seeds: List<GroupSeed>,
         now: Long,
-    ): Int? =
-        seeds
-            .mapNotNull { seed ->
-                val newest = store.recvChains(groupId, senderId, seed.epoch).firstOrNull()
-                when (val outcome = engine.adoptSeed(newest, groupId, senderId, seed.epoch, seed.seed, seed.mintedAt, now)) {
-                    is GroupRatchetEngine.AdoptOutcome.Adopt -> {
-                        if (!recordAdoption(groupId, senderId, now)) return@mapNotNull null
-                        store.insertRecvChain(outcome.recv)
-                        seed.epoch
-                    }
+    ): AdoptResult {
+        var fresh = 0
+        val ackEpoch =
+            seeds
+                .mapNotNull { seed ->
+                    val newest = store.recvChains(groupId, senderId, seed.epoch).firstOrNull()
+                    when (val outcome = engine.adoptSeed(newest, groupId, senderId, seed.epoch, seed.seed, seed.mintedAt, now)) {
+                        is GroupRatchetEngine.AdoptOutcome.Adopt -> {
+                            if (!recordAdoption(groupId, senderId, now)) return@mapNotNull null
+                            store.insertRecvChain(outcome.recv)
+                            fresh++
+                            seed.epoch
+                        }
 
-                    GroupRatchetEngine.AdoptOutcome.AlreadyKnown -> {
-                        seed.epoch
-                    }
+                        GroupRatchetEngine.AdoptOutcome.AlreadyKnown -> {
+                            seed.epoch
+                        }
 
-                    GroupRatchetEngine.AdoptOutcome.Stale -> {
-                        null
+                        GroupRatchetEngine.AdoptOutcome.Stale -> {
+                            null
+                        }
                     }
-                }
-            }.maxOrNull()
+                }.maxOrNull()
+        return AdoptResult(ackEpoch = ackEpoch, freshChains = fresh)
+    }
+
+    /** Records a distribution attempt in the outbox (the send path's bookkeeping; no lock needed —
+     *  a single idempotent row upsert). */
+    suspend fun markKeySent(
+        groupId: String,
+        memberId: String,
+        epoch: Int,
+        now: Long,
+    ) {
+        store.markKeySent(groupId, memberId, epoch, now)
+    }
+
+    /** The outbox row for one member, or null when never distributed. */
+    suspend fun keySend(
+        groupId: String,
+        memberId: String,
+    ): GroupKeySendState? = store.keySend(groupId, memberId)
+
+    /** One sealed v3 group frame; [minted] non-null when this seal started a fresh epoch — the caller
+     *  MUST distribute it to the roster (and record the outbox rows) before flooding the frame. */
+    class SealedGroup(
+        val env: EncEnvelope,
+        val minted: GroupSeed?,
+    )
+
+    /**
+     * Seals one outbound group frame under our send chain for [groupId], minting a fresh epoch when
+     * the advance rules fire ([GroupRatchetEngine.needsNewEpoch]: none yet / count / age — the forced
+     * cases arrive here as deleted chains). Runs read → mint → seal → persist atomically under the
+     * shared lock; distribution of a minted seed happens strictly AFTER (the caller seals per-member
+     * ctl DMs via [RatchetSessions.sealDm], which takes this same lock).
+     */
+    suspend fun sealGroup(
+        groupId: String,
+        selfNodeId: String,
+        plaintext: ByteArray,
+        aad: ByteArray,
+        now: Long,
+    ): SealedGroup? =
+        mutex.withLock {
+            var chain = store.sendChain(groupId)
+            var minted: GroupSeed? = null
+            if (engine.needsNewEpoch(chain, now)) {
+                chain = engine.mint(groupId, selfNodeId, prevEpoch = chain?.epoch ?: 0, now = now)
+                minted = GroupSeed(epoch = chain.epoch, seed = chain.seed, mintedAt = chain.mintedAt)
+            }
+            val sealed = engine.seal(checkNotNull(chain), plaintext, aad) ?: return@withLock null
+            store.commitSend(sealed.chain)
+            SealedGroup(sealed.toEnvelope(), minted)
+        }
+
+    /** Our retained seeds for [groupId] (current + draining previous), newest first — the
+     *  re-distribution payload for key requests and proactive re-sends. */
+    suspend fun currentSeeds(groupId: String): List<GroupSeed> =
+        mutex.withLock {
+            store.sendChains(groupId).map { GroupSeed(epoch = it.epoch, seed = it.seed, mintedAt = it.mintedAt) }
+        }
 
     /** Stamps a member's `CTL_GROUP_KEY_ACK` into the outbox (see [adoptSeeds] for the lock posture). */
     suspend fun onKeyAck(

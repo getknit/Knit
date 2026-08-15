@@ -117,6 +117,9 @@ class InboundPipeline(
     // Answers a member's CTL_GROUP_KEY_REQ by re-sealing our current group seeds to them —
     // MeshManager.redistributeGroupKey (lands with the hardening phase), lambda-mediated like originate.
     private val redistributeGroupKey: suspend (String, String) -> Unit = { _, _ -> },
+    // Re-sends unacked group seeds to a member whose profile/prekey just (re)arrived — the group
+    // analogue of flushPending (MeshManager.flushPendingGroupKeysFor), lambda-mediated like originate.
+    private val flushGroupKeys: suspend (String) -> Unit = {},
 ) {
     // nodeId -> avatar hash a non-direct peer advertised but whose bytes we're still pulling, so a blob
     // arriving via the multi-hop BlobExchange can be attributed back to the peer that advertised it.
@@ -637,7 +640,9 @@ class InboundPipeline(
         if (gk.keys.isEmpty()) return null
         val group = groups.find(gk.groupId) ?: return null
         if (group.left || env.senderId !in GroupMembersStore.decode(group.members)) return null
-        return groupRatchet.adoptSeeds(gk.groupId, env.senderId, gk.keys, now)
+        val result = groupRatchet.adoptSeeds(gk.groupId, env.senderId, gk.keys, now)
+        repeat(result.freshChains) { metrics.onGroupSeedAdopted() }
+        return result.ackEpoch
     }
 
     /**
@@ -1509,8 +1514,10 @@ class InboundPipeline(
         reclaimRemovedAvatarIfCleared(env.senderId, advertised, existing?.avatarHash)
         applyDeviceTagBlockContinuity(env.senderId, content.deviceTag)
         pullRelayAvatarIfNeeded(env.senderId, advertised, haveAvatar)
-        // The sender's key is now pinned: retransmit any DMs to them that were stuck awaiting it.
+        // The sender's key is now pinned: retransmit any DMs to them that were stuck awaiting it, and
+        // re-send any group epoch seeds their outbox still shows unacked (their prekey may be new).
         flushPending(env.senderId)
+        flushGroupKeys(env.senderId)
         // Cache this peer's verbatim signed profile so we can re-serve its key to a neighbor that asks, and
         // resolve any key request we (or a node we're relaying for) had outstanding for it.
         keyExchange.onProfilePinned(env.senderId, wire)

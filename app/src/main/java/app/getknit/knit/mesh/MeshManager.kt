@@ -34,7 +34,9 @@ import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
+import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
+import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
@@ -202,6 +204,7 @@ class MeshManager(
             flushPending = ::flushPendingFor,
             classifyText = ::isTextFlagged,
             resealUnacked = ::resealRecentDmsTo,
+            flushGroupKeys = ::flushPendingGroupKeysFor,
         )
 
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
@@ -495,10 +498,11 @@ class MeshManager(
      * The seal chokepoint for every encrypted chat (compose-time [sendChat] and flush-time
      * [flushPendingFor]). A DM to a ratchet-capable peer — pinned profile advertising
      * [Protocol.CAP_RATCHET], both on one signed frame with any prekey — goes **v2** (the epoch-ratchet
-     * session, created on first use); groups and everything else take the v1 static per-recipient wrap.
-     * A v2-eligible seal can still fall back to v1 (peer downgraded mid-session: prekey cleared and no
-     * epoch contributed), which every build reads. Null means nobody addressable holds a key at all —
-     * the caller parks the DM pendingKey.
+     * session, created on first use); a group whose every member is group-ratchet-eligible goes **v3**
+     * (the sender-key chain, minted on first use, its seed distributed pairwise before the frame
+     * floods); everything else takes the v1 static per-recipient wrap. An eligible seal can still fall
+     * back to v1 (peer downgraded mid-session; a member's seed unsendable), which every build reads.
+     * Null means nobody addressable holds a key at all — the caller parks the DM pendingKey.
      */
     private suspend fun sealEnvelopeFor(
         id: String,
@@ -523,7 +527,121 @@ class MeshManager(
                 metrics.onDmSealedV1Fallback()
             }
         }
+        if (group != null && recipientId == null) {
+            sealGroupV3(group, me, content, aad)?.let { return it }
+        }
         return messageCrypto.seal(content.encode(), aad, recipientBundles(recipientId, group, me))
+    }
+
+    /**
+     * The v3 half of the group seal: all-or-nothing per message. Every other member must be
+     * group-ratchet-eligible ([groupRatchetEligible]) AND a mint's seed must seal to every member
+     * ([distributeGroupSeed] — v2-or-nothing, never a v1-wrapped seed); any shortfall returns null and
+     * the whole message falls back to v1, which every build reads. Re-evaluated per send, so the group
+     * upgrades the instant the last capable profile lands. A minted seed is distributed and its outbox
+     * rows recorded BEFORE the group frame floods (first frames may still race their seed — benign:
+     * NO_KEY now, the custody re-serve decrypts once the seed lands).
+     */
+    private suspend fun sealGroupV3(
+        group: GroupInfo,
+        me: String,
+        content: MessageContent,
+        aad: ByteArray,
+    ): EncEnvelope? {
+        val members = group.members.filter { it != me }
+        if (members.isEmpty() || !groupRatchetEligible(members)) return null
+        val sealed = groupRatchet.sealGroup(group.id, me, content.encode(), aad, clock())
+        if (sealed == null) {
+            metrics.onGroupSealedV1Fallback()
+            return null
+        }
+        val minted = sealed.minted
+        if (minted != null && !distributeGroupSeed(group.id, members, minted, me)) {
+            // A member couldn't receive the seed (stale prekey, dead session): stay v1 for the whole
+            // message. The mint is already persisted — harmless; the next eligible send reuses it and
+            // re-attempts the missing distributions.
+            metrics.onGroupSealedV1Fallback()
+            return null
+        }
+        metrics.onGroupSealedV3()
+        return sealed.env
+    }
+
+    /** Whether every one of [members] has a pinned profile carrying [Protocol.CAP_GROUP_RATCHET],
+     *  [Protocol.CAP_RATCHET], and a valid prekey — the seed rides the DM ratchet, so DM-sealability
+     *  to every member is the prerequisite. */
+    private suspend fun groupRatchetEligible(members: List<String>): Boolean =
+        members.all { nodeId ->
+            val peer = peers.find(nodeId) ?: return@all false
+            val caps = peer.capabilities ?: 0L
+            peer.pubKey != null &&
+                caps and Protocol.CAP_GROUP_RATCHET != 0L &&
+                caps and Protocol.CAP_RATCHET != 0L &&
+                ratchetPrekeyOf(peer) != null
+        }
+
+    /**
+     * Distributes [seed] to every member as a `CTL_GROUP_KEY` v2 ctl DM (flooded + custodied like any
+     * chat, never persisted/notified/acked as a message) and records the outbox rows. **Never v1**: a
+     * static-wrapped seed would void the epoch's forward secrecy, so a member whose session can't seal
+     * fails the whole distribution (the caller falls back to v1 for the message). Includes blocked
+     * members — blocking is local presentation (ADR 010) and must stay invisible. Never called while
+     * holding the shared ratchet lock ([RatchetSessions.sealDm] takes it per member).
+     */
+    private suspend fun distributeGroupSeed(
+        groupId: String,
+        members: List<String>,
+        seed: GroupSeed,
+        me: String,
+    ): Boolean {
+        val payload = MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(groupId, keys = listOf(seed)))
+        return members.all { memberId -> sendSeedDm(groupId, memberId, payload, seed.epoch, me) }
+    }
+
+    /** Seals + floods one seed ctl DM and stamps the outbox; false when the member can't receive v2. */
+    private suspend fun sendSeedDm(
+        groupId: String,
+        memberId: String,
+        payload: MessageContent,
+        epoch: Int,
+        me: String,
+    ): Boolean {
+        val peer = peers.find(memberId)
+        val bundle = peer?.pubKey?.let { PublicKeyBundle.decode(it) } ?: return false
+        val id = FrameId.new()
+        val now = clock()
+        val aad = MessageCrypto.header(id, me, now, memberId)
+        val sealed = ratchet.sealDm(memberId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), payload.encode(), aad, now) ?: return false
+        groupRatchet.markKeySent(groupId, memberId, epoch, now)
+        metrics.onGroupSeedSent()
+        originateSigned(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                recipientId = memberId,
+                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+            ),
+        )
+        return true
+    }
+
+    /**
+     * The group analogue of [flushPendingFor], fired when [memberId]'s profile (re)arrives: for every
+     * non-left group we share with a live send chain, re-send the current seed if the outbox says this
+     * member hasn't acked it — the "member's prekey arrived later" healing path.
+     */
+    private suspend fun flushPendingGroupKeysFor(memberId: String) {
+        val me = identity.nodeId()
+        groups.groupsWith(memberId).forEach { group ->
+            val chain = groupRatchet.currentSeeds(group.groupId).firstOrNull() ?: return@forEach
+            val outbox = groupRatchet.keySend(group.groupId, memberId)
+            if (outbox != null && outbox.ackedEpoch >= chain.epoch) return@forEach
+            val payload =
+                MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.groupId, keys = listOf(chain)))
+            sendSeedDm(group.groupId, memberId, payload, chain.epoch, me)
+        }
     }
 
     /** The peer's pinned, already-verified ratchet prekey (base64-decoded), or null when absent/garbled. */

@@ -367,6 +367,49 @@ class PrekeyInfo(
 )
 
 /**
+ * The v3 group sender-key header inside an [EncEnvelope] (crypto scheme v3 —
+ * docs/GROUP_FORWARD_SECRECY.md): the sender's group epoch [se] and index [n] in that epoch's
+ * forward-only message chain. Tiny by design — the groupId rides [RelayEnvelope.group], the sender on
+ * the envelope, and the epoch seed itself never appears on a group frame (it travels pairwise inside
+ * v2 ctl DMs, [app.getknit.knit.mesh.crypto.MessageContent] `CTL_GROUP_KEY`). Integrity needs no
+ * extra MAC: tampering changes the derived AEAD key, and the whole payload is under the frame
+ * signature.
+ */
+@Serializable
+class GroupRatchetHeader(
+    val se: Int,
+    val n: Int,
+)
+
+/**
+ * One group send-epoch seed as distributed inside a v2 ctl DM: the sender's [epoch] number, the raw
+ * 32-byte [seed] its chain derives from, and the [mintedAt] stamp receivers key their rows by
+ * (idempotence across custody re-serves; last-writer-wins across a wiped sender's re-mint). A plain
+ * `class` (see [WrappedKey]).
+ */
+@Serializable
+class GroupSeed(
+    val epoch: Int,
+    @ByteString val seed: ByteArray,
+    val mintedAt: Long,
+)
+
+/**
+ * The `gk` payload for the group-key ctl values (rides inside the encrypted
+ * [app.getknit.knit.mesh.crypto.MessageContent], additive): a distribution (`CTL_GROUP_KEY`) carries
+ * one or more [keys] (the current epoch, plus the still-draining previous one on a key-request
+ * response); a key request (`CTL_GROUP_KEY_REQ`) carries [groupId] with [keys] empty; an adoption
+ * ack (`CTL_GROUP_KEY_ACK`) echoes [groupId] + [ackEpoch]. Deliberately extensible — a future shared
+ * group root for the relay plane rides here as additive fields (docs/GROUP_FORWARD_SECRECY.md §8).
+ */
+@Serializable
+data class GroupKeyPayload(
+    val groupId: String,
+    val keys: List<GroupSeed> = emptyList(),
+    val ackEpoch: Int? = null,
+)
+
+/**
  * The end-to-end encryption envelope carried inside an encrypted [ChatContent]. A random per-message
  * content key encrypts the [app.getknit.knit.mesh.crypto.MessageContent] with AES-256-GCM into [ct]
  * under [nonce] (both raw byte strings — CBOR `@ByteString`, not base64: the envelope already rides a
@@ -381,6 +424,10 @@ class PrekeyInfo(
  * wrapped — [keys] is empty and [r] non-null. v1 ↔ v2 discrimination is [v] alone; [r] is additive
  * (nullable, ignored by older builds) per docs/WIRE_COMPAT.md rule 1, with its `@ByteString` bytes
  * living inside the new [RatchetHeader] type rather than as defaulted fields here (rule 1's exception).
+ *
+ * **v3 (group sender-key ratchet)**: same derived-key discipline for groups — [keys] empty, [g]
+ * non-null, [r] absent. A v3 envelope is only legal group-addressed ([RelayEnvelope.group] set),
+ * exactly as v2 is only legal as a DM.
  */
 @Serializable
 class EncEnvelope(
@@ -389,6 +436,7 @@ class EncEnvelope(
     @ByteString val ct: ByteArray,
     val keys: List<WrappedKey>,
     val r: RatchetHeader? = null,
+    val g: GroupRatchetHeader? = null,
 ) {
     companion object {
         /** Highest crypto-scheme version this build understands; a higher [v] is dropped on delivery. */
@@ -396,6 +444,11 @@ class EncEnvelope(
 
         /** The DM epoch-ratchet scheme (docs/FORWARD_SECRECY_RATCHET.md); requires [r]. */
         const val VERSION_RATCHET = 2
+
+        /** The group sender-key scheme (docs/GROUP_FORWARD_SECRECY.md); requires [g]. NOTE:
+         *  [MAX_SUPPORTED_VERSION] stays 2 until the v3 decrypt branch lands — WIRE_COMPAT's rule:
+         *  bump MAX and the branch together, or a clean unknown-version drop becomes DECRYPT_FAILED noise. */
+        const val VERSION_GROUP_RATCHET = 3
     }
 }
 

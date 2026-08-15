@@ -146,6 +146,20 @@ old-decoder-ignores-`r` behavior is pinned in `WireSerializationTest`. Senders g
 pinned profile carrying **both** `CAP_RATCHET` and a `prekey` (one signed frame — no stale-capability
 window), so a v2 frame is only ever addressed to a build that can open it.
 
+**Precedent — the second additive crypto-scheme bump (`EncEnvelope.v` 2 → 3, the group sender-key
+ratchet).** Same template re-applied (`docs/GROUP_FORWARD_SECRECY.md`): `EncEnvelope` gained the
+nullable `g: GroupRatchetHeader?` (two plain ints — no `@ByteString` at all this time),
+`MessageContent` gained the nullable `gk: GroupKeyPayload?` + three ctl values *inside* the
+ciphertext (`CTL_GROUP_KEY`/`_REQ`/`_ACK` — legal precisely because unknown ctl values were already
+consumed as silent no-ops, a property the v2 precedent shipped and this one leans on),
+`GroupInfo` gained the nullable `departed` list (the roster-integrity phase), and
+`Protocol.CAP_GROUP_RATCHET` took bit `0x20`. The epoch seeds themselves never touch a new wire
+surface: they ride *inside* ordinary v2 DM ctl frames, which v1 relays already custody (the ADR 016
+argument re-applied — a new frame type would not be custodial to old builds). Senders gate v3 on
+**every** other member's pinned profile carrying `CAP_GROUP_RATCHET` + `CAP_RATCHET` + a prekey;
+any ineligible member demotes that message to v1, so a v3 frame is only ever addressed to a roster
+that can open it.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

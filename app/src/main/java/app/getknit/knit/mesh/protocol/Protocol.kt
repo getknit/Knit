@@ -50,6 +50,15 @@ object Protocol {
      */
     const val CAP_RATCHET = 0x10L
 
+    /**
+     * Group sender-key ratchet (crypto scheme v3, docs/GROUP_FORWARD_SECRECY.md). A send-time input
+     * like [CAP_RATCHET]: outbound v3 requires EVERY other member's pinned profile to carry this bit,
+     * [CAP_RATCHET], and a valid prekey (the epoch seeds ride the pairwise v2 DM ratchet). NOT yet in
+     * [LOCAL_CAPABILITIES] — that flips with the send path, so a build never advertises what it
+     * cannot yet do.
+     */
+    const val CAP_GROUP_RATCHET = 0x20L
+
     /** This build's advertised capability bitfield. */
     val LOCAL_CAPABILITIES: Long = CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET
 

@@ -7,6 +7,7 @@ import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
+import app.getknit.knit.mesh.protocol.GroupRatchetHeader
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
@@ -285,12 +286,65 @@ class WireSerializationTest {
     }
 
     @Test
-    fun aFutureV3EnvelopeStillDecodesForRelay() {
+    fun aFutureEnvelopeVersionStillDecodesForRelay() {
         // The WIRE_COMPAT bump checklist's decode half: a higher version must never be a parse error
         // (delivery drops it by the version gate; InboundPipelineTest covers the counting).
-        val future = EncEnvelope(v = 3, nonce = byteArrayOf(1), ct = byteArrayOf(2), keys = emptyList())
+        val future = EncEnvelope(v = EncEnvelope.MAX_SUPPORTED_VERSION + 1, nonce = byteArrayOf(1), ct = byteArrayOf(2), keys = emptyList())
         val decoded = WireCodec.decodePayload<ChatContent>(WireCodec.encodePayload(ChatContent(enc = future)))
-        assertEquals(3, decoded?.enc?.v)
+        assertEquals(EncEnvelope.MAX_SUPPORTED_VERSION + 1, decoded?.enc?.v)
+    }
+
+    @Test
+    fun groupV3EnvelopeRoundTripsWithItsHeader() {
+        val content =
+            ChatContent(
+                enc =
+                    EncEnvelope(
+                        v = EncEnvelope.VERSION_GROUP_RATCHET,
+                        nonce = byteArrayOf(1, 2, 3),
+                        ct = byteArrayOf(4, 5, 6, 7),
+                        keys = emptyList(),
+                        g = GroupRatchetHeader(se = 4, n = 129),
+                    ),
+            )
+        val enc = requireNotNull(WireCodec.decodePayload<ChatContent>(WireCodec.encodePayload(content))?.enc)
+        assertEquals(EncEnvelope.VERSION_GROUP_RATCHET, enc.v)
+        assertTrue(enc.keys.isEmpty())
+        assertNull(enc.r)
+        assertEquals(4, requireNotNull(enc.g).se)
+        assertEquals(129, requireNotNull(enc.g).n)
+    }
+
+    /** The v2-era [EncEnvelope] shape (has `r`, predates `g`), exactly as a v2 build compiled it. */
+    @Serializable
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    private class EncEnvelopeV2Shape(
+        val v: Int = 1,
+        @ByteString val nonce: ByteArray,
+        @ByteString val ct: ByteArray,
+        val keys: List<WrappedKey>,
+        val r: RatchetHeader? = null,
+    )
+
+    @Test
+    fun aV2ShapedDecoderIgnoresTheGroupHeader() {
+        // What a v2-era build does with a v3 envelope: `ignoreUnknownKeys` drops `g`, the envelope
+        // still decodes, and the version gate (not a parse error) rejects it — so it keeps relaying
+        // and custodying it for members that can read it.
+        val v3 =
+            WireCodec.encodePayload(
+                EncEnvelope(
+                    v = EncEnvelope.VERSION_GROUP_RATCHET,
+                    nonce = byteArrayOf(1),
+                    ct = byteArrayOf(2),
+                    keys = emptyList(),
+                    g = GroupRatchetHeader(se = 1, n = 0),
+                ),
+            )
+        val seenByV2Build = WireCodec.decodePayload<EncEnvelopeV2Shape>(v3)
+        assertEquals(EncEnvelope.VERSION_GROUP_RATCHET, seenByV2Build?.v)
+        assertTrue(requireNotNull(seenByV2Build).keys.isEmpty())
+        assertNull(seenByV2Build.r)
     }
 
     @Test

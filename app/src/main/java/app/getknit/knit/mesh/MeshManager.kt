@@ -201,6 +201,7 @@ class MeshManager(
             typingTracker = typingTracker,
             ratchet = ratchet,
             groupRatchet = groupRatchet,
+            clock = clock,
             originate = ::originateSigned,
             flushPending = ::flushPendingFor,
             classifyText = ::isTextFlagged,

@@ -287,6 +287,7 @@ class InboundPipelineTest {
                     typingTracker = typingTracker,
                     ratchet = ratchet,
                     groupRatchet = groupRatchet,
+                    clock = { 42L },
                     originate = { originated += it },
                     flushPending = { flushed += it },
                     classifyText = { _, _, _ -> if (failClassify) error("moderation boom") else false },
@@ -572,7 +573,11 @@ class InboundPipelineTest {
             // Decrypted + delivered.
             assertEquals("hi dm", rig.msgMap["dm1"]?.body)
             // A DM addressed to us floods a RECEIPT back via the origination choke.
-            assertTrue("a receipt should be originated", rig.originated.any { it.type == FrameType.RECEIPT })
+            val ack = rig.originated.filter { it.type == FrameType.RECEIPT }
+            assertTrue("a receipt should be originated", ack.isNotEmpty())
+            // Custody derives the frame-global expiry from sentAt, so an unset 0 is refused dead-on-arrival
+            // at every store and the receipt is never carried (work item #16).
+            assertEquals("the receipt must be stamped with the wall clock", 42L, ack.single().sentAt)
             // A DM for us is delivered, not custodied.
             assertFalse(rig.forwardStore.has("dm1"))
         }

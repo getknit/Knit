@@ -47,7 +47,7 @@ class ForwardSyncTest {
     /** In-memory [ForwardStore]; TTL/order mirror the real repository closely enough for the sync logic. */
     private class FakeForwardStore(
         private val ttlMs: Long = 60_000L,
-        // Mirrors the repository's dead-on-arrival guard (store() returning false) without modelling clocks.
+        // Forces store() to refuse regardless of clocks (models a full/refusing repository).
         private val refuseAll: Boolean = false,
     ) : ForwardStore {
         private data class Row(
@@ -64,7 +64,12 @@ class ForwardSyncTest {
             now: Long,
         ): Boolean {
             if (refuseAll) return false
-            rows.putIfAbsent(frame.envelope.id, Row(frame, origin, now + ttlMs))
+            // Guard-faithful to ForwardRepository: the expiry is frame-global (sentAt + TTL, ADR 006) and a
+            // frame already past it is refused dead-on-arrival. The old arrival-clock expiry (now + ttlMs, no
+            // guard) let a sentAt=0 receipt pass here while the real store refused it (work item #16).
+            val expiresAt = frame.envelope.sentAt + ttlMs
+            if (expiresAt < now) return false
+            rows.putIfAbsent(frame.envelope.id, Row(frame, origin, expiresAt))
             return true
         }
 
@@ -252,6 +257,25 @@ class ForwardSyncTest {
             assertTrue("a profile is now carried so it propagates delay-tolerantly", store.has("p"))
             assertTrue("a group message is carried for offline members", store.has("g1"))
             assertFalse("a point-to-point key request is not carried", store.has("q"))
+        }
+
+    @Test
+    fun aFrameWithoutASentAtIsRefusedCustodyDeadOnArrival() =
+        runTest {
+            val store = FakeForwardStore()
+            val now = 1_000_000_000L
+            val sync = ForwardSync(RecordingTransport(), store, clock = { now })
+
+            // The work-item-#16 shape: an origination that forgot sentAt (wire default 0) computes a 1970
+            // frame-global expiry, so every store — the author's own ORIGIN_SELF capture included — must
+            // refuse it rather than custody it against the local arrival clock.
+            val dead = RelayEnvelope(type = FrameType.RECEIPT, id = "r0", senderId = "a", payload = ByteArray(0))
+            sync.onSeen(wireOf(dead), dead, ForwardStore.ORIGIN_SELF)
+            assertFalse("a sentAt=0 receipt is dead on arrival, never carried", store.has("r0"))
+
+            val live = RelayEnvelope(type = FrameType.RECEIPT, id = "r1", senderId = "a", sentAt = now, payload = ByteArray(0))
+            sync.onSeen(wireOf(live), live, ForwardStore.ORIGIN_SELF)
+            assertTrue("a wall-clock-stamped receipt is custodied", store.has("r1"))
         }
 
     @Test
@@ -659,9 +683,13 @@ class ForwardSyncTest {
                     type = FrameType.RECEIPT,
                     id = "ack-${env.id}-$id",
                     senderId = id,
+                    // Mirrors InboundPipeline.acknowledge: sentAt = clock() (this rig's clock is fixed at 0) —
+                    // custody derives the frame-global expiry from it (work item #16).
+                    sentAt = 0L,
                     payload = WireCodec.encodePayload(ReceiptContent(env.id)),
                 )
-            router.originate(WireEnvelope(sig = ByteArray(0), signed = WireCodec.encodeEnvelope(ack)), ack.id)
+            // Through the origination choke (flood + ORIGIN_SELF capture), like production originateSigned.
+            send(ack)
         }
 
         fun start(scope: CoroutineScope) {
@@ -712,6 +740,43 @@ class ForwardSyncTest {
             assertEquals("c receives the carried DM exactly once", listOf("dm1"), c.delivered)
             assertEquals("and notifies once", listOf("dm1"), c.notified)
             assertFalse("c's ack vaccinates the carrier b", b.store.has("dm1"))
+        }
+
+    @Test
+    fun custodiedReceiptVaccinatesACarrierThatMissedTheLiveAck() =
+        runTest(UnconfinedTestDispatcher()) {
+            val a = Node("a", backgroundScope)
+            val b = Node("b", backgroundScope)
+            val d = Node("d", backgroundScope)
+            a.transport.connect(b.transport)
+            a.transport.connect(d.transport)
+            a.start(backgroundScope)
+            b.start(backgroundScope)
+            d.start(backgroundScope)
+
+            a.send(dm("dm1", sender = "a", recipient = "c"))
+            advanceUntilIdle()
+            assertTrue("b carries the DM while c is away", b.store.has("dm1"))
+            assertTrue("d carries the DM while c is away", d.store.has("dm1"))
+
+            // d wanders off before the recipient appears, so it misses the live ack flood entirely.
+            a.transport.disconnect(d.transport)
+
+            val c = Node("c", backgroundScope)
+            c.start(backgroundScope)
+            b.transport.connect(c.transport)
+            advanceUntilIdle()
+
+            assertEquals("c receives the carried DM", listOf("dm1"), c.delivered)
+            assertFalse("the live ack vaccinates b", b.store.has("dm1"))
+
+            // d meets b much later. The receipt is custodied like any flood frame, so b re-serves it and it
+            // purges d's carried copy — the delay-tolerant half work item #16 restored (an uncustodied
+            // receipt reached only the carriers online at ack time, and d would re-serve for the full TTL).
+            b.transport.connect(d.transport)
+            advanceUntilIdle()
+
+            assertFalse("the custodied receipt vaccinates the late carrier d", d.store.has("dm1"))
         }
 
     @Test

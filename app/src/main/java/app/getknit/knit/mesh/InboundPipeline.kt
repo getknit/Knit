@@ -108,6 +108,9 @@ class InboundPipeline(
     private val typingTracker: TypingTracker,
     private val ratchet: RatchetSessions,
     private val groupRatchet: GroupRatchetSessions,
+    // Injectable wall clock for the receipt we originate (its sentAt is the frame-global custody expiry
+    // anchor). Defaults to the real clock; mirrors the house convention — MeshManager, ForwardSync, AckSync.
+    private val clock: () -> Long = { System.currentTimeMillis() },
     private val originate: suspend (RelayEnvelope) -> Unit,
     private val flushPending: suspend (String) -> Unit,
     private val classifyText: suspend (String, String, Boolean) -> Boolean,
@@ -1428,11 +1431,15 @@ class InboundPipeline(
     ) {
         if (env.recipientId == me) {
             // DM: flood so the receipt reaches the sender across hops and is custodied like any flood frame.
+            // sentAt is load-bearing for that custody: every store derives the frame-global expiry from it
+            // (sentAt + TTL, ADR 006), so an unset 0 computes a 1970 expiry and is refused dead-on-arrival
+            // at every node — the receipt then floods live but is never carried (work item #16).
             val ack =
                 RelayEnvelope(
                     type = FrameType.RECEIPT,
                     id = FrameId.new(),
                     senderId = me,
+                    sentAt = clock(),
                     payload = WireCodec.encodePayload(ReceiptContent(env.id)),
                 )
             originate(ack)

@@ -214,18 +214,20 @@ skipped-key path absorbs.
   what the wiped device lost from custody. Control frames are never persisted, notified, or acked
   as messages; inbound replacements are additionally rate-limited (1/peer/h).
 
-## 8. Export API (for the internet relay plane; no consumer yet)
+## 8. Export API (for the internet relay plane — consumer spec'd)
 
 ```
 pairwiseRoot = HKDF(sessionRoot, salt = 0*32, info = "knit/dm/v2/export/root", 32)   // symmetric
 epochSeal    = HKDF(epochExport, salt = 0*32, info = "knit/dm/v2/export/epoch", 32)  // rotates per epoch
 ```
 
-`pairwiseRoot` is what the relay ("spool") design derives scope ids from; `epochSeal` is the
-rotating sealing-key input ("sealing keys rotate with ratchet epochs"). Epoch secrets are pairwise-
-shared per (direction, epoch) — the receiver derives the same `epochSecret` to decrypt — so either
-side can compute the other's seal keys for a scope. The exact consumer shape is pinned by the
-relay-plane design doc, not here; until then this surface is API-only.
+`pairwiseRoot` is what the spool plane derives DM scope ids and seal keys from — the consumer shape
+is now pinned by `docs/SPOOL_PROTOCOL.md` §3 (`ScopeCrypto` implements it; still no runtime caller
+until the client plane ships). `epochSeal` stays API-only: the spool spec's v1 outer seal is
+deliberately scope-static (its §4.2 records why per-epoch seal keys deadlock on fresh epochs), and
+this surface is reserved for the registered `sealv = 2` epoch-keyed extension. Epoch secrets are
+pairwise-shared per (direction, epoch) — the receiver derives the same `epochSecret` to decrypt —
+so either side could compute the other's seal keys for a scope when that extension lands.
 
 ## 9. Security claim (honest, epoch-granular)
 

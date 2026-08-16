@@ -353,6 +353,9 @@ Google Play services dependency**, end-to-end encrypts DMs and groups, and needs
   on those DM sessions, including seed distribution, recovery, and what a member's departure costs.
 - [`docs/ENCRYPTED_RECEIPTS_REACTIONS.md`](docs/ENCRYPTED_RECEIPTS_REACTIONS.md) — receipts and
   reactions as sealed control frames, and the store-and-forward trade that came with them.
+- [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) — the normative spec for the planned Internet
+  relay plane ("spools"): scope derivation, sealing, the relay protocol, and test vectors. Spec only —
+  nothing in the app speaks it yet.
 - [`docs/CONTENT_MODERATION.md`](docs/CONTENT_MODERATION.md) — on-device abusive-text / explicit-image
   moderation: design, hook points, the bundled models, and Git LFS.
 
@@ -373,11 +376,12 @@ offline app sharing.
 - **Encrypting the broadcast room** — the last cleartext plane, and as much a product question as a
   crypto one: a room with no fixed recipient set has nobody in particular to encrypt to.
 
-**Being designed:** an optional Internet layer that would carry DMs and group messages between contacts
-you already have when no radio path exists, keeping the mesh's delay-tolerant behaviour and running
-through small relays that hold sealed frames without learning whose they are or what is in them. This is
-a design draft — nothing is implemented and no spec is published yet — and the app is built around
-proximity meshing either way.
+**Designed — spec published:** an optional Internet layer that would carry DMs and group messages
+between contacts you already have when no radio path exists, keeping the mesh's delay-tolerant
+behaviour and running through small relays ("spools") that hold sealed frames without learning whose
+they are or what is in them. The protocol is specified in
+[`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) with executable test vectors; the app ships none of
+it yet — no relay code, no network calls — and is built around proximity meshing either way.
 
 ## 🔐 Security note
 

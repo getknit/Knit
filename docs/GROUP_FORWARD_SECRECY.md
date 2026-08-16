@@ -227,21 +227,24 @@ per-(group, member) floor, then re-seal the **current + draining previous** seed
 The v1 fallback path keeps the old silent gap (members without pinned keys are skipped); that
 residual shrinks as capability floods and is noted in the roadmap.
 
-## 8. Export API (for the internet relay plane; no consumer yet)
+## 8. Export API (for the internet relay plane — root mechanism confirmed)
 
 ```
 epochSeal = HKDF(epochExport, salt = 0*32, info = "knit/group/v1/export/epoch", 32)
 ```
 
-Per-(sender, epoch), pairwise-shared with every member (anyone holding the seed derives it). The
-**shared group root** the spool plane's scope derivation wants (`scopeId = KDF(groupSecret, …)`,
-stable until remove, rotated on remove) is **deferred to the relay-plane design doc**: pure
-sender-key has no shared secret, and shipping root-agreement machinery with zero consumers repeats
-nothing the DM scheme did (its §8 shipped API-only). Two affordances keep the deferral cheap, per
-the review: `GroupKeyPayload` is additive-extensible (a future `{root, rootVersion, minter}` rides
-the same ctl channel), and the leave-rekey hook (§6.1) is the single named point scopeId rotation
-will piggyback. The reserved mechanism, if the relay doc confirms it: creator-minted root,
-deterministic re-minter on departure (smallest remaining nodeId), highest-`(version, minter)` wins.
+Per-(sender, epoch), pairwise-shared with every member (anyone holding the seed derives it). It
+stays API-only: the spool spec's v1 outer seal is scope-static (per-sender epoch seals would be
+unopenable exactly by the seed-lagging member the frame must stay visible to — the spec's §4.2
+records the full argument), and this surface is reserved for its registered `sealv = 2` extension.
+
+The **shared group root** this section deferred is now **confirmed and specified by
+`docs/SPOOL_PROTOCOL.md` §3.2**, exactly along the reserved mechanism: creator-minted root,
+deterministic re-minter on departure (creator if remaining, else smallest remaining nodeId),
+highest-`(version, minter)` wins, gossiped as additive `GroupKeyPayload` fields (`gr: {root,
+version, minter}`) on the existing `CTL_GROUP_KEY` channel, with the leave-rekey hook (§6.1) as the
+rotation point. Client machinery (the wire field, mint/gossip/adopt code) lands with the group-scope
+milestone; until then the affordances stay affordances.
 
 ## 9. Security claim (honest, epoch-granular, availability-inverted)
 

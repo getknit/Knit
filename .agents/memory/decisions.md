@@ -345,3 +345,40 @@ tell-free asymmetry; and a blocked member's sealed group reaction still draws a 
 their undecryptable group chats already exhibit. Scheme doc: `docs/ENCRYPTED_RECEIPTS_REACTIONS.md`;
 wire precedent: `docs/WIRE_COMPAT.md` (the third additive `MessageContent` change); context:
 `context/e2e-encryption.md`, `context/store-and-forward.md`.
+
+## 019. The internet plane is a scoped-custody spool protocol — M1 ships the public spec plus pure-crypto anchors, nothing else
+
+Status: Accepted (2026-08-15; docs/SPOOL_PROTOCOL.md, `mesh/crypto/scope/`, `mesh/spool/`)
+
+Names committed: **spool** (the store-and-forward relay daemon — "relay" is taken by
+`RelayEnvelope`/`relayed()`/the mesh `relay` flag), **scope** (one conversation's internet
+presence), **`ScopeSync`** (the future client plane — a custody-plane sibling of `ForwardSync`
+under `MeshManager`, deliberately NOT a third `MeshTransport`: the seam is radio-shaped and a scope
+has no neighbors), **`knit-spool`** (the reference daemon repo, **AGPL-3.0**; the app stays
+GPL-3.0-or-later, no shared code). The spec is the product: `docs/SPOOL_PROTOCOL.md` is normative
+and public from day one, `ScopeCrypto`/`SpoolPow`/`SpoolRecords` are its reference implementation
+and the vector tests its executable anchors — the daemon (M2) and client (M3) implement the spec,
+not each other.
+
+M1 deliberately stops at pure functions — the FS docs' §8 "API-only, no consumer" posture one
+layer up. **No mesh-wire fields land**: the scope-config ctl (`CTL_SCOPE_CONFIG = 7`,
+`MessageContent.sc`) and the group root (`GroupKeyPayload.gr = {root, version, minter}`) are named
+normatively in the spec but ship additively with their consumers (client plane / group scopes),
+under WIRE_COMPAT's released-numbers-append-only, unreleased-still-editable rule. Two design-phase
+intents were amended with rationale recorded in the spec: the **outer seal is scope-static**, not
+epoch-rotating (per-epoch keys deadlock — the DM epoch identifiers needed to select the key live
+inside the sealed blob and a fresh epoch's DH pub can't be enumerated; group epoch seals would be
+unopenable exactly by the seed-lagging member whose custody/re-flood/key-request signal the frame
+must keep feeding — `sealv = 2` reserves the epoch-keyed variant, and the `exportEpochSeal`
+surfaces stay API-only for it), and the **scope config rides as a ctl inside sealed v2 chat**, not
+as a new frame type (the ADR 016/018 custody argument: `isCustodial` is a fixed list on deployed
+builds, and the config is exactly the frame that must survive store-and-forward). The seal is
+**deterministic** (SIV-style nonce keyed off a scope secret) so any member seals a frame to the
+identical blobId — spool dedup and cross-uploader digest convergence by construction, and the
+keyed nonce denies spools a known-plaintext confirmation oracle. The group **shared root** deferred
+by ADR 017/GROUP_FORWARD_SECRECY §8 is confirmed along the reserved mechanism: creator-minted,
+deterministic re-mint on departure (creator if remaining, else smallest remaining nodeId),
+highest-`(version, minter)` wins, gossiped on the existing `CTL_GROUP_KEY` channel.
+
+Scheme spec: docs/SPOOL_PROTOCOL.md; wire posture: docs/WIRE_COMPAT.md (no change at M1);
+context: context/e2e-encryption.md; deferred remainder: memory/roadmap.md.

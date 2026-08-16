@@ -24,9 +24,23 @@ doc). **Don't start a deferred item without explicit direction.**
   `docs/FORWARD_SECRECY_RATCHET.md`; ADR 016): X3DH-style bootstrap off a signed prekey published in the
   profile, per-epoch X25519 rekeying, session state in the `ratchet_*` tables, capability-gated dual-stack
   (v1 static wrap remains for groups and pre-ratchet peers, and inbound v1 is accepted forever). Also
-  supplies the `pairwiseRoot` export the future internet-relay scope derivation needs.
+  supplies the `pairwiseRoot` export the internet-relay scope derivation consumes
+  (`docs/SPOOL_PROTOCOL.md` §3, `ScopeCrypto`).
+- **The spool (internet-relay) protocol is specified** — `docs/SPOOL_PROTOCOL.md` (ADR 019, public,
+  normative) plus the pure reference implementation and vector anchors (`mesh/crypto/scope/`
+  `ScopeCrypto`/`SpoolPow`, `mesh/spool/` `SpoolRecords`; API-only, zero runtime consumers). Names
+  committed: spool / scope / `ScopeSync` / `knit-spool` (AGPL-3.0).
 
 ## Still deferred (by design)
+
+- **The spool plane beyond the spec** — everything that makes the protocol run, in order: the
+  `knit-spool` reference daemon + conformance suite; the client `ScopeSync` plane (OkHttp/WSS dep +
+  lockfile regen, a validated-Internet `ConnectivityManager` seam — which needs a
+  `rules/mesh.md` amendment, since `ConnectivityManager` is currently NAN-only — the scope-config
+  ctl producer/consumer, global opt-in toggle, spool-list settings, Tor SOCKS toggle, diagnostics
+  counters); group scopes (the `GroupKeyPayload.gr` wire field + root mint/gossip/adopt +
+  departure re-mint, per the spec's §3.2); sealed attachments over spools. Each lands additively
+  per `docs/WIRE_COMPAT.md` with its golden vectors and precedent entry when it ships.
 
 - **BLE promotion gate on A2DP audio** — the adaptive scan throttle now drops the **scan** to its floor
   while streaming (`ScanDemandPolicy` / the demand-gated `scanLoop`), but **connects** are still not gated
@@ -50,5 +64,6 @@ doc). **Don't start a deferred item without explicit direction.**
   the cleartext fallback toward pre-ratchet peers, counted by `receiptsSealedFallback`/
   `reactionsSealedFallback`). (Group forward secrecy shipped as the v2 group form — the sender-key
   ratchet over the pairwise sessions, ADR 017, docs/GROUP_FORWARD_SECRECY.md; it also supplies the
-  per-sender `epochSeal` export the internet-relay plane's group scopes need, with the shared group
-  root deliberately deferred to that plane's design doc.) See `context/e2e-encryption.md`.
+  per-sender `epochSeal` export reserved for the spool plane's `sealv = 2` extension; the shared
+  group root is now specified by `docs/SPOOL_PROTOCOL.md` §3.2, client machinery deferred with the
+  group-scope milestone above.) See `context/e2e-encryption.md`.

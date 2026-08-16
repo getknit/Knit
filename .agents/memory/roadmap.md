@@ -49,6 +49,10 @@ doc). **Don't start a deferred item without explicit direction.**
     list is a device setting and bounds are §12 constants in `ScopeRegistry`.
   - **a spool-list editor** — until then the Settings switch is `BuildConfig.DEBUG`-gated and
     spools are configured over the debug bridge, so a release build has no way to turn it on.
+    **This is now a hard prerequisite for un-gating that switch**, not a nicety: the app ships a
+    default spool (`res/values/spools.xml`, seeded once by `SettingsStore.seedDefaultSpools`), so a
+    release user who could enable the plane but not edit the list would be stuck with an endpoint
+    they cannot remove. Today the pair is safe — the default is inert because the switch is hidden.
   - a validated-Internet `ConnectivityManager` seam (the MVP reconnects on backoff instead, which
     is why `rules/mesh.md` still reads NAN-only and `ACCESS_NETWORK_STATE` is still undeclared);
     the Tor SOCKS toggle; per-conversation opt-out.

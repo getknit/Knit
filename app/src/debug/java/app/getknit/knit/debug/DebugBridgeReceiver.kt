@@ -803,7 +803,10 @@ class DebugBridgeReceiver :
                         .put("local", scope.localCount)
                         .put("spool", scope.spoolCount)
                         .put("converged", scope.converged)
-                        .put("invalid", scope.invalidCount),
+                        .put("invalid", scope.invalidCount)
+                        // A retiring scope is drained, never refilled, so local > spool for its whole
+                        // drain window — expected, not divergence.
+                        .put("retiring", scope.retiring),
                 )
             }
             spools.put(
@@ -811,6 +814,7 @@ class DebugBridgeReceiver :
                     .put("url", spool.url)
                     .put("connected", spool.connected)
                     .put("powBits", spool.powBits)
+                    .put("lastError", spool.lastError ?: JSONObject.NULL)
                     .put("scopes", scopes),
             )
         }

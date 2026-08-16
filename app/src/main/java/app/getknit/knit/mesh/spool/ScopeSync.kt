@@ -30,7 +30,13 @@ interface SpoolSocket : SpoolLink {
     val incoming: ReceiveChannel<ByteArray>
 }
 
-/** One scope's convergence state at one spool: the two digests that must agree, plus the quarantine size. */
+/**
+ * One scope's convergence state at one spool: the two digests that must agree, plus the quarantine size.
+ *
+ * [converged] is plain digest equality, so read it together with [retiring]: a retiring scope is drained
+ * but never refilled (spec §3.1), so it legitimately sits at `local > spool` and reports **false** for
+ * the whole drain window. That is the scope working as designed, not divergence.
+ */
 class ScopeStatus(
     val scopeHex: String,
     val peerId: String,
@@ -38,13 +44,20 @@ class ScopeStatus(
     val spoolCount: Int,
     val converged: Boolean,
     val invalidCount: Int,
+    val retiring: Boolean,
 )
 
-/** One spool's live state, for the Diagnostics screen and the debug bridge. */
+/**
+ * One spool's live state, for the Diagnostics screen and the debug bridge. [lastError] is the most
+ * recent `err` code this spool answered with — the difference between "connected but idle" and
+ * "connected and refusing us", which is otherwise invisible and is exactly what a field test needs
+ * (`quota`, `pow` and `rate` all present as a scope that simply never converges).
+ */
 class SpoolStatus(
     val url: String,
     val connected: Boolean,
     val powBits: Int,
+    val lastError: String?,
     val scopes: List<ScopeStatus>,
 )
 
@@ -186,6 +199,11 @@ class ScopeSync(
         @Volatile
         private var connection: SpoolConnection? = null
 
+        // The most recent `err` code this spool answered with, for diagnostics. Cleared on a clean
+        // connect so a stale refusal doesn't outlive the condition that caused it.
+        @Volatile
+        private var lastError: String? = null
+
         fun ensureRunning(host: CoroutineScope) {
             if (job?.isActive == true) return
             job = host.launch { runLoop() }
@@ -207,6 +225,7 @@ class ScopeSync(
                 url = url,
                 connected = connection != null,
                 powBits = connection?.powBits ?: 0,
+                lastError = lastError,
                 scopes =
                     all.map { scope ->
                         ScopeStatus(
@@ -216,6 +235,7 @@ class ScopeSync(
                             spoolCount = spoolCounts[scope.idHex] ?: 0,
                             converged = spoolDigests[scope.idHex] == localDigests[scope.idHex],
                             invalidCount = invalid[scope.idHex]?.size ?: 0,
+                            retiring = scope.retiring,
                         )
                     },
             )
@@ -241,6 +261,7 @@ class ScopeSync(
             pump.invokeOnCompletion { conn.onClosed() }
             val ready = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { conn.awaitReady() } == true
             if (ready) {
+                lastError = null
                 subscribe(conn, scopes)
                 while (pump.isActive && currentCoroutineContext().isActive) {
                     withTimeoutOrNull(TICK_INTERVAL_MS) { wakeup.receive() }
@@ -335,7 +356,10 @@ class ScopeSync(
                     pushed.add(entry.sealed.blobId)
                     metrics.onSpoolPushed()
                 } else {
-                    if (reply is SpoolReply.Failed) metrics.onSpoolError()
+                    if (reply is SpoolReply.Failed) {
+                        metrics.onSpoolError()
+                        lastError = reply.code
+                    }
                     // A per-blob refusal is worth stepping over; anything else (quota, a dead socket) ends
                     // the round.
                     if (reply !is SpoolReply.Failed || !survivable(reply)) break
@@ -419,6 +443,7 @@ class ScopeSync(
             code: String,
         ) {
             metrics.onSpoolError()
+            lastError = code
             // A refused stamp is stale (day rollover, or the spool raised its difficulty): drop it so the
             // next SUB/PUSH mines a fresh one instead of replaying the rejected counter forever.
             if (scopeHex != null && code == SpoolErrCode.POW) stamps.remove(scopeHex)

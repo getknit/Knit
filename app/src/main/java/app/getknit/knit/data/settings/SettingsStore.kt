@@ -212,6 +212,22 @@ class SettingsStore(
 
     suspend fun setSpoolEnabled(value: Boolean) = dataStore.edit { it[KEY_SPOOL_ENABLED] = value }
 
+    /**
+     * Seeds the shipped default spools (`res/values/spools.xml`) into [spoolUrls] exactly once, marking
+     * the install as seeded so a **removal sticks**. A default the app kept re-adding would not be a
+     * default, it would be a policy — and this list decides which third parties see a conversation's
+     * traffic pattern, so the user's edit has to be the last word.
+     *
+     * Idempotent and safe to call on every start. Seeding a URL does not use it: the plane stays off
+     * until [spoolEnabled] is set, so a fresh install still opens no socket.
+     */
+    suspend fun seedDefaultSpools(defaults: List<String>) =
+        dataStore.edit { prefs ->
+            if (prefs[KEY_SPOOL_SEEDED] == true) return@edit
+            prefs[KEY_SPOOL_SEEDED] = true
+            if (defaults.isNotEmpty()) prefs[KEY_SPOOL_URLS] = (prefs[KEY_SPOOL_URLS] ?: emptySet()) + defaults
+        }
+
     /** Adds a spool URL to sync against (idempotent — the setting is a set, not a list). */
     suspend fun addSpoolUrl(url: String) = dataStore.edit { it[KEY_SPOOL_URLS] = (it[KEY_SPOOL_URLS] ?: emptySet()) + url }
 
@@ -238,5 +254,6 @@ class SettingsStore(
         val KEY_REVIEW_ATTEMPT_COUNT = longPreferencesKey("review_attempt_count")
         val KEY_SPOOL_ENABLED = booleanPreferencesKey("spool_enabled")
         val KEY_SPOOL_URLS = stringSetPreferencesKey("spool_urls")
+        val KEY_SPOOL_SEEDED = booleanPreferencesKey("spool_defaults_seeded")
     }
 }

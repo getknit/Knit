@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Default spools for the Internet-relay plane (docs/SPOOL_PROTOCOL.md).
+
+  Seeded into the user's spool list ONCE, on first run (SettingsStore.seedDefaultSpools), behind a
+  marker so that removing an entry sticks — a default the app keeps re-adding would not be a default,
+  it would be a policy. Editing this list only affects installs that have never seeded.
+
+  Seeding a URL is NOT the same as using it: the plane is off unless the user turns it on
+  (SettingsStore.spoolEnabled defaults false), so a fresh install still opens no socket.
+
+  Entries must be `wss://` — release builds refuse any other scheme at dial time, and a spool sees
+  subscriber IPs, so plaintext would leak the scope ids that identify a conversation's era on the wire.
+-->
+<resources>
+    <string-array name="default_spools" translatable="false">
+        <item>wss://lax.spool.getknit.app/spool/v1</item>
+    </string-array>
+</resources>

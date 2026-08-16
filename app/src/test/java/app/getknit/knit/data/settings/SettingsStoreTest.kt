@@ -151,4 +151,45 @@ class SettingsStoreTest {
             assertEquals(0L, store.reviewLastAttemptAt.first())
             assertEquals(0L, store.reviewAttemptCount.first())
         }
+
+    @Test
+    fun `the Internet plane is off with no spools until something configures it`() =
+        runTest {
+            val store = newStore()
+            assertEquals(false, store.spoolEnabled.first())
+            assertEquals(emptySet<String>(), store.spoolUrls.first())
+        }
+
+    @Test
+    fun `default spools seed once and never come back after the user removes one`() =
+        runTest {
+            val store = newStore()
+            val default = "wss://lax.spool.getknit.app/spool/v1"
+
+            store.seedDefaultSpools(listOf(default))
+            assertEquals(setOf(default), store.spoolUrls.first())
+            // Seeding a spool must not switch the plane on — the two decisions are separate.
+            assertEquals(false, store.spoolEnabled.first())
+
+            store.removeSpoolUrl(default)
+            store.seedDefaultSpools(listOf(default)) // every app start re-runs this
+            assertEquals("a removed default must stay removed", emptySet<String>(), store.spoolUrls.first())
+        }
+
+    @Test
+    fun `seeding preserves a spool the user added and tolerates an empty default list`() =
+        runTest {
+            val store = newStore()
+            store.addSpoolUrl("wss://mine.example/spool/v1")
+
+            store.seedDefaultSpools(listOf("wss://lax.spool.getknit.app/spool/v1"))
+            assertEquals(
+                setOf("wss://mine.example/spool/v1", "wss://lax.spool.getknit.app/spool/v1"),
+                store.spoolUrls.first(),
+            )
+
+            val bare = newStore()
+            bare.seedDefaultSpools(emptyList())
+            assertEquals(emptySet<String>(), bare.spoolUrls.first())
+        }
 }

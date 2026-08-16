@@ -54,7 +54,11 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   reverse-proxy job); release refuses it at dial time whatever is stored. The reply's per-scope
   `local` vs `spool` counts are the **convergence oracle** — they agree once the heal loop settles,
   exactly as `liveFingerprint` parity is for mesh custody — and `invalid` should stay 0 (a nonzero
-  count means some uploader is putting blobs into a scope that fail validation).
+  count means some uploader is putting blobs into a scope that fail validation). Two fields exist to
+  stop you chasing ghosts: `retiring` marks a drained previous-session scope, where `local > spool`
+  is correct rather than divergence; and `lastError` is the spool's most recent `err` code, which is
+  the only thing distinguishing "connected and idle" from "connected and refusing us" (`quota`,
+  `pow` and `rate` all otherwise present as a scope that simply never converges).
 - `…debug.REACT` — `--es id <messageId> --es emoji <emoji>`. `…debug.HEAL` — nudge rescan/re-advertise.
 - `…debug.FLAGMSG` — injects one inbound message **the text moderator flagged** (the UI collapses it behind a
   tap-to-reveal) as the newest row of `--es conv <id>` (default `nearby`), from `--es from <peerNodeId>`

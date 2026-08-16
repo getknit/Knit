@@ -2,6 +2,7 @@ package app.getknit.knit
 
 import android.app.Application
 import app.getknit.knit.data.blob.BlobDao
+import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.di.appModule
 import app.getknit.knit.di.meshModule
 import app.getknit.knit.di.moderationModule
@@ -47,6 +48,9 @@ class KnitApplication :
         // gracefully if the assets fail to load, and warmUp() dedupes against a racing first send.
         koinApp.koin.get<CoroutineScope>().launch {
             koinApp.koin.get<MlTextModerator>().warmUp()
+            // Seed the shipped default spools once (res/values/spools.xml). Opens no socket by itself —
+            // the Internet plane stays off until the user turns it on — and a later removal sticks.
+            koinApp.koin.get<SettingsStore>().seedDefaultSpools(resources.getStringArray(R.array.default_spools).toList())
         }
 
         // Demo-screenshot mode (`-PseedDemo=true`): fill the DB with a realistic conversation history so

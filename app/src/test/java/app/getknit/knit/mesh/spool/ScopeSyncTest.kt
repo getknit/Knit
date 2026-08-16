@@ -185,6 +185,30 @@ class ScopeSyncTest {
         }
 
     @Test
+    fun `a frame swept from custody while the spool still holds it is not re-pulled every heal round`() =
+        runTest {
+            val spool = FakeSpool()
+            val holder = member(spool, alice, bob)
+            holder.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            holder.sync.start(backgroundScope)
+            pump()
+            assertEquals("pushed and converged first", 1, spool.pushed.size)
+
+            // The scope TTL (48 h) deliberately outlives mesh custody (24 h), so a frame we already
+            // delivered gets swept locally while the spool keeps it for another day. From then on it is
+            // absent from `local` forever and our digest can never match — and re-pulling it achieves
+            // nothing, because the custody store refuses it as dead on arrival every single time.
+            holder.custody.sweep("m1")
+            pump(rounds = 120) // several 60 s heal ticks
+            val afterFirstSweep = spool.pulled.size
+            pump(rounds = 120)
+
+            assertEquals("pulled at most once after the sweep", 1, afterFirstSweep)
+            assertEquals("and never again", afterFirstSweep, spool.pulled.size)
+            holder.sync.stop()
+        }
+
+    @Test
     fun `a spool that rejects the connection reports why, instead of just looking disconnected`() =
         runTest {
             // A spool with a token configured closes 4001 before saying anything. Without the close code

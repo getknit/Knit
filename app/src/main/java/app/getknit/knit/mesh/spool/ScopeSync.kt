@@ -331,7 +331,14 @@ class ScopeSync(
             val quarantined = invalid[scope.idHex].orEmpty()
             val spoolIds = listing.blobIds.associateBy { hex(it) }
             val tombstoned = listing.tombstones.mapTo(mutableSetOf()) { hex(it) }
-            val wanted = spoolIds.filterKeys { it !in local && it !in quarantined }.values.toList()
+            // Skip what we already processed on this connection, not just what we still hold. The scope
+            // TTL (48 h) deliberately outlives mesh custody (24 h), so a frame we delivered and then swept
+            // still sits at the spool for another day: it is absent from `local` forever, our digest never
+            // matches, and without this the heal round re-pulls it every tick for that whole second day —
+            // silently, since `accept` short-circuits before the counters move.
+            val processed = accepted[scope.idHex].orEmpty()
+            val wanted =
+                spoolIds.filterKeys { it !in local && it !in quarantined && it !in processed }.values.toList()
             val gone = pullMissing(conn, scope, wanted)
             val pushed = pushMissing(conn, scope, local, spoolIds.keys, tombstoned, quarantined)
             reanchor(scope, spoolIds, gone, pushed)

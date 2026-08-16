@@ -43,6 +43,9 @@ class FakeSpool(
     /** Every PUSH the spool accepted, in order — the outbound-side assertion hook. */
     val pushed = mutableListOf<String>()
 
+    /** Every blob id a PULL asked for — how a test proves the client stopped re-requesting something. */
+    val pulled = mutableListOf<String>()
+
     /** SUB stamps the spool was handed, by scope hex — lets a test assert PoW actually rode along. */
     val stamps = ConcurrentHashMap<String, PowStamp>()
 
@@ -175,6 +178,7 @@ class FakeSpool(
             // The daemon truncates an overshoot rather than erroring; ids past the cap appear in neither
             // the blobs nor `missing`, so a client that overshoots must re-pull the remainder.
             pull.blobIds.take(maxPull).forEach { id ->
+                pulled.add(hex(id))
                 val data = state.live[hex(id)]
                 if (data == null) {
                     missing.add(id)
@@ -240,12 +244,23 @@ class FakeCustody(
     private val ttlMs: Long = 24 * 60 * 60_000L,
 ) : ForwardStore {
     private val rows = ConcurrentHashMap<String, CarriedFrame>()
+    private val swept = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Drops [id] and refuses it from then on — the real store's answer once a frame passes its
+     * frame-global expiry. Models the 24 h custody sweep while a 48 h scope still holds the blob.
+     */
+    fun sweep(id: String) {
+        rows.remove(id)
+        swept.add(id)
+    }
 
     override suspend fun store(
         frame: CarriedFrame,
         origin: Int,
         now: Long,
     ): Boolean {
+        if (frame.envelope.id in swept) return false
         if (frame.envelope.sentAt + ttlMs < now) return false
         rows.putIfAbsent(frame.envelope.id, frame)
         return true

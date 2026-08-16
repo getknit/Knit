@@ -380,5 +380,15 @@ by ADR 017/GROUP_FORWARD_SECRECY §8 is confirmed along the reserved mechanism: 
 deterministic re-mint on departure (creator if remaining, else smallest remaining nodeId),
 highest-`(version, minter)` wins, gossiped on the existing `CTL_GROUP_KEY` channel.
 
+**Amended 2026-08-16 (M2 shipped):** the `knit-spool` reference daemon + 22-check conformance
+suite exist; implementing them surfaced eight spec ambiguities, resolved the same day as semantic
+clarifications in SPOOL_PROTOCOL.md — §6.2 tombstone count bound (`max(2 × maxFrames, 1024)`,
+§12 row) and forgotten-scope semantics (LIST/PULL answer empty; PUSH recreates through the §6.4
+creation gates — the reachable use of `push.pow`), §6.4 recommended shed shape (whole scope,
+tombstones included, plus an empty-digest re-anchor), §7.1 post-negotiation hello = `err
+malformed` (4000 is pre-hello only), §7.2 unsolicited-digest SHOULD / pull-over-`maxPull`
+truncation / duplicate-push acks without re-fan-out / `version` code reserved-never-emitted. No
+wire field, vector, or derivation changed — the §13 anchors are untouched.
+
 Scheme spec: docs/SPOOL_PROTOCOL.md; wire posture: docs/WIRE_COMPAT.md (no change at M1);
 context: context/e2e-encryption.md; deferred remainder: memory/roadmap.md.

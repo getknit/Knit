@@ -1,13 +1,16 @@
 # The spool protocol — scoped, blinded store-and-forward relays for the Internet plane
 
-Status: **normative spec, v1 draft** · 2026-08-15 · ADR 019. This document is the normative spec and
-is public from day one; `mesh/crypto/scope/` (`ScopeCrypto`, `SpoolPow`) and `mesh/spool/`
-(`SpoolRecords`) are the reference implementation of the derivation/sealing/digest/PoW/record
-sections, and `ScopeCryptoTest`/`ScopeVectorTest`/`SpoolPowTest`/`SpoolRecordsTest` are the
-executable anchors (§13's vectors are those tests' pinned constants, verbatim). The reference spool
-daemon (`knit-spool`, AGPL-3.0) and its conformance suite are the next milestone; the Android client
-plane (`ScopeSync`) follows it. **Both implement this file, not each other.** Nothing in the app
-speaks this protocol yet.
+Status: **normative spec, v1 draft** · 2026-08-15, updated 2026-08-16 · ADR 019. This document is
+the normative spec and is public from day one; `mesh/crypto/scope/` (`ScopeCrypto`, `SpoolPow`) and
+`mesh/spool/` (`SpoolRecords`) are the reference implementation of the
+derivation/sealing/digest/PoW/record sections, and
+`ScopeCryptoTest`/`ScopeVectorTest`/`SpoolPowTest`/`SpoolRecordsTest` are the executable anchors
+(§13's vectors are those tests' pinned constants, verbatim). The reference spool daemon
+(`knit-spool`, AGPL-3.0) and its 22-check conformance suite exist as of 2026-08-16; the Android
+client plane (`ScopeSync`) follows. **All of them implement this file, not each other.** Nothing in
+the app speaks this protocol yet. *The 2026-08-16 update resolves eight ambiguities the daemon
+implementation surfaced — semantic clarifications only (§6.2, §6.4, §7.1, §7.2, §12); no wire
+field, vector, or derivation changed.*
 
 Sections are tagged by audience: **[Spool]** is everything a relay implementer needs (no crypto —
 a spool never decrypts anything), **[Client]** is member-side, **[Both]** is shared.
@@ -314,6 +317,20 @@ a third party must not be able to poison an honest spool's digest. Delivery fact
 this layer: receipts are just more sealed frames inside a scope; spool copies of everything age out
 on the TTL uniformly.
 
+Tombstone sets are **count-bounded** as well as TTL'd (suggested bound in §12, oldest-first drop):
+without a count bound, a member cycling unique blobs through eviction grows the set at push rate
+for a whole `ttlMs`. Dropping a tombstone early merely re-admits a blob that then ages out through
+the ordinary TTL — bounded churn, never divergence.
+
+A spool may also **forget a scope entirely** — watermark shedding (§6.4), an operator wipe, or a
+restart of a non-persistent spool — while connections still hold subscriptions for it. The
+subscription survives on the connection; `list`/`pull` against a forgotten scope answer empty (an
+empty `list` response, all ids `missing`) — never an error. The next `push` **recreates** the
+scope: it is exactly §6.4's "first SUB or PUSH for an unknown scope id", so the creation gates
+apply (PoW stamp on the `push` record — this is what `push.pow` is for — and any creation rate
+limit), the bounds re-apply from the connection's most recent declaration, and the spool sends the
+recreated scope's fresh `digest` before the push's `ok` so the uploader re-anchors.
+
 ### 6.3 The digest
 
 ```
@@ -333,7 +350,11 @@ frame-id strings.)
   (§8), difficulty advertised in HELLO; the spool caches accepted `(scopeId, day)` so honest
   clients pay roughly once per scope.
 - Per-IP / per-connection rate limits (`rate` + `retryMs`); a global storage watermark with
-  oldest-scope shedding is operator policy.
+  oldest-scope shedding is operator policy. When a spool sheds, the recommended shape is a
+  **whole-scope drop, tombstones included** — a shed scope is exactly the "wiped spool" §9.1
+  refills, and surviving tombstones would refuse the very re-pushes that refill it — followed by an
+  empty `digest` (count 0, digest 0) to the scope's still-connected subscribers so they refill
+  immediately instead of on the next reconnect.
 - **Private spools**: a bearer token in the WSS URL (§7.1) — zero-config access control for
   self-hosters; the URL lives only inside the sealed scope config anyway.
 
@@ -347,7 +368,9 @@ frame-id strings.)
 - **Exactly one CBOR record per WebSocket binary message** — WS provides framing.
 - Each direction sends `hello` first. The spool advertises `v` (highest supported record-layer
   version), `min`, `limits`, `powBits`; the client answers with the chosen `v` in `[min, v]` — and
-  nothing else identifying, in either direction. No version overlap: close `4002`.
+  nothing else identifying, in either direction. No version overlap: close `4002`. A `hello` *after*
+  negotiation is malformed in-band traffic: answered with `err malformed`, connection kept —
+  `4000` covers pre-hello traffic only.
 - Request/response correlation: the client stamps `q` (monotonically increasing per connection);
   terminal responses (`ok`/`err`) echo it. Server-initiated records (`digest`, `event`) carry no `q`.
 - All scope operations require a prior `sub` for that scope on the same connection
@@ -373,10 +396,22 @@ Field names are the CBOR map keys. `bstr32`/`bstr8` = byte strings of that lengt
 
 Error codes (append-only registry; unknown codes are terminal-generic): `version`, `pow`,
 `tombstoned`, `quota`, `too_large`, `bad_id`, `rate`, `not_subscribed`, `malformed`, `internal`.
+`version` is **reserved, never emitted in v1** — a hello mismatch is close `4002`, not a record;
+the code exists for a future record-level versioning use so it is never recycled.
 
-Evolution: new fields are additive (defaulted/optional); new record types are new `t` strings —
-receivers skip unknown `t` and ignore unknown fields (pinned by the tolerance tests); `t` strings,
-field names, and error codes are never recycled.
+Clarifications (v1 semantics the reference daemon and conformance suite pin):
+
+- **Unsolicited `digest`**: a spool **should** send a fresh `digest` to a scope's subscribers
+  whenever the live set changes beyond a single acked push — eviction pressure, TTL expiry, a
+  watermark shed — so connected clients learn of loss without waiting for a reconnect. Clients
+  must not *rely* on it (it is best-effort fan-out like `event`); §9.1 on reconnect remains the
+  correctness anchor.
+- **`pull` beyond `maxPull`**: the spool truncates the request to `maxPull` — never an error. Ids
+  beyond the cap appear in neither `blob`s nor `missing`; a client that overshoots re-pulls the
+  remainder.
+- **Duplicate `push`** (blobId already live): acked `ok`, **no** `event` fan-out — the push row's
+  "fans out `event`" applies to newly stored blobs only. Content addressing makes the duplicate
+  byte-identical, so subscribers already have it or will heal via digest.
 
 ## 8. Proof of work [Both]
 
@@ -501,6 +536,7 @@ never-opting-in creator; client→spool `digest` (the record is direction-agnost
 | default `maxFrames` | 400 | 2× the mesh's 200-per-sender custody bucket |
 | default `maxBlob` | 64 KiB | comfortably above any mesh frame |
 | tombstone TTL | = scope `ttlMs` | §6.2 |
+| suggested tombstone count bound | max(2 × `maxFrames`, 1024) per scope, oldest-first drop | §6.2 — caps the eviction-cycling growth vector |
 | rotation drain (old scope subscribed) | 48 h | DM prev-root TTL mirror (§3.1, §3.3) |
 | PoW default / window | 20 bits / ±1 day UTC | §8 |
 | suggested `maxScopes` / `maxPull` | 64 / 64 | HELLO-advertised, spool-tunable |

@@ -33,8 +33,12 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
-- **The spool plane beyond the spec** — everything that makes the protocol run, in order: the
-  `knit-spool` reference daemon + conformance suite; the client `ScopeSync` plane (OkHttp/WSS dep +
+- **The spool plane beyond the spec** — everything that makes the protocol run, in order: ~~the
+  `knit-spool` reference daemon + conformance suite~~ (**done 2026-08-16** in the `knit-spool`
+  repo — full v1 daemon with SQLite persistence, rate limits, watermark, ops surface, plus the
+  22-check TAP conformance CLI; its implementation pass fed eight semantic clarifications back
+  into `docs/SPOOL_PROTOCOL.md` §6.2/§6.4/§7.1/§7.2/§12, no wire or vector change — ADR 019
+  amendment); the client `ScopeSync` plane (OkHttp/WSS dep +
   lockfile regen, a validated-Internet `ConnectivityManager` seam — which needs a
   `rules/mesh.md` amendment, since `ConnectivityManager` is currently NAN-only — the scope-config
   ctl producer/consumer, global opt-in toggle, spool-list settings, Tor SOCKS toggle, diagnostics

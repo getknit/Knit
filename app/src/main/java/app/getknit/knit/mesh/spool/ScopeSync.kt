@@ -176,6 +176,7 @@ class ScopeSync(
         private val localDigests = ConcurrentHashMap<String, Long>()
         private val localCounts = ConcurrentHashMap<String, Int>()
         private val invalid = ConcurrentHashMap<String, LinkedHashSet<String>>()
+        private val accepted = ConcurrentHashMap<String, LinkedHashSet<String>>()
         private val stamps = ConcurrentHashMap<String, PowStamp>()
         private val wakeup = Channel<Unit>(Channel.CONFLATED)
 
@@ -251,6 +252,7 @@ class ScopeSync(
             socket.close(NORMAL_CLOSE, "done")
             connection = null
             spoolDigests.clear()
+            accepted.clear()
             return ready
         }
 
@@ -290,7 +292,7 @@ class ScopeSync(
             val anchor = spoolDigests[scope.idHex] ?: return // the SUB hasn't been answered yet
             if (anchor == localFold) return
             val listing = conn.list(scope.id) ?: return
-            val quarantined = invalid.getOrPut(scope.idHex) { LinkedHashSet() }
+            val quarantined = invalid[scope.idHex].orEmpty()
             val spoolIds = listing.blobIds.associateBy { hex(it) }
             val tombstoned = listing.tombstones.mapTo(mutableSetOf()) { hex(it) }
             val wanted = spoolIds.filterKeys { it !in local && it !in quarantined }.values.toList()
@@ -422,15 +424,26 @@ class ScopeSync(
             if (scopeHex != null && code == SpoolErrCode.POW) stamps.remove(scopeHex)
         }
 
-        /** §4.4 validation, then the mesh carry gate, then §9.4's bridge. Any failure quarantines the id. */
+        /**
+         * §4.4 validation, then the mesh carry gate, then §9.4's bridge. Any failure quarantines the id.
+         *
+         * A blob arrives twice whenever a live `event` races the heal round that was already pulling it —
+         * routine, since the pull set is computed before the events land. Re-delivering is *harmless*
+         * (the router's SeenSet dedups), but it would re-run the AEAD and inflate the bridged count that
+         * Diagnostics presents as "messages received via relays", so an accepted id is remembered for the
+         * life of the connection. The memory is per (spool, scope) and dropped on reconnect, so a custody
+         * wipe still re-converges by the ordinary route.
+         */
         private suspend fun accept(
             scope: Scope,
             blobId: ByteArray,
             data: ByteArray,
         ): Boolean {
+            val idHex = hex(blobId)
+            if (!remember(accepted, scope.idHex, idHex)) return false
             val opened = ScopeFrames.open(scope, selfId(), blobId, data)
             if (opened == null || !canCarry(opened.wire, opened.env)) {
-                quarantine(scope, hex(blobId))
+                quarantine(scope, idHex)
                 return false
             }
             metrics.onSpoolPulled()
@@ -443,11 +456,24 @@ class ScopeSync(
             scope: Scope,
             blobIdHex: String,
         ) {
-            val set = invalid.getOrPut(scope.idHex) { LinkedHashSet() }
-            while (set.size >= INVALID_SET_MAX) set.remove(set.first())
-            set.add(blobIdHex)
-            metrics.onSpoolInvalid()
+            if (remember(invalid, scope.idHex, blobIdHex)) metrics.onSpoolInvalid()
         }
+
+        /**
+         * Records [blobIdHex] under [scopeHex] in a bounded, oldest-first-evicting per-scope set. Returns
+         * whether it was new — false means "already known", which is the skip signal for both the invalid
+         * set (§9.3: never re-pull, never re-count) and the accepted set (don't re-deliver a raced blob).
+         */
+        private fun remember(
+            sets: ConcurrentHashMap<String, LinkedHashSet<String>>,
+            scopeHex: String,
+            blobIdHex: String,
+        ): Boolean =
+            synchronized(sets) {
+                val set = sets.getOrPut(scopeHex) { LinkedHashSet() }
+                while (set.size >= BLOB_SET_MAX) set.remove(set.first())
+                set.add(blobIdHex)
+            }
 
         /** A cached hashcash stamp for [scope], mined only when the spool demands one (§8). */
         private fun stampFor(
@@ -491,7 +517,7 @@ class ScopeSync(
         private const val RECONNECT_JITTER_MS = 750L
         private const val MAX_RATE_WAIT_MS = 5_000L
         private const val DEFAULT_MAX_PULL = 64
-        private const val INVALID_SET_MAX = 256
+        private const val BLOB_SET_MAX = 512
         private const val SEAL_CACHE_MAX = 2_048
         private const val INITIAL_CACHE_CAPACITY = 64
         private const val LOAD_FACTOR = 0.75f

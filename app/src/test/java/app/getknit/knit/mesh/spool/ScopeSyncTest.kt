@@ -160,6 +160,30 @@ class ScopeSyncTest {
         }
 
     @Test
+    fun `a blob delivered by a live event is not delivered again by the heal round that raced it`() =
+        runTest {
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            val receiver = member(spool, bob, alice)
+            listOf("m1", "m2", "m3").forEach {
+                sender.custody.store(dmFrame(it, from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            }
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump()
+
+            // Events and the pull set race by construction — the pull set is computed before the events
+            // land — so the same blob legitimately arrives twice. Re-delivering is harmless (the router's
+            // SeenSet dedups) but it would double-count the number Diagnostics shows as messages received.
+            assertEquals(3, receiver.delivered.size)
+            assertEquals(3, receiver.metrics.snapshot().spoolBridged)
+            assertEquals(3, receiver.metrics.snapshot().spoolPulled)
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
     fun `a garbage blob at the spool is quarantined once, never delivered, never re-pulled`() =
         runTest {
             val spool = FakeSpool()

@@ -78,11 +78,19 @@ Sealed receipts retire the carrier vaccine-purge: nobody can parse them, so deli
 custody on the 24 h TTL uniformly (the recipient custodies its own inbound DMs and a cleartext ack
 self-vaccinates — both required for digest convergence, ADR 006).
 
-The ratchet export APIs have their consumer specified: `docs/SPOOL_PROTOCOL.md` (ADR 019) derives
+The ratchet export APIs now have a live consumer: `docs/SPOOL_PROTOCOL.md` (ADR 019) derives
 internet-relay scope ids and seal keys from `RatchetCrypto.exportRoot` (DM) and a spec-minted shared
-group root, in `mesh/crypto/scope/ScopeCrypto` — pure, API-only until the client plane ships. The
-outer seal is scope-static by design (the spec's §4.2 records why per-epoch keys deadlock); the
-`exportEpochSeal` surfaces stay reserved for its registered `sealv = 2` extension.
+group root, in `mesh/crypto/scope/ScopeCrypto`. `RatchetSessions.exportedRoots()` is the seam the
+client plane (`mesh/spool/ScopeSync`) reads — **`pairwiseRoot` exports only, under the ratchet mutex,
+unconfirmed sessions skipped**, so raw session roots never leave the ratchet facade. The outer seal is
+scope-static by design (the spec's §4.2 records why per-epoch keys deadlock); the `exportEpochSeal`
+surfaces stay reserved for its registered `sealv = 2` extension. Group scopes need the shared group
+root (`GroupKeyPayload.gr`), still unshipped — the client plane is DM-only today.
+
+The seal is **deterministic** (SIV-style keyed nonce), which is load-bearing beyond dedup: it makes a
+frame's blob id a pure function of (scope, frame), so `ScopeSync` derives its held-set on demand
+instead of persisting one. Anything that made sealing non-deterministic would break spool convergence
+*and* force a `forward_store` schema change.
 
 Still deferred for E2E (see `memory/roadmap.md`): encrypting the broadcast room (a deliberate
 separate decision).

@@ -29,8 +29,10 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   convergence), `.agents/context/e2e-encryption.md` (crypto).
 - **When touching `mesh/crypto/scope/`, `mesh/spool/`, or the spool/internet-relay plane:** READ
   `docs/SPOOL_PROTOCOL.md` (the normative public spec; its §13 vectors are pinned by
-  `ScopeVectorTest`/`SpoolRecordsTest` — change them only together). The code is spec-companion,
-  API-only; everything runtime is deferred — CHECK `.agents/memory/roadmap.md` before building any of it.
+  `ScopeVectorTest`/`SpoolRecordsTest` — change them only together), then the `ScopeSync` invariants in
+  `.agents/rules/mesh.md`. The client plane runs as a DM-only MVP, off by default; the scope-config ctl,
+  the spool-list editor, group scopes and Tor are still deferred — CHECK `.agents/memory/roadmap.md`
+  before building any of them. The reference daemon lives in the separate `knit-spool` repo.
 - **When writing or running tests, or checking accessibility:** READ `.agents/context/testing.md` (unit +
   Robolectric Room + seeded UI / FTL + black-box UIAutomator + the accessibility/ATF suite that mirrors the
   Play pre-launch report).

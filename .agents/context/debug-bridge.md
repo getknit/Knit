@@ -46,6 +46,15 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   across devices to find the stranded frame(s): `… STORE | sed -n 's/.*data="//;s/"$//p' | jq -r '.allIds[]'
   | sort` per device, then `comm`/`diff` the files. **`liveFingerprint` matching across devices = converged**
   (`allFingerprint` is NOT fleet-comparable at a TTL boundary — soak oracles must compare `liveFingerprint`).
+- `…debug.SPOOL` — configures and inspects the **Internet (spool) plane**, which has no UI beyond a
+  debug-only on/off switch, so this is the only way to drive it on a locked lab device. `--es url
+  <ws(s)://host:port/spool/v1[?k=token]>` adds a spool, `--es drop <url>` removes one, `--ez on
+  <true|false>` flips the global opt-in (default **off**); no extras at all just dumps state. Debug
+  builds accept plain `ws://` (a `knit-spool` daemon terminates no TLS of its own — that's a
+  reverse-proxy job); release refuses it at dial time whatever is stored. The reply's per-scope
+  `local` vs `spool` counts are the **convergence oracle** — they agree once the heal loop settles,
+  exactly as `liveFingerprint` parity is for mesh custody — and `invalid` should stay 0 (a nonzero
+  count means some uploader is putting blobs into a scope that fail validation).
 - `…debug.REACT` — `--es id <messageId> --es emoji <emoji>`. `…debug.HEAL` — nudge rescan/re-advertise.
 - `…debug.FLAGMSG` — injects one inbound message **the text moderator flagged** (the UI collapses it behind a
   tap-to-reveal) as the newest row of `--es conv <id>` (default `nearby`), from `--es from <peerNodeId>`
@@ -59,6 +68,16 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
 adb -s A shell "am broadcast -a app.getknit.knit.debug.SEND  -p app.getknit.knit --es text 'hi there 😀' --es conv nearby"
 adb -s B shell  am broadcast -a app.getknit.knit.debug.STATE -p app.getknit.knit --es conv nearby
 # → data="{…,"messages":[{"from":"<A>","body":"hi there 😀","received":…}]}"
+```
+
+```
+# Point both devices at a LAN spool and watch the scope converge. Start the daemon first:
+#   cd ~/source/knit-spool && ./gradlew :daemon:run     # binds 0.0.0.0:9470, PoW off, in-memory
+for d in A B; do adb -s $d shell "am broadcast -a app.getknit.knit.debug.SPOOL -p app.getknit.knit \
+  --es url ws://<lan-ip>:9470/spool/v1 --ez on true"; done
+adb -s B shell am broadcast -a app.getknit.knit.debug.SPOOL -p app.getknit.knit
+# → data="{…,"spools":[{"url":…,"connected":true,"scopes":[{"peer":"<A>","local":7,"spool":7,
+#          "converged":true,"invalid":0}]}],"counters":{…,"spoolBridged":7}}"
 ```
 
 ## Stable resource-ids

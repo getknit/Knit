@@ -390,5 +390,30 @@ malformed` (4000 is pre-hello only), §7.2 unsolicited-digest SHOULD / pull-over
 truncation / duplicate-push acks without re-fan-out / `version` code reserved-never-emitted. No
 wire field, vector, or derivation changed — the §13 anchors are untouched.
 
-Scheme spec: docs/SPOOL_PROTOCOL.md; wire posture: docs/WIRE_COMPAT.md (no change at M1);
-context: context/e2e-encryption.md; deferred remainder: memory/roadmap.md.
+**Amended 2026-08-16 (M3 MVP — the client plane runs):** `ScopeSync` exists and syncs **DM scopes
+only**, off by default, over OkHttp (`mesh/spool/`). Four shape decisions worth not relitigating:
+
+1. **The MVP's spool list is a device setting, not the signed scope config.** `CTL_SCOPE_CONFIG`
+   (ctl 7, `MessageContent.sc`) is still unshipped — carrying it is the one *wire* change this plane
+   needs, and it wants its own WIRE_COMPAT precedent entry plus golden vectors rather than riding
+   in with the first working socket. Until then bounds are the spec's §12 defaults held as
+   constants in `ScopeRegistry`, and every scope syncs against every configured spool.
+2. **The local blob-id set is derived, never stored.** Because the seal is deterministic, `blobId`
+   is a pure function of (scope, frame), so the held-set is re-sealed on demand from
+   `ForwardStore.liveFrames` behind an LRU. That is why this milestone needs no `forward_store`
+   column and **no DB migration** — worth preserving, since a persisted blobId would have to be
+   invalidated on every scope rotation.
+3. **Session secrets stay behind `RatchetSessions`.** The plane consumes `exportedRoots()` —
+   `pairwiseRoot` exports only, taken under the ratchet mutex, unconfirmed sessions skipped.
+4. **Cleartext `ws://` is debug-only**, enforced twice (the debug manifest's `usesCleartextTraffic`
+   and the dialer's own scheme check against `BuildConfig.DEBUG`), because `knit-spool` terminates
+   no TLS of its own and the lab daemon is plain `ws://` on the LAN.
+
+Deferred with reasons, not just deferred: the validated-Internet `ConnectivityManager` seam (the
+MVP reconnects on backoff, which keeps `rules/mesh.md`'s NAN-only `ConnectivityManager` restriction
+intact and avoids adding `ACCESS_NETWORK_STATE`); the spool-list editor, which is why the Settings
+switch is `BuildConfig.DEBUG`-gated and spools are configured over `…debug.SPOOL`; Tor; group scopes.
+
+Scheme spec: docs/SPOOL_PROTOCOL.md; wire posture: docs/WIRE_COMPAT.md (still no change — the
+client plane touched no mesh wire); context: context/e2e-encryption.md; deferred remainder:
+memory/roadmap.md.

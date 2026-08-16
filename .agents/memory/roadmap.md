@@ -38,13 +38,23 @@ doc). **Don't start a deferred item without explicit direction.**
   repo — full v1 daemon with SQLite persistence, rate limits, watermark, ops surface, plus the
   22-check TAP conformance CLI; its implementation pass fed eight semantic clarifications back
   into `docs/SPOOL_PROTOCOL.md` §6.2/§6.4/§7.1/§7.2/§12, no wire or vector change — ADR 019
-  amendment); the client `ScopeSync` plane (OkHttp/WSS dep +
-  lockfile regen, a validated-Internet `ConnectivityManager` seam — which needs a
-  `rules/mesh.md` amendment, since `ConnectivityManager` is currently NAN-only — the scope-config
-  ctl producer/consumer, global opt-in toggle, spool-list settings, Tor SOCKS toggle, diagnostics
-  counters); group scopes (the `GroupKeyPayload.gr` wire field + root mint/gossip/adopt +
-  departure re-mint, per the spec's §3.2); sealed attachments over spools. Each lands additively
-  per `docs/WIRE_COMPAT.md` with its golden vectors and precedent entry when it ships.
+  amendment); ~~the client `ScopeSync` plane~~ (**MVP done 2026-08-16**, `mesh/spool/` — DM scopes
+  only, off by default, OkHttp behind the `SpoolLink` seam, the §9.1 heal loop, §9.3 quarantine,
+  §9.4 bridge into `handleInbound`, metrics + Diagnostics rows + the `…debug.SPOOL` bridge action;
+  ADR 019's M3 amendment records the four shape decisions). **What the client plane still
+  owes**, roughly in order:
+  - **the scope-config ctl** — `CTL_SCOPE_CONFIG = 7` / `MessageContent.sc` / `ScopeConfigPayload`
+    with LWW on `(version, issuer)`. The one *wire* change the plane needs, so it lands additively
+    per `docs/WIRE_COMPAT.md` with golden vectors and a precedent entry. Until it ships, the spool
+    list is a device setting and bounds are §12 constants in `ScopeRegistry`.
+  - **a spool-list editor** — until then the Settings switch is `BuildConfig.DEBUG`-gated and
+    spools are configured over the debug bridge, so a release build has no way to turn it on.
+  - a validated-Internet `ConnectivityManager` seam (the MVP reconnects on backoff instead, which
+    is why `rules/mesh.md` still reads NAN-only and `ACCESS_NETWORK_STATE` is still undeclared);
+    the Tor SOCKS toggle; per-conversation opt-out.
+  Then: group scopes (the `GroupKeyPayload.gr` wire field + root mint/gossip/adopt + departure
+  re-mint, per the spec's §3.2); sealed attachments over spools. Each lands additively per
+  `docs/WIRE_COMPAT.md` with its golden vectors and precedent entry when it ships.
 
 - **BLE promotion gate on A2DP audio** — the adaptive scan throttle now drops the **scan** to its floor
   while streaming (`ScanDemandPolicy` / the demand-gated `scanLoop`), but **connects** are still not gated

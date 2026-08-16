@@ -104,6 +104,10 @@ import java.nio.ByteBuffer
  *   from `--es from <peerNodeId>` (default a synthetic sender, named on upsert) with body `--es text <body>`:
  *   the seam the UIAutomator moderation-reveal test drives, since the radio-less build never receives a real
  *   flagged message and the marketing seed deliberately carries none (a hidden bubble would spoil a screenshot).
+ * - [ACTION_SPOOL] — configures and inspects the Internet (spool) plane, which has no UI beyond a
+ *   debug-only on/off switch: `--es url <ws(s)://…/spool/v1>` adds a spool, `--es drop <url>` removes one,
+ *   `--ez on <bool>` flips the global opt-in, and no extras at all just dumps state. The per-scope
+ *   `local` vs `spool` counts are the convergence oracle, the way `liveFingerprint` parity is for custody.
  * - [ACTION_HEAL] — nudges the transport to rescan/re-advertise.
  *
  * Each action replies as a one-line JSON object: it is returned via the ordered-broadcast result
@@ -194,6 +198,10 @@ class DebugBridgeReceiver :
 
                         ACTION_REVIEW -> {
                             handleReview(context, intent)
+                        }
+
+                        ACTION_SPOOL -> {
+                            handleSpool(intent)
                         }
 
                         ACTION_HEAL -> {
@@ -762,6 +770,57 @@ class DebugBridgeReceiver :
             .put("filesSentNan", snap.filesSentNan)
             .put("filesSentBt", snap.filesSentBt)
             .put("nanBulkGraceTimeouts", snap.nanBulkGraceTimeouts)
+            .put("spoolPushed", snap.spoolPushed)
+            .put("spoolPulled", snap.spoolPulled)
+            .put("spoolBridged", snap.spoolBridged)
+            .put("spoolInvalid", snap.spoolInvalid)
+            .put("spoolErrors", snap.spoolErrors)
+
+    /**
+     * Configures and inspects the Internet (spool) plane — the only way to drive it on a locked lab
+     * device, since there is no spool-list editor in the UI yet. With no extras it just dumps state.
+     *
+     * `--es url <ws(s)://host:port/spool/v1[?k=token]>` adds a spool, `--es drop <url>` removes one, and
+     * `--ez on <true|false>` flips the global opt-in. Debug builds accept plain `ws://` (a LAN daemon
+     * terminates no TLS of its own); release refuses it at dial time regardless of what is stored here.
+     *
+     * The dump's `local` and `spool` counts per scope are the convergence oracle: they agree once the
+     * heal loop has settled, exactly like `liveFingerprint` parity for mesh custody.
+     */
+    private suspend fun handleSpool(intent: Intent): JSONObject {
+        intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() }?.let { settings.addSpoolUrl(it.trim()) }
+        intent.getStringExtra(EXTRA_DROP)?.takeIf { it.isNotBlank() }?.let { settings.removeSpoolUrl(it.trim()) }
+        if (intent.hasExtra(EXTRA_ON)) settings.setSpoolEnabled(intent.getBooleanExtra(EXTRA_ON, false))
+
+        val spools = JSONArray()
+        mesh.spoolStatus().forEach { spool ->
+            val scopes = JSONArray()
+            spool.scopes.forEach { scope ->
+                scopes.put(
+                    JSONObject()
+                        .put("scope", scope.scopeHex)
+                        .put("peer", scope.peerId)
+                        .put("local", scope.localCount)
+                        .put("spool", scope.spoolCount)
+                        .put("converged", scope.converged)
+                        .put("invalid", scope.invalidCount),
+                )
+            }
+            spools.put(
+                JSONObject()
+                    .put("url", spool.url)
+                    .put("connected", spool.connected)
+                    .put("powBits", spool.powBits)
+                    .put("scopes", scopes),
+            )
+        }
+        return JSONObject()
+            .put("status", "ok")
+            .put("enabled", settings.spoolEnabled.first())
+            .put("configured", JSONArray(settings.spoolUrls.first().toList()))
+            .put("spools", spools)
+            .put("counters", metricsJson(metrics.snapshot()))
+    }
 
     private fun reply(
         status: String,
@@ -820,6 +879,7 @@ class DebugBridgeReceiver :
         const val ACTION_FLAGMSG = "app.getknit.knit.debug.FLAGMSG"
         const val ACTION_MKGROUP = "app.getknit.knit.debug.MKGROUP"
         const val ACTION_REVIEW = "app.getknit.knit.debug.REVIEW"
+        const val ACTION_SPOOL = "app.getknit.knit.debug.SPOOL"
 
         const val EXTRA_TEXT = "text"
         const val EXTRA_CONV = "conv"
@@ -834,6 +894,9 @@ class DebugBridgeReceiver :
         const val EXTRA_FROM = "from"
         const val EXTRA_RESET = "reset"
         const val EXTRA_ARM = "arm"
+        const val EXTRA_URL = "url"
+        const val EXTRA_ON = "on"
+        const val EXTRA_DROP = "drop"
 
         /** Default sender + hidden body for [ACTION_FLAGMSG]'s synthetic flagged inbound message. */
         const val FLAGGED_SENDER_ID = "flagger0"

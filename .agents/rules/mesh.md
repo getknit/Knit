@@ -9,6 +9,10 @@ behind each lives in `context/mesh-transport.md`, `context/wire-format.md`, and
 - Nothing outside `mesh/wifiaware/` may import `android.net.wifi.aware.*` (or
   `ConnectivityManager`/`NetworkRequest` for the NAN data path).
 - Nothing outside `mesh/bluetooth/` may import `android.bluetooth.*`.
+- Nothing outside `mesh/spool/OkHttpSpoolDialer.kt` may import `okhttp3.*`. The Internet plane's socket
+  sits behind the `SpoolLink`/`SpoolSocket` seam for the same reason the radios sit behind
+  `MeshTransport`: everything protocol-shaped above it (`SpoolConnection`, `ScopeSync`) stays pure and
+  runs against an in-process fake spool in unit tests.
 - Everything above the transport talks only to the `MeshTransport` interface; `CompositeMeshTransport`
   runs both radios at once behind that seam (Bluetooth preferred, Wi-Fi Aware second), so orchestration
   (`MeshManager`/`MeshRouter`) is unchanged and another sibling transport drops in the same way. The socket
@@ -16,7 +20,22 @@ behind each lives in `context/mesh-transport.md`, `context/wire-format.md`, and
   L2CAP socket.
 - After changing the `MeshTransport` interface, run `:app:testDebugUnitTest` — a test double
   (`RecordingTransport` in `MeshRouterTest`) implements that interface and won't be caught by
-  `assembleDebug`.
+  `assembleDebug`. Same trap on `ForwardStore` (`FakeForwardStore`, `FakeCustody`) and `RatchetStore`.
+
+## The Internet plane is a custody-plane sibling, not a third transport
+
+`ScopeSync` (`mesh/spool/`, `docs/SPOOL_PROTOCOL.md`) sits beside `ForwardSync` under `MeshManager` —
+deliberately **not** behind `MeshTransport`, whose seam is peer-addressed and radio-shaped while a scope
+has no neighbors (ADR 019). It reaches the app through exactly two existing doors and adds no delivery
+semantics of its own: `InboundPipeline.canCarry` authenticates a pulled frame, and
+`MeshRouter.handleInbound` delivers it (dedup, custody, roster vetting, and the onward mesh relay come
+free). Two invariants that are easy to break:
+
+- **Only frames matching the scope frame-set rule may be sealed into a scope, in *both* directions**
+  (`ScopeFrames.eligibleForDm`, spec §4.4) — a scope is not a general-purpose upload channel.
+- **A blob that fails validation is quarantined per (spool, scope), never merely dropped** (spec §9.3).
+  Spools are untrusted storage: a garbage blob folds into *their* digest and never ours, so without the
+  invalid set the two digests diverge forever and the client re-pulls it on every heal round.
 
 ## Keep pure mesh logic Android-free
 

@@ -66,6 +66,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
@@ -83,6 +84,7 @@ internal data class ProfileFormState(
     val alias: String,
     val avatarHash: String?,
     val contentFilteringEnabled: Boolean,
+    val spoolEnabled: Boolean,
     val isDirty: Boolean,
 )
 
@@ -98,6 +100,7 @@ fun ProfileScreen(
     val avatarHash by viewModel.avatarHash.collectAsStateWithLifecycle()
     val cropTarget by viewModel.cropTarget.collectAsStateWithLifecycle()
     val contentFilteringEnabled by viewModel.contentFilteringEnabled.collectAsStateWithLifecycle()
+    val spoolEnabled by viewModel.spoolEnabled.collectAsStateWithLifecycle()
     val isDirty by viewModel.isDirty.collectAsStateWithLifecycle()
 
     // Navigate back only once Save has finished persisting (the write outlives this composition because
@@ -130,6 +133,7 @@ fun ProfileScreen(
                 alias = alias,
                 avatarHash = avatarHash,
                 contentFilteringEnabled = contentFilteringEnabled,
+                spoolEnabled = spoolEnabled,
                 isDirty = isDirty,
             ),
         batteryExempt = rememberBatteryExempt(),
@@ -139,6 +143,7 @@ fun ProfileScreen(
         onStatusChange = viewModel::setStatus,
         onStatusCommit = viewModel::commitStatus,
         onToggleContentFiltering = viewModel::setContentFilteringEnabled,
+        onToggleSpool = viewModel::setSpoolEnabled,
         onPickPhoto = {
             picker.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -161,6 +166,7 @@ internal fun ProfileScreenContent(
     onStatusChange: (String) -> Unit,
     onStatusCommit: () -> Unit,
     onToggleContentFiltering: (Boolean) -> Unit,
+    onToggleSpool: (Boolean) -> Unit,
     onPickPhoto: () -> Unit,
     onClearPhoto: () -> Unit,
     onAllowBattery: () -> Unit,
@@ -242,6 +248,12 @@ internal fun ProfileScreenContent(
                 enabled = form.contentFilteringEnabled,
                 onToggle = onToggleContentFiltering,
             )
+
+            // Debug builds only: the Internet-relay plane has no spool-list editor yet (spools are set
+            // over the debug bridge), so on a release build this switch would have nothing to act on.
+            if (BuildConfig.DEBUG) {
+                InternetRelayRow(enabled = form.spoolEnabled, onToggle = onToggleSpool)
+            }
 
             BatteryOptimizationRow(exempt = batteryExempt, onAllow = onAllowBattery)
 
@@ -342,6 +354,41 @@ private fun ContentFilteringRow(
 }
 
 /**
+ * Toggle for the Internet (spool) plane. Off by default and stated plainly: this is the one setting that
+ * sends anything — sealed, unreadable, but real traffic — to a machine the user doesn't hold.
+ */
+@Composable
+private fun InternetRelayRow(
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                // One toggle target, same as ContentFilteringRow: the row owns the switch so a screen
+                // reader announces title + subtitle as the label with an on/off state.
+                .toggleable(value = enabled, onValueChange = onToggle, role = Role.Switch)
+                .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.settings_internet_relays_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.settings_internet_relays_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = enabled, onCheckedChange = null)
+    }
+}
+
+/**
  * Whether the app is currently exempt from battery optimization, refreshed on every screen resume.
  * Lives in the stateful wrapper (not [BatteryOptimizationRow]) because the `PowerManager` read is not
  * available to the preview renderer.
@@ -437,6 +484,7 @@ fun ProfileScreenPreview() =
                     alias = "Rustling Rabbit",
                     avatarHash = null,
                     contentFilteringEnabled = true,
+                    spoolEnabled = false,
                     isDirty = true,
                 ),
             batteryExempt = false,
@@ -446,6 +494,7 @@ fun ProfileScreenPreview() =
             onStatusChange = {},
             onStatusCommit = {},
             onToggleContentFiltering = {},
+            onToggleSpool = {},
             onPickPhoto = {},
             onClearPhoto = {},
             onAllowBattery = {},
@@ -467,6 +516,7 @@ fun ProfileScreenNewUserPreview() =
                     alias = "Rustling Rabbit",
                     avatarHash = null,
                     contentFilteringEnabled = true,
+                    spoolEnabled = false,
                     isDirty = false,
                 ),
             batteryExempt = true,
@@ -476,6 +526,7 @@ fun ProfileScreenNewUserPreview() =
             onStatusChange = {},
             onStatusCommit = {},
             onToggleContentFiltering = {},
+            onToggleSpool = {},
             onPickPhoto = {},
             onClearPhoto = {},
             onAllowBattery = {},

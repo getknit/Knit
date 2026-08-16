@@ -117,6 +117,24 @@ class SettingsStore(
     /** Lifetime rate-prompts shown — we don't record the user's choice, so shown-count is all we keep. */
     val reviewAttemptCount: Flow<Long> = dataStore.data.map { it[KEY_REVIEW_ATTEMPT_COUNT] ?: 0L }
 
+    /**
+     * Whether the Internet (spool) plane may run — **default off**, deliberately. Uploading a
+     * conversation's sealed history to third-party machines is a real threat-model change, so it is a
+     * choice the user makes rather than one they inherit (docs/SPOOL_PROTOCOL.md §10). With it off, or
+     * with [spoolUrls] empty, `ScopeSync` opens no socket at all.
+     */
+    val spoolEnabled: Flow<Boolean> = dataStore.data.map { it[KEY_SPOOL_ENABLED] ?: false }
+
+    /**
+     * The spools to sync every scope against — full `wss://host/spool/v1[?k=token]` URLs. A set, since a
+     * scope's members converge through the union of whatever every spool holds; the spools themselves
+     * never talk to each other. Release builds refuse a non-`wss://` entry at dial time.
+     *
+     * Until the signed scope-config ctl ships (spec §5), this list is per-device rather than
+     * per-conversation: every scope is synced against every configured spool.
+     */
+    val spoolUrls: Flow<Set<String>> = dataStore.data.map { it[KEY_SPOOL_URLS] ?: emptySet() }
+
     suspend fun setDisplayName(value: String) = dataStore.edit { it[KEY_NAME] = value }
 
     suspend fun setStatus(value: String) = dataStore.edit { it[KEY_STATUS] = value }
@@ -192,6 +210,13 @@ class SettingsStore(
             it.remove(KEY_REVIEW_ATTEMPT_COUNT)
         }
 
+    suspend fun setSpoolEnabled(value: Boolean) = dataStore.edit { it[KEY_SPOOL_ENABLED] = value }
+
+    /** Adds a spool URL to sync against (idempotent — the setting is a set, not a list). */
+    suspend fun addSpoolUrl(url: String) = dataStore.edit { it[KEY_SPOOL_URLS] = (it[KEY_SPOOL_URLS] ?: emptySet()) + url }
+
+    suspend fun removeSpoolUrl(url: String) = dataStore.edit { it[KEY_SPOOL_URLS] = (it[KEY_SPOOL_URLS] ?: emptySet()) - url }
+
     /** Dynamic per-conversation read-watermark key, e.g. "last_read_nearby" / "last_read_<nodeId>". */
     private fun lastReadKey(conversationId: String) = longPreferencesKey(LAST_READ_PREFIX + conversationId)
 
@@ -211,5 +236,7 @@ class SettingsStore(
         val KEY_REVIEW_ENGAGEMENT_STARTED_AT = longPreferencesKey("review_engagement_started_at")
         val KEY_REVIEW_LAST_ATTEMPT_AT = longPreferencesKey("review_last_attempt_at")
         val KEY_REVIEW_ATTEMPT_COUNT = longPreferencesKey("review_attempt_count")
+        val KEY_SPOOL_ENABLED = booleanPreferencesKey("spool_enabled")
+        val KEY_SPOOL_URLS = stringSetPreferencesKey("spool_urls")
     }
 }

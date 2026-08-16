@@ -311,6 +311,20 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
                 MetricRow(stringResource(R.string.diagnostics_metric_reactions_sealed_fallback), metrics.reactionsSealedFallback.toString())
             }
         }
+        // The Internet (spool) plane, shown only once it has done anything — it is off by default, so a
+        // mesh-only install never sees these rows. `bridged` is the payoff (frames that reached us with no
+        // radio in range); `quarantined` should stay at 0, and a rising count means some uploader is
+        // putting blobs into a scope that fail validation (spec §9.3).
+        if (metrics.spoolPushed > 0 || metrics.spoolBridged > 0 || metrics.spoolInvalid > 0) {
+            MetricRow(stringResource(R.string.diagnostics_metric_spool_pushed), metrics.spoolPushed.toString())
+            MetricRow(stringResource(R.string.diagnostics_metric_spool_bridged), metrics.spoolBridged.toString())
+            if (metrics.spoolInvalid > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_spool_invalid), metrics.spoolInvalid.toString())
+            }
+            if (metrics.spoolErrors > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_spool_errors), metrics.spoolErrors.toString())
+            }
+        }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an
         // intermittent "can link one peer but not the second" is visible and attributable (RADIO vs other).
         if (metrics.btConnectFails > 0) {

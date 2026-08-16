@@ -4,6 +4,7 @@ import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.spool.SpoolStatus
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -47,6 +48,14 @@ interface MeshController {
 
     /** Tears down and re-establishes the transport (e.g. after Bluetooth toggles back on). */
     fun restart()
+
+    /**
+     * The Internet (spool) plane's live state — one entry per configured spool, each carrying its scopes'
+     * convergence. Empty when the plane is off, unconfigured, or absent from the build. Read-only
+     * observability for Diagnostics and the debug bridge; the digests here are the only way to see a
+     * scope diverging at a spool, since nothing else in the UI reflects the plane.
+     */
+    fun spoolStatus(): List<SpoolStatus> = emptyList()
 
     /**
      * Composes a chat message (optionally with an ingested image [attachment]), stores it locally, and

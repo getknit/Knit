@@ -2,7 +2,8 @@ package app.getknit.knit.mesh.spool
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -117,10 +118,10 @@ class SpoolConnectionTest {
             var listing: SpoolReply.Listing? = null
             var pulled: PullOutcome? = null
             launch { listing = conn.list(scope) }
-            advanceUntilIdle()
+            runCurrent()
             val listQ = link.last<SpoolList>().q
             launch { pulled = conn.pull(scope, listOf(other)) }
-            advanceUntilIdle()
+            runCurrent()
             val pullQ = link.last<SpoolPull>().q
             assertTrue("q must increase monotonically per connection", pullQ > listQ)
 
@@ -131,7 +132,7 @@ class SpoolConnectionTest {
             conn.onMessage(
                 SpoolCodec.encode(SpoolList(t = SpoolRecordType.LIST, q = listQ, scope = scope, blobIds = listOf(other))),
             )
-            advanceUntilIdle()
+            runCurrent()
 
             assertEquals(1, pulled?.blobs?.size)
             assertEquals(hex(other), pulled?.blobs?.single()?.let { hex(it.blobId) })
@@ -148,12 +149,31 @@ class SpoolConnectionTest {
 
             var reply: SpoolReply? = null
             launch { reply = conn.push(scope, other, byteArrayOf(1)) }
-            advanceUntilIdle()
+            runCurrent()
             conn.onClosed()
-            advanceUntilIdle()
+            runCurrent()
 
             assertEquals(SpoolReply.Closed, reply)
             assertFalse(conn.isSubscribed(hex(scope)))
+        }
+
+    @Test
+    fun `a request the spool never answers times out instead of wedging the heal loop`() =
+        runTest {
+            val link = RecordingLink()
+            val conn = connection(link)
+            conn.onMessage(serverHello())
+
+            var reply: SpoolReply? = null
+            launch { reply = conn.push(scope, other, byteArrayOf(1)) }
+            runCurrent()
+            assertNull("still waiting while the spool stays silent", reply)
+            // A spool that accepts a record and answers nothing must not park this caller forever: the
+            // next heal round re-derives the diff, and a re-PUSH is byte-identical anyway.
+            advanceTimeBy(60_000)
+            runCurrent()
+
+            assertEquals(SpoolReply.Closed, reply)
         }
 
     @Test

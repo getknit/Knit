@@ -17,6 +17,8 @@ class RatchetRepository(
 ) : RatchetStore {
     override suspend fun session(peerId: String): RatchetEngine.SessionState? = dao.session(peerId)?.toState()
 
+    override suspend fun sessionPeerIds(): List<String> = dao.sessionPeerIds()
+
     override suspend fun upsertSession(state: RatchetEngine.SessionState) {
         dao.upsertSession(state.toEntity(clock()))
     }

@@ -479,6 +479,11 @@ dependencies {
     implementation(libs.reandroid.arsclib)
     implementation(libs.apksig)
 
+    // The spool (Internet-relay) plane's WebSocket client — see docs/SPOOL_PROTOCOL.md and the version
+    // catalog. The mesh itself never touches it: only mesh/spool/OkHttpSpoolDialer.kt may import okhttp3,
+    // and the plane is off unless the user turns it on.
+    implementation(libs.okhttp)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.koin.test.junit4)

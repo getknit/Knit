@@ -2,10 +2,16 @@
 <!-- Debug-only overlay: registers the DebugBridgeReceiver so an automation agent can drive the app
      over `adb shell am broadcast` (send messages, read state). The manifest merger folds this in for
      debug variants only, so neither the receiver nor this entry ships in a release build. Exported so
-     the `shell` uid (adb) can deliver to it; debug-only, so an exported custom-action receiver is fine. -->
+     the `shell` uid (adb) can deliver to it; debug-only, so an exported custom-action receiver is fine.
+
+     usesCleartextTraffic is the bench affordance for the spool (Internet-relay) plane: knit-spool
+     terminates no TLS of its own (that is a reverse-proxy job), so a LAN daemon is reachable only over
+     plain `ws://`. DEBUG BUILDS ONLY — `staging` inherits `release`, has no source-set overlay here, and
+     the dialer itself refuses any non-`wss://` URL unless BuildConfig.DEBUG, so no shipped artifact can
+     be pointed at a plaintext relay however its settings are edited. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <application>
+    <application android:usesCleartextTraffic="true">
         <receiver
             android:name="app.getknit.knit.debug.DebugBridgeReceiver"
             android:exported="true">

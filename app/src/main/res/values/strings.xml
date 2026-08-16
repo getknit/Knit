@@ -294,6 +294,12 @@
     <string name="diagnostics_metric_reactions_sealed">Reactions sent sealed</string>
     <string name="diagnostics_metric_reactions_sealed_fallback">Reactions sent cleartext (fallback)</string>
     <string name="diagnostics_metric_bt_connect_fails">BT connect failures</string>
+    <string name="settings_internet_relays_title">Use Internet relays</string>
+    <string name="settings_internet_relays_subtitle">Keep conversations flowing when nobody is in radio range, by storing sealed copies on relay servers. Relays cannot read your messages, but they do see that a conversation is active and the IP addresses connecting to it.</string>
+    <string name="diagnostics_metric_spool_pushed">Messages sent to Internet relays</string>
+    <string name="diagnostics_metric_spool_bridged">Messages received via Internet relays</string>
+    <string name="diagnostics_metric_spool_invalid">Relay blobs quarantined</string>
+    <string name="diagnostics_metric_spool_errors">Relay errors</string>
     <string name="diagnostics_controls">Mesh controls</string>
     <string name="diagnostics_status_healthy">Mesh status: Healthy</string>
     <string name="diagnostics_status_degraded">Mesh status: Degraded</string>

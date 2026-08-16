@@ -1,6 +1,7 @@
 package app.getknit.knit.di
 
 import android.os.Build
+import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.mesh.CompositeMeshTransport
@@ -16,6 +17,8 @@ import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.meshExceptionHandler
 import app.getknit.knit.mesh.power.PowerMonitor
 import app.getknit.knit.mesh.power.PowerStateSource
+import app.getknit.knit.mesh.spool.OkHttpSpoolDialer
+import app.getknit.knit.mesh.spool.SpoolDialer
 import app.getknit.knit.mesh.wifiaware.WifiAwareTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -93,11 +96,17 @@ val meshModule =
         }
         // The group sender-key session service (crypto scheme v2's group form, docs/GROUP_FORWARD_SECRECY.md).
         single { GroupRatchetSessions(store = get(), mutex = get(ratchetMutex)) }
+        // The Internet (spool) plane's socket factory. Cleartext `ws://` is a debug-build affordance for a
+        // LAN daemon (which terminates no TLS of its own); release and staging accept `wss://` only, so a
+        // shipped build cannot be pointed at a plaintext relay. The plane itself stays dark until the user
+        // opts in AND configures a spool — see SettingsStore.spoolEnabled.
+        single<SpoolDialer> { OkHttpSpoolDialer(allowCleartext = BuildConfig.DEBUG) }
         // Constructor order: transport, messages, groups, reactions, peers, identity, settings, blobs,
         // imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet,
-        // groupRatchet, scope, metrics, db.
+        // groupRatchet, scope, metrics, db, spoolDialer.
         single {
             MeshManager(
+                get(),
                 get(),
                 get(),
                 get(),

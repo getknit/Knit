@@ -77,6 +77,15 @@ class ProfileViewModel(
         settings.contentFilteringEnabled
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
+    /**
+     * Whether the Internet (spool) plane may run. Default off — see [SettingsStore.spoolEnabled]. The row
+     * that binds this is debug-only for now: the plane has no spool-list editor yet, so on a release build
+     * the switch would have nothing to act on.
+     */
+    val spoolEnabled: StateFlow<Boolean> =
+        settings.spoolEnabled
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     init {
         viewModelScope.launch {
             val id = identity.nodeId()
@@ -136,6 +145,10 @@ class ProfileViewModel(
 
     fun setContentFilteringEnabled(value: Boolean) {
         viewModelScope.launch { settings.setContentFilteringEnabled(value) }
+    }
+
+    fun setSpoolEnabled(value: Boolean) {
+        viewModelScope.launch { settings.setSpoolEnabled(value) }
     }
 
     // The picked image awaiting crop. Held here (not in SavedStateHandle — a Bitmap is large and not

@@ -251,6 +251,39 @@ class RatchetSessions(
     /** Retention GC passthrough (wired into the existing sweep loops). */
     suspend fun sweep(now: Long) = mutex.withLock { store.sweep(now) }
 
+    /**
+     * The spool plane's key material for every confirmed session: `pairwiseRoot` exports, never raw
+     * session roots. Deliberately exported here rather than letting the plane read [RatchetStore], so
+     * session secrets stay behind this facade and its mutex — the plane only ever sees the one-way
+     * derivation `docs/SPOOL_PROTOCOL.md` §3.1 names.
+     *
+     * Unconfirmed sessions are skipped: the two sides may still be resolving a replacement race, and a
+     * scope derived from a root that is about to be discarded is churn with no continuity value.
+     */
+    suspend fun exportedRoots(): List<ExportedRoots> =
+        mutex.withLock {
+            store.sessionPeerIds().mapNotNull { peerId ->
+                val state = store.session(peerId)?.takeIf { it.confirmed } ?: return@mapNotNull null
+                ExportedRoots(
+                    peerId = peerId,
+                    pairwiseRoot = RatchetCrypto.exportRoot(state.root),
+                    prevPairwiseRoot = state.prevRoot?.let { RatchetCrypto.exportRoot(it) },
+                    prevRootExpiresAt = state.prevRootExpiresAt,
+                )
+            }
+        }
+
+    /**
+     * One peer's exported scope roots: the active one plus, until [prevRootExpiresAt], the retiring
+     * session's — the drain window that keeps a replaced session's blobs reachable.
+     */
+    class ExportedRoots(
+        val peerId: String,
+        val pairwiseRoot: ByteArray,
+        val prevPairwiseRoot: ByteArray?,
+        val prevRootExpiresAt: Long,
+    )
+
     companion object {
         /** Distinct undecryptable frames from one peer before a reset request fires. */
         const val RESET_DISTINCT_FRAMES = 3

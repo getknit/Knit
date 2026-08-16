@@ -1,6 +1,7 @@
 package app.getknit.knit.mesh.spool
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -250,7 +251,11 @@ class SpoolConnection(
             pending.remove(q)
             return SpoolReply.Closed
         }
-        return entry.reply.await()
+        // A spool that accepts a record and never answers must not wedge the heal loop: time out, drop the
+        // correlation, and let the next round re-derive the diff (a re-PUSH is byte-identical, a re-PULL is
+        // idempotent, so nothing is lost by giving up on a response).
+        return withTimeoutOrNull(REQUEST_TIMEOUT_MS) { entry.reply.await() }
+            ?: SpoolReply.Closed.also { pending.remove(q) }
     }
 
     private fun send(bytes: ByteArray): Boolean {
@@ -258,5 +263,10 @@ class SpoolConnection(
         val cap = limits?.maxRecord
         if (cap != null && bytes.size > cap) return false // never hand the spool a record it must refuse
         return link.send(bytes)
+    }
+
+    private companion object {
+        /** How long a `q`-correlated request waits for its terminal `ok`/`err`/`list` before giving up. */
+        const val REQUEST_TIMEOUT_MS = 30_000L
     }
 }

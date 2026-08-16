@@ -49,6 +49,11 @@ import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import app.getknit.knit.mesh.spool.ScopeRegistry
+import app.getknit.knit.mesh.spool.ScopeRoots
+import app.getknit.knit.mesh.spool.ScopeSync
+import app.getknit.knit.mesh.spool.SpoolDialer
+import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.moderation.ScopedTextModerator
 import app.getknit.knit.normalizeSingleLine
@@ -99,6 +104,10 @@ class MeshManager(
     private val scope: CoroutineScope,
     private val metrics: MeshMetrics,
     private val db: KnitDatabase,
+    // Opens WebSocket sessions to spools for [scopeSync]. Null (the default) means the app is built
+    // without the Internet plane at all — which is what every unit test wants, and what keeps the mesh
+    // seam free of any transitive knowledge of it.
+    private val spoolDialer: SpoolDialer? = null,
     // Injectable wall clock so the send path's timestamps (a frame and its stored local copy share one
     // sentAt) are deterministic under test. Defaults to the real clock, so production wiring (the Koin
     // module) is unchanged; mirrors the house convention — ForwardSync(clock = …), AckSync, KeyExchange.
@@ -220,6 +229,37 @@ class MeshManager(
     // so onDeliver targets it.
     private var router = MeshRouter(transport, scope, metrics = metrics, onDeliver = pipeline::onDeliver)
 
+    /**
+     * The Internet plane (`docs/SPOOL_PROTOCOL.md`) — a custody-plane sibling of [forwardSync], not a
+     * third transport. Null when no dialer is injected (unit tests, and any build that ships without
+     * it); off at runtime unless the user opts in and configures a spool, so the default install opens
+     * no socket. Inbound frames re-enter through [router] exactly as a radio's would, and outbound
+     * frames come from the same custody store the radios re-serve from.
+     */
+    private val scopeSync: ScopeSync? =
+        spoolDialer?.let { dialer ->
+            ScopeSync(
+                registry =
+                    ScopeRegistry(
+                        selfId = { identity.nodeId() },
+                        roots = {
+                            ratchet.exportedRoots().map {
+                                ScopeRoots(it.peerId, it.pairwiseRoot, it.prevPairwiseRoot, it.prevRootExpiresAt)
+                            }
+                        },
+                        isAccepted = ::isAcceptedConversation,
+                    ),
+                dialer = dialer,
+                store = forwardStore,
+                selfId = { identity.nodeId() },
+                urls = { if (settings.spoolEnabled.first()) settings.spoolUrls.first().toList() else emptyList() },
+                canCarry = pipeline::canCarry,
+                deliver = { wire, env, from -> router.handleInbound(wire, env, from) },
+                metrics = metrics,
+                clock = clock,
+            )
+        }
+
     @Volatile
     private var started = false
 
@@ -309,11 +349,13 @@ class MeshManager(
         pruneForwardStorePeriodically(session)
         reofferToNeighborsPeriodically(session)
         logMetricsPeriodically(session)
+        scopeSync?.start(session)
     }
 
     override fun stop() {
         if (!started) return
         started = false
+        scopeSync?.stop()
         transport.stop()
         // Clear this session's pending relays on the app scope (the session is about to die); capture
         // the instance so a fast restart reassigning `router` can't retarget the wrong one. Then tear
@@ -324,6 +366,8 @@ class MeshManager(
         session?.cancel()
         sessionScope = null
     }
+
+    override fun spoolStatus(): List<SpoolStatus> = scopeSync?.status().orEmpty()
 
     /** Triggers an immediate rescan/reconnect (heartbeat alarm, device motion) and sweeps stale carry. */
     override fun heal() {
@@ -1286,7 +1330,24 @@ class MeshManager(
         router.originate(wire, env.id)
         forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_SELF)
         if (shouldFastFanout(env)) transport.fastFanout(wire)
+        // Our own sends are the latency-sensitive case, so nudge the Internet plane instead of waiting for
+        // its tick. Relayed frames ride the next heal round — they are already in flight on the radios.
+        scopeSync?.onCustodyChanged()
     }
+
+    /**
+     * Whether [conversationId] is an accepted conversation rather than a stranger's message request — the
+     * shared [Conversations.isAccepted] rule, read here so the Internet plane never spends a scope (or a
+     * spool's storage) on someone the user hasn't accepted. Group senders are irrelevant: only DM scopes
+     * exist today.
+     */
+    private suspend fun isAcceptedConversation(conversationId: String): Boolean =
+        Conversations.isAccepted(
+            conversationId,
+            settings.acceptedConversations.first(),
+            peers.verifiedNodeIds().toSet(),
+            messages.conversationsIAuthoredIn(identity.nodeId()).toSet(),
+        )
 
     /**
      * Wraps [env] in a signed [WireEnvelope]: the canonical envelope bytes plus our raw Ed25519 signature

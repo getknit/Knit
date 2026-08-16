@@ -26,6 +26,15 @@ sqlcipher = "4.16.0"
 coroutines = "1.11.0"
 kotlinxSerializationJson = "1.11.0"
 datastore = "1.2.1"
+# The WSS client for the spool (Internet-relay) plane. Pure Java/Kotlin — no native code, so nothing to
+# 16 KB-align and nothing that can make the F-Droid rebuild machine-dependent; its only non-stdlib
+# dependency is okio, already on the classpath via DataStore. Chosen over a Ktor client because its
+# WebSocket support is first-class on Android (it answers the daemon's 30 s pings automatically) and its
+# SOCKS Proxy support is the path to the deferred Tor toggle. Confined by rules/mesh.md to
+# mesh/spool/OkHttpSpoolDialer.kt — nothing else in the app may import okhttp3.
+# 5.5.0 exists but its okhttp-android AAR sets minCompileSdk=37; we deliberately stay on compileSdk 36.1
+# (same constraint that pins coreKtx and lifecycle), so 5.4.0 is the newest usable release.
+okhttp = "5.4.0"
 koin = "4.2.2"
 # Coil 3.4.0+ is built with Kotlin 2.4.0. We now compile :app with Kotlin 2.4.0 (built-in Kotlin is
 # overridden off AGP's bundled 2.2.10 — see the buildscript classpath in the root build.gradle.kts), so
@@ -38,7 +47,9 @@ coil = "3.5.0"
 # (0x4000) across all four ABIs while keeping the identical org.tensorflow.lite.Interpreter API. The 1.4.x
 # line stays bare: depends only on litert-api (Java + native .so, no Kotlin metadata), pulls NO telemetry
 # (datatransport), NO Play model delivery (ai-delivery), declares no manifest permissions — so it can't
-# perturb the pinned Kotlin-2.4 graph or the app's no-INTERNET, offline design. Do NOT jump to litert 2.x
+# perturb the pinned Kotlin-2.4 graph or the app's offline-first, phones-home-never design. (The one
+# network dependency is okhttp below, and it only ever talks to spools the user configures themselves.)
+# Do NOT jump to litert 2.x
 # (renames the lib to libLiteRt.so, drops x86, pulls ai-delivery + lifecycle + guava + coroutines +
 # FOREGROUND_SERVICE). Still deliberately chosen over com.google.mediapipe:tasks-vision.
 litert = "1.4.2"
@@ -178,6 +189,8 @@ androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiaut
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 
 sqlcipher-android = { group = "net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher" }
+
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }

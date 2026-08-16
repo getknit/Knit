@@ -235,7 +235,10 @@ class ScopeSync(
             val conn = connect(socket)
             connection = conn
             val pump = host.launch { for (bytes in socket.incoming) conn.onMessage(bytes) }
-            val ready = conn.awaitReady()
+            // The socket dying before (or instead of) the spool's hello must resolve the handshake rather
+            // than park this worker forever; so must a spool that opens the socket and then says nothing.
+            pump.invokeOnCompletion { conn.onClosed() }
+            val ready = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { conn.awaitReady() } == true
             if (ready) {
                 subscribe(conn, scopes)
                 while (pump.isActive && currentCoroutineContext().isActive) {
@@ -482,6 +485,7 @@ class ScopeSync(
 
         private const val RECONCILE_INTERVAL_MS = 15_000L
         private const val TICK_INTERVAL_MS = 60_000L
+        private const val HANDSHAKE_TIMEOUT_MS = 20_000L
         private const val MIN_BACKOFF_MS = 1_000L
         private const val MAX_BACKOFF_MS = 60_000L
         private const val RECONNECT_JITTER_MS = 750L

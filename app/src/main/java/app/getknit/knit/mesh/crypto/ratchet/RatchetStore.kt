@@ -11,6 +11,13 @@ package app.getknit.knit.mesh.crypto.ratchet
 interface RatchetStore {
     suspend fun session(peerId: String): RatchetEngine.SessionState?
 
+    /**
+     * Every peer we hold session state for. The spool plane's scope table is derived from this
+     * ([RatchetSessions.exportedRoots]) — it is the only caller that needs the whole set rather than one
+     * peer, since a scope exists per *session*, not per conversation row.
+     */
+    suspend fun sessionPeerIds(): List<String>
+
     suspend fun upsertSession(state: RatchetEngine.SessionState)
 
     suspend fun localEpochPriv(

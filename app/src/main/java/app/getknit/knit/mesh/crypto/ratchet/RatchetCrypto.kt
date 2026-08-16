@@ -136,10 +136,16 @@ object RatchetCrypto {
         pub: ByteArray,
     ): ByteArray = LABEL_SPK + u32be(id) + pub
 
-    /** Stable per-session export secret (the spool-plane `pairwiseRoot`); both sides derive the same value. */
+    /**
+     * Stable per-session export secret (the spool-plane `pairwiseRoot`); both sides derive the same
+     * value. Consumed by `ScopeCrypto` for DM scope derivation (docs/SPOOL_PROTOCOL.md §3).
+     */
     fun exportRoot(sessionRoot: ByteArray): ByteArray = Hkdf.computeHkdf(MAC, sessionRoot, ZERO_SALT, LABEL_EXPORT_ROOT, KEY_BYTES)
 
-    /** Per-epoch export secret (future relay sealing keys rotate with this). */
+    /**
+     * Per-epoch export secret — reserved for an epoch-keyed outer seal (`sealv = 2`, extension
+     * register of docs/SPOOL_PROTOCOL.md); the v1 seal is scope-static, so this stays API-only.
+     */
     fun exportEpochSeal(epochExport: ByteArray): ByteArray = Hkdf.computeHkdf(MAC, epochExport, ZERO_SALT, LABEL_EXPORT_EPOCH, KEY_BYTES)
 
     @Suppress("MagicNumber") // big-endian byte-lane shifts; naming 24/16/8 would only obscure them

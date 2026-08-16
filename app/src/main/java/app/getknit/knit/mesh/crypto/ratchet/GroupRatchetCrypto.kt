@@ -68,9 +68,10 @@ object GroupRatchetCrypto {
     fun nextChainKey(chainKey: ByteArray): ByteArray = Hkdf.computeHkdf(MAC, chainKey, ZERO_SALT, LABEL_CHAIN_KEY, KEY_BYTES)
 
     /**
-     * Per-(sender, epoch) export secret for the future relay ("spool") plane — API-only, like the DM
-     * ratchet's §8 surface. A shared per-group root is deliberately deferred to the relay-plane
-     * design doc; see docs/GROUP_FORWARD_SECRECY.md §8.
+     * Per-(sender, epoch) export secret — reserved for an epoch-keyed outer seal (`sealv = 2`,
+     * extension register of docs/SPOOL_PROTOCOL.md); the spool plane's v1 seal is scope-static off
+     * the shared group root that spec §3 mints, so this stays API-only like the DM ratchet's §8
+     * surface. See docs/GROUP_FORWARD_SECRECY.md §8.
      */
     fun exportEpochSeal(epochExport: ByteArray): ByteArray = Hkdf.computeHkdf(MAC, epochExport, ZERO_SALT, LABEL_EXPORT_EPOCH, KEY_BYTES)
 

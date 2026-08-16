@@ -142,6 +142,11 @@ class MeshMetrics {
     private val filesSentNan = AtomicLong()
     private val filesSentBt = AtomicLong()
     private val nanBulkGraceTimeouts = AtomicLong()
+    private val spoolPushed = AtomicLong()
+    private val spoolPulled = AtomicLong()
+    private val spoolBridged = AtomicLong()
+    private val spoolInvalid = AtomicLong()
+    private val spoolErrors = AtomicLong()
 
     /** A frame this device authored and injected into the mesh. */
     fun onOriginated() {
@@ -314,6 +319,31 @@ class MeshMetrics {
         nanBulkGraceTimeouts.incrementAndGet()
     }
 
+    /** A sealed custody frame was accepted by a spool (the Internet plane's outbound work). */
+    fun onSpoolPushed() {
+        spoolPushed.incrementAndGet()
+    }
+
+    /** A blob pulled or evented from a spool passed the §4.4 unseal/validate pipeline. */
+    fun onSpoolPulled() {
+        spoolPulled.incrementAndGet()
+    }
+
+    /** A validated spool blob re-entered mesh delivery — the island bridge actually firing. */
+    fun onSpoolBridged() {
+        spoolBridged.incrementAndGet()
+    }
+
+    /** A blob failed hash/AEAD/signature/frame-set and was quarantined (spec §9.3). Should stay at 0. */
+    fun onSpoolInvalid() {
+        spoolInvalid.incrementAndGet()
+    }
+
+    /** A spool answered `err`, or refused a scope at SUB. */
+    fun onSpoolError() {
+        spoolErrors.incrementAndGet()
+    }
+
     fun snapshot(): Snapshot {
         val byReason = drops.mapValues { it.value.get() }
         val connectByReason = connectFails.mapValues { it.value.get() }
@@ -353,6 +383,11 @@ class MeshMetrics {
             filesSentNan = filesSentNan.get(),
             filesSentBt = filesSentBt.get(),
             nanBulkGraceTimeouts = nanBulkGraceTimeouts.get(),
+            spoolPushed = spoolPushed.get(),
+            spoolPulled = spoolPulled.get(),
+            spoolBridged = spoolBridged.get(),
+            spoolInvalid = spoolInvalid.get(),
+            spoolErrors = spoolErrors.get(),
         )
     }
 
@@ -392,5 +427,10 @@ class MeshMetrics {
         val filesSentNan: Long = 0,
         val filesSentBt: Long = 0,
         val nanBulkGraceTimeouts: Long = 0,
+        val spoolPushed: Long = 0,
+        val spoolPulled: Long = 0,
+        val spoolBridged: Long = 0,
+        val spoolInvalid: Long = 0,
+        val spoolErrors: Long = 0,
     )
 }

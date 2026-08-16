@@ -53,6 +53,10 @@ class OkHttpSpoolDialer(
         @Volatile
         private var socket: WebSocket? = null
 
+        @Volatile
+        override var closeReason: String? = null
+            private set
+
         override val incoming: ReceiveChannel<ByteArray> get() = channel
 
         val listener =
@@ -73,6 +77,7 @@ class OkHttpSpoolDialer(
                     reason: String,
                 ) {
                     Log.i(TAG, "spool closing: $code $reason")
+                    closeReason = "close $code${if (reason.isBlank()) "" else " $reason"}"
                     channel.close()
                 }
 
@@ -90,6 +95,7 @@ class OkHttpSpoolDialer(
                     response: Response?,
                 ) {
                     Log.i(TAG, "spool socket failed: ${t.javaClass.simpleName} ${response?.code ?: ""}")
+                    closeReason = t.javaClass.simpleName
                     channel.close()
                 }
             }

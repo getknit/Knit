@@ -28,6 +28,14 @@ interface SpoolDialer {
 /** An open spool socket: a [SpoolLink] to write to plus its inbound stream, closed when the socket dies. */
 interface SpoolSocket : SpoolLink {
     val incoming: ReceiveChannel<ByteArray>
+
+    /**
+     * Why the socket ended, once [incoming] is closed — a protocol close code (`4001 auth`), a transport
+     * failure, or null while it is still open. Without this the most common field failures are invisible:
+     * a spool that rejects our token closes 4001 before saying anything, which otherwise looks exactly
+     * like "not connected yet".
+     */
+    val closeReason: String? get() = null
 }
 
 /**
@@ -252,7 +260,11 @@ class ScopeSync(
         /** One connection lifetime. Returns whether the handshake completed — that drives the backoff. */
         private suspend fun session(): Boolean {
             val host = this@ScopeSync.session ?: return false
-            val socket = dialer.dial(url) ?: return false
+            val socket = dialer.dial(url)
+            if (socket == null) {
+                lastError = UNREACHABLE
+                return false
+            }
             val conn = connect(socket)
             connection = conn
             val pump = host.launch { for (bytes in socket.incoming) conn.onMessage(bytes) }
@@ -270,6 +282,9 @@ class ScopeSync(
             }
             pump.cancel()
             conn.onClosed()
+            // A close code is the only explanation we get for auth/version/abuse rejections, and the
+            // handshake itself never fails "loudly" — record it before the socket is discarded.
+            socket.closeReason?.let { lastError = it }
             socket.close(NORMAL_CLOSE, "done")
             connection = null
             spoolDigests.clear()
@@ -547,6 +562,9 @@ class ScopeSync(
         private const val INITIAL_CACHE_CAPACITY = 64
         private const val LOAD_FACTOR = 0.75f
         private const val NORMAL_CLOSE = 1000
+
+        /** [SpoolStatus.lastError] when the socket could not be opened at all (bad URL, DNS, refused). */
+        const val UNREACHABLE = "unreachable"
 
         /** Hashcash budget per stamp: ~67 M hashes, comfortably above the spec's 20-bit recommendation. */
         private const val POW_BUDGET = 1L shl 26

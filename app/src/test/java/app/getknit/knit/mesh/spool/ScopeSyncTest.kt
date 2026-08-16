@@ -7,6 +7,7 @@ import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -181,6 +182,80 @@ class ScopeSyncTest {
             assertEquals(3, receiver.metrics.snapshot().spoolPulled)
             sender.sync.stop()
             receiver.sync.stop()
+        }
+
+    @Test
+    fun `a spool that rejects the connection reports why, instead of just looking disconnected`() =
+        runTest {
+            // A spool with a token configured closes 4001 before saying anything. Without the close code
+            // reaching the status, that is indistinguishable from "not connected yet" — which is exactly
+            // how a wrong/missing `?k=` token presents in the field.
+            val rejecting =
+                object : SpoolDialer {
+                    override suspend fun dial(url: String): SpoolSocket =
+                        object : SpoolSocket {
+                            private val ch = Channel<ByteArray>(Channel.UNLIMITED).also { it.close() }
+
+                            override val incoming get() = ch
+                            override val closeReason = "close 4001 auth"
+
+                            override fun send(bytes: ByteArray) = false
+
+                            override fun close(
+                                code: Int,
+                                reason: String,
+                            ) = Unit
+                        }
+                }
+            val member =
+                member(FakeSpool(), alice, bob).let { base ->
+                    ScopeSync(
+                        registry = ScopeRegistry({ alice }, { listOf(ScopeRoots(bob, pairwiseRoot)) }, { true }),
+                        dialer = rejecting,
+                        store = base.custody,
+                        selfId = { alice },
+                        urls = { listOf(url) },
+                        canCarry = { _, _ -> true },
+                        deliver = { _, _, _ -> },
+                        clock = { now },
+                        jitter = { 0L },
+                    )
+                }
+
+            member.start(backgroundScope)
+            pump()
+
+            val status = member.status().single()
+            assertFalse(status.connected)
+            assertEquals("close 4001 auth", status.lastError)
+            member.stop()
+        }
+
+    @Test
+    fun `a socket that will not open at all is reported as unreachable`() =
+        runTest {
+            val dead =
+                object : SpoolDialer {
+                    override suspend fun dial(url: String): SpoolSocket? = null
+                }
+            val member =
+                ScopeSync(
+                    registry = ScopeRegistry({ alice }, { listOf(ScopeRoots(bob, pairwiseRoot)) }, { true }),
+                    dialer = dead,
+                    store = FakeCustody(),
+                    selfId = { alice },
+                    urls = { listOf(url) },
+                    canCarry = { _, _ -> true },
+                    deliver = { _, _, _ -> },
+                    clock = { now },
+                    jitter = { 0L },
+                )
+
+            member.start(backgroundScope)
+            pump()
+
+            assertEquals(ScopeSync.UNREACHABLE, member.status().single().lastError)
+            member.stop()
         }
 
     @Test

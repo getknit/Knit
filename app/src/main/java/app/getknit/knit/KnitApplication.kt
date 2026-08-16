@@ -48,8 +48,16 @@ class KnitApplication :
         // gracefully if the assets fail to load, and warmUp() dedupes against a racing first send.
         koinApp.koin.get<CoroutineScope>().launch {
             koinApp.koin.get<MlTextModerator>().warmUp()
-            // Seed the shipped default spools once (res/values/spools.xml). Opens no socket by itself —
-            // the Internet plane stays off until the user turns it on — and a later removal sticks.
+        }
+
+        // Seed the shipped default spools once (res/values/spools.xml). Opens no socket by itself — the
+        // Internet plane stays off until the user turns it on — and a later removal sticks.
+        //
+        // Its OWN coroutine, deliberately: chained behind warmUp() it inherited a ~16 MB model load, so a
+        // fresh install sat with an unconfigured spool list for tens of seconds (observed on a Pixel 8),
+        // and any throw from the warm-up would have skipped the seed entirely. The two share a scope, not
+        // a sequence.
+        koinApp.koin.get<CoroutineScope>().launch {
             koinApp.koin.get<SettingsStore>().seedDefaultSpools(resources.getStringArray(R.array.default_spools).toList())
         }
 

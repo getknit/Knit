@@ -179,6 +179,22 @@ vaccine-purge on a cleartext receipt exactly as before but cannot on a sealed on
 rule keys on that form (a property of the frame bytes, identical at every node) — see
 `docs/ENCRYPTED_RECEIPTS_REACTIONS.md` §4 for why that stays ADR 006-convergent.
 
+**Precedent — the spool plane's first mesh-wire field (`GroupKeyPayload.gr`, group scopes / M4).** The
+Internet plane got its DM half (`docs/SPOOL_PROTOCOL.md`) with *no* mesh wire change at all; group
+scopes need exactly one, and it is additive: `GroupKeyPayload` gained the nullable
+`gr: GroupRootPayload?` — the shared group root the group scope id and seal keys derive from
+(SPOOL_PROTOCOL §3.2/§3.3). It rides the **existing** `CTL_GROUP_KEY` ctl DM rather than a new frame
+type or a new ctl value, for the ADR 016/018 reason a third time over: `isCustodial` is a fixed list on
+deployed builds, and the root is precisely the thing that must survive store-and-forward to reach an
+offline member. `GroupRootPayload` is its own type because its `root` is `@ByteString` and rule 1's
+exception keeps those non-default — the `GroupSeed`/`RatchetInit` shape. Two consequences worth pinning:
+a distribution may now carry `keys` **empty** with only `gr` set (a member that holds a root but has
+never sealed a group frame), which is byte-legal and is why `GoldenVectorTest` pins that exact fixture
+alongside the seeds-and-root one; and an old build decodes the ctl, ignores `gr`, and still advances the
+DM chain as the pinned silent no-op. No discovery marker, no `EncEnvelope.v`, no `MessageContent.v`, and
+no new ctl value is spent. The DB **does** bump (v2 → v3, the `group_roots` table) — local state only,
+with a tested `KnitMigrations` entry.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

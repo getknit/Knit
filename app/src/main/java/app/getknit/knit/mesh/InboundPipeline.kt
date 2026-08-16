@@ -129,6 +129,15 @@ class InboundPipeline(
     // arrived (MeshManager.replayCustodiedGroupFrames) — the local half of the re-serve heal; a frame
     // WE custodied before its seed is never re-served by a peer (no digest divergence to cue it).
     private val replayGroupCustody: suspend (String?, String?) -> Unit = { _, _ -> },
+    // Adopts a gossiped shared group root (MeshManager.adoptGroupRoot, docs/SPOOL_PROTOCOL.md §3.2).
+    // Called INSIDE the ctl commit so the root lands atomically with the DM chain advance that carried
+    // it; returns whether anything was adopted. Lambda-mediated like redistributeGroupKey, so this
+    // pipeline stays free of the spool plane's store.
+    private val adoptGroupRoot: suspend (senderId: String, gk: GroupKeyPayload, now: Long) -> Boolean = { _, _, _ -> false },
+    // Post-commit half of the root exchange (MeshManager.onGroupRootCtl): pass an adopted root onward,
+    // or correct a sender whose gossip proves it is behind ours. Fired for every CTL_GROUP_KEY, not only
+    // adoptions — a stale gossip is the ONLY evidence that an earlier one to that member was lost.
+    private val onGroupRootCtl: suspend (senderId: String, gk: GroupKeyPayload, adopted: Boolean) -> Unit = { _, _, _ -> },
 ) {
     // nodeId -> avatar hash a non-direct peer advertised but whose bytes we're still pulling, so a blob
     // arriving via the multi-hop BlobExchange can be attributed back to the peer that advertised it.
@@ -606,8 +615,8 @@ class InboundPipeline(
         now: Long,
         commit: suspend (suspend () -> Unit) -> Boolean,
     ) {
-        var adoptedEpoch: Int? = null
-        val committed = commit { adoptedEpoch = applyCtlInTxn(env, plain, now) }
+        var outcome = CtlOutcome()
+        val committed = commit { outcome = applyCtlInTxn(env, plain, now) }
         if (!committed) return
         when (plain.ctl) {
             MessageContent.CTL_SESSION_RESET -> {
@@ -622,11 +631,15 @@ class InboundPipeline(
             }
 
             MessageContent.CTL_GROUP_KEY -> {
-                adoptedEpoch?.let {
+                outcome.adoptedEpoch?.let {
                     ackGroupSeed(env.senderId, plain.gk?.groupId, it, me, now)
                     // The seed (or its idempotent re-distribution) may unlock frames we already carry.
                     plain.gk?.let { gk -> replayGroupCustody(gk.groupId, env.senderId) }
                 }
+                // Independent of the seeds: a root-only distribution carries none, and a distribution can
+                // carry a stale epoch alongside a newer root (or the reverse). Fired whether or not
+                // anything was adopted — the not-adopted case is where we correct a lagging sender.
+                plain.gk?.let { onGroupRootCtl(env.senderId, it, outcome.adoptedRoot) }
             }
 
             MessageContent.CTL_GROUP_KEY_REQ -> {
@@ -637,20 +650,33 @@ class InboundPipeline(
         }
     }
 
+    /** What a ctl DM's in-transaction half changed, for the post-commit actions that answer it. */
+    private class CtlOutcome(
+        /** The highest seed epoch worth acknowledging (`CTL_GROUP_KEY` only), else null. */
+        val adoptedEpoch: Int? = null,
+        /** Whether a strictly-newer shared group root landed — gossip it onward, wake the spool plane. */
+        val adoptedRoot: Boolean = false,
+    )
+
     /**
      * The in-transaction half of a ctl DM — runs inside the ratchet commit (shared lock held, outer
-     * Room transaction open) so state the ctl carries lands atomically with the session advance.
-     * Returns the adopted seed epoch worth acknowledging (`CTL_GROUP_KEY` only), else null. An unknown
-     * code does nothing here — the commit still advances the chain, which is the additive-ctl contract.
+     * Room transaction open) so state the ctl carries lands atomically with the session advance. An
+     * unknown code does nothing here — the commit still advances the chain, which is the additive-ctl
+     * contract.
      */
     private suspend fun applyCtlInTxn(
         env: RelayEnvelope,
         plain: MessageContent,
         now: Long,
-    ): Int? {
+    ): CtlOutcome {
         when (plain.ctl) {
             MessageContent.CTL_GROUP_KEY -> {
-                return adoptGroupSeeds(env, plain, now)
+                // Seeds and root are adopted independently: `gk.keys` is empty on a root-only gossip, and
+                // adoptGroupSeeds short-circuits on that, so nesting the root inside it would drop exactly
+                // the distributions a member sends before it has ever sealed a group frame.
+                val epoch = adoptGroupSeeds(env, plain, now)
+                val root = plain.gk?.let { adoptGroupRoot(env.senderId, it, now) } == true
+                return CtlOutcome(adoptedEpoch = epoch, adoptedRoot = root)
             }
 
             MessageContent.CTL_GROUP_KEY_ACK -> {
@@ -669,7 +695,7 @@ class InboundPipeline(
 
             else -> {}
         }
-        return null
+        return CtlOutcome()
     }
 
     /**

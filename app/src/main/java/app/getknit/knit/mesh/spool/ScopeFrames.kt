@@ -4,27 +4,37 @@ import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
+import app.getknit.knit.mesh.protocol.GroupLeaveContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 
 /**
- * One conversation's Internet presence: the scope id both members derive from a shared secret, the
- * seal keys bound to it, and the retention [bounds] members declare at SUB. [peerId] is the DM
- * counterpart (group scopes are deferred — `docs/SPOOL_PROTOCOL.md` §3.2/§3.3 and the roadmap).
- * [retiring] marks a scope derived from a *previous* session root, kept subscribed for the ratchet's
- * drain window so a session replacement doesn't strand blobs (spec §3.1): we still pull and heal it,
- * but never seal fresh frames into it.
+ * One conversation's Internet presence: the scope id its members derive from a shared secret, the seal
+ * keys bound to it, and the retention [bounds] members declare at SUB. Exactly one of [peerId] (the DM
+ * counterpart) and [groupId] is set — the same discriminator the spec's `ScopeConfigPayload` uses
+ * (`groupId` null ⇒ the DM pair). [roster] is the group's **founding** roster, carried here so the
+ * group frame-set rule (§4.4) stays a pure function of the scope.
+ *
+ * [retiring] marks a scope derived from a *superseded* secret, kept subscribed for its drain window so a
+ * rotation doesn't strand blobs: a replaced DM session (spec §3.1) or a rotated-away group root, whether
+ * rotated by a departure re-mint or by losing a competing v1 mint (§3.2/§3.3). We still pull and heal a
+ * retiring scope, but never seal fresh frames into it.
  */
 class Scope(
     val id: ByteArray,
     val keys: ScopeCrypto.SealKeys,
-    val peerId: String,
     val bounds: ScopeBounds,
     val retiring: Boolean = false,
+    val peerId: String? = null,
+    val groupId: String? = null,
+    val roster: Set<String> = emptySet(),
 ) {
     /** The spec's display form — lowercase hex — and this scope's identity in maps/logs/diagnostics. */
     val idHex: String = hex(id)
+
+    /** What this scope is *of*, for diagnostics: the DM peer's node id or the group id. */
+    val label: String = peerId ?: groupId.orEmpty()
 
     override fun equals(other: Any?): Boolean = other is Scope && other.idHex == idHex
 
@@ -55,9 +65,24 @@ object ScopeFrames {
     )
 
     /**
+     * The §4.4 frame-set rule for whichever form [scope] is. It governs **both** directions — a frame
+     * that fails it is neither sealed into the scope nor accepted out of it — and a scope with neither
+     * form set carries nothing, which is the safe default for a malformed scope table.
+     */
+    fun eligibleFor(
+        env: RelayEnvelope,
+        selfId: String,
+        scope: Scope,
+    ): Boolean =
+        when {
+            scope.peerId != null -> eligibleForDm(env, selfId, scope.peerId)
+            scope.groupId != null -> eligibleForGroup(env, scope.groupId, scope.roster)
+            else -> false
+        }
+
+    /**
      * The DM half of the §4.4 frame-set rule: `type = chat`, the sender/recipient pair is exactly this
-     * scope's two members, and the payload is v2-sealed with the DM ratchet header. It governs **both**
-     * directions — a frame that fails it is neither sealed into the scope nor accepted out of it.
+     * scope's two members, and the payload is v2-sealed with the DM ratchet header.
      *
      * Group forms, the plaintext broadcast room, profiles, and the cleartext receipt/reaction frames are
      * all excluded: a scope-eligible pair is ratchet-capable by construction, so its receipts and
@@ -76,6 +101,56 @@ object ScopeFrames {
         if (!pairMatches) return false
         val enc = WireCodec.decodePayload<ChatContent>(env.payload)?.enc ?: return false
         return enc.v == EncEnvelope.VERSION_RATCHET && enc.r != null
+    }
+
+    /**
+     * The group half of the §4.4 frame-set rule: a ratcheted group chat frame, a `groupupdate`, or a
+     * `groupleave` for this scope's group, from a founding-roster sender.
+     *
+     * Two details the rule turns on, both easy to get subtly wrong:
+     *
+     * - **Where the group id lives is per type.** `chat` and `groupupdate` carry it in the envelope's
+     *   [RelayEnvelope.group]; `groupleave` carries it in its *payload* and leaves that field null (see
+     *   `MeshManager.sendGroupLeave`). Reading only the envelope would silently exclude departures — the
+     *   one frame the remaining members most need to reach each other over the Internet, since it is
+     *   what drives the leave-rekey and the scope rotation.
+     * - **[roster] is the FOUNDING roster, not the effective one.** A leaver is already departed by the
+     *   time its own `groupleave` is evaluated, and a departed member's pre-departure frames stay
+     *   legitimately re-servable. Admitting them is safe because the departure re-mint rotates the scope
+     *   id: a departed member cannot reach the new scope at all, whatever this rule says.
+     *
+     * v1-wrapped group chat is excluded like every other non-ratcheted form — a group with a scope is
+     * fully ratchet-capable by construction (§3.3), so a v1 frame in one is a peer that has since
+     * regressed, not a case to carry.
+     */
+    fun eligibleForGroup(
+        env: RelayEnvelope,
+        groupId: String,
+        roster: Set<String>,
+    ): Boolean {
+        if (env.senderId !in roster) return false
+        return when (env.type) {
+            FrameType.CHAT -> {
+                if (env.group?.id != groupId) {
+                    false
+                } else {
+                    val enc = WireCodec.decodePayload<ChatContent>(env.payload)?.enc
+                    enc != null && enc.v == EncEnvelope.VERSION_RATCHET && enc.g != null
+                }
+            }
+
+            FrameType.GROUP_UPDATE -> {
+                env.group?.id == groupId
+            }
+
+            FrameType.GROUP_LEAVE -> {
+                WireCodec.decodePayload<GroupLeaveContent>(env.payload)?.groupId == groupId
+            }
+
+            else -> {
+                false
+            }
+        }
     }
 
     /**
@@ -114,7 +189,7 @@ object ScopeFrames {
         // AEAD exception on a wrong key/scope/tamper; both mean "quarantine", so collapse them here.
         val unsealed = runCatching { ScopeCrypto.open(scope.keys, scope.id, blob) }.getOrNull() ?: return null
         val env = WireCodec.decodeEnvelope(unsealed.signed) ?: return null
-        if (!eligibleForDm(env, selfId, scope.peerId)) return null
+        if (!eligibleFor(env, selfId, scope)) return null
         return Opened(WireEnvelope(sig = unsealed.sig, signed = unsealed.signed), env)
     }
 

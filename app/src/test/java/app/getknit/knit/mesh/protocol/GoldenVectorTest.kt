@@ -177,6 +177,15 @@ class GoldenVectorTest {
                         prekey = PrekeyInfo(id = 7, pub = bytes(32, 9), sig = bytes(64, 11)),
                     ),
                 ),
+            // The spool plane's shared group root (docs/SPOOL_PROTOCOL.md §3.2), gossiped as the additive
+            // `gr` field of the existing group-key ctl payload. The second fixture is the root-only
+            // distribution: `keys` defaults to empty and stays off the wire entirely, which is exactly the
+            // shape a receiver must still adopt from.
+            "groupRootPayload" to WireCodec.encodePayload(GroupRootPayload(root = bytes(32, 13), version = 2, minter = "aa")),
+            "groupKeyPayloadRoot" to
+                WireCodec.encodePayload(
+                    GroupKeyPayload(groupId = "g-1", gr = GroupRootPayload(root = bytes(32, 13), version = 2, minter = "aa")),
+                ),
         )
 
     @Test
@@ -285,6 +294,12 @@ class GoldenVectorTest {
                     "696365546167636474316c70726f746f56657273696f6e016c6361706162696c6974696573181f667072656b6579a362696407637075" +
                     "6258200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe26373696758400b121920272e353c434a51585f" +
                     "666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4",
+                "groupRootPayload" to
+                    "a364726f6f7458200d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6" +
+                    "6776657273696f6e02666d696e746572626161",
+                "groupKeyPayloadRoot" to
+                    "a26767726f7570496463672d31626772a364726f6f7458200d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3ca" +
+                    "d1d8dfe66776657273696f6e02666d696e746572626161",
             )
 
         const val BUNDLE_ENCODED =

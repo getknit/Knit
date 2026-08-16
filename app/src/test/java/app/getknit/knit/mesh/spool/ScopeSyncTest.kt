@@ -29,7 +29,9 @@ import org.junit.Test
 class ScopeSyncTest {
     private val alice = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
     private val bob = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
+    private val carol = "cccccccccccccccccccccccccc"
     private val pairwiseRoot = ByteArray(32) { it.toByte() }
+    private val groupRoot = ByteArray(32) { (it + 30).toByte() }
     private val now = 1_000L
     private val url = "ws://spool.test/spool/v1"
 
@@ -46,6 +48,7 @@ class ScopeSyncTest {
         peer: String,
         custody: FakeCustody = FakeCustody(),
         carryGate: suspend (WireEnvelope, RelayEnvelope) -> Boolean = { _, _ -> true },
+        groups: List<GroupScopeRoots> = emptyList(),
     ): Member {
         val metrics = MeshMetrics()
         val delivered = mutableListOf<RelayEnvelope>()
@@ -56,6 +59,7 @@ class ScopeSyncTest {
                         selfId = { self },
                         roots = { listOf(ScopeRoots(peer, pairwiseRoot)) },
                         isAccepted = { true },
+                        groupRoots = { groups },
                     ),
                 dialer = spool,
                 store = custody,
@@ -107,6 +111,73 @@ class ScopeSyncTest {
             assertEquals(1, receiver.metrics.snapshot().spoolBridged)
             sender.sync.stop()
             receiver.sync.stop()
+        }
+
+    @Test
+    fun `a group frame bridges to another member over the group scope`() =
+        runTest {
+            val spool = FakeSpool()
+            val groupId = "g-00112233445566778899aabb"
+            val roster = setOf(alice, bob, carol)
+            val group = GroupScopeRoots(groupId, roster, groupRoot, rootVersion = 1)
+            val sender = member(spool, alice, bob, groups = listOf(group))
+            val receiver = member(spool, bob, alice, groups = listOf(group))
+            // A chat from carol that alice merely CARRIES: the bridge is a custody property, not an
+            // authorship one, so a third member's frame crosses the Internet through either of the two.
+            sender.custody.store(
+                groupChatFrame("gc1", from = carol, groupId = groupId, members = roster.toList(), sentAt = now),
+                ForwardStore.ORIGIN_RELAY,
+                now,
+            )
+            sender.custody.store(groupLeaveFrame("gl1", from = carol, groupId = groupId, sentAt = now), ForwardStore.ORIGIN_RELAY, now)
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump()
+
+            assertEquals(setOf("gc1", "gl1"), receiver.delivered.map { it.id }.toSet())
+            assertEquals(2, spool.liveIds(hex(ScopeCrypto.groupScopeId(groupRoot, groupId, 1))).size)
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `a re-minted root moves the group to a fresh scope and drains the old one`() =
+        runTest {
+            val spool = FakeSpool()
+            val groupId = "g-00112233445566778899aabb"
+            val roster = setOf(alice, bob, carol)
+            val v1 = hex(ScopeCrypto.groupScopeId(groupRoot, groupId, 1))
+            val newRoot = ByteArray(32) { (it + 60).toByte() }
+            val v2 = hex(ScopeCrypto.groupScopeId(newRoot, groupId, 2))
+
+            // Post-departure state: the rotated root is live, the old lineage is still inside its drain.
+            val rotated =
+                GroupScopeRoots(
+                    groupId = groupId,
+                    roster = roster,
+                    root = newRoot,
+                    rootVersion = 2,
+                    prevRoot = groupRoot,
+                    prevRootVersion = 1,
+                    prevRootExpiresAt = now + 1_000_000L,
+                )
+            val holder = member(spool, alice, bob, groups = listOf(rotated))
+            holder.custody.store(
+                groupChatFrame("gc1", from = bob, groupId = groupId, members = roster.toList(), sentAt = now),
+                ForwardStore.ORIGIN_RELAY,
+                now,
+            )
+
+            holder.sync.start(backgroundScope)
+            pump()
+
+            // §3.3: old blobs are never migrated. The frame is re-sealed under the new keys into a fresh,
+            // unlinkable id; the retiring scope is subscribed and healed but never refilled.
+            assertEquals(1, spool.liveIds(v2).size)
+            assertTrue("the retiring scope is drained, not refilled", spool.liveIds(v1).isEmpty())
+            assertTrue(v1 != v2)
+            holder.sync.stop()
         }
 
     @Test

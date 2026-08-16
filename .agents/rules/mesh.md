@@ -32,10 +32,18 @@ semantics of its own: `InboundPipeline.canCarry` authenticates a pulled frame, a
 free). Two invariants that are easy to break:
 
 - **Only frames matching the scope frame-set rule may be sealed into a scope, in *both* directions**
-  (`ScopeFrames.eligibleForDm`, spec §4.4) — a scope is not a general-purpose upload channel.
+  (`ScopeFrames.eligibleFor`, spec §4.4) — a scope is not a general-purpose upload channel. The group
+  half has two traps: a `groupleave` carries its group id in the **payload** (never in
+  `RelayEnvelope.group`), and the sender is vetted against the **founding** roster (members ∪ departed),
+  because a leaver is already departed when its own leave frame is evaluated.
 - **A blob that fails validation is quarantined per (spool, scope), never merely dropped** (spec §9.3).
   Spools are untrusted storage: a garbage blob folds into *their* digest and never ours, so without the
   invalid set the two digests diverge forever and the client re-pulls it on every heal round.
+- **Group-root minting is damped; group-root adoption is not** (`GroupRootPolicy`, spec §3.2). Several
+  members minting version 1 at once is normal and self-healing — `(version, minter)` collapses the
+  lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping
+  a root everyone else ignores and never converges again. Bound outbound chatter (the per-(group,
+  member) seed-send floor), never adoption.
 
 ## Keep pure mesh logic Android-free
 

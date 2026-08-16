@@ -19,13 +19,28 @@ class ScopeRoots(
 )
 
 /**
- * Derives the scope table: one scope per **accepted** DM peer with a live ratchet session, plus that
- * peer's retiring scope while its drain window is open. Pure — identity, ratchet state, and the
- * acceptance rule are all injected suspend seams, so the derivation is unit-testable with fixtures and
- * carries no Android or Room dependency.
+ * One group's scope inputs: the shared root (`docs/SPOOL_PROTOCOL.md` §3.2) with the [rootVersion] that
+ * doubles as the scope epoch, the **founding** roster the frame-set rule vets senders against, and the
+ * rotated-away lineage while its drain window is open.
  *
- * Group scopes are absent by design at this milestone: they need the shared group root
- * (`GroupKeyPayload.gr`), which ships with the group-scope milestone (spec §3.2, `memory/roadmap.md`).
+ * Assembled by the caller from the group row and [GroupRootStore], so this layer stays free of Room and
+ * of the mint/gossip machinery — it only turns secrets into scopes.
+ */
+class GroupScopeRoots(
+    val groupId: String,
+    val roster: Set<String>,
+    val root: ByteArray,
+    val rootVersion: Int,
+    val prevRoot: ByteArray? = null,
+    val prevRootVersion: Int = 0,
+    val prevRootExpiresAt: Long = 0L,
+)
+
+/**
+ * Derives the scope table: one scope per **accepted** DM peer with a live ratchet session and one per
+ * group holding a shared root, plus each one's retiring scope while its drain window is open. Pure —
+ * identity, ratchet state, group roots, and the acceptance rule are all injected suspend seams, so the
+ * derivation is unit-testable with fixtures and carries no Android or Room dependency.
  *
  * Bounds are constants here rather than per-conversation state because the signed scope-config ctl
  * (`CTL_SCOPE_CONFIG`, spec §5) is not on the wire yet; when it lands, [bounds] becomes a per-scope
@@ -36,25 +51,43 @@ class ScopeRegistry(
     private val selfId: suspend () -> String,
     private val roots: suspend () -> List<ScopeRoots>,
     private val isAccepted: suspend (String) -> Boolean,
+    private val groupRoots: suspend () -> List<GroupScopeRoots> = { emptyList() },
     private val bounds: ScopeBounds = DEFAULT_BOUNDS,
 ) {
-    /** Every scope this device participates in at [now], newest-session first, de-duplicated by id. */
+    /** Every scope this device participates in at [now], newest-secret first, de-duplicated by id. */
     suspend fun scopes(now: Long): List<Scope> {
         val me = selfId()
-        return roots()
+        return (dmScopes(me, now) + groupScopes(now)).distinctBy { it.idHex }
+    }
+
+    private suspend fun dmScopes(
+        me: String,
+        now: Long,
+    ): List<Scope> =
+        roots()
             .filter { isAccepted(it.peerId) }
             .flatMap { entry ->
                 buildList {
-                    add(scopeFor(me, entry.peerId, entry.pairwiseRoot, retiring = false))
+                    add(dmScope(me, entry.peerId, entry.pairwiseRoot, retiring = false))
                     val prev = entry.prevPairwiseRoot
                     if (prev != null && entry.prevRootExpiresAt > now) {
-                        add(scopeFor(me, entry.peerId, prev, retiring = true))
+                        add(dmScope(me, entry.peerId, prev, retiring = true))
                     }
                 }
-            }.distinctBy { it.idHex }
-    }
+            }
 
-    private fun scopeFor(
+    private suspend fun groupScopes(now: Long): List<Scope> =
+        groupRoots().flatMap { entry ->
+            buildList {
+                add(groupScope(entry, entry.root, entry.rootVersion, retiring = false))
+                val prev = entry.prevRoot
+                if (prev != null && entry.prevRootExpiresAt > now) {
+                    add(groupScope(entry, prev, entry.prevRootVersion, retiring = true))
+                }
+            }
+        }
+
+    private fun dmScope(
         selfId: String,
         peerId: String,
         pairwiseRoot: ByteArray,
@@ -62,9 +95,23 @@ class ScopeRegistry(
     ) = Scope(
         id = ScopeCrypto.dmScopeId(pairwiseRoot, selfId, peerId),
         keys = ScopeCrypto.dmSealKeys(pairwiseRoot, selfId, peerId),
-        peerId = peerId,
         bounds = bounds,
         retiring = retiring,
+        peerId = peerId,
+    )
+
+    private fun groupScope(
+        entry: GroupScopeRoots,
+        root: ByteArray,
+        version: Int,
+        retiring: Boolean,
+    ) = Scope(
+        id = ScopeCrypto.groupScopeId(root, entry.groupId, version),
+        keys = ScopeCrypto.groupSealKeys(root, entry.groupId, version),
+        bounds = bounds,
+        retiring = retiring,
+        groupId = entry.groupId,
+        roster = entry.roster,
     )
 
     companion object {

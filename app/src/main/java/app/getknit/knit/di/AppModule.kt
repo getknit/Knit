@@ -18,6 +18,7 @@ import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.crypto.KeystoreSecret
 import app.getknit.knit.data.forward.ForwardRepository
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
+import app.getknit.knit.data.ratchet.GroupRootRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.demo.DemoComposer
@@ -27,6 +28,7 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 import app.getknit.knit.mesh.crypto.ratchet.RatchetStore
+import app.getknit.knit.mesh.spool.GroupRootStore
 import app.getknit.knit.notifications.MessageNotifier
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.review.ReviewPrompter
@@ -77,12 +79,13 @@ val appModule =
         single { get<KnitDatabase>().forwardDao() }
         single { get<KnitDatabase>().ratchetDao() }
         single { get<KnitDatabase>().groupRatchetDao() }
+        single { get<KnitDatabase>().groupRootDao() }
         single { MessageRepository(get()) }
         single { PeerRepository(get()) }
         single { ReactionRepository(get(), get()) }
         // BlobRepository: blobDao, messageDao, peerDao, settings, blobVerdictDao, groupDao, forwardDao, db.
         single { BlobRepository(get(), get(), get(), get(), get(), get(), get(), get()) }
-        single { GroupRepository(get(), get(), get(), get()) }
+        single { GroupRepository(get(), get(), get(), get(), get()) }
         // Store-and-forward custody for DMs, backed by the encrypted forward_store table. Takes the shared
         // StoreDigest (from meshModule) so every carry-store mutation keeps the cue-plane content digest in sync,
         // plus the KnitDatabase so store/remove/sweep run their DB writes in a transaction under the repo mutex.
@@ -92,4 +95,8 @@ val appModule =
         single<RatchetStore> { RatchetRepository(get()) }
         // Group sender-key ratchet state (docs/GROUP_FORWARD_SECRECY.md), same transactional posture.
         single<GroupRatchetStore> { GroupRatchetRepository(get()) }
+        // The spool plane's shared group roots (docs/SPOOL_PROTOCOL.md §3.2). Deliberately NOT scoped to the
+        // Internet plane's own lifetime: a device with the plane off still adopts and re-gossips roots, which
+        // is what carries one across a plane-off member sitting between two plane-on ones.
+        single<GroupRootStore> { GroupRootRepository(get()) }
     }

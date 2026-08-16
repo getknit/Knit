@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
@@ -37,6 +38,7 @@ import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
+import app.getknit.knit.mesh.protocol.GroupRootPayload
 import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.PrekeyInfo
@@ -49,6 +51,9 @@ import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import app.getknit.knit.mesh.spool.GroupRootPolicy
+import app.getknit.knit.mesh.spool.GroupRootStore
+import app.getknit.knit.mesh.spool.GroupScopeRoots
 import app.getknit.knit.mesh.spool.ScopeRegistry
 import app.getknit.knit.mesh.spool.ScopeRoots
 import app.getknit.knit.mesh.spool.ScopeSync
@@ -101,6 +106,10 @@ class MeshManager(
     private val messageCrypto: MessageCrypto,
     private val ratchet: RatchetSessions,
     private val groupRatchet: GroupRatchetSessions,
+    // The spool plane's shared group roots (docs/SPOOL_PROTOCOL.md §3.2). NOT gated on the Internet plane
+    // being wired: a device with it switched off still adopts and re-gossips roots, which is what carries
+    // one across a plane-off member sitting between two plane-on ones. Only minting checks the switch.
+    private val groupRoots: GroupRootStore,
     private val scope: CoroutineScope,
     private val metrics: MeshMetrics,
     private val db: KnitDatabase,
@@ -222,6 +231,8 @@ class MeshManager(
             redistributeGroupKey = ::redistributeGroupKey,
             flushGroupKeys = ::flushPendingGroupKeysFor,
             replayGroupCustody = ::replayCustodiedGroupFrames,
+            adoptGroupRoot = ::adoptGroupRoot,
+            onGroupRootCtl = ::onGroupRootCtl,
         )
 
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
@@ -248,6 +259,7 @@ class MeshManager(
                             }
                         },
                         isAccepted = ::isAcceptedConversation,
+                        groupRoots = ::groupScopeRoots,
                     ),
                 dialer = dialer,
                 store = forwardStore,
@@ -386,8 +398,10 @@ class MeshManager(
             ackSync.retryPending() // re-send broadcast/group ticks we still owe absent authors (+ age out old ones)
             ratchet.sweep(clock()) // retire epoch privs / skipped keys — the ratchet's PFS window enforcement
             groupRatchet.sweep(clock()) // retire group chains / skipped keys — the group PFS window
+            groupRoots.sweep(clock()) // drop rotated-away group roots past their drain window
             replayUndeliveredGroupCustody() // re-try own-custody group frames whose seed arrived late
             rotatePrekeyIfDue()
+            mintGroupRootsIfDue() // mint a group's spool root when it is our turn (spec §3.2)
         }
     }
 
@@ -646,16 +660,23 @@ class MeshManager(
         seed: GroupSeed,
         me: String,
     ): Boolean {
-        val payload = MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(groupId, keys = listOf(seed)))
+        val payload = groupKeyPayload(groupId, listOf(seed))
         return members.all { memberId -> sendSeedDm(groupId, memberId, payload, seed.epoch, me) }
     }
 
-    /** Seals + floods one seed ctl DM and stamps the outbox; false when the member can't receive v2. */
+    /**
+     * Seals + floods one group-key ctl DM and stamps the outbox; false when the member can't receive v2.
+     *
+     * [epoch] is null for a **root-only** gossip — a member that holds a shared root but has never sealed
+     * a group frame has no seed to distribute. The outbox stamp is skipped there rather than recording a
+     * bogus epoch 0, which would read as "we distributed something" and suppress the real first
+     * distribution's re-send triggers.
+     */
     private suspend fun sendSeedDm(
         groupId: String,
         memberId: String,
         payload: MessageContent,
-        epoch: Int,
+        epoch: Int?,
         me: String,
     ): Boolean {
         val peer = peers.find(memberId)
@@ -664,8 +685,11 @@ class MeshManager(
         val now = clock()
         val aad = MessageCrypto.header(id, me, now, memberId)
         val sealed = ratchet.sealDm(memberId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), payload.encode(), aad, now) ?: return false
-        groupRatchet.markKeySent(groupId, memberId, epoch, now)
-        metrics.onGroupSeedSent()
+        if (epoch != null) {
+            groupRatchet.markKeySent(groupId, memberId, epoch, now)
+            metrics.onGroupSeedSent()
+        }
+        payload.gk?.gr?.let { lastRootGossipVersion[groupId to memberId] = it.version }
         originateSigned(
             RelayEnvelope(
                 type = FrameType.CHAT,
@@ -682,6 +706,12 @@ class MeshManager(
     // (groupId, memberId) -> last seed (re-)send toward them, bounding every proactive plane (profile
     // arrival, neighbor join, session reset) and the key-request responder to one send per floor window.
     private val lastSeedSendAt = ConcurrentHashMap<Pair<String, String>, Long>()
+
+    // (groupId, memberId) -> the group-root version we last gossiped to them. The root has no ack (unlike
+    // an epoch seed), so without this a member whose seeds are all acked would still draw a root-only ctl
+    // DM on every profile re-arrival and neighbor re-join, forever. In-memory on purpose: losing it costs
+    // one redundant, idempotent re-gossip per member per process, which is the cheap side of the trade.
+    private val lastRootGossipVersion = ConcurrentHashMap<Pair<String, String>, Int>()
 
     /**
      * The group analogue of [flushPendingFor], fired when [memberId]'s profile (re)arrives, when they
@@ -704,13 +734,21 @@ class MeshManager(
     ) {
         val me = identity.nodeId()
         groups.groupsWith(memberId).forEach { group ->
-            val chain = groupRatchet.currentSeeds(group.groupId).firstOrNull() ?: return@forEach
+            val chain = groupRatchet.currentSeeds(group.groupId).firstOrNull()
             val outbox = groupRatchet.keySend(group.groupId, memberId)
-            if (!force && outbox != null && outbox.ackedEpoch >= chain.epoch) return@forEach
+            val seedDue = chain != null && (force || outbox == null || outbox.ackedEpoch < chain.epoch)
+            // A held root is its own reason to send even when the seed half has nothing to say: this is
+            // the trigger set (profile arrival, neighbor join, session reset) that reaches a member who
+            // was away when we minted, and without it the root would wait for the group's next natural
+            // mint — hours to days. Only until we have gossiped THIS version to them, though: a root
+            // carries no ack, so an unconditional "we hold one" would re-send forever. Root-only sends
+            // carry no epoch, so they never touch the outbox.
+            val heldVersion = groupRoots.find(group.groupId)?.takeIf { it.root != null }?.version
+            val rootDue = heldVersion != null && lastRootGossipVersion[group.groupId to memberId] != heldVersion
+            if (!seedDue && !rootDue) return@forEach
             if (!seedSendFloorOpen(group.groupId, memberId)) return@forEach
-            val payload =
-                MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.groupId, keys = listOf(chain)))
-            sendSeedDm(group.groupId, memberId, payload, chain.epoch, me)
+            val seeds = if (seedDue && chain != null) listOf(chain) else emptyList()
+            sendSeedDm(group.groupId, memberId, groupKeyPayload(group.groupId, seeds), seeds.firstOrNull()?.epoch, me)
         }
     }
 
@@ -729,9 +767,183 @@ class MeshManager(
         val seeds = groupRatchet.currentSeeds(groupId)
         if (seeds.isEmpty()) return
         if (!seedSendFloorOpen(groupId, requesterId)) return
-        val payload = MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(groupId, keys = seeds))
-        sendSeedDm(groupId, requesterId, payload, seeds.first().epoch, identity.nodeId())
+        sendSeedDm(groupId, requesterId, groupKeyPayload(groupId, seeds), seeds.first().epoch, identity.nodeId())
     }
+
+    // ---- the spool plane's shared group root (docs/SPOOL_PROTOCOL.md §3.2) ----
+
+    /**
+     * The one builder for every `CTL_GROUP_KEY` we emit, so the four emit sites (seed distribution, the
+     * re-send flush, the key-request answer, the root gossip) cannot drift on whether the root rides
+     * along. The spec's rule is simply "on **every** seed send and key-request response from any member
+     * who holds a root", which is exactly what routing them all through here enforces.
+     */
+    private suspend fun groupKeyPayload(
+        groupId: String,
+        keys: List<GroupSeed>,
+    ): MessageContent {
+        val held = groupRoots.find(groupId)?.takeIf { it.root != null }
+        return MessageContent(
+            body = "",
+            ctl = MessageContent.CTL_GROUP_KEY,
+            gk =
+                GroupKeyPayload(
+                    groupId = groupId,
+                    keys = keys,
+                    gr = held?.let { GroupRootPayload(root = checkNotNull(it.root), version = it.version, minter = it.minter) },
+                ),
+        )
+    }
+
+    /**
+     * The mint pass, on the 15-min heal heartbeat: for every group we hold, become eligible (plane on,
+     * fully ratchet-capable — spec §3.3), stamp the grace clock once, and mint when
+     * [GroupRootPolicy.mintDue] says it is our turn. One rule covers both mints: version 1 when we hold
+     * no root, `version + 1` when a processed departure left a re-mint owed.
+     *
+     * The eligibility stamp is written **before** the first decision on purpose — the grace is measured
+     * from it, so a device that never stamps never waits and never mints.
+     */
+    private suspend fun mintGroupRootsIfDue() {
+        if (!settings.spoolEnabled.first()) return
+        val me = identity.nodeId()
+        val now = clock()
+        groups.active().forEach { group ->
+            val members = GroupMembersStore.decode(group.members)
+            val others = members.filter { it != me }
+            // A group we are no longer in, or one everyone else has left, has nothing to carry over the
+            // Internet — the same emptiness guard `sealGroupRatchet` applies before minting an epoch.
+            if (me !in members || others.isEmpty() || !groupRatchetEligible(others)) return@forEach
+            groupRoots.markEligible(group.groupId, now)
+            val state = groupRoots.find(group.groupId)
+            val version =
+                GroupRootPolicy.mintDue(
+                    state = state,
+                    selfId = me,
+                    preferredMinter = GroupRootPolicy.preferredMinter(group.createdBy, members),
+                    now = now,
+                ) ?: return@forEach
+            groupRoots.upsert(
+                GroupRootPolicy.rotated(state, group.groupId, GroupRootPolicy.newRoot(), version, me, now),
+            )
+            metrics.onGroupRootMinted()
+            gossipGroupRoot(group.groupId)
+        }
+    }
+
+    /**
+     * Fans our held root to every other member as a `CTL_GROUP_KEY`, carrying whatever seeds we have (an
+     * empty list is the normal shape before we have ever sealed a group frame). Floored per
+     * (group, member) by the same clock the seed re-sends use — that floor is the ONLY bound on root
+     * chatter, deliberately, because bounding adoption instead would strand a device on a dead lineage.
+     *
+     * [skip] drops the member we just learned this root from: echoing it straight back is inert (their
+     * own root is never strictly newer than itself) and doubles the traffic of every convergence round.
+     */
+    private suspend fun gossipGroupRoot(
+        groupId: String,
+        skip: String? = null,
+    ) {
+        val group = groups.find(groupId)?.takeIf { !it.left } ?: return
+        if (groupRoots.find(groupId)?.root == null) return
+        val me = identity.nodeId()
+        val seeds = groupRatchet.currentSeeds(groupId)
+        val payload = groupKeyPayload(groupId, seeds)
+        GroupMembersStore.decode(group.members).filter { it != me && it != skip }.forEach { memberId ->
+            if (seedSendFloorOpen(groupId, memberId)) {
+                sendSeedDm(groupId, memberId, payload, seeds.firstOrNull()?.epoch, me)
+            }
+        }
+    }
+
+    /**
+     * Adopts a gossiped root, inside the ctl DM's commit so it lands atomically with the chain advance
+     * that carried it. Returns whether anything changed.
+     *
+     * The sender gates mirror the seed path exactly (group held, not left, sender in the effective
+     * roster); [GroupRootPolicy.adoptable] adds the spec's two insider-DoS bounds — the minter must be a
+     * founding-roster member, and the version must stay inside the ceiling and jump bound.
+     */
+    private suspend fun adoptGroupRoot(
+        senderId: String,
+        gk: GroupKeyPayload,
+        now: Long,
+    ): Boolean {
+        val gr = gk.gr ?: return false
+        val group = groups.find(gk.groupId) ?: return false
+        if (group.left || senderId !in GroupMembersStore.decode(group.members)) return false
+        val held = groupRoots.find(gk.groupId)
+        if (!GroupRootPolicy.adoptable(gr, foundingRoster(group), held)) return false
+        groupRoots.upsert(GroupRootPolicy.rotated(held, gk.groupId, gr.root, gr.version, gr.minter, now))
+        metrics.onGroupRootAdopted()
+        return true
+    }
+
+    /**
+     * The post-commit half of every inbound `CTL_GROUP_KEY`, in both directions of the root exchange.
+     *
+     * **Adopted**: pass the newer root on — the gossip that makes a lineage collapse across the whole
+     * roster rather than only the members its minter could reach — and wake the Internet plane so the
+     * rotated scope subscribes now instead of at the next reconcile tick.
+     *
+     * **Not adopted**: if the sender's gossip shows they are *behind* us (an older root, or none at all),
+     * send ours back. This is the anti-entropy half, and it is load-bearing rather than belt-and-braces:
+     * the root has no ack, so [lastRootGossipVersion] would otherwise suppress a re-send forever after a
+     * single lost gossip, and a stale gossip is the only evidence that loss ever happened. Bounded by the
+     * ordinary per-(group, member) floor, and self-terminating — once they adopt, their next distribution
+     * carries exactly our `(version, minter)` and this branch stops firing.
+     */
+    private suspend fun onGroupRootCtl(
+        senderId: String,
+        gk: GroupKeyPayload,
+        adopted: Boolean,
+    ) {
+        if (adopted) {
+            scopeSync?.onCustodyChanged()
+            gossipGroupRoot(gk.groupId, skip = senderId)
+            return
+        }
+        val held = groupRoots.find(gk.groupId)?.takeIf { it.root != null } ?: return
+        val theirs = gk.gr
+        // They can't be holding anything NEWER — that would have been adopted above — so "not exactly
+        // ours" means "behind ours".
+        if (theirs != null && theirs.version == held.version && theirs.minter == held.minter) return
+        if (groups.find(gk.groupId)?.left != false) return
+        if (!seedSendFloorOpen(gk.groupId, senderId)) return
+        val seeds = groupRatchet.currentSeeds(gk.groupId)
+        sendSeedDm(gk.groupId, senderId, groupKeyPayload(gk.groupId, seeds), seeds.firstOrNull()?.epoch, identity.nodeId())
+    }
+
+    /**
+     * The scope table's group half: every group we hold that has a root, paired with the founding roster
+     * the frame-set rule vets senders against and the rotated-away lineage while it drains.
+     */
+    private suspend fun groupScopeRoots(): List<GroupScopeRoots> {
+        val states = groupRoots.all().filter { it.root != null }.associateBy { it.groupId }
+        if (states.isEmpty()) return emptyList()
+        return groups.active().mapNotNull { group ->
+            val state = states[group.groupId] ?: return@mapNotNull null
+            GroupScopeRoots(
+                groupId = group.groupId,
+                roster = foundingRoster(group),
+                root = checkNotNull(state.root),
+                rootVersion = state.version,
+                prevRoot = state.prevRoot,
+                prevRootVersion = state.prevVersion,
+                prevRootExpiresAt = state.prevExpiresAt,
+            )
+        }
+    }
+
+    /**
+     * The **founding** roster: the effective members plus everyone who has departed. That is the set the
+     * group id was derived from, and the set the scope frame-set rule vets against — a leaver is already
+     * departed when its own `groupleave` is evaluated, and a departed member's pre-departure frames stay
+     * legitimately re-servable. Safe because the departure re-mint rotates the scope id out from under
+     * them (spec §4.4).
+     */
+    private fun foundingRoster(group: GroupEntity): Set<String> =
+        (GroupMembersStore.decode(group.members) + GroupMembersStore.decode(group.departed)).toSet()
 
     /**
      * Re-enters our OWN custody's undelivered group chat frames through the inbound pipeline. A group
@@ -1183,7 +1395,11 @@ class MeshManager(
             rotatePrekeyIfDue()
             ratchet.sweep(clock())
             groupRatchet.sweep(clock())
+            groupRoots.sweep(clock())
             replayUndeliveredGroupCustody()
+            // At startup too, not only on the 15-min heartbeat: this is where a device that just enabled
+            // the Internet plane (or just finished its mint grace while the app was closed) actually mints.
+            mintGroupRootsIfDue()
             val env = currentProfileEnvelope()
             forwardSync.onSeen(sign(env), env, ForwardStore.ORIGIN_SELF)
         }

@@ -40,14 +40,15 @@ interface SpoolSocket : SpoolLink {
 
 /**
  * One scope's convergence state at one spool: the two digests that must agree, plus the quarantine size.
+ * [label] is what the scope is *of* — a DM peer's node id or a group id.
  *
  * [converged] is plain digest equality, so read it together with [retiring]: a retiring scope is drained
- * but never refilled (spec §3.1), so it legitimately sits at `local > spool` and reports **false** for
- * the whole drain window. That is the scope working as designed, not divergence.
+ * but never refilled (spec §3.1/§3.3), so it legitimately sits at `local > spool` and reports **false**
+ * for the whole drain window. That is the scope working as designed, not divergence.
  */
 class ScopeStatus(
     val scopeHex: String,
-    val peerId: String,
+    val label: String,
     val localCount: Int,
     val spoolCount: Int,
     val converged: Boolean,
@@ -171,7 +172,7 @@ class ScopeSync(
         val me = selfId()
         return store
             .liveFrames(clock())
-            .filter { ScopeFrames.eligibleForDm(it.envelope, me, scope.peerId) }
+            .filter { ScopeFrames.eligibleFor(it.envelope, me, scope) }
             .associate { carried ->
                 val sealed = sealCache.get(scope, carried)
                 hex(sealed.blobId) to Held(sealed, carried)
@@ -238,7 +239,7 @@ class ScopeSync(
                     all.map { scope ->
                         ScopeStatus(
                             scopeHex = scope.idHex,
-                            peerId = scope.peerId,
+                            label = scope.label,
                             localCount = localCounts[scope.idHex] ?: 0,
                             spoolCount = spoolCounts[scope.idHex] ?: 0,
                             converged = spoolDigests[scope.idHex] == localDigests[scope.idHex],

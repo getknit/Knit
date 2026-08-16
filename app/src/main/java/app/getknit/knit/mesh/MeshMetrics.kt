@@ -128,6 +128,8 @@ class MeshMetrics {
     private val groupSealedV1Fallback = AtomicLong()
     private val groupSeedsSent = AtomicLong()
     private val groupSeedsAdopted = AtomicLong()
+    private val groupRootsMinted = AtomicLong()
+    private val groupRootsAdopted = AtomicLong()
 
     // Fixed key set → no allocation on the hot path, every reason always present.
     private val drops: Map<DropReason, AtomicLong> = DropReason.entries.associateWith { AtomicLong() }
@@ -266,6 +268,20 @@ class MeshMetrics {
         groupSeedsAdopted.incrementAndGet()
     }
 
+    /** We minted a group's shared spool root — version 1, or a departure re-mint (SPOOL_PROTOCOL §3.2). */
+    fun onGroupRootMinted() {
+        groupRootsMinted.incrementAndGet()
+    }
+
+    /**
+     * A strictly-newer gossiped root replaced ours. Read together with [onGroupRootMinted]: a steady
+     * trickle of adoptions with no local mint is healthy gossip; repeated mint/adopt alternation on one
+     * device is a lineage that is not collapsing.
+     */
+    fun onGroupRootAdopted() {
+        groupRootsAdopted.incrementAndGet()
+    }
+
     /** A Bluetooth L2CAP connect attempt to a peer failed for [reason] (see [ConnectFailReason]). */
     fun onBtConnectFailed(reason: ConnectFailReason) {
         connectFails.getValue(reason).incrementAndGet()
@@ -372,6 +388,8 @@ class MeshMetrics {
             groupSealedV1Fallback = groupSealedV1Fallback.get(),
             groupSeedsSent = groupSeedsSent.get(),
             groupSeedsAdopted = groupSeedsAdopted.get(),
+            groupRootsMinted = groupRootsMinted.get(),
+            groupRootsAdopted = groupRootsAdopted.get(),
             btConnectFails = connectByReason.values.sum(),
             btConnectFailsByReason = connectByReason.filterValues { it > 0 },
             btLinksEstablished = btLinksEstablished.get(),
@@ -416,6 +434,8 @@ class MeshMetrics {
         val groupSealedV1Fallback: Long = 0,
         val groupSeedsSent: Long = 0,
         val groupSeedsAdopted: Long = 0,
+        val groupRootsMinted: Long = 0,
+        val groupRootsAdopted: Long = 0,
         val btConnectFails: Long = 0,
         val btConnectFailsByReason: Map<ConnectFailReason, Long> = emptyMap(),
         val btLinksEstablished: Long = 0,

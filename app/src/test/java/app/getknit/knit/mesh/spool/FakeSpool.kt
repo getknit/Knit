@@ -6,6 +6,9 @@ import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
+import app.getknit.knit.mesh.protocol.GroupInfo
+import app.getknit.knit.mesh.protocol.GroupLeaveContent
+import app.getknit.knit.mesh.protocol.GroupRatchetHeader
 import app.getknit.knit.mesh.protocol.RatchetHeader
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireCodec
@@ -311,3 +314,87 @@ fun dmFrame(
     val signed = WireCodec.encodeEnvelope(env)
     return CarriedFrame(envelope = env, sig = ByteArray(ScopeCrypto.SIG_BYTES) { id.hashCode().toByte() }, signed = signed)
 }
+
+/** Builds a v2 group-form chat frame — the sender-key header, no DM header (spec §4.4's group rule). */
+fun groupChatFrame(
+    id: String,
+    from: String,
+    groupId: String,
+    members: List<String>,
+    sentAt: Long = 1_000L,
+    body: ByteArray = byteArrayOf(4, 5, 6),
+): CarriedFrame =
+    carried(
+        id,
+        RelayEnvelope(
+            type = FrameType.CHAT,
+            id = id,
+            senderId = from,
+            sentAt = sentAt,
+            group = GroupInfo(id = groupId, members = members, createdBy = members.first()),
+            payload =
+                WireCodec.encodePayload(
+                    ChatContent(
+                        enc =
+                            EncEnvelope(
+                                v = EncEnvelope.VERSION_RATCHET,
+                                nonce = ByteArray(12) { it.toByte() },
+                                ct = body,
+                                keys = emptyList(),
+                                g = GroupRatchetHeader(se = 1, n = 0),
+                            ),
+                    ),
+                ),
+        ),
+    )
+
+/**
+ * Builds a signed `groupleave`. Deliberately mirrors `MeshManager.sendGroupLeave`: the group id rides in
+ * the PAYLOAD and `RelayEnvelope.group` stays null, which is the case the group frame-set rule has to
+ * read specially.
+ */
+fun groupLeaveFrame(
+    id: String,
+    from: String,
+    groupId: String,
+    sentAt: Long = 1_000L,
+): CarriedFrame =
+    carried(
+        id,
+        RelayEnvelope(
+            type = FrameType.GROUP_LEAVE,
+            id = id,
+            senderId = from,
+            sentAt = sentAt,
+            payload = WireCodec.encodePayload(GroupLeaveContent(groupId)),
+        ),
+    )
+
+/** Builds a `groupupdate` (the roster rides in `group`; no per-type content, as MeshManager sends it). */
+fun groupUpdateFrame(
+    id: String,
+    from: String,
+    groupId: String,
+    members: List<String>,
+    sentAt: Long = 1_000L,
+): CarriedFrame =
+    carried(
+        id,
+        RelayEnvelope(
+            type = FrameType.GROUP_UPDATE,
+            id = id,
+            senderId = from,
+            sentAt = sentAt,
+            group = GroupInfo(id = groupId, members = members, createdBy = members.first()),
+            payload = ByteArray(0),
+        ),
+    )
+
+private fun carried(
+    id: String,
+    env: RelayEnvelope,
+) = CarriedFrame(
+    envelope = env,
+    sig = ByteArray(ScopeCrypto.SIG_BYTES) { id.hashCode().toByte() },
+    signed = WireCodec.encodeEnvelope(env),
+)

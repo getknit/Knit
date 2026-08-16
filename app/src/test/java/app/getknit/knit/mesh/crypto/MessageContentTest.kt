@@ -1,6 +1,7 @@
 package app.getknit.knit.mesh.crypto
 
 import app.getknit.knit.mesh.protocol.GroupKeyPayload
+import app.getknit.knit.mesh.protocol.GroupRootPayload
 import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReactionPayload
@@ -102,6 +103,48 @@ class MessageContentTest {
 
         // An ordinary message carries no gk (encodeDefaults = false keeps it off the wire entirely).
         assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.gk)
+
+        // A seed distribution carries no root unless one is gossiped alongside it.
+        assertNull(dist.gk?.gr)
+    }
+
+    @Test
+    fun theGroupRootRidesTheKeyCtlWithAndWithoutSeeds() {
+        // The root-only distribution (docs/SPOOL_PROTOCOL.md §3.2): `keys` empty is the normal shape for a
+        // member that holds a root but has never sealed a group frame, so `gr` must survive it — a receiver
+        // that adopts roots only inside its seed branch would drop exactly these.
+        val root = GroupRootPayload(root = ByteArray(32) { 9 }, version = 2, minter = "bbbbbbbbbbbbbbbbbbbbbbbbbb")
+        val rootOnly =
+            MessageContent.decode(
+                MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload("g-1", gr = root)).encode(),
+            )!!
+        assertTrue(rootOnly.gk!!.keys.isEmpty())
+        assertEquals(2, rootOnly.gk?.gr?.version)
+        assertEquals("bbbbbbbbbbbbbbbbbbbbbbbbbb", rootOnly.gk?.gr?.minter)
+        assertTrue(ByteArray(32) { 9 }.contentEquals(rootOnly.gk!!.gr!!.root))
+
+        // ...and the ordinary shape: seeds and root together on one ctl DM.
+        val both =
+            MessageContent.decode(
+                MessageContent(
+                    body = "",
+                    ctl = MessageContent.CTL_GROUP_KEY,
+                    gk =
+                        GroupKeyPayload(
+                            "g-1",
+                            keys = listOf(GroupSeed(epoch = 4, seed = ByteArray(32) { 1 }, mintedAt = 88L)),
+                            gr = root,
+                        ),
+                ).encode(),
+            )!!
+        assertEquals(
+            4,
+            both.gk
+                ?.keys
+                ?.single()
+                ?.epoch,
+        )
+        assertEquals(2, both.gk?.gr?.version)
     }
 
     @Test

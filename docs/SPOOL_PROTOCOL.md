@@ -1,6 +1,6 @@
 # The spool protocol — scoped, blinded store-and-forward relays for the Internet plane
 
-Status: **normative spec, v1 draft** · 2026-08-15, updated 2026-08-16 · ADR 019. This document is
+Status: **normative spec, v1 draft** · 2026-08-15, updated 2026-08-16 (twice) · ADR 019. This document is
 the normative spec and is public from day one; `mesh/crypto/scope/` (`ScopeCrypto`, `SpoolPow`) and
 `mesh/spool/` (`SpoolRecords`) are the reference implementation of the
 derivation/sealing/digest/PoW/record sections, and
@@ -8,9 +8,14 @@ derivation/sealing/digest/PoW/record sections, and
 (§13's vectors are those tests' pinned constants, verbatim). The reference spool daemon
 (`knit-spool`, AGPL-3.0) and its 22-check conformance suite exist as of 2026-08-16; the Android
 client plane (`ScopeSync`) follows. **All of them implement this file, not each other.** Nothing in
-the app speaks this protocol yet. *The 2026-08-16 update resolves eight ambiguities the daemon
+the app speaks this protocol yet. *The first 2026-08-16 update resolved eight ambiguities the daemon
 implementation surfaced — semantic clarifications only (§6.2, §6.4, §7.1, §7.2, §12); no wire
-field, vector, or derivation changed.*
+field, vector, or derivation changed. The second lands with group scopes (M4): §3.2's v1 mint opens
+from the creator to **any member** (preferred-minter-plus-grace damping, which also unfreezes a
+departure re-mint whose re-minter never comes back), §3.2 adoption gains two mandatory insider-DoS
+bounds, and §4.4 pins where a group frame's id actually lives. Again no wire field, no derivation,
+no §13 vector changed — spool implementations need no update at all, since a spool never sees a
+root.*
 
 Sections are tagged by audience: **[Spool]** is everything a relay implementer needs (no crypto —
 a spool never decrypts anything), **[Client]** is member-side, **[Both]** is shared.
@@ -106,29 +111,63 @@ this object here). The **group root** supplies it:
 GroupRoot { root: 32 random bytes, version: Int (from 1), minter: nodeId }
 ```
 
-- **Minting**: the group **creator** mints `version = 1` when it first enables the Internet plane
-  for the group. Non-creators never mint version 1 (accepted gap: a group whose creator never opts
-  in gets no scope in v1 — an any-member fallback needs a liveness signal the mesh lacks; §11).
+- **Minting**: **any current member** mints `version = 1` when it holds no root, has the Internet
+  plane enabled for the group, and the group is fully ratchet-capable (§3.3). Concurrent mints are
+  damped, not forbidden, by the **preferred minter** — the same deterministic function the
+  departure re-mint uses below: *the creator if still a member, else the smallest remaining node
+  id*. The preferred minter mints immediately; any other eligible member waits `mintGrace` (§12)
+  from when it first became eligible, giving a gossiped root time to arrive. The wait is persistent
+  state, not a process timer — a device that restarts hourly must not restart the clock.
+  Competing v1 mints resolve by the `(version, minter)` order below; the losing lineage's blobs are
+  orphaned at spools and age out on `ttlMs`, and members refill the winning scope through the
+  ordinary §9.1 push half. *(This replaces the draft's creator-only rule, whose accepted gap — a
+  group whose creator never opts in gets no scope — is exactly what the grace closes.)*
 - **Distribution is gossip on the existing seed channel**: the root rides as additive fields of the
   group-key control payload (`GroupKeyPayload.gr`, `CTL_GROUP_KEY` — pairwise-sealed ctl DMs) on
   **every** seed send and key-request response from **any member who holds a root**. The minter
   originates versions; everyone gossips the newest they hold. The seed outbox / key-request /
   re-send machinery is the delivery system — root healing costs no new mechanism, and a wiped
-  minter passively recovers the current root from the first seed DM it receives.
+  minter passively recovers the current root from the first seed DM it receives. A member that
+  receives a distribution carrying a root **older** than its own (or none, while it holds one)
+  **should** answer with its own — the root has no acknowledgment, so a stale gossip is the only
+  evidence that an earlier one to that member was lost, and without the correction a sender that
+  believes it already delivered will never retry. The answer is self-terminating: once the lagging
+  member adopts, its next distribution carries the same `(version, minter)` and the branch stops.
+  Echoing a root straight back to the member it was just learned from is pointless and should be
+  skipped.
 - **Adoption**: adopt a carried root iff its `(version, minter)` is **strictly greater** than the
   held one (compare `version`, then `minter` lexicographically) and the carrying DM's sender is in
   the pinned founding roster and not departed. Authenticity is the carrying v2 session plus the
   frame signature; a root is never v1-wrapped (the seed rule, same harvest argument). Adoption is
-  idempotent.
-- **Re-mint on departure**: when a member processes a signed `groupleave`, in the same transaction
-  as the leave-rekey send-chain reset: if it is the **deterministic re-minter** — the creator if
-  still a member, else the smallest remaining node id — it mints `(fresh 32 bytes, version + 1)`.
-  The leave-rekey already fans seed ctl DMs to every remaining member; the new root rides them for
-  free.
-- **Convergence**: divergent departure views can transiently mint competing same-version roots; the
-  `(version, minter)` order resolves them deterministically, and the next processed departure mints
-  strictly higher, so lineages collapse. A malicious member can grief-rotate — insider spam tier,
-  same posture as "a member can spam its own scope" (§6).
+  idempotent. Two bounds a receiver **must** also enforce, both closing insider denial-of-service
+  that the ordering rule alone does not:
+  - `minter` must itself be in the pinned founding roster. Otherwise any member wins every tie
+    forever by naming a lexicographically-maximal minter id that belongs to nobody.
+  - `version` must satisfy `version ≤ held.version + maxRootVersionJump` and
+    `version ≤ maxRootVersion` (§12). Otherwise one grief-mint at `2³¹ − 1` puts every future
+    legitimate re-mint out of reach, permanently freezing the scope. A legitimate version never
+    exceeds the founding roster size (one mint plus at most `size − 1` departures, and rosters
+    never grow), so §12's ceiling of 16 is double the model's maximum. State the residual honestly:
+    a member willing to burn the version space *before* departing can still freeze rotation, which
+    is the same insider tier as grief-rotation below and leaves the mesh path untouched.
+
+  Adoption is otherwise **never rate-limited**, deliberately — refusing a strictly-greater root
+  strands the device on a dead lineage with no way back, since it would keep gossiping a root
+  everyone else ignores. Outbound chatter is bounded on the *send* side instead (the per-(group,
+  member) seed-send floor), which is the safe place to put the bound.
+- **Re-mint on departure**: when a member processes a signed `groupleave` it records, in the same
+  transaction as the leave-rekey send-chain reset, that a re-mint is due. The mint itself follows
+  the same preferred-minter-plus-grace rule as version 1 — the **deterministic re-minter** (creator
+  if still a member, else the smallest remaining node id) mints `(fresh 32 bytes, version + 1)`
+  immediately, any other remaining member after `mintGrace`. Splitting the record from the mint is
+  what makes rotation crash-safe, and the grace is what keeps a re-minter who is offline or has the
+  plane switched off from freezing rotation for everyone else. The leave-rekey already fans seed
+  ctl DMs to every remaining member; the new root rides them for free.
+- **Convergence**: divergent departure views — and, now, several members reaching the end of their
+  mint grace at once — can transiently mint competing same-version roots; the `(version, minter)`
+  order resolves them deterministically, and the next processed departure mints strictly higher, so
+  lineages collapse. A malicious member can grief-rotate, now bounded by the adoption ceiling above
+  — insider spam tier, same posture as "a member can spam its own scope" (§6).
 
 ### 3.3 Group scopes
 
@@ -234,7 +273,15 @@ frame**:
 - **DM scope**: `type = chat`, sender and recipient are exactly the pair, and the payload is
   v2-sealed (`EncEnvelope.v = 2` with the DM ratchet header).
 - **Group scope**: `type ∈ {chat (group form), groupupdate, groupleave}` with the scope's group id,
-  and the sender in the pinned founding roster.
+  and the sender in the pinned founding roster. Two details that decide the rule's exact shape:
+  - **Where the group id lives is per type.** `chat` and `groupupdate` carry it in the envelope's
+    roster field; `groupleave` carries it in its *payload* and leaves the envelope field unset, so
+    a rule that only reads the envelope silently excludes departures — the one frame the remaining
+    members most need over the Internet.
+  - **Founding roster, not the effective one.** A leaver is already departed by the time its own
+    `groupleave` is evaluated, and a departed member's pre-departure frames stay legitimately
+    re-servable. Admitting them is safe because the departure re-mint rotates the scope id: a
+    departed member cannot reach the new scope at all, whatever the frame rule says.
 
 The same rule governs the **push side**: only frames matching it may be sealed into a scope.
 Profiles and any cleartext-payload DM forms are not scope-carried in v1 (scope-eligible pairs are
@@ -519,9 +566,10 @@ un-fetchable-image gap); storage watermark trim; padding/cover traffic; per-conv
 UX; **scope auth** (a TOFU `HKDF(scopeRoot, …)` credential closing the leaked-scopeId
 subscribe/flood hole §10 accepts); time-based group root re-mint (periodic metadata-PFS and spool
 unlinkability using the existing §3.2 machinery); **`sealv = 2`** — the epoch-keyed outer seal (the
-ratchet `exportEpochSeal` surfaces are reserved for it); an any-member v1-mint fallback for the
-never-opting-in creator; client→spool `digest` (the record is direction-agnostic already); a
-`CAP_SPOOL` capability bit if client UX ever needs a peer-support signal.
+ratchet `exportEpochSeal` surfaces are reserved for it); client→spool `digest` (the record is
+direction-agnostic already); a `CAP_SPOOL` capability bit if client UX ever needs a peer-support
+signal. *(The any-member v1-mint fallback this list used to register is no longer an extension —
+§3.2 makes it the base rule.)*
 
 ## 12. Constants [Both]
 
@@ -538,6 +586,8 @@ never-opting-in creator; client→spool `digest` (the record is direction-agnost
 | tombstone TTL | = scope `ttlMs` | §6.2 |
 | suggested tombstone count bound | max(2 × `maxFrames`, 1024) per scope, oldest-first drop | §6.2 — caps the eviction-cycling growth vector |
 | rotation drain (old scope subscribed) | 48 h | DM prev-root TTL mirror (§3.1, §3.3) |
+| `mintGrace` (non-preferred minter waits) | 6 h | §3.2 — one waking day's slack before a second lineage appears |
+| `maxRootVersion` / `maxRootVersionJump` | 16 / 8 | §3.2 adoption bound; the roster caps at 8, so legitimate versions never approach it |
 | PoW default / window | 20 bits / ±1 day UTC | §8 |
 | suggested `maxScopes` / `maxPull` | 64 / 64 | HELLO-advertised, spool-tunable |
 

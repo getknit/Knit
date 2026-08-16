@@ -16,6 +16,7 @@ import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
+import app.getknit.knit.data.ratchet.GroupRootRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
@@ -227,6 +228,7 @@ class MeshManagerTest {
                             spkPrivFor = { null },
                         ),
                     groupRatchet = groupRatchet,
+                    groupRoots = GroupRootRepository(db.groupRootDao()),
                     scope = scope,
                     metrics = metrics,
                     db = db,

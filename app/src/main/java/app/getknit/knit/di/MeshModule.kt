@@ -103,9 +103,10 @@ val meshModule =
         single<SpoolDialer> { OkHttpSpoolDialer(allowCleartext = BuildConfig.DEBUG) }
         // Constructor order: transport, messages, groups, reactions, peers, identity, settings, blobs,
         // imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet,
-        // groupRatchet, scope, metrics, db, spoolDialer.
+        // groupRatchet, groupRoots, scope, metrics, db, spoolDialer.
         single {
             MeshManager(
+                get(),
                 get(),
                 get(),
                 get(),

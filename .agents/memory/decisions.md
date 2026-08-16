@@ -414,6 +414,47 @@ MVP reconnects on backoff, which keeps `rules/mesh.md`'s NAN-only `ConnectivityM
 intact and avoids adding `ACCESS_NETWORK_STATE`); the spool-list editor, which is why the Settings
 switch is `BuildConfig.DEBUG`-gated and spools are configured over `…debug.SPOOL`; Tor; group scopes.
 
-Scheme spec: docs/SPOOL_PROTOCOL.md; wire posture: docs/WIRE_COMPAT.md (still no change — the
-client plane touched no mesh wire); context: context/e2e-encryption.md; deferred remainder:
-memory/roadmap.md.
+**Amended 2026-08-16 (M4 — group scopes ship, and the v1 mint opens to any member):** the plane now
+carries groups. Machinery: the shared root persists in a new `group_roots` table (**DB v2 → v3**,
+`KnitMigrations.MIGRATION_2_3` — this reverses M3's "no DB migration" note, which held only because
+the *blob-id set* is derived, and still does); `GroupRootPolicy`/`GroupRootStore` hold the pure rules
+and the seam; `ScopeRegistry` gained a group seam and `Scope` a `groupId`/`roster`; and the plane's
+**first mesh-wire field** lands additively as `GroupKeyPayload.gr` (its own `GroupRootPayload` type,
+rule 1's `@ByteString` exception), riding the existing `CTL_GROUP_KEY` ctl DM rather than a new frame
+type or ctl value — the ADR 016/018 custody argument a third time.
+
+Four decisions worth not relitigating:
+
+1. **Any member may mint version 1**, amending the spec's creator-only rule. The creator-only gap
+   ("a group whose creator never opts in gets no scope") was booked as accepted and is now closed by
+   damping rather than restricting: the **preferred minter** (creator if still a member, else the
+   smallest remaining node id — the function the departure re-mint already used) mints immediately,
+   anyone else after a 6 h grace measured from a **persisted** eligibility stamp. Competing v1
+   lineages are not an error; `(version, minter)` collapses them and the loser's blobs age out.
+2. **The same rule now covers the departure re-mint**, which fixes a latent stall the draft had: a
+   deterministic re-minter that is offline or plane-off froze rotation for everyone. `recordDeparture`
+   records the obligation (`remintDueAt`) inside the leave-rekey transaction; the heal pass mints. The
+   split is what makes rotation crash-safe.
+3. **Adoption is never rate-limited, and gains two mandatory bounds.** Refusing a strictly-greater
+   root strands the device on a dead lineage permanently, so the bound lives on the send side (the
+   per-(group, member) seed-send floor). The two adoption bounds close real insider DoS instead: the
+   `minter` must be in the founding roster (else any member wins every tie forever with a
+   lexicographically maximal fake id), and the version must stay inside the ceiling/jump bound (else
+   one grief-mint at `2³¹ − 1` freezes the scope). The residual — an insider burning the version space
+   before departing — is stated honestly in the spec rather than engineered away.
+4. **Roots are adopted and gossiped even with the plane switched off**; only minting checks the
+   switch. That is what carries a root across a plane-off member sitting between two plane-on ones, and
+   it is why `GroupRootStore` is wired in `appModule`, outside `ScopeSync`'s nullable lifetime.
+
+The one healing subtlety, added to the spec in the same pass: a root has **no ack**, so the send-side
+dedup (`lastRootGossipVersion`) would suppress a re-send forever after a single lost gossip. The fix is
+the anti-entropy direction — a distribution carrying a root *older* than ours (or none, while we hold
+one) is answered with ours, floored like any seed send and self-terminating once they adopt. Without
+it, "we already sent it" and "they have it" are silently conflated.
+
+`knit-spool` needs **no change** — a spool is scope-blind, so a group scope is one more opaque id.
+No derivation, no seal, and no §13 vector moved: `ScopeCrypto.groupScopeId`/`groupSealKeys` were
+already written and vector-pinned at M1.
+
+Scheme spec: docs/SPOOL_PROTOCOL.md; wire posture: docs/WIRE_COMPAT.md (its `GroupKeyPayload.gr`
+precedent entry); context: context/e2e-encryption.md; deferred remainder: memory/roadmap.md.

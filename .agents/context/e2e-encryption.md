@@ -84,8 +84,13 @@ group root, in `mesh/crypto/scope/ScopeCrypto`. `RatchetSessions.exportedRoots()
 client plane (`mesh/spool/ScopeSync`) reads — **`pairwiseRoot` exports only, under the ratchet mutex,
 unconfirmed sessions skipped**, so raw session roots never leave the ratchet facade. The outer seal is
 scope-static by design (the spec's §4.2 records why per-epoch keys deadlock); the `exportEpochSeal`
-surfaces stay reserved for its registered `sealv = 2` extension. Group scopes need the shared group
-root (`GroupKeyPayload.gr`), still unshipped — the client plane is DM-only today.
+surfaces stay reserved for its registered `sealv = 2` extension. Group scopes derive from the shared
+group root instead: minted locally (`mesh/spool/GroupRootPolicy`, persisted in `group_roots`),
+gossiped as `GroupKeyPayload.gr` on the existing `CTL_GROUP_KEY` ctl DM, with `rootVersion` doubling
+as the scope epoch so a departure re-mint rotates id and seal keys as one. **Any** member may mint —
+damped by a preferred-minter-plus-grace rule, not restricted to the creator (spec §3.2, ADR 019's M4
+amendment). Roots are adopted and re-gossiped even with the Internet plane switched off; only minting
+checks the switch.
 
 The seal is **deterministic** (SIV-style keyed nonce), which is load-bearing beyond dedup: it makes a
 frame's blob id a pure function of (scope, frame), so `ScopeSync` derives its held-set on demand

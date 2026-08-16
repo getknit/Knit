@@ -799,7 +799,8 @@ class DebugBridgeReceiver :
                 scopes.put(
                     JSONObject()
                         .put("scope", scope.scopeHex)
-                        .put("peer", scope.peerId)
+                        // A DM peer's node id or, for a group scope, the group id.
+                        .put("of", scope.label)
                         .put("local", scope.localCount)
                         .put("spool", scope.spoolCount)
                         .put("converged", scope.converged)

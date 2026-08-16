@@ -101,6 +101,25 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v3 — the spool plane's group scopes (docs/SPOOL_PROTOCOL.md §3.2): one `group_roots` table holding
+     * the shared group root the group scope id and seal keys derive from, the retiring lineage's drain
+     * window, and the two idempotent stamps (mint grace, re-mint due). Purely local state — the wire
+     * change that accompanies it (`GroupKeyPayload.gr`) is additive and breaks nothing. Additive only;
+     * the SQL must stay byte-equivalent to what Room generates for `app/schemas/**/3.json`.
+     */
+    val MIGRATION_2_3 =
+        object : Migration(2, 3) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `group_roots` (" +
+                        "`groupId` TEXT NOT NULL, `root` BLOB, `version` INTEGER NOT NULL, `minter` TEXT NOT NULL, " +
+                        "`prevRoot` BLOB, `prevVersion` INTEGER NOT NULL, `prevExpiresAt` INTEGER NOT NULL, " +
+                        "`firstEligibleAt` INTEGER NOT NULL, `remintDueAt` INTEGER NOT NULL, PRIMARY KEY(`groupId`))",
+                )
+            }
+        }
+
     /** All migrations, applied by Room in order. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 }

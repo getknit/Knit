@@ -56,9 +56,16 @@ doc). **Don't start a deferred item without explicit direction.**
   - a validated-Internet `ConnectivityManager` seam (the MVP reconnects on backoff instead, which
     is why `rules/mesh.md` still reads NAN-only and `ACCESS_NETWORK_STATE` is still undeclared);
     the Tor SOCKS toggle; per-conversation opt-out.
-  Then: group scopes (the `GroupKeyPayload.gr` wire field + root mint/gossip/adopt + departure
-  re-mint, per the spec's §3.2); sealed attachments over spools. Each lands additively per
-  `docs/WIRE_COMPAT.md` with its golden vectors and precedent entry when it ships.
+  ~~Then: group scopes~~ (**done 2026-08-16** — the `GroupKeyPayload.gr` wire field, `group_roots`
+  at DB v3, `GroupRootPolicy`/`GroupRootStore`, group scopes in `ScopeRegistry`/`ScopeFrames`, and
+  the mint/gossip/adopt/re-mint wiring in `MeshManager`/`InboundPipeline`. The spec's §3.2 was
+  amended in the same pass: **any member** may mint version 1, damped by preferred-minter-plus-grace
+  rather than restricted to the creator — ADR 019's M4 amendment records why, plus the two mandatory
+  adoption bounds and the never-rate-limit-adoption rule). Still owed on the group half: nothing
+  structural, but it has **not been exercised on devices** — the lab bridge trial (two islands, one
+  real spool, a departure rotating the scope) is the outstanding verification.
+  Then: sealed attachments over spools. Each lands additively per `docs/WIRE_COMPAT.md` with its
+  golden vectors and precedent entry when it ships.
 
 - **BLE promotion gate on A2DP audio** — the adaptive scan throttle now drops the **scan** to its floor
   while streaming (`ScanDemandPolicy` / the demand-gated `scanLoop`), but **connects** are still not gated

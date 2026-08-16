@@ -23,8 +23,12 @@ import org.junit.Test
 class ScopeFramesTest {
     private val alice = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
     private val bob = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
+    private val carol = "cccccccccccccccccccccccccc"
     private val mallory = "mmmmmmmmmmmmmmmmmmmmmmmmmm"
     private val root = ByteArray(32) { it.toByte() }
+
+    private val groupId = "g-00112233445566778899aabb"
+    private val founding = setOf(alice, bob, carol)
 
     private fun scope(
         peer: String = bob,
@@ -32,8 +36,21 @@ class ScopeFramesTest {
     ) = Scope(
         id = ScopeCrypto.dmScopeId(secret, alice, peer),
         keys = ScopeCrypto.dmSealKeys(secret, alice, peer),
-        peerId = peer,
         bounds = ScopeRegistry.DEFAULT_BOUNDS,
+        peerId = peer,
+    )
+
+    private fun groupScope(
+        gid: String = groupId,
+        roster: Set<String> = founding,
+        secret: ByteArray = root,
+        version: Int = 1,
+    ) = Scope(
+        id = ScopeCrypto.groupScopeId(secret, gid, version),
+        keys = ScopeCrypto.groupSealKeys(secret, gid, version),
+        bounds = ScopeRegistry.DEFAULT_BOUNDS,
+        groupId = gid,
+        roster = roster,
     )
 
     @Test
@@ -133,6 +150,96 @@ class ScopeFramesTest {
         val ttl = ScopeRegistry.DEFAULT_TTL_MS
         assertFalse(ScopeFrames.deadOnArrival(env, ttl, now = 1_000L + ttl - 1))
         assertTrue(ScopeFrames.deadOnArrival(env, ttl, now = 1_000L + ttl))
+    }
+
+    // --- the group form (spec §4.4's second half) ---
+
+    @Test
+    fun `accepts the three group types a group scope carries`() {
+        val chat = groupChatFrame("gc1", from = bob, groupId = groupId, members = founding.toList()).envelope
+        val update = groupUpdateFrame("gu1", from = bob, groupId = groupId, members = founding.toList()).envelope
+        val leave = groupLeaveFrame("gl1", from = bob, groupId = groupId).envelope
+
+        listOf(chat, update, leave).forEach {
+            assertTrue("${it.type} must ride its group's scope", ScopeFrames.eligibleFor(it, alice, groupScope()))
+        }
+    }
+
+    @Test
+    fun `a groupleave is matched on its PAYLOAD group id, since the envelope carries none`() {
+        val leave = groupLeaveFrame("gl1", from = bob, groupId = groupId).envelope
+        // The trap this pins: reading only RelayEnvelope.group would drop every departure, which is the
+        // frame that drives the remaining members' leave-rekey and the scope rotation itself.
+        assertNull("MeshManager.sendGroupLeave sets no envelope group", leave.group)
+        assertTrue(ScopeFrames.eligibleFor(leave, alice, groupScope()))
+        assertFalse(ScopeFrames.eligibleFor(leave, alice, groupScope(gid = "g-ffffffffffffffffffffffff")))
+    }
+
+    @Test
+    fun `a departed member's own leave still rides, because the roster is the FOUNDING one`() {
+        // carol has departed, so the effective roster no longer holds her — but her signed leave (and her
+        // pre-departure frames) must still reach the others. Safe: the re-mint rotates the scope id.
+        val leave = groupLeaveFrame("gl2", from = carol, groupId = groupId).envelope
+        assertTrue(ScopeFrames.eligibleFor(leave, alice, groupScope(roster = founding)))
+        assertFalse(
+            "a sender outside the founding roster is refused",
+            ScopeFrames.eligibleFor(leave, alice, groupScope(roster = setOf(alice, bob))),
+        )
+    }
+
+    @Test
+    fun `refuses another group, a non-member sender, a v1 group chat, and a DM`() {
+        val otherGroup = groupChatFrame("x1", bob, "g-ffffffffffffffffffffffff", founding.toList()).envelope
+        val stranger = groupChatFrame("x2", mallory, groupId, founding.toList()).envelope
+        val dm = dmFrame("x3", from = alice, to = bob).envelope
+        val v1Group =
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = "x4",
+                senderId = bob,
+                group = GroupInfo(id = groupId, members = founding.toList(), createdBy = alice),
+                payload = WireCodec.encodePayload(ChatContent(enc = ratchetEnc().copyAsV1())),
+            )
+        // The DM ratchet header in a group frame is the other half of the form split (§4.4): a scope-bound
+        // group frame must carry `g`, never `r`.
+        val dmHeaderInGroup =
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = "x5",
+                senderId = bob,
+                group = GroupInfo(id = groupId, members = founding.toList(), createdBy = alice),
+                payload = WireCodec.encodePayload(ChatContent(enc = ratchetEnc())),
+            )
+
+        listOf(otherGroup, stranger, dm, v1Group, dmHeaderInGroup).forEach {
+            assertFalse("${it.id} must not ride a group scope", ScopeFrames.eligibleFor(it, alice, groupScope()))
+        }
+    }
+
+    @Test
+    fun `a group frame does not ride a DM scope, and a DM does not ride a group scope`() {
+        val groupChat = groupChatFrame("gc2", bob, groupId, founding.toList()).envelope
+        assertFalse(ScopeFrames.eligibleFor(groupChat, alice, scope()))
+        assertFalse(ScopeFrames.eligibleFor(dmFrame("m1", alice, bob).envelope, alice, groupScope()))
+    }
+
+    @Test
+    fun `a scope with neither form carries nothing`() {
+        val formless = Scope(id = ByteArray(32), keys = ScopeCrypto.dmSealKeys(root, alice, bob), bounds = ScopeRegistry.DEFAULT_BOUNDS)
+        assertFalse(ScopeFrames.eligibleFor(dmFrame("m1", alice, bob).envelope, alice, formless))
+    }
+
+    @Test
+    fun `a group blob round-trips through the seal and the frame-set rule`() {
+        val frame = groupChatFrame("gc3", from = bob, groupId = groupId, members = founding.toList())
+        val sealed = ScopeFrames.seal(groupScope(), frame.sig, frame.signed)
+        val opened = ScopeFrames.open(groupScope(), alice, sealed.blobId, sealed.blob)
+        assertNotNull(opened)
+        assertArrayEquals(frame.signed, opened!!.wire.signed)
+        assertEquals("gc3", opened.env.id)
+        // A rotated scope (fresh root, bumped version) cannot open the old lineage's blob — the aad binds
+        // the scope id, and §3.3 says old blobs are never migrated.
+        assertNull(ScopeFrames.open(groupScope(secret = ByteArray(32) { 99 }, version = 2), alice, sealed.blobId, sealed.blob))
     }
 
     private fun envelope(

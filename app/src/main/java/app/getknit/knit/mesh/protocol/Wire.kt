@@ -395,18 +395,40 @@ class GroupSeed(
 )
 
 /**
+ * The shared **group root** the spool plane's group scopes derive from (`docs/SPOOL_PROTOCOL.md` §3.2):
+ * the raw 32-byte [root], its [version] (which doubles as the scope epoch — a departure re-mint rotates
+ * root and version together, so scope id and seal keys rotate as one), and the [minter] that originated
+ * it. Ordering is `(version, minter)` lexicographic; a receiver adopts only a strictly greater pair, and
+ * only from a founding-roster minter within the spec's version ceiling.
+ *
+ * Its own type rather than fields on [GroupKeyPayload] because `@ByteString ByteArray` fields are kept
+ * non-default — docs/WIRE_COMPAT.md rule 1's exception, the same reason [GroupSeed] and [RatchetInit]
+ * are types.
+ */
+@Serializable
+class GroupRootPayload(
+    @ByteString val root: ByteArray,
+    val version: Int,
+    val minter: String,
+)
+
+/**
  * The `gk` payload for the group-key ctl values (rides inside the encrypted
  * [app.getknit.knit.mesh.crypto.MessageContent], additive): a distribution (`CTL_GROUP_KEY`) carries
  * one or more [keys] (the current epoch, plus the still-draining previous one on a key-request
  * response); a key request (`CTL_GROUP_KEY_REQ`) carries [groupId] with [keys] empty; an adoption
- * ack (`CTL_GROUP_KEY_ACK`) echoes [groupId] + [ackEpoch]. Deliberately extensible — a future shared
- * group root for the relay plane rides here as additive fields (docs/GROUP_FORWARD_SECRECY.md §8).
+ * ack (`CTL_GROUP_KEY_ACK`) echoes [groupId] + [ackEpoch].
+ *
+ * [gr] is the shared group root gossiped on this same channel (docs/SPOOL_PROTOCOL.md §3.2) — additive,
+ * and deliberately **independent of [keys]**: a root-only distribution carries [keys] empty, so a
+ * receiver must adopt [gr] outside whatever short-circuit its seed path applies to an empty key list.
  */
 @Serializable
 data class GroupKeyPayload(
     val groupId: String,
     val keys: List<GroupSeed> = emptyList(),
     val ackEpoch: Int? = null,
+    val gr: GroupRootPayload? = null,
 )
 
 /**

@@ -19,6 +19,8 @@ import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupKeySendEntity
 import app.getknit.knit.data.ratchet.GroupRatchetDao
 import app.getknit.knit.data.ratchet.GroupRecvChainEntity
+import app.getknit.knit.data.ratchet.GroupRootDao
+import app.getknit.knit.data.ratchet.GroupRootEntity
 import app.getknit.knit.data.ratchet.GroupSendChainEntity
 import app.getknit.knit.data.ratchet.GroupSkippedKeyEntity
 import app.getknit.knit.data.ratchet.RatchetDao
@@ -38,6 +40,7 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         RatchetRecvEpochEntity::class, RatchetSkippedKeyEntity::class,
         GroupSendChainEntity::class, GroupRecvChainEntity::class,
         GroupSkippedKeyEntity::class, GroupKeySendEntity::class,
+        GroupRootEntity::class,
     ],
     // v1: frozen launch baseline. The pre-1.0 alpha schema churn (the old destructive v2…v22 bumps that
     //     rode the wire/crypto breaks) is collapsed; docs/WIRE_COMPAT.md keeps the historical break record.
@@ -47,7 +50,10 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     //     group sender-key state (4 group_* tables: send/recv chains, skipped keys, the seed outbox),
     //     and the peers prekey columns (docs/FORWARD_SECRECY_RATCHET.md +
     //     docs/GROUP_FORWARD_SECRECY.md); migrated by KnitMigrations.MIGRATION_1_2.
-    version = 2,
+    // v3: the spool plane's group scopes — one `group_roots` table holding the shared group root the group
+    //     scope id and seal keys derive from (docs/SPOOL_PROTOCOL.md §3.2); no wire break, local state only,
+    //     migrated by KnitMigrations.MIGRATION_2_3.
+    version = 3,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without
@@ -72,6 +78,8 @@ abstract class KnitDatabase : RoomDatabase() {
     abstract fun ratchetDao(): RatchetDao
 
     abstract fun groupRatchetDao(): GroupRatchetDao
+
+    abstract fun groupRootDao(): GroupRootDao
 
     companion object {
         /**

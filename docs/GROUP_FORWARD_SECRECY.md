@@ -238,13 +238,20 @@ stays API-only: the spool spec's v1 outer seal is scope-static (per-sender epoch
 unopenable exactly by the seed-lagging member the frame must stay visible to — the spec's §4.2
 records the full argument), and this surface is reserved for its registered `sealv = 2` extension.
 
-The **shared group root** this section deferred is now **confirmed and specified by
-`docs/SPOOL_PROTOCOL.md` §3.2**, exactly along the reserved mechanism: creator-minted root,
-deterministic re-minter on departure (creator if remaining, else smallest remaining nodeId),
-highest-`(version, minter)` wins, gossiped as additive `GroupKeyPayload` fields (`gr: {root,
-version, minter}`) on the existing `CTL_GROUP_KEY` channel, with the leave-rekey hook (§6.1) as the
-rotation point. Client machinery (the wire field, mint/gossip/adopt code) lands with the group-scope
-milestone; until then the affordances stay affordances.
+The **shared group root** this section deferred is now **specified by `docs/SPOOL_PROTOCOL.md` §3.2
+and shipped** (2026-08-16, the group-scope milestone), along the reserved mechanism: a root gossiped
+as the additive `GroupKeyPayload.gr` field (`{root, version, minter}`) on the existing
+`CTL_GROUP_KEY` channel, highest-`(version, minter)` wins, with the leave-rekey hook (§6.1) as the
+rotation point — `GroupRepository.recordDeparture` stamps the re-mint due in the same transaction
+that resets the send chains.
+
+One departure from the reserved sketch, worth not relitigating: minting is **any member's**, not the
+creator's. The creator-only rule left a group whose creator never enables the Internet plane with no
+scope at all; the spec now damps concurrent mints with a preferred-minter-plus-grace rule instead
+(creator if still a member, else the smallest remaining node id, and anyone else after a 6 h grace),
+which also unfreezes a departure re-mint whose deterministic re-minter never comes back. Convergence
+is the same `(version, minter)` order either way. `mesh/spool/GroupRootPolicy` is the reference
+implementation; adoption additionally bounds the version and requires a founding-roster minter.
 
 ## 9. Security claim (honest, epoch-granular, availability-inverted)
 

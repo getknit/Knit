@@ -20,6 +20,7 @@ class ScopeAttachmentsTest {
     private val alice = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
     private val bob = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
     private val carol = "cccccccccccccccccccccccccc"
+    private val mallory = "mmmmmmmmmmmmmmmmmmmmmmmmmm"
     private val root = ByteArray(32) { it.toByte() }
     private val groupId = "g-00112233445566778899aabb"
 
@@ -184,6 +185,41 @@ class ScopeAttachmentsTest {
         val refs = ScopeAttachments.references(frames, groupScope(), alice)
 
         assertEquals(listOf(aHash), refs.map { it.aHash })
+    }
+
+    @Test
+    fun `a group photo is referenced from the groupupdate that advertises it`() {
+        val (_, photoHash) = attachment(300)
+        val frames =
+            listOf(
+                groupUpdateFrame("g1", from = bob, groupId = groupId, members = listOf(alice, bob), sentAt = 7_000L, photoHash = photoHash),
+                // A groupupdate from outside the founding roster fails the frame-set rule before its
+                // photo is ever read, and a leave names no image at all.
+                groupUpdateFrame("g2", from = mallory, groupId = groupId, members = listOf(alice, bob), photoHash = photoHash),
+                groupLeaveFrame("g3", from = bob, groupId = groupId),
+            )
+
+        val refs = ScopeAttachments.references(frames, groupScope(), alice)
+
+        assertEquals(listOf(photoHash), refs.map { it.aHash })
+        assertEquals(7_000L, refs.single().sentAt)
+        // GroupInfo carries no mime; the fetcher's fallback supplies one.
+        assertNull(refs.single().mime)
+        // A group photo belongs to the group scope only — a DM scope must not carry it.
+        assertEquals(emptyList<String>(), ScopeAttachments.references(frames, dmScope(), alice).map { it.aHash })
+    }
+
+    @Test
+    fun `a sealed profile frame's avatar is picked up through the cleartext hint`() {
+        val (_, avatarHash) = attachment(400)
+        // A CTL_PROFILE frame is an ordinary v2 chat frame that repeats the avatar hash in cleartext
+        // (the DB v19 precedent), so the attachment pass needs no special case for avatars.
+        val frames = listOf(dmFrame("p1", from = bob, to = alice, sentAt = 9_000L, attachmentHash = avatarHash))
+
+        val refs = ScopeAttachments.references(frames, dmScope(), alice)
+
+        assertEquals(listOf(avatarHash), refs.map { it.aHash })
+        assertEquals(9_000L, refs.single().sentAt)
     }
 
     @Test

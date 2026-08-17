@@ -652,4 +652,33 @@ class ScopeSyncTest {
             assertEquals(0, sender.metrics.snapshot().spoolAttachPushed)
             sender.sync.stop()
         }
+
+    @Test
+    fun `a group photo crosses on the groupupdate that advertises it`() =
+        runTest {
+            val spool = FakeSpool()
+            val groupId = "g-00112233445566778899aabb"
+            val roster = setOf(alice, bob, carol)
+            val group = GroupScopeRoots(groupId, roster, groupRoot, rootVersion = 1)
+            val (photoHash, bytes) = image(60_000)
+            val sender = member(spool, alice, bob, groups = listOf(group), blobs = FakeBlobs(photoHash to bytes))
+            val receiver = member(spool, bob, alice, groups = listOf(group))
+            sender.custody.store(
+                groupUpdateFrame("gu1", from = alice, groupId = groupId, members = roster.toList(), sentAt = now, photoHash = photoHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump(rounds = 16)
+
+            assertEquals(listOf("gu1"), receiver.delivered.map { it.id })
+            assertTrue("the group photo landed", receiver.blobs.stored.containsKey(photoHash))
+            assertTrue(bytes.contentEquals(receiver.blobs.stored.getValue(photoHash)))
+            // GroupInfo carries no mime, so the fetcher's fallback names it.
+            assertEquals("image/jpeg", receiver.blobs.mimes[photoHash])
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
 }

@@ -446,6 +446,34 @@ data class ReactionPayload(
 )
 
 /**
+ * A sealed profile update, carried as [app.getknit.knit.mesh.crypto.MessageContent.pr] under
+ * `CTL_PROFILE` — the encrypted replacement for re-flooding a cleartext [ProfileContent] frame at an
+ * *established* contact.
+ *
+ * [version] is the sender's own profile version — the same monotonic value a cleartext profile frame
+ * puts in its `sentAt`. Carrying it explicitly, rather than reusing the carrying chat frame's `sentAt`,
+ * is what lets the two propagation paths order against **one** number: a re-sent ctl would otherwise
+ * arrive stamped later than a genuinely newer cleartext profile and gate it out.
+ *
+ * Deliberately narrower than [ProfileContent]: only the presentation fields move. [ProfileContent.pubKey]
+ * stays out because an identity re-pin is a trust-on-first-use event that must ride the authenticated
+ * cleartext frame, and [ProfileContent.prekey] stays out because its whole job is to *start* a session —
+ * sealing it under a session that must already exist is circular. Neither is a size decision; both are
+ * bootstrap ones.
+ *
+ * [avatarHash] names the same content-addressed blob the cleartext form does. The carrying chat frame
+ * repeats it in [ChatContent.attachmentHash] so a blind carrier — and the Internet plane's attachment
+ * pass — can fetch the bytes; see docs/WIRE_COMPAT.md's DB v19 precedent.
+ */
+@Serializable
+data class ProfilePayload(
+    val name: String,
+    val status: String,
+    val avatarHash: String? = null,
+    val version: Long = 0L,
+)
+
+/**
  * The end-to-end encryption envelope carried inside an encrypted [ChatContent]. A random per-message
  * content key encrypts the [app.getknit.knit.mesh.crypto.MessageContent] with AES-256-GCM into [ct]
  * under [nonce] (both raw byte strings — CBOR `@ByteString`, not base64: the envelope already rides a

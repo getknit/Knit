@@ -181,6 +181,13 @@ class GoldenVectorTest {
             // `gr` field of the existing group-key ctl payload. The second fixture is the root-only
             // distribution: `keys` defaults to empty and stays off the wire entirely, which is exactly the
             // shape a receiver must still adopt from.
+            // The sealed profile update (CTL_PROFILE). `version` is the sender's own profile version —
+            // the same number a cleartext ProfileContent frame carries as its envelope `sentAt` — so the
+            // sealed and cleartext paths converge on one ordering. The second fixture is the
+            // avatar-cleared shape: a null avatarHash stays off the wire entirely.
+            "profilePayload" to
+                WireCodec.encodePayload(ProfilePayload(name = "Ann", status = "hiking", avatarHash = "av1", version = 1700L)),
+            "profilePayloadNoAvatar" to WireCodec.encodePayload(ProfilePayload(name = "Ann", status = "", version = 1700L)),
             "groupRootPayload" to WireCodec.encodePayload(GroupRootPayload(root = bytes(32, 13), version = 2, minter = "aa")),
             "groupKeyPayloadRoot" to
                 WireCodec.encodePayload(
@@ -294,6 +301,11 @@ class GoldenVectorTest {
                     "696365546167636474316c70726f746f56657273696f6e016c6361706162696c6974696573181f667072656b6579a362696407637075" +
                     "6258200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe26373696758400b121920272e353c434a51585f" +
                     "666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4",
+                "profilePayload" to
+                    "a4646e616d6563416e6e667374617475736668696b696e676a617661746172486173" +
+                    "6863617631" +
+                    "6776657273696f6e1906a4",
+                "profilePayloadNoAvatar" to "a3646e616d6563416e6e66737461747573606776657273696f6e1906a4",
                 "groupRootPayload" to
                     "a364726f6f7458200d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6" +
                     "6776657273696f6e02666d696e746572626161",

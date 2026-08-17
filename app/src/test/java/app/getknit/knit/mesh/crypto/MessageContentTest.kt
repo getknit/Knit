@@ -4,6 +4,7 @@ import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupRootPayload
 import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.ReactionPayload
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -179,6 +180,36 @@ class MessageContentTest {
         assertEquals("m-42", retraction.rp?.messageId)
         assertNull(retraction.rp?.emoji)
         assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.rp)
+    }
+
+    @Test
+    fun theProfileCtlRoundTripsAndCarriesItsOwnVersion() {
+        val update =
+            MessageContent.decode(
+                MessageContent(
+                    body = "",
+                    ctl = MessageContent.CTL_PROFILE,
+                    pr = ProfilePayload(name = "Ann", status = "hiking", avatarHash = "av1", version = 1_700L),
+                ).encode(),
+            )!!
+        assertEquals(MessageContent.CTL_PROFILE, update.ctl)
+        assertEquals("Ann", update.pr?.name)
+        assertEquals("hiking", update.pr?.status)
+        assertEquals("av1", update.pr?.avatarHash)
+        // The version rides in the payload, not the carrying frame's sentAt: it is the one number the
+        // sealed and cleartext profile paths both order against.
+        assertEquals(1_700L, update.pr?.version)
+        assertTrue(update.isSupported()) // additive field, same schema version
+        assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.pr)
+
+        // Avatar cleared, and the ctl value is 8 — 7 stays reserved for CTL_SCOPE_CONFIG, and ctl
+        // numbers are append-only.
+        val cleared =
+            MessageContent.decode(
+                MessageContent(body = "", ctl = MessageContent.CTL_PROFILE, pr = ProfilePayload("Ann", "", version = 2L)).encode(),
+            )!!
+        assertNull(cleared.pr?.avatarHash)
+        assertEquals(8, MessageContent.CTL_PROFILE)
     }
 
     @Test

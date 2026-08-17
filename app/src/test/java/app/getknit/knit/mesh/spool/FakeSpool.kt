@@ -577,6 +577,7 @@ fun groupUpdateFrame(
     groupId: String,
     members: List<String>,
     sentAt: Long = 1_000L,
+    photoHash: String? = null,
 ): CarriedFrame =
     carried(
         id,
@@ -585,7 +586,7 @@ fun groupUpdateFrame(
             id = id,
             senderId = from,
             sentAt = sentAt,
-            group = GroupInfo(id = groupId, members = members, createdBy = members.first()),
+            group = GroupInfo(id = groupId, members = members, createdBy = members.first(), photoHash = photoHash),
             payload = ByteArray(0),
         ),
     )

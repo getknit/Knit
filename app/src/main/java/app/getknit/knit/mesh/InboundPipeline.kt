@@ -45,6 +45,7 @@ import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
 import app.getknit.knit.mesh.protocol.KeyReqContent
 import app.getknit.knit.mesh.protocol.ProfileContent
+import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.ReactionPayload
@@ -646,6 +647,12 @@ class InboundPipeline(
                 plain.gk?.let { redistributeGroupKey(it.groupId, env.senderId) }
             }
 
+            MessageContent.CTL_PROFILE -> {
+                // Post-commit: originating a pull is outbound work, and the peer row must already be
+                // written so the bytes have somewhere to be adopted into when they land.
+                outcome.avatarToPull?.let { pullRelayAvatarIfNeeded(env.senderId, it, haveAvatar = false) }
+            }
+
             else -> {}
         }
     }
@@ -656,6 +663,8 @@ class InboundPipeline(
         val adoptedEpoch: Int? = null,
         /** Whether a strictly-newer shared group root landed — gossip it onward, wake the spool plane. */
         val adoptedRoot: Boolean = false,
+        /** An avatar a sealed profile advertised whose bytes we still lack (`CTL_PROFILE` only). */
+        val avatarToPull: String? = null,
     )
 
     /**
@@ -693,9 +702,57 @@ class InboundPipeline(
                 applySealedReaction(env, plain.rp)
             }
 
+            MessageContent.CTL_PROFILE -> {
+                return CtlOutcome(avatarToPull = applySealedProfile(env, plain.pr))
+            }
+
             else -> {}
         }
         return CtlOutcome()
+    }
+
+    /**
+     * Applies a sealed `CTL_PROFILE` — the presentation half of a profile update from a contact whose
+     * key is already pinned, since a v2 session is the precondition for this frame existing at all.
+     * Returns the avatar hash still needing a fetch, for the post-commit pull.
+     *
+     * Deliberately far narrower than [handleProfile]: it never touches the pinned key, the prekey, the
+     * device tag, or the advertised capabilities. Identity moves only on the authenticated cleartext
+     * frame, which is self-certifying (the nodeId IS the key bundle's hash) in a way a sealed payload
+     * cannot be — the session it arrives under proves *who sent it*, not what their key is.
+     *
+     * Two rules are shared verbatim with the cleartext path rather than re-derived, because having two
+     * profile writers with two conventions is exactly how a name silently reverts: last-writer-wins on
+     * the sender's profile **version** (the same number a cleartext profile frame carries as its
+     * `sentAt`, which is why the two paths order against each other and a custody re-serve of a stale
+     * ctl cannot undo a newer update), and [resolveAvatarHash]'s rule that a stored avatar hash means
+     * "the bytes are present locally", so a hash is never adopted before its blob lands.
+     */
+    private suspend fun applySealedProfile(
+        env: RelayEnvelope,
+        pr: ProfilePayload?,
+    ): String? {
+        val payload = pr ?: return null
+        // No pinned peer row means we have never seen their cleartext profile, which cannot happen for a
+        // frame we just decrypted under their session — but a missing row is a no-op, never an insert:
+        // this path must not be able to mint a peer that skipped the key pin.
+        val existing = peers.find(env.senderId) ?: return null
+        // A payload predating this build's version field reads 0 and is ignored rather than treated as
+        // ancient-but-valid — an unversioned update cannot be ordered, so it must not be applied.
+        if (payload.version <= 0L || payload.version < existing.updatedAt) return null
+        val advertised = payload.avatarHash
+        val haveAvatar = advertised != null && blobStore.has(advertised)
+        peers.upsert(
+            existing.copy(
+                // Clamp inbound, as the cleartext path does: our own cap bounds only what we originate.
+                name = payload.name.take(TextLimits.DISPLAY_NAME),
+                status = payload.status.take(TextLimits.STATUS),
+                avatarHash = resolveAvatarHash(advertised, haveAvatar, existing.avatarHash),
+                updatedAt = payload.version,
+            ),
+        )
+        reclaimRemovedAvatarIfCleared(env.senderId, advertised, existing.avatarHash)
+        return advertised?.takeIf { !haveAvatar }
     }
 
     /**

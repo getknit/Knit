@@ -98,19 +98,38 @@ object ScopeAttachments {
         return byHash.values.toList()
     }
 
-    /** The attachment one frame references for [scope], or null if it names none this scope may carry. */
+    /**
+     * The image one frame references for [scope], or null if it names none this scope may carry. Two
+     * shapes qualify, and where the hash lives differs per type exactly as the frame-set rule's group id
+     * does:
+     *
+     * - **`chat`** — `ChatContent.attachmentHash`. That covers message attachments and, since it is also
+     *   set on a sealed `CTL_PROFILE` frame, peer **avatars**: the cleartext hint of the DB v19
+     *   precedent means this path needs no special case for them.
+     * - **`groupupdate`** — `GroupInfo.photoHash`, the group's own picture. A groupupdate is already
+     *   scope-eligible (§4.4), so its photo is legitimately scope content; only the bytes were missing.
+     *
+     * `groupleave` names no image, and everything else fails the frame-set rule first.
+     */
     private fun refFor(
         frame: CarriedFrame,
         scope: Scope,
         selfId: String,
     ): Ref? {
         val env = frame.envelope
-        // Only chat carries an attachment; the group rule also admits groupupdate/groupleave, which
-        // decode to a different payload entirely.
-        if (env.type != FrameType.CHAT || !ScopeFrames.eligibleFor(env, selfId, scope)) return null
-        val content = WireCodec.decodePayload<ChatContent>(env.payload) ?: return null
-        val hash = content.attachmentHash?.takeIf { isValidBlobHash(it) } ?: return null
-        return Ref(aHash = hash, mime = content.attachmentMime, sentAt = env.sentAt)
+        if (!ScopeFrames.eligibleFor(env, selfId, scope)) return null
+        val named =
+            when (env.type) {
+                FrameType.CHAT -> WireCodec.decodePayload<ChatContent>(env.payload)?.let { it.attachmentHash to it.attachmentMime }
+
+                // GroupInfo carries no mime; a group photo is JPEG like an avatar, and the fetcher's
+                // fallback covers it either way.
+                FrameType.GROUP_UPDATE -> env.group?.photoHash to null
+
+                else -> null
+            } ?: return null
+        val hash = named.first?.takeIf { isValidBlobHash(it) } ?: return null
+        return Ref(aHash = hash, mime = named.second, sentAt = env.sentAt)
     }
 
     /** The presence bitmap for [present] over [total] chunks: chunk *i* is bit *i % 8* (MSB-first) of byte *i / 8*. */

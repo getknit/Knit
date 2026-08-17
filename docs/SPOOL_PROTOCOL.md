@@ -291,10 +291,14 @@ frame**:
     re-servable. Admitting them is safe because the departure re-mint rotates the scope id: a
     departed member cannot reach the new scope at all, whatever the frame rule says.
 
-The same rule governs the **push side**: only frames matching it may be sealed into a scope.
-Profiles and any cleartext-payload DM forms are not scope-carried in v1 (scope-eligible pairs are
-ratchet-capable by construction, so their receipts/reactions are already sealed chat-shaped ctl
-frames; profile propagation stays mesh/QR — §11). A blob whose plaintext fails any check is
+The same rule governs the **push side**: only frames matching it may be sealed into a scope. A
+`profile` frame is not scope-carried, and the reason is structural rather than a deferral: it is
+authenticated against the `pubKey` *inside its own payload* (a node id is that key bundle's hash), it
+addresses no recipient and no group — so no scope is its natural home — and its job is first contact,
+which a scope by definition never has. Profile *updates* between established contacts do cross, as an
+ordinary sealed chat frame carrying `CTL_PROFILE`, which needs nothing from this rule; the cleartext
+frame keeps first contact permanently. Receipts and reactions are likewise already sealed chat-shaped
+ctl frames, since a scope-eligible pair is ratchet-capable by construction. A blob whose plaintext fails any check is
 discarded and quarantined (§9.3); the fault is the *uploader's*, never the spool's.
 
 A frame that passes re-enters delivery inside a fresh mesh envelope with a full hop budget — the

@@ -209,6 +209,26 @@ independently re-pinned by `knit-spool`'s `SpecVectorTest`. *Metadata cost:* unc
 Internet plane a spool learns a scope holds an object of roughly `total × 48 KiB` (SPOOL_PROTOCOL §10),
 which is stronger than the frame signal and is why the byte quota is per scope.
 
+**Precedent — the fourth additive `MessageContent` change, and the second use of the DB v19 field reuse
+(sealed profile updates, ADR 020).** `MessageContent.pr: ProfilePayload?` under a new
+`ctl = CTL_PROFILE (8)`. Rule 1: nullable, absent from every frame that does not set it, so no existing
+golden vector moved. Ctl `7` stays **reserved** for `CTL_SCOPE_CONFIG` and is named in code so it can
+never be recycled. No `EncEnvelope.v` bump, no `MessageContent.MAX_SUPPORTED` bump, no capability bit
+(`CAP_RATCHET` already gates it, the ADR 017 precedent), no DB change — an old build consumes the
+unknown ctl as the pinned chain-advancing silent no-op.
+
+The carrying chat frame additionally sets the already-existing `ChatContent.attachmentHash` /
+`attachmentMime` to the sender's **avatar**, which is the DB v19 precedent above applied a second time:
+the field's meaning ("the content address to pull for this message's image") is unchanged, an old peer
+ignores it, and it is what lets a blind carrier custody an avatar and the Internet plane fetch one with
+no avatar-specific code. *Metadata cost:* a carrier learns this control frame carries an image of roughly
+avatar size — the same cost DB v19 already accepted for attachments, and strictly less than the cleartext
+`profile` frame it replaces, which floods the name and avatar hash in the clear to everyone.
+
+What did **not** move, and why it is worth recording: group photos needed no wire change at all.
+`groupupdate` already carries `GroupInfo.photoHash` in cleartext and is already scope-eligible, so only
+the client's attachment-reference reader had to learn about it.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.crypto
 
 import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReplyRef
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -38,7 +39,7 @@ data class MessageContent(
     val replyTo: ReplyRef? = null,
     // Control marker for ratchet session management and sealed metadata (additive;
     // [CTL_SESSION_RESET], [CTL_GROUP_KEY], [CTL_GROUP_KEY_REQ], [CTL_GROUP_KEY_ACK],
-    // [CTL_RECEIPT], [CTL_REACTION]). A non-null value means this frame is machinery, not
+    // [CTL_RECEIPT], [CTL_REACTION], [CTL_PROFILE]). A non-null value means this frame is machinery, not
     // conversation: it is never persisted as a message, never notified, never acked-as-a-message —
     // see docs/FORWARD_SECRECY_RATCHET.md §7. Inside the ciphertext deliberately: a relay cannot
     // distinguish machinery from an ordinary DM. An unknown value is consumed as a silent no-op,
@@ -50,6 +51,8 @@ data class MessageContent(
     val ack: String? = null,
     // Reaction payload for [CTL_REACTION] (additive; docs/ENCRYPTED_RECEIPTS_REACTIONS.md).
     val rp: ReactionPayload? = null,
+    // Profile payload for [CTL_PROFILE] (additive; docs/SEALED_PROFILE_UPDATES.md).
+    val pr: ProfilePayload? = null,
 ) {
     @OptIn(ExperimentalSerializationApi::class)
     fun encode(): ByteArray = cryptoCbor.encodeToByteArray(this)
@@ -86,6 +89,17 @@ data class MessageContent(
 
         /** [ctl]: [rp] is a sealed reaction (or retraction) — DM form or group form. */
         const val CTL_REACTION = 6
+
+        // `7` is RESERVED for CTL_SCOPE_CONFIG (docs/SPOOL_PROTOCOL.md §5) — specified but not yet
+        // shipped. Named here so the value is never recycled; ctl numbers are append-only.
+
+        /**
+         * [ctl]: [pr] is a sealed profile update (name/status/avatar) for an already-established
+         * contact — the encrypted replacement for re-flooding a cleartext `profile` frame. The
+         * cleartext frame keeps its one irreplaceable job, first contact: it is authenticated against
+         * the `pubKey` inside its own payload, so it can never be encrypted.
+         */
+        const val CTL_PROFILE = 8
 
         @OptIn(ExperimentalSerializationApi::class)
         fun decode(bytes: ByteArray): MessageContent? = runCatching { cryptoCbor.decodeFromByteArray<MessageContent>(bytes) }.getOrNull()

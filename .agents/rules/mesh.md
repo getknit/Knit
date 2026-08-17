@@ -47,6 +47,14 @@ free). Two invariants that are easy to break:
   and would otherwise let a spool confirm a frame belongs to a scope; and a client must **never** send
   an attachment record to a spool that omitted the three HELLO limits — an unknown record is skipped
   without an answer, stranding that `q` until the request timeout.
+- **A profile has two propagation paths and they order on one number.** The cleartext `profile` frame
+  is first contact only (it is self-certifying — the node id IS the hash of the `pubKey` in its own
+  payload — so it can never be encrypted); presentation updates to an established contact ride
+  `CTL_PROFILE` sealed inside v2 chat, which is what makes them cross the Internet plane. Both writers
+  gate on the sender's **profile version** (`ProfilePayload.version`, the same value the cleartext
+  frame puts in its envelope `sentAt`, stored as `PeerEntity.updatedAt`) — never on the carrying
+  frame's own `sentAt`, or a re-sent ctl outranks a genuinely newer profile. The sealed path never
+  touches the pinned key, the prekey, the device tag or the capabilities, and never inserts a peer row.
 - **Group-root minting is damped; group-root adoption is not** (`GroupRootPolicy`, spec §3.2). Several
   members minting version 1 at once is normal and self-healing — `(version, minter)` collapses the
   lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping

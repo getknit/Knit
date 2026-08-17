@@ -43,6 +43,7 @@ import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
+import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.ReactionPayload
@@ -283,6 +284,9 @@ class MeshManager(
     // nodeId -> avatar hash we last sent that neighbor, so we don't re-push an unchanged avatar on
     // every profile edit or reconnect. Cleared per-peer when they disconnect (see watchNeighbors).
     private val sentAvatarHashes = ConcurrentHashMap<String, String>()
+
+    /** Profile version last sealed to each peer — the per-(peer, version) dedupe of [broadcastSealedProfile]. */
+    private val sentProfileVersions = ConcurrentHashMap<String, Long>()
 
     /**
      * Number of nearby peers for the UI status header — the smoothed [MeshTransport.reachable] set (seen
@@ -1468,6 +1472,7 @@ class MeshManager(
                     // custodied profile from minting a new frame every launch (see SettingsStore.profileVersion).
                     settings.setProfileVersion(maxOf(clock(), settings.profileVersion.first() + 1))
                     broadcastProfile()
+                    broadcastSealedProfile()
                 }
         }
     }
@@ -1525,7 +1530,87 @@ class MeshManager(
         sentAvatarHashes[peer.nodeId] = hash
     }
 
-    private fun avatarMeta(hash: String): FileMeta = FileMeta(FileKind.AVATAR, key = hash, mime = "image/jpeg")
+    private fun avatarMeta(hash: String): FileMeta = FileMeta(FileKind.AVATAR, key = hash, mime = AVATAR_MIME)
+
+    /**
+     * Fans a sealed profile update (`CTL_PROFILE`) to every peer we hold a confirmed v2 session with.
+     *
+     * This does **not** replace [broadcastProfile]; the two ship together. A cleartext `profile` frame
+     * remains the only thing that works at first contact — it is authenticated against the `pubKey`
+     * inside its own payload, so it can never be encrypted — and the only thing a pre-ratchet peer can
+     * read. What this adds is the copy that reaches an *established* contact with no radio path, since a
+     * `profile` frame is deliberately not scope-carried (`docs/SPOOL_PROTOCOL.md` §4.4), and it takes
+     * name/status/avatar changes off the cleartext plane for peers that can read it.
+     *
+     * The target set is confirmed sessions rather than "accepted conversations": a sealed profile
+     * discloses strictly less than the cleartext frame already floods to everyone, so narrowing it would
+     * cost propagation and buy no privacy.
+     *
+     * Deduped per (peer, version) rather than floored on a timer. A profile edit is rare and
+     * user-visible, so a time floor would suppress a real second edit — worse than the storm it
+     * prevents — and one send per version suffices because custody and the Internet plane both carry the
+     * frame to a peer that is offline right now.
+     */
+    private suspend fun broadcastSealedProfile() {
+        val version = settings.profileVersion.first()
+        if (version <= 0L) return
+        val me = identity.nodeId()
+        val avatarHash = settings.ownAvatarHash.first()
+        val payload =
+            MessageContent(
+                body = "",
+                ctl = MessageContent.CTL_PROFILE,
+                pr =
+                    ProfilePayload(
+                        name = normalizeSingleLine(settings.displayName.first()).take(TextLimits.DISPLAY_NAME),
+                        status = normalizeSingleLine(settings.status.first()).take(TextLimits.STATUS),
+                        avatarHash = avatarHash,
+                        version = version,
+                    ),
+            )
+        ratchet.exportedRoots().forEach { session ->
+            if (sentProfileVersions[session.peerId] == version) return@forEach
+            if (sendProfileDm(session.peerId, payload, avatarHash, me)) sentProfileVersions[session.peerId] = version
+        }
+    }
+
+    /**
+     * Seals one `CTL_PROFILE` to [peerId]. The avatar hash is repeated in the **cleartext**
+     * [ChatContent.attachmentHash] — the DB v19 precedent (`docs/WIRE_COMPAT.md`) reapplied: it is what
+     * lets a blind carrier custody the avatar bytes, and what the Internet plane's attachment pass reads
+     * to fetch them (`docs/SPOOL_PROTOCOL.md` §9.5). The authoritative copy stays inside the seal.
+     */
+    private suspend fun sendProfileDm(
+        peerId: String,
+        payload: MessageContent,
+        avatarHash: String?,
+        me: String,
+    ): Boolean {
+        val peer = peers.find(peerId)
+        val bundle = peer?.pubKey?.let { PublicKeyBundle.decode(it) } ?: return false
+        val id = FrameId.new()
+        val now = clock()
+        val aad = MessageCrypto.header(id, me, now, peerId)
+        val sealed = ratchet.sealDm(peerId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), payload.encode(), aad, now) ?: return false
+        originateSigned(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = me,
+                sentAt = now,
+                recipientId = peerId,
+                payload =
+                    WireCodec.encodePayload(
+                        ChatContent(
+                            enc = sealed,
+                            attachmentHash = avatarHash,
+                            attachmentMime = avatarHash?.let { AVATAR_MIME },
+                        ),
+                    ),
+            ),
+        )
+        return true
+    }
 
     private suspend fun currentProfileEnvelope(): RelayEnvelope {
         val me = identity.nodeId()
@@ -1734,6 +1819,9 @@ class MeshManager(
         // Min spacing between first-contact profile floods (watchReachable): a burst of newcomers costs one
         // origination; custody + the per-link pushProfileTo cover anyone the coalesced flood skipped.
         const val PROFILE_REFLOOD_MIN_MS = 30_000L
+
+        /** Avatars are always JPEG on this path (`AvatarStore` re-encodes every input). */
+        const val AVATAR_MIME = "image/jpeg"
 
         /** How far back the post-reset DM re-seal reaches — the custody TTL (older frames left the mesh). */
         const val RESEAL_WINDOW_MS = 24 * 60 * 60_000L

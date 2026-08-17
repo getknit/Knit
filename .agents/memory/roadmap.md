@@ -74,6 +74,14 @@ doc). **Don't start a deferred item without explicit direction.**
   mid-transfer refetches — the upload half already resumes off the spool's bitmap), and the same
   two-island device trial the group half is waiting on.
 
+- **Sealed profile updates SHIPPED 2026-08-16** (ADR 020, was never a roadmap item — the gap surfaced in
+  field testing after M5): `CTL_PROFILE = 8` carries name/status/avatar to established contacts inside v2
+  chat, so profile changes now cross the Internet plane and stay off the cleartext plane for
+  ratchet-capable peers. Avatars ride the carrying frame's cleartext `attachmentHash` (the DB v19
+  precedent), and group photos needed no wire change since `groupupdate` was already scope-carried. The
+  cleartext `profile` frame keeps first contact permanently — it is self-certifying and cannot be
+  encrypted — so ADR 018's "last cleartext flooded metadata" goal is advanced, not finished.
+
 - **BLE promotion gate on A2DP audio** — the adaptive scan throttle now drops the **scan** to its floor
   while streaming (`ScanDemandPolicy` / the demand-gated `scanLoop`), but **connects** are still not gated
   on `contended` (it remains diagnostic-only for the connect path).

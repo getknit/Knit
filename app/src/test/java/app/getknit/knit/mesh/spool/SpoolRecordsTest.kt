@@ -42,6 +42,27 @@ class SpoolRecordsTest {
                         powBits = 20,
                     ),
                 ),
+            "helloSpoolAttach" to
+                SpoolCodec.encode(
+                    SpoolHello(
+                        t = SpoolRecordType.HELLO,
+                        v = SPOOL_RECORD_VERSION,
+                        min = 1,
+                        limits =
+                            SpoolLimits(
+                                maxBlob = 65_536,
+                                maxRecord = 131_072,
+                                maxScopes = 64,
+                                maxPull = 64,
+                                maxFramesCap = 1_000,
+                                maxTtlMs = 604_800_000L,
+                                maxAttachBytes = 16_777_216,
+                                maxAChunk = 49_221,
+                                maxAget = 32,
+                            ),
+                        powBits = 20,
+                    ),
+                ),
             "helloClient" to SpoolCodec.encode(SpoolHello(t = SpoolRecordType.HELLO, v = SPOOL_RECORD_VERSION)),
             "sub" to
                 SpoolCodec.encode(
@@ -118,6 +139,61 @@ class SpoolRecordsTest {
                 SpoolCodec.encode(
                     SpoolErr(t = SpoolRecordType.ERR, code = SpoolErrCode.RATE, msg = "slow down", retryMs = 30_000L),
                 ),
+            "ahave" to
+                SpoolCodec.encode(SpoolAhave(t = SpoolRecordType.AHAVE, q = 5L, scope = bytes(32, 1), aid = bytes(32, 7))),
+            "ahas" to
+                SpoolCodec.encode(
+                    SpoolAhas(
+                        t = SpoolRecordType.AHAS,
+                        q = 5L,
+                        scope = bytes(32, 1),
+                        aid = bytes(32, 7),
+                        total = 3,
+                        bits = bytes(1, 9),
+                    ),
+                ),
+            "ahasDead" to
+                SpoolCodec.encode(
+                    SpoolAhas(
+                        t = SpoolRecordType.AHAS,
+                        q = 5L,
+                        scope = bytes(32, 1),
+                        aid = bytes(32, 7),
+                        total = 0,
+                        bits = ByteArray(0),
+                        dead = true,
+                    ),
+                ),
+            "aget" to
+                SpoolCodec.encode(
+                    SpoolAget(t = SpoolRecordType.AGET, q = 6L, scope = bytes(32, 1), aid = bytes(32, 7), from = 0, n = 2),
+                ),
+            "achunk" to
+                SpoolCodec.encode(
+                    SpoolAchunk(
+                        t = SpoolRecordType.ACHUNK,
+                        scope = bytes(32, 1),
+                        aid = bytes(32, 7),
+                        idx = 1,
+                        total = 3,
+                        cid = bytes(32, 8),
+                        data = bytes(48, 6),
+                    ),
+                ),
+            "aput" to
+                SpoolCodec.encode(
+                    SpoolAput(
+                        t = SpoolRecordType.APUT,
+                        q = 7L,
+                        scope = bytes(32, 1),
+                        aid = bytes(32, 7),
+                        idx = 1,
+                        total = 3,
+                        cid = bytes(32, 8),
+                        data = bytes(48, 6),
+                        pow = PowStamp(n = 42L, d = 20_680L),
+                    ),
+                ),
         )
 
     @Test
@@ -164,6 +240,51 @@ class SpoolRecordsTest {
     }
 
     @Test
+    fun attachmentSupportIsAllThreeLimitsOrNone() {
+        val plain = SpoolCodec.decode<SpoolHello>(vectors().getValue("helloSpool"))!!
+        val attaching = SpoolCodec.decode<SpoolHello>(vectors().getValue("helloSpoolAttach"))!!
+
+        // A v1 spool decodes unchanged and is *not* offered attachment records — it would skip them
+        // without answering, hanging the client's q until the request timeout.
+        assertEquals(false, plain.limits!!.attachments)
+        assertNull(plain.limits!!.maxAget)
+        assertEquals(true, attaching.limits!!.attachments)
+        assertEquals(16_777_216, attaching.limits!!.maxAttachBytes)
+        assertEquals(49_221, attaching.limits!!.maxAChunk)
+        assertEquals(32, attaching.limits!!.maxAget)
+        // The v1 hello's bytes must not have moved: the three fields are nullable and defaults are omitted.
+        assertEquals(EXPECTED.getValue("helloSpool"), vectors().getValue("helloSpool").toHex())
+    }
+
+    @Test
+    fun attachmentRecordsRoundTrip() {
+        val ahas = SpoolCodec.decode<SpoolAhas>(vectors().getValue("ahas"))!!
+        assertEquals(3, ahas.total)
+        assertArrayEquals(bytes(32, 7), ahas.aid)
+        assertEquals(false, ahas.dead)
+
+        val dead = SpoolCodec.decode<SpoolAhas>(vectors().getValue("ahasDead"))!!
+        assertEquals(0, dead.total)
+        assertEquals(true, dead.dead)
+        assertEquals(0, dead.bits.size)
+
+        val aget = SpoolCodec.decode<SpoolAget>(vectors().getValue("aget"))!!
+        assertEquals(0, aget.from)
+        assertEquals(2, aget.n)
+
+        val achunk = SpoolCodec.decode<SpoolAchunk>(vectors().getValue("achunk"))!!
+        assertEquals(1, achunk.idx)
+        assertEquals(3, achunk.total)
+        assertArrayEquals(bytes(32, 8), achunk.cid)
+        assertArrayEquals(bytes(48, 6), achunk.data)
+
+        val aput = SpoolCodec.decode<SpoolAput>(vectors().getValue("aput"))!!
+        assertEquals(7L, aput.q)
+        assertEquals(42L, aput.pow?.n)
+        assertArrayEquals(bytes(32, 7), aput.aid)
+    }
+
+    @Test
     fun unknownDiscriminatorIsIdentifiableAndUnknownFieldsAreIgnored() {
         val future = SpoolCodec.encode(FutureRecord(t = "future", q = 9L, novel = "later"))
 
@@ -193,6 +314,12 @@ class SpoolRecordsTest {
                     "00010000696d61785265636f72641a00020000696d617853636f7065731840676d61" +
                     "7850756c6c18406c6d61784672616d65734361701903e8686d617854746c4d731a24" +
                     "0c840067706f774269747314",
+                "helloSpoolAttach" to
+                    "a561746568656c6c6f617601636d696e01666c696d697473a9676d6178426c6f621a" +
+                    "00010000696d61785265636f72641a00020000696d617853636f7065731840676d61" +
+                    "7850756c6c18406c6d61784672616d65734361701903e8686d617854746c4d731a24" +
+                    "0c84006e6d617841747461636842797465731a01000000696d6178414368756e6b19" +
+                    "c045676d617841676574182067706f774269747314",
                 "helloClient" to "a261746568656c6c6f617601",
                 "sub" to
                     "a3617463737562617101647375627381a36573636f7065582001080f161d242b3239" +
@@ -244,6 +371,39 @@ class SpoolRecordsTest {
                     "a461746365727264636f64656a746f6d6273746f6e65646171046573636f70655820" +
                     "01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3da",
                 "errRate" to "a461746365727264636f64656472617465636d736769736c6f7720646f776e6772657472794d73197530",
+                "ahave" to
+                    "a461746561686176656171056573636f7065582001080f161d242b323940474e555c" +
+                    "636a71787f868d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f46" +
+                    "4d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0",
+                "ahas" to
+                    "a6617464616861736171056573636f7065582001080f161d242b323940474e555c63" +
+                    "6a71787f868d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d" +
+                    "545b626970777e858c939aa1a8afb6bdc4cbd2d9e065746f74616c03646269747341" +
+                    "09",
+                "ahasDead" to
+                    "a7617464616861736171056573636f7065582001080f161d242b323940474e555c63" +
+                    "6a71787f868d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d" +
+                    "545b626970777e858c939aa1a8afb6bdc4cbd2d9e065746f74616c00646269747340" +
+                    "6464656164f5",
+                "aget" to
+                    "a6617464616765746171066573636f7065582001080f161d242b323940474e555c63" +
+                    "6a71787f868d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d" +
+                    "545b626970777e858c939aa1a8afb6bdc4cbd2d9e06466726f6d00616e02",
+                "achunk" to
+                    "a7617466616368756e6b6573636f7065582001080f161d242b323940474e555c636a" +
+                    "71787f868d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d54" +
+                    "5b626970777e858c939aa1a8afb6bdc4cbd2d9e0636964780165746f74616c036363" +
+                    "69645820080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3" +
+                    "dae164646174615830060d141b222930373e454c535a61686f767d848b9299a0a7ae" +
+                    "b5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f",
+                "aput" to
+                    "a9617464617075746171076573636f7065582001080f161d242b323940474e555c63" +
+                    "6a71787f868d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d" +
+                    "545b626970777e858c939aa1a8afb6bdc4cbd2d9e0636964780165746f74616c0363" +
+                    "6369645820080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5cc" +
+                    "d3dae164646174615830060d141b222930373e454c535a61686f767d848b9299a0a7" +
+                    "aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f63706f77a2616e182a61" +
+                    "641950c8",
             )
     }
 }

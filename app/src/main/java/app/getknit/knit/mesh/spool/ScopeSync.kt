@@ -19,6 +19,22 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
+/**
+ * The local content-addressed blob store, as much of it as the Internet plane needs (spec §9.5).
+ * Implemented over `BlobRepository`; kept as a seam so [ScopeSync] stays Android-free and testable.
+ */
+interface ScopeBlobs {
+    suspend fun has(aHash: String): Boolean
+
+    suspend fun bytes(aHash: String): ByteArray?
+
+    suspend fun save(
+        aHash: String,
+        mime: String,
+        bytes: ByteArray,
+    )
+}
+
 /** Opens WebSocket sessions to spools. The one seam the OkHttp adapter implements. */
 interface SpoolDialer {
     /** Connects to [url], or null when the socket could not be opened. */
@@ -98,6 +114,12 @@ class ScopeSync(
     private val canCarry: suspend (WireEnvelope, RelayEnvelope) -> Boolean,
     // The mesh bridge: `MeshRouter.handleInbound`. Dedup, delivery, custody, and relay live behind it.
     private val deliver: suspend (WireEnvelope, RelayEnvelope, String) -> Unit,
+    // The local blob store, for attachments (§4.5/§9.5). Null switches the attachment half off
+    // entirely — the frame plane is unaffected, which is what keeps this additive.
+    private val blobs: ScopeBlobs? = null,
+    // Fired once an attachment's bytes are in hand, so screening, the message row and the UI run the
+    // same path a radio pull takes. `InboundPipeline::onObtained` in the app.
+    private val onAttachmentObtained: suspend (String) -> Unit = {},
     private val metrics: MeshMetrics = MeshMetrics(),
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val jitter: () -> Long = { Random.nextLong(RECONNECT_JITTER_MS) },
@@ -168,10 +190,12 @@ class ScopeSync(
     }
 
     /** Every custody frame that may ride [scope], keyed by the blob id it deterministically seals to. */
-    private suspend fun held(scope: Scope): Map<String, Held> {
+    private suspend fun held(
+        scope: Scope,
+        frames: List<CarriedFrame>,
+    ): Map<String, Held> {
         val me = selfId()
-        return store
-            .liveFrames(clock())
+        return frames
             .filter { ScopeFrames.eligibleFor(it.envelope, me, scope) }
             .associate { carried ->
                 val sealed = sealCache.get(scope, carried)
@@ -200,6 +224,11 @@ class ScopeSync(
         private val invalid = ConcurrentHashMap<String, LinkedHashSet<String>>()
         private val accepted = ConcurrentHashMap<String, LinkedHashSet<String>>()
         private val stamps = ConcurrentHashMap<String, PowStamp>()
+        private val invalidAttachments = ConcurrentHashMap<String, LinkedHashSet<String>>()
+
+        // Partially-received attachments, keyed "scopeHex|aHash". In memory by design (§9.5): the
+        // plane persists nothing, and the spool's bitmap makes a restarted download cheap to resume.
+        private val assemblies = ConcurrentHashMap<String, ScopeAttachments.Assembly>()
         private val wakeup = Channel<Unit>(Channel.CONFLATED)
 
         @Volatile
@@ -322,12 +351,19 @@ class ScopeSync(
             conn: SpoolConnection,
             scope: Scope,
         ) {
-            val local = held(scope)
+            // One custody read serves both halves of the round: the frames, and the attachments they
+            // reference. Attachments are healed even when the frame digests already agree — they are
+            // outside the digest by design (§6.5), so it can never signal them.
+            val frames = store.liveFrames(clock())
+            val local = held(scope, frames)
             val localFold = ScopeCrypto.scopeDigest(local.values.map { it.sealed.blobId })
             localDigests[scope.idHex] = localFold
             localCounts[scope.idHex] = local.size
             val anchor = spoolDigests[scope.idHex] ?: return // the SUB hasn't been answered yet
-            if (anchor == localFold) return
+            if (anchor == localFold) {
+                healAttachments(conn, scope, frames)
+                return
+            }
             val listing = conn.list(scope.id) ?: return
             val quarantined = invalid[scope.idHex].orEmpty()
             val spoolIds = listing.blobIds.associateBy { hex(it) }
@@ -343,6 +379,7 @@ class ScopeSync(
             val gone = pullMissing(conn, scope, wanted)
             val pushed = pushMissing(conn, scope, local, spoolIds.keys, tombstoned, quarantined)
             reanchor(scope, spoolIds, gone, pushed)
+            healAttachments(conn, scope, frames)
         }
 
         /** Pulls the ids we lack, in `maxPull` batches (an overshoot is silently truncated, never an error). */
@@ -447,6 +484,199 @@ class ScopeSync(
             pushed.forEach { fold = fold xor ScopeCrypto.fnv64(it) }
             spoolDigests[scope.idHex] = fold
             spoolCounts[scope.idHex] = remaining.size + pushed.size
+        }
+
+        /**
+         * §9.5: fetch the attachments this scope's frames reference and we lack, and refill the ones we
+         * hold and the spool lacks. Bounded per round so one 8 MiB image cannot starve every other
+         * scope on this connection.
+         *
+         * Gated on the spool advertising the §7.3 limits. That gate is mechanical, not cosmetic: a spool
+         * without attachment support *skips* an unknown record without answering, so an optimistic
+         * `ahave` would sit until the 30 s request timeout — once per attachment, per scope, per round.
+         */
+        private suspend fun healAttachments(
+            conn: SpoolConnection,
+            scope: Scope,
+            frames: List<CarriedFrame>,
+        ) {
+            val blobStore = blobs ?: return
+            if (conn.limits?.attachments != true) return
+            val quarantined = invalidAttachments[scope.idHex].orEmpty()
+            val candidates =
+                ScopeAttachments
+                    .references(frames, scope, selfId())
+                    .filterNot { it.aHash in quarantined }
+                    .mapNotNull { ref -> ScopeAttachments.hashBytes(ref.aHash)?.let { ref to it } }
+                    .take(ATTACHMENTS_PER_ROUND)
+            for ((ref, aHashBytes) in candidates) {
+                val aid = ScopeCrypto.attachmentId(scope.keys, scope.id, aHashBytes)
+                // A dead socket ends the round; there is nothing useful to try against it.
+                val presence = conn.ahave(scope.id, aid) ?: return
+                if (blobStore.has(ref.aHash)) {
+                    pushAttachment(conn, scope, ref, aid, aHashBytes, presence, blobStore)
+                } else {
+                    fetchAttachment(conn, scope, ref, aid, presence, blobStore)
+                }
+            }
+        }
+
+        /** Pulls the chunks we still lack and, once whole, verifies and stores the attachment. */
+        @Suppress("LongParameterList") // the §9.5 step's inputs; a parameter object would only relocate them
+        private suspend fun fetchAttachment(
+            conn: SpoolConnection,
+            scope: Scope,
+            ref: ScopeAttachments.Ref,
+            aid: ByteArray,
+            presence: SpoolReply.Presence,
+            blobStore: ScopeBlobs,
+        ) {
+            if (presence.dead || presence.total <= 0) return
+            val key = "${scope.idHex}|${ref.aHash}"
+            val assembly = assemblyFor(scope, key, ref, presence) ?: return
+            if (!pullChunks(conn, scope, ref, aid, presence, assembly, key)) return
+            if (!assembly.isComplete()) return
+            assemblies.remove(key)
+            // The decisive check: the bytes must hash to the address the frame named.
+            val bytes = assembly.finish() ?: return quarantineAttachment(scope, ref.aHash)
+            blobStore.save(ref.aHash, ref.mime ?: FALLBACK_MIME, bytes)
+            metrics.onSpoolAttachmentPulled()
+            onAttachmentObtained(ref.aHash)
+        }
+
+        /**
+         * The in-flight buffer for one attachment: the existing one when it still agrees with the spool's
+         * chunk count, else a fresh one. Null when the concurrency cap is reached (try again next round)
+         * or the declared `total` is out of range — a member lying inside the AEAD, so quarantine.
+         */
+        private fun assemblyFor(
+            scope: Scope,
+            key: String,
+            ref: ScopeAttachments.Ref,
+            presence: SpoolReply.Presence,
+        ): ScopeAttachments.Assembly? {
+            assemblies[key]?.let { held -> if (held.total == presence.total) return held }
+            if (assemblies.size >= MAX_ASSEMBLIES && !assemblies.containsKey(key)) return null
+            val fresh = runCatching { ScopeAttachments.Assembly(ref.aHash, presence.total) }.getOrNull()
+            if (fresh == null) quarantineAttachment(scope, ref.aHash) else assemblies[key] = fresh
+            return fresh
+        }
+
+        /** Fetches the windows we still need. False means stop — a dead socket or an unusable chunk. */
+        @Suppress("LongParameterList") // one hop below fetchAttachment; the same inputs, threaded once
+        private suspend fun pullChunks(
+            conn: SpoolConnection,
+            scope: Scope,
+            ref: ScopeAttachments.Ref,
+            aid: ByteArray,
+            presence: SpoolReply.Presence,
+            assembly: ScopeAttachments.Assembly,
+            key: String,
+        ): Boolean {
+            val maxAget = (conn.limits?.maxAget ?: DEFAULT_MAX_AGET).coerceAtLeast(1)
+            val wanted = (0 until presence.total).filter { it !in assembly.held && ScopeAttachments.bitSet(presence.bits, it) }
+            for (window in ScopeAttachments.windows(wanted, maxAget)) {
+                val chunks = conn.aget(scope.id, aid, window.first, window.last - window.first + 1) ?: return false
+                if (chunks.isEmpty()) return false // nothing served; the next round re-reads the bitmap
+                for (chunk in chunks) {
+                    if (!absorb(scope, ref, assembly, presence.total, chunk)) {
+                        assemblies.remove(key)
+                        return false
+                    }
+                }
+            }
+            return true
+        }
+
+        /** Opens one chunk and files it, or reports the failure that quarantines the whole attachment. */
+        private fun absorb(
+            scope: Scope,
+            ref: ScopeAttachments.Ref,
+            assembly: ScopeAttachments.Assembly,
+            total: Int,
+            chunk: SpoolAchunk,
+        ): Boolean {
+            val opened = runCatching { ScopeCrypto.openChunk(scope.keys, scope.id, chunk.data) }.getOrNull()
+            if (opened == null || !inPosition(opened, ref, total, chunk)) {
+                quarantineAttachment(scope, ref.aHash)
+                return false
+            }
+            // `put` also refuses a duplicate, which is not a fault — only a genuinely bad chunk is.
+            return assembly.put(opened.index, opened.data) || opened.index in assembly.held
+        }
+
+        /**
+         * Whether a chunk's sealed header says what we asked for. The header is inside the AEAD, so this
+         * catches a *member* replaying a chunk out of position — the only party able to produce one.
+         */
+        private fun inPosition(
+            opened: ScopeCrypto.AttachChunk,
+            ref: ScopeAttachments.Ref,
+            total: Int,
+            chunk: SpoolAchunk,
+        ): Boolean = hex(opened.aHash) == ref.aHash && opened.total == total && opened.index == chunk.idx
+
+        /** Uploads the chunks this spool's bitmap says it lacks, inside the scope's liveness window. */
+        @Suppress("LongParameterList") // mirrors fetchAttachment
+        private suspend fun pushAttachment(
+            conn: SpoolConnection,
+            scope: Scope,
+            ref: ScopeAttachments.Ref,
+            aid: ByteArray,
+            aHashBytes: ByteArray,
+            presence: SpoolReply.Presence,
+            blobStore: ScopeBlobs,
+        ) {
+            if (!worthPushing(scope, ref, presence)) return
+            val bytes = blobStore.bytes(ref.aHash) ?: return
+            if (bytes.isEmpty() || bytes.size > ScopeAttachments.MAX_ATTACHMENT_BYTES) return
+            val total = ScopeAttachments.chunkCount(bytes.size)
+            // A spool holding a different chunk count for this id is serving another member's
+            // disagreement; first write wins there, so adding ours would only collect `conflict`s.
+            if (presence.total != 0 && presence.total != total) return
+            val stamp = stampFor(scope, conn.powBits)
+            val missing = (0 until total).filter { presence.total == 0 || !ScopeAttachments.bitSet(presence.bits, it) }
+            for (index in missing) {
+                val sealed =
+                    ScopeCrypto.sealChunk(scope.keys, scope.id, aHashBytes, index, total, ScopeAttachments.sliceAt(bytes, index))
+                if (!putChunk(conn, scope, aid, index, total, sealed, stamp)) return
+            }
+        }
+
+        /** A retiring scope is drained, a dead attachment is gone, and §9.2 bars an aged-out frame's bytes. */
+        private fun worthPushing(
+            scope: Scope,
+            ref: ScopeAttachments.Ref,
+            presence: SpoolReply.Presence,
+        ): Boolean = !scope.retiring && !presence.dead && ref.sentAt + scope.bounds.ttlMs > clock()
+
+        /** Stores one sealed chunk; false means the rest of this attachment is not worth attempting. */
+        @Suppress("LongParameterList") // the aput record's own field list
+        private suspend fun putChunk(
+            conn: SpoolConnection,
+            scope: Scope,
+            aid: ByteArray,
+            index: Int,
+            total: Int,
+            sealed: ByteArray,
+            stamp: PowStamp?,
+        ): Boolean {
+            val reply = conn.aput(scope.id, aid, index, total, ScopeCrypto.blobId(sealed), sealed, stamp)
+            if (reply is SpoolReply.Ok) {
+                metrics.onSpoolAttachmentPushed()
+                return true
+            }
+            if (reply !is SpoolReply.Failed) return false
+            metrics.onSpoolError()
+            lastError = reply.code
+            return survivable(reply)
+        }
+
+        private fun quarantineAttachment(
+            scope: Scope,
+            aHash: String,
+        ) {
+            if (remember(invalidAttachments, scope.idHex, aHash)) metrics.onSpoolInvalid()
         }
 
         private fun handleDigest(digest: SpoolDigest) {
@@ -565,6 +795,16 @@ class ScopeSync(
         private const val RECONNECT_JITTER_MS = 750L
         private const val MAX_RATE_WAIT_MS = 5_000L
         private const val DEFAULT_MAX_PULL = 64
+        private const val DEFAULT_MAX_AGET = 32
+
+        /** Attachments touched per (spool, scope) per round — one big image must not starve the rest. */
+        private const val ATTACHMENTS_PER_ROUND = 4
+
+        /** Concurrent in-memory reassemblies per spool; each is bounded by `MAX_CHUNKS` (8 MiB). */
+        private const val MAX_ASSEMBLIES = 2
+
+        /** Used when a frame names an attachment but no mime; Coil sniffs the real format anyway. */
+        private const val FALLBACK_MIME = "image/jpeg"
         private const val BLOB_SET_MAX = 512
         private const val SEAL_CACHE_MAX = 2_048
         private const val INITIAL_CACHE_CAPACITY = 64

@@ -470,3 +470,54 @@ already written and vector-pinned at M1.
 
 Scheme spec: docs/SPOOL_PROTOCOL.md; wire posture: docs/WIRE_COMPAT.md (its `GroupKeyPayload.gr`
 precedent entry); context: context/e2e-encryption.md; deferred remainder: memory/roadmap.md.
+
+**Amended 2026-08-16 (M5 — attachments ride the scope, in their own namespace):** the plane now carries
+image bytes, closing the un-fetchable-image gap the spec's §11 had registered. New spec sections
+§4.5/§6.5/§7.3/§9.5, added as fresh sub-numbers so **no existing cross-reference moved**; new client code
+is `ScopeCrypto.attachmentId`/`sealChunk`/`openChunk`, `mesh/spool/ScopeAttachments`, five records in
+`SpoolRecords`, and the attachment pass in `ScopeSync`. This is the first amendment that asks anything of
+spool implementations, and `knit-spool` gained the matching half (both stores, the server, four
+conformance checks, `SPOOL_MAX_ATTACH_BYTES`).
+
+**M5 lands with no mesh-wire change at all** — no field, no ctl value, no capability bit, and no DB
+migration. Everything a fetcher needs already rides in cleartext on the frame: `ChatContent.attachmentHash`
+(the *ciphertext* hash) and `attachmentMime`, put there by the DB v19 precedent precisely so a blind
+carrier could custody images. Size is not needed on the mesh because the spool reports the chunk count.
+`GoldenVectorTest` is therefore untouched; only `ScopeVectorTest` and `SpoolRecordsTest` gained rows,
+regenerated together and mirrored into spec §13 (and re-pinned independently by `knit-spool`'s
+`SpecVectorTest`, which is a genuine cross-implementation check — two codebases, byte-identical records).
+
+Five decisions worth not relitigating:
+
+1. **A separate namespace, deliberately outside the frame digest.** Attachments are discovered by asking
+   (`ahave`), never by anti-entropy. Folding them in would make a *byte* quota convergence-relevant, and
+   two spools with different budgets would then never converge — the ADR 006 lesson, and the same reason
+   `ForwardEntity.attachmentHash` stays out of `StoreDigest` and `CARRIER_BLOB_BUDGET_BYTES` is a purely
+   local knob. It also means `maxAttachBytes` is the operator's alone and is **not** in the SUB-declared
+   `ScopeBounds`: members must agree on what the digest folds, and on nothing else.
+2. **`aid` is keyed, not the attachment hash itself.** `aHash` travels the mesh in the clear, so an
+   unkeyed id would hand a spool that has any source of candidate hashes a confirmation oracle linking a
+   frame to a scope. `HKDF(nonceKey, "…/aid" ‖ scopeId ‖ aHash)` closes it — §4.3's known-plaintext
+   argument applied to the one object that actually travels in cleartext.
+3. **Fixed 48 KiB chunks are structural, not tunable.** A constant chunk size is what makes a chunk's
+   position derivable from the attachment alone, so there is no manifest object for two members to
+   disagree about, and the sealed chunk (49221 B) still fits the 64 KiB `maxBlob`. The header
+   (`aHash ‖ index ‖ total`) is sealed *inside*, so a member cannot replay a chunk elsewhere; the
+   decisive check is still that the reassembled bytes hash to the address the frame named.
+4. **Capability negotiation is a gate, not a hint.** Three HELLO limits, present together or absent
+   together. The reason is mechanical: an unknown record is *skipped*, and a skipped request is never
+   answered, so an optimistic `ahave` to a v1 spool strands that `q` until the 30 s timeout — once per
+   attachment, per scope, per round. `FakeSpool(attachments = false)` models exactly that and the test
+   asserts not one attachment record goes out.
+5. **Partial downloads stay in memory.** M3's "derived, never stored" property is worth more than saving
+   a re-fetch, and a partial-chunk table would be the first thing to break it. The cost is honest — a
+   process death mid-transfer refetches that attachment — and the spool-side bitmap already makes the
+   *upload* half resume for free (a test pins that only the missing chunk is re-sent). Persisting the
+   download half is registered in §11.
+
+One bound stated rather than engineered away: the want set derives from **custody**, whose 24 h TTL is
+shorter than a scope's 48 h, so a frame that has aged out locally stops driving a fetch even while the
+spool still holds the bytes. That matches the mesh carrier's own behaviour and keeps the seam small.
+
+Scheme spec: docs/SPOOL_PROTOCOL.md §4.5/§6.5/§7.3/§9.5; wire posture: docs/WIRE_COMPAT.md (its
+no-mesh-change precedent entry); deferred remainder: memory/roadmap.md.

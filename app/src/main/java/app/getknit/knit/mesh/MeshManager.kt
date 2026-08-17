@@ -54,6 +54,7 @@ import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.mesh.spool.GroupRootPolicy
 import app.getknit.knit.mesh.spool.GroupRootStore
 import app.getknit.knit.mesh.spool.GroupScopeRoots
+import app.getknit.knit.mesh.spool.ScopeBlobs
 import app.getknit.knit.mesh.spool.ScopeRegistry
 import app.getknit.knit.mesh.spool.ScopeRoots
 import app.getknit.knit.mesh.spool.ScopeSync
@@ -266,6 +267,10 @@ class MeshManager(
                 selfId = { identity.nodeId() },
                 urls = { if (settings.spoolEnabled.first()) settings.spoolUrls.first().toList() else emptyList() },
                 canCarry = pipeline::canCarry,
+                blobs = scopeBlobs(),
+                // The same hook a radio pull fires, so NSFW screening, the message rows, and the UI all
+                // run unchanged for a spool-delivered image (§9.5).
+                onAttachmentObtained = pipeline::onObtained,
                 deliver = { wire, env, from -> router.handleInbound(wire, env, from) },
                 metrics = metrics,
                 clock = clock,
@@ -913,6 +918,24 @@ class MeshManager(
         val seeds = groupRatchet.currentSeeds(gk.groupId)
         sendSeedDm(gk.groupId, senderId, groupKeyPayload(gk.groupId, seeds), seeds.firstOrNull()?.epoch, identity.nodeId())
     }
+
+    /**
+     * The Internet plane's view of the local blob store (spec §9.5). Content-addressed and
+     * write-once, so `save` is the same insert the radio path performs — a re-arrival is a no-op at
+     * the DAO's `OnConflictStrategy.IGNORE`, and GC still bounds it through the ordinary references.
+     */
+    private fun scopeBlobs(): ScopeBlobs =
+        object : ScopeBlobs {
+            override suspend fun has(aHash: String): Boolean = blobs.exists(aHash)
+
+            override suspend fun bytes(aHash: String): ByteArray? = blobs.bytes(aHash)
+
+            override suspend fun save(
+                aHash: String,
+                mime: String,
+                bytes: ByteArray,
+            ) = blobs.insert(aHash, mime, bytes)
+        }
 
     /**
      * The scope table's group half: every group we hold that has a root, paired with the founding roster

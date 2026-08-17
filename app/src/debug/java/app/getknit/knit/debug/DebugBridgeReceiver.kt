@@ -779,6 +779,8 @@ class DebugBridgeReceiver :
             .put("spoolBridged", snap.spoolBridged)
             .put("spoolInvalid", snap.spoolInvalid)
             .put("spoolErrors", snap.spoolErrors)
+            .put("spoolAttachPushed", snap.spoolAttachPushed)
+            .put("spoolAttachPulled", snap.spoolAttachPulled)
 
     /**
      * Configures and inspects the Internet (spool) plane — the only way to drive it on a locked lab

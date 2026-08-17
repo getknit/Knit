@@ -415,14 +415,15 @@ always-present Nearby room plus one row per DM thread; the contacts picker start
 
 Images are **content-addressed** and pulled on demand, so the (large) bytes don't ride the flood.
 
-- **`AttachmentStore`** — `ingest(uri)` returns `Ingested(hash, mime, path)`: GIFs are copied
-  verbatim (animation preserved); other images are EXIF-oriented, downscaled to `MAX_DIMENSION = 1280`,
-  and re-encoded JPEG q85; inputs are rejected if empty or `> 8 MiB`. The **SHA-256** of the stored
-  bytes is the hash; files live at `filesDir/attachments/<hash>.<ext>` (the mime is encoded in the
-  extension and recovered from it — not stored separately). `saveIncoming(hash, mime, srcPath)`
-  copies a received file into place (and dedupes if already present). **Note:** `saveIncoming` trusts
-  the supplied hash and does not re-verify it; only the local `ingest` path computes the hash from
-  bytes.
+- **`AttachmentStore`** — `ingest(uri)` returns `IngestResult.Success(Ingested(hash, mime), flagged)`
+  or `IngestResult.Failed`: GIFs are transcoded to animated WebP (`data/webp/WebpTranscode`, animation
+  preserved); other images are EXIF-oriented, downscaled to `MAX_DIMENSION = 1280`, and re-encoded
+  JPEG q85; inputs are rejected if empty or `> MAX_BYTES` (8 MiB). The **SHA-256** of the stored bytes
+  is the hash, and the bytes live in the encrypted `blobs` table, not as files — only in-flight
+  transfers touch the disk, through the `blobtx` cache dir. `MeshBlobStore.saveIncoming(hash, mime,
+  srcPath)` ingests a received file and **re-verifies** that the bytes hash to the peer-supplied
+  address before storing it, since a holder must not be able to serve arbitrary bytes under someone
+  else's content address.
 - **`BlobExchange`** (with the `BlobStore` interface `has`/`fileFor`/`mimeFor`/`saveIncoming`,
   adapted over `AttachmentStore`) implements a hop-by-hop pull:
   - `want(hash)` — returns early if held or already in flight (`fetching` set); otherwise sends a
@@ -446,6 +447,13 @@ message whose bytes aren't present yet (`MessageDao.hashesNeedingFetch()`) — a
 attachment referenced by a **carried store-and-forward frame** whose bytes are missing
 (`ForwardStore.attachmentHashesNeedingFetch()`, gated by the carrier budget below), so a carrier keeps
 retrying the image it is custodying for a late joiner.
+
+**Over the Internet.** The same image crosses the spool plane as a second object class beside frames:
+sealed and chunked under the scope keys, stored against a per-scope byte quota, and fetched on demand
+from the cleartext hash the frame already carries (`docs/SPOOL_PROTOCOL.md` §4.5/§9.5,
+`mesh/spool/ScopeAttachments`). It reuses this section's whole local half — the bytes land in `blobs`
+and fire the same `onObtained` hook a radio pull does, so screening, the message row, and the UI are
+unchanged.
 
 **Blob custody.** Store-and-forward carries the *frame* but historically not the image bytes,
 so a custodied message re-served to a late joiner — after the sender and every recipient who pulled it

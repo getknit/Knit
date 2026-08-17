@@ -80,7 +80,7 @@
     <string name="chat_message_hint">Knit Message</string>
     <string name="chat_typing">%1$s is typing</string>
     <string name="chat_typing_multiple">%1$s and others are typing</string>
-    <string name="chat_loading_photo">Photo appears when a nearby device has it</string>
+    <string name="chat_loading_photo">Photo appears once a device that has it is reachable</string>
     <string name="chat_sending">Sending…</string>
     <string name="chat_attachment_image_desc">Photo attachment</string>
     <string name="chat_view_photo">View photo</string>
@@ -300,6 +300,8 @@
     <string name="diagnostics_metric_spool_bridged">Messages received via Internet relays</string>
     <string name="diagnostics_metric_spool_invalid">Relay blobs quarantined</string>
     <string name="diagnostics_metric_spool_errors">Relay errors</string>
+    <string name="diagnostics_metric_spool_attach_pushed">Photo chunks sent to Internet relays</string>
+    <string name="diagnostics_metric_spool_attach_pulled">Photos received via Internet relays</string>
     <string name="diagnostics_controls">Mesh controls</string>
     <string name="diagnostics_status_healthy">Mesh status: Healthy</string>
     <string name="diagnostics_status_degraded">Mesh status: Degraded</string>

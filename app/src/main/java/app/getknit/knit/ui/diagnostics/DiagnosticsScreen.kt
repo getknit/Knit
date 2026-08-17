@@ -324,6 +324,12 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
             if (metrics.spoolErrors > 0) {
                 MetricRow(stringResource(R.string.diagnostics_metric_spool_errors), metrics.spoolErrors.toString())
             }
+            // Attachments (spec §9.5) get their own rows: they are counted in chunks out and whole
+            // images in, which is the difference between "an upload is progressing" and "a photo arrived".
+            if (metrics.spoolAttachPushed > 0 || metrics.spoolAttachPulled > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_spool_attach_pushed), metrics.spoolAttachPushed.toString())
+                MetricRow(stringResource(R.string.diagnostics_metric_spool_attach_pulled), metrics.spoolAttachPulled.toString())
+            }
         }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an
         // intermittent "can link one peer but not the second" is visible and attributable (RADIO vs other).

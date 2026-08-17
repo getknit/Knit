@@ -1,21 +1,25 @@
 # The spool protocol — scoped, blinded store-and-forward relays for the Internet plane
 
-Status: **normative spec, v1 draft** · 2026-08-15, updated 2026-08-16 (twice) · ADR 019. This document is
+Status: **normative spec, v1 draft** · 2026-08-15, updated 2026-08-16 (three times) · ADR 019. This document is
 the normative spec and is public from day one; `mesh/crypto/scope/` (`ScopeCrypto`, `SpoolPow`) and
-`mesh/spool/` (`SpoolRecords`) are the reference implementation of the
-derivation/sealing/digest/PoW/record sections, and
-`ScopeCryptoTest`/`ScopeVectorTest`/`SpoolPowTest`/`SpoolRecordsTest` are the executable anchors
-(§13's vectors are those tests' pinned constants, verbatim). The reference spool daemon
-(`knit-spool`, AGPL-3.0) and its 22-check conformance suite exist as of 2026-08-16; the Android
-client plane (`ScopeSync`) follows. **All of them implement this file, not each other.** Nothing in
-the app speaks this protocol yet. *The first 2026-08-16 update resolved eight ambiguities the daemon
+`mesh/spool/` (`SpoolRecords`, `ScopeAttachments`) are the reference implementation of the
+derivation/sealing/chunking/digest/PoW/record sections, and `ScopeCryptoTest`/`ScopeVectorTest`/
+`SpoolPowTest`/`SpoolRecordsTest`/`ScopeAttachmentsTest` are the executable anchors (§13's vectors are
+those tests' pinned constants, verbatim). The reference spool daemon (`knit-spool`, AGPL-3.0) and its
+conformance suite exist as of 2026-08-16, as does the Android client plane (`ScopeSync`).
+**All of them implement this file, not each other.** *The first 2026-08-16 update resolved eight ambiguities the daemon
 implementation surfaced — semantic clarifications only (§6.2, §6.4, §7.1, §7.2, §12); no wire
 field, vector, or derivation changed. The second lands with group scopes (M4): §3.2's v1 mint opens
 from the creator to **any member** (preferred-minter-plus-grace damping, which also unfreezes a
 departure re-mint whose re-minter never comes back), §3.2 adoption gains two mandatory insider-DoS
 bounds, and §4.4 pins where a group frame's id actually lives. Again no wire field, no derivation,
 no §13 vector changed — spool implementations need no update at all, since a spool never sees a
-root.*
+root. The third lands with attachments (M5): §4.5, §6.5, §7.3 and §9.5 are new, added as fresh
+sub-numbers so no existing cross-reference moves. This is the first change that **does** ask
+something of spool implementations — an attachment-capable spool advertises three new HELLO limits
+and answers five new records, and one that does not simply omits them and is left alone. Still no
+mesh wire field, no existing derivation touched, and no existing §13 vector changed; §12 and §13
+gain rows rather than losing any.*
 
 Sections are tagged by audience: **[Spool]** is everything a relay implementer needs (no crypto —
 a spool never decrypts anything), **[Client]** is member-side, **[Both]** is shared.
@@ -48,10 +52,14 @@ impossible by construction; that is simultaneously the privacy story and the abu
 quotas and PoW are the whole toolkit). Spools are cattle: losing one loses nothing a member can't
 refill.**
 
+- An **attachment** — the image bytes a frame references rather than carries — rides the same scope
+  as a second, separate object class: sealed and chunked (§4.5), stored under a per-scope *byte*
+  quota (§6.5), fetched on demand by the member that holds the referencing frame (§9.5). It is
+  deliberately outside the frame digest, for the reason §6.5 states.
+
 Non-goals (v1): carrying the plaintext Nearby broadcast room (proximity semantic, spam surface);
 contact discovery or any server-side identity; spool-to-spool federation; resistance to a global
-passive network observer (Tor optionally covers the IP edge; padding is future study, §11);
-attachments (§11).
+passive network observer (Tor optionally covers the IP edge; padding is future study, §11).
 
 ## 2. Conventions and encodings [Both]
 
@@ -293,6 +301,56 @@ A frame that passes re-enters delivery inside a fresh mesh envelope with a full 
 custody re-serve path — so it re-floods the local mesh; dedup, idempotent delivery, and roster
 vetting are the existing inbound gates, unchanged.
 
+### 4.5 Attachments [Client]
+
+A chat frame does not carry its image; it names one. The name is the *ciphertext* hash of the
+attachment, and it rides the mesh in **cleartext** on the frame (`ChatContent.attachmentHash`) so a
+carrier blind to the sealed content can still custody the bytes. The plane carries the bytes as a
+second object class beside frames.
+
+The input is that same attachment ciphertext `A` — already AEAD-encrypted end to end under a fresh
+per-send key that lives inside the sealed `MessageContent`, and already content-addressed by
+`aHash = SHA-256(A)`. This layer does not re-protect the content, which is already opaque; it blinds
+the *routing* of it, exactly as §4.2's outer seal does for frames.
+
+```
+aid       = HKDF(ikm = nonceKey, info = "knit/scope/v1/aid" ‖ scopeId ‖ aHash, L = 32)
+total     = ceil(|A| / aChunkBytes)                          // aChunkBytes = 49152 (§12)
+chunk_i   = A[i·aChunkBytes … min((i+1)·aChunkBytes, |A|))
+apt_i     = aHash(32) ‖ u32be(i) ‖ u32be(total) ‖ chunk_i
+nonce_i   = HKDF(ikm = nonceKey, info = "knit/scope/v1/anonce" ‖ SHA-256(apt_i), L = 12)
+aad       = "knit/scope/v1/attach" ‖ scopeId
+ct_i      = AES-256-GCM(key = sealKey, nonce_i, apt_i, aad)
+achunk_i  = 0x03 ‖ nonce_i(12) ‖ ct_i
+cid_i     = SHA-256(achunk_i)
+```
+
+Why each piece is shaped this way:
+
+- **`aid` is keyed, not `aHash` itself.** `aHash` is public on the mesh. An unkeyed attachment id
+  would hand a spool that has *any* source of candidate hashes — an operator who also runs a node in
+  radio range, a harvested disk — a confirmation oracle linking a mesh frame to a scope id. This is
+  §4.3's known-plaintext argument applied to the object that actually travels in the clear, and it is
+  the one place where the attachment plane is more exposed than the frame plane if you get it wrong.
+- **`sealv = 0x03`.** Distinct from the frame seal's `0x01`, and from the `0x02` reserved for the
+  epoch-keyed frame seal (§11), so the two openers can never be fed each other's blobs. The aad
+  prefixes differ too, and cannot alias: the scope id that follows is fixed-width, so a frame aad is
+  always 45 bytes and a chunk aad 52.
+- **Chunking is fixed-size and structural, not tunable.** A constant `aChunkBytes` is what makes a
+  chunk's position a function of the attachment alone — there is no manifest object, and therefore
+  nothing for two members to disagree about. A sealed chunk is `1 + 12 + 40 + 49152 + 16 = 49221`
+  bytes, comfortably inside the 64 KiB `maxBlob`.
+- **The header is inside the seal.** `aHash ‖ index ‖ total` binds each chunk to its attachment and
+  its position, so a chunk cannot be replayed elsewhere even by a scope member.
+- **Deterministic, like §4.3.** Every member seals a given chunk to identical bytes, so cross-uploader
+  dedup and idempotent re-push hold with no coordination.
+
+**Chunks are addressed by `(aid, index)`, never by `cid`** — a fetcher cannot know a chunk's content
+address before fetching it. `cid` exists so a spool can verify what it is asked to store, the way
+`blobId` does for a frame. Integrity for the fetcher is the AEAD, then the sealed header, then the
+decisive check: the reassembled bytes must hash to `aHash`, the address the frame named. A member
+that fails any of these treats the attachment the way §9.3 treats a bad blob.
+
 ## 5. Scope configuration [Client]
 
 A scope's operating parameters ride *inside the conversation itself*, end-to-end sealed like any
@@ -405,6 +463,40 @@ frame-id strings.)
 - **Private spools**: a bearer token in the WSS URL (§7.1) — zero-config access control for
   self-hosters; the URL lives only inside the sealed scope config anyway.
 
+### 6.5 Attachments at the spool [Spool]
+
+A spool that supports attachments (it says so in HELLO — §7.3) keeps, per scope, a second table
+alongside §6.1's: per `aid`, the declared `total`, the bytes held, an `arrivedAt`, and the stored
+chunks keyed by index. Chunks are opaque, exactly like frame blobs.
+
+- **The quota is bytes, not objects, and it is the spool's alone.** Per-scope `maxAttachBytes`, taken
+  straight from the spool's HELLO — deliberately **not** added to the SUB-declared `ScopeBounds`.
+  Members must agree on the frame bounds because the frame digest folds over them; attachments are
+  outside the digest, so a per-scope declaration would buy no convergence and only add a field two
+  members could disagree about. Over budget, evict the **oldest whole `aid`** by `arrivedAt` — never
+  individual chunks. Half an attachment is useless to every member and would show up in the bitmap as
+  progress that can never complete. An attachment that cannot fit the budget even alone is refused
+  `quota`.
+- **TTL is stamped at the first chunk and never extended.** Otherwise a member trickling one chunk an
+  hour pins an attachment indefinitely.
+- **Tombstones**, in the §6.2 shape and with the same TTL and count bound: an evicted or expired `aid`
+  is remembered, `aput` against it is refused `tombstoned`, and `ahave` answers `dead`. Without this
+  a member re-uploads what the spool just dropped, forever.
+- On `aput` a spool **must** verify `cid = SHA-256(data)` (refuse `bad_id`) and enforce `maxAChunk`.
+  **First write wins** at a position: an identical `cid` is acked idempotently, a differing one is
+  refused `conflict`. Honest members never differ, because §4.5's seal is deterministic; the refusal
+  exists so one member cannot poison an attachment for the rest of the scope.
+- A whole-scope shed (§6.4) drops that scope's attachments and their tombstones with it.
+
+**Attachments are never folded into the scope digest.** This is the load-bearing decision of the
+section, and it is the mesh's own lesson restated: anything a digest folds over must be bounded by a
+rule identical on every node, or the two sides never converge and re-attempt forever. A byte quota is
+precisely the kind of operator- and device-tunable knob that cannot be identical, which is why the
+mesh keeps `ForwardEntity.attachmentHash` out of `StoreDigest` and bounds carrier blobs with a purely
+local budget. Attachment presence is therefore discovered by **asking** (`ahave`) rather than by
+anti-entropy, and a spool holding fewer attachments than a member is not divergence — it is the
+quota working.
+
 ## 7. Records [Both]
 
 ### 7.1 Binding
@@ -430,7 +522,7 @@ Field names are the CBOR map keys. `bstr32`/`bstr8` = byte strings of that lengt
 
 | Record | Direction | Fields | Semantics |
 |---|---|---|---|
-| `hello` | both, first | `t, v: Int` (+ spool→client: `min: Int, limits, powBits: Int`) | version negotiation; `limits = { maxBlob, maxRecord, maxScopes, maxPull, maxFramesCap: Int, maxTtlMs: Long }`; `powBits = 0` disables PoW |
+| `hello` | both, first | `t, v: Int` (+ spool→client: `min: Int, limits, powBits: Int`) | version negotiation; `limits = { maxBlob, maxRecord, maxScopes, maxPull, maxFramesCap: Int, maxTtlMs: Long }` plus, on a spool that supports attachments, `maxAttachBytes, maxAChunk, maxAget: Int` (§7.3); `powBits = 0` disables PoW |
 | `sub` | c→s | `t, q: Long, subs: [ { scope: bstr32, bounds: { maxFrames: Int, ttlMs: Long, maxBlob: Int }, pow?: { n: Long, d: Long } } ]` | subscribe + declare bounds; unknown scope with PoW on ⇒ valid stamp or `err pow`; response: one `digest` (or scoped `err`) per scope |
 | `digest` | s→c | `t, scope: bstr32, digest: bstr8, count: Int, full: Bool, bounds` | the anti-entropy cue — sent on sub and whenever the spool chooses (e.g. after eviction); the client treats the latest as the anchor |
 | `list` | c→s / s→c | `t, q, scope` / `t, q, scope, blobIds: [bstr32], tombstones: [bstr32]` | the id exchange behind a digest mismatch |
@@ -442,9 +534,10 @@ Field names are the CBOR map keys. `bstr32`/`bstr8` = byte strings of that lengt
 | `err` | s→c | `t, code: String, q?: Long, scope?: bstr32, msg?: String, retryMs?: Long` | terminal error; connection-scoped when `q` absent |
 
 Error codes (append-only registry; unknown codes are terminal-generic): `version`, `pow`,
-`tombstoned`, `quota`, `too_large`, `bad_id`, `rate`, `not_subscribed`, `malformed`, `internal`.
-`version` is **reserved, never emitted in v1** — a hello mismatch is close `4002`, not a record;
-the code exists for a future record-level versioning use so it is never recycled.
+`tombstoned`, `quota`, `too_large`, `bad_id`, `rate`, `not_subscribed`, `malformed`, `internal`,
+`conflict`. `version` is **reserved, never emitted in v1** — a hello mismatch is close `4002`, not a
+record; the code exists for a future record-level versioning use so it is never recycled. `conflict`
+is emitted only by `aput` (§7.3).
 
 Clarifications (v1 semantics the reference daemon and conformance suite pin):
 
@@ -459,6 +552,33 @@ Clarifications (v1 semantics the reference daemon and conformance suite pin):
 - **Duplicate `push`** (blobId already live): acked `ok`, **no** `event` fan-out — the push row's
   "fans out `event`" applies to newly stored blobs only. Content addressing makes the duplicate
   byte-identical, so subscribers already have it or will heal via digest.
+
+### 7.3 Attachment records
+
+| Record | Direction | Fields | Semantics |
+|---|---|---|---|
+| `ahave` | c→s | `t, q, scope: bstr32, aid: bstr32` | what does this spool hold for this attachment; answered by `ahas` |
+| `ahas` | s→c | `t, q, scope, aid, total: Int, bits: bstr, dead: Bool` | `total = 0` ⇒ never seen; `dead` ⇒ tombstoned (§6.5); `bits` is the presence bitmap — chunk *i* is bit *i mod 8*, **MSB-first**, of byte *i div 8* |
+| `aget` | c→s | `t, q, scope, aid, from: Int, n: Int` (≤ `maxAget`) | answered by `achunk`* then a bare `ok { q }` |
+| `achunk` | s→c | `t, scope, aid, idx: Int, total: Int, cid: bstr32, data: bstr` | one sealed chunk; carries no `q`, exactly like `blob` |
+| `aput` | c→s | `t, q, scope, aid, idx, total, cid: bstr32, data: bstr, pow?` | store one sealed chunk |
+
+- Indices the spool lacks simply do not arrive from `aget`. The client already knows which those are
+  from the bitmap, so nothing enumerates them back and `ok.missing` stays a frame-only field. An
+  `aget` overshooting `maxAget` is truncated, never an error — the `pull` rule (§7.2), reapplied.
+- `aput` follows §6.5: `cid` verified, `maxAChunk` and the byte quota enforced, tombstones refused,
+  first write wins with `conflict` on a differing re-write.
+- Attachments are **not** fanned out with `event`. A member learns an attachment exists from the frame
+  that names it, not from the spool, so a push-time fan-out would deliver bytes nobody has a reference
+  for yet.
+
+**Capability negotiation is a gate, not a hint.** A spool advertises attachment support by including
+`maxAttachBytes`, `maxAChunk` and `maxAget` in HELLO's `limits` — all three, or none. A client
+**must not** send `ahave`/`aget`/`aput` to a spool that omitted them. The reason is mechanical rather
+than stylistic: §2's rule is that unknown records are *skipped*, and a skipped request is never
+answered, so an optimistic `ahave` to a v1 spool leaves that `q` outstanding until the client's
+request timeout — once per attachment, per scope, per heal round. Support is additive and needs no
+record-layer version bump precisely because the flag carries it.
 
 ## 8. Proof of work [Both]
 
@@ -512,6 +632,42 @@ Symmetrically, frames the member custodies for a scope (from the mesh or its own
 and pushed. One Internet-connected member thus bridges a whole radio island in both directions with
 zero new delivery semantics.
 
+### 9.5 Attachments — the fetch and refill procedure
+
+Both working sets are derived from what the member already holds; nothing about attachments is
+persisted by this plane:
+
+- **want(scope)** — live custodied frames that pass §4.4 for the scope, whose cleartext
+  `attachmentHash` is set, and whose bytes are absent locally.
+- **have(scope)** — the same, bytes present.
+
+Per heal round, per (spool, scope), for a small bounded number of attachments at a time:
+
+1. `ahave` for the `aid` (§4.5). `dead` ⇒ give up on this spool for this attachment; `total = 0` ⇒
+   nothing to pull, but the push half below may still apply.
+2. `aget` the indices the bitmap marks absent locally, in `maxAget` batches. Open each chunk, check
+   its header against what was asked for, buffer it.
+3. When complete, verify `SHA-256(reassembled) = aHash` and hand the bytes to the ordinary local blob
+   store, so screening, the message row, and the UI all update exactly as they do after a radio pull.
+4. Push half: `aput` the indices the bitmap marks missing at the spool, bounded by the byte budget and
+   by §9.2's dead-on-arrival guard applied to the newest frame that references the attachment. A
+   retiring scope (§3.1/§3.3) is pulled but never refilled, mirroring frames.
+
+Any failure — AEAD, a header that does not match the request, a final hash mismatch — **quarantines
+the `aid`** per (spool, scope), the §9.3 invalid-set rule extended. The argument is identical: a spool
+is untrusted storage, and without an accounted invalid set a single bad chunk is re-fetched on every
+round forever.
+
+Partial downloads live in memory and are **not** persisted. That is a deliberate cost: a process
+death mid-transfer re-fetches that attachment. It buys the plane's no-new-persistence property (the
+blob-id set is derived, never stored), and the spool-side bitmap already makes the *upload* half
+resume for free. Persisting partial downloads is registered in §11.
+
+One honest bound: the want set comes from **custody**, whose TTL (24 h on the mesh) is shorter than a
+scope's (48 h). A frame that has aged out of local custody stops driving an attachment fetch even
+though the spool may still hold the bytes. This matches the mesh's own carrier behaviour and keeps the
+derivation seam small; it is not a convergence problem, only a missed opportunity at the tail.
+
 ## 10. Security and privacy claims (honest) [Both]
 
 What a spool (or its disk's taker) observes:
@@ -522,6 +678,12 @@ What a spool (or its disk's taker) observes:
   between IPs, the honest residual leak. **Tor removes it** at battery/latency cost (client SOCKS
   routing; a later milestone ships the toggle). Scope multiplexing over one WSS already blurs
   per-scope timing somewhat; padding/cover traffic is future study (§11).
+- for attachments, a **stronger size signal than frames give**: that a scope holds an object of
+  roughly `total × 48 KiB`, when it was uploaded, and how many subscribers fetched it. Chunking
+  quantises this to 48 KiB, and the keyed `aid` (§4.5) keeps the attachment unlinkable across scopes
+  and un-confirmable against a candidate hash — but "this conversation exchanged a ~4 MB image at
+  09:14" is visible in a way "this conversation exchanged some frames" is not. That is the price of
+  carrying bytes at all, and it is why the byte quota is per scope.
 
 What it cannot do:
 
@@ -561,15 +723,14 @@ the damage; a TOFU scope-auth extension is registered in §11).
 Deliberately open, additively reachable, in no order: a cleartext `sentAt` hint on PUSH (true-age
 eviction at the cost of upload-time metadata — revisit with soak data); UnifiedPush wake-ups
 (per-scope random topics to dodge endpoint linkability); a QUIC binding with its own framing;
-attachments (sealed content-addressed blobs with a per-scope byte quota — the current
-un-fetchable-image gap); storage watermark trim; padding/cover traffic; per-conversation opt-out
-UX; **scope auth** (a TOFU `HKDF(scopeRoot, …)` credential closing the leaked-scopeId
-subscribe/flood hole §10 accepts); time-based group root re-mint (periodic metadata-PFS and spool
-unlinkability using the existing §3.2 machinery); **`sealv = 2`** — the epoch-keyed outer seal (the
-ratchet `exportEpochSeal` surfaces are reserved for it); client→spool `digest` (the record is
-direction-agnostic already); a `CAP_SPOOL` capability bit if client UX ever needs a peer-support
-signal. *(The any-member v1-mint fallback this list used to register is no longer an extension —
-§3.2 makes it the base rule.)*
+storage watermark trim; padding/cover traffic; per-conversation opt-out UX; **scope auth** (a TOFU
+`HKDF(scopeRoot, …)` credential closing the leaked-scopeId subscribe/flood hole §10 accepts);
+time-based group root re-mint (periodic metadata-PFS and spool unlinkability using the existing §3.2
+machinery); **`sealv = 2`** — the epoch-keyed outer seal (the ratchet `exportEpochSeal` surfaces are
+reserved for it); client→spool `digest` (the record is direction-agnostic already); a `CAP_SPOOL`
+capability bit if client UX ever needs a peer-support signal; **persisted partial attachment
+downloads** (§9.5 keeps them in memory, so a process death re-fetches). *(Two entries left this list
+by shipping: the any-member v1 mint is now §3.2's base rule, and attachments are §4.5/§6.5/§7.3/§9.5.)*
 
 ## 12. Constants [Both]
 
@@ -590,6 +751,12 @@ signal. *(The any-member v1-mint fallback this list used to register is no longe
 | `maxRootVersion` / `maxRootVersionJump` | 16 / 8 | §3.2 adoption bound; the roster caps at 8, so legitimate versions never approach it |
 | PoW default / window | 20 bits / ±1 day UTC | §8 |
 | suggested `maxScopes` / `maxPull` | 64 / 64 | HELLO-advertised, spool-tunable |
+| `aChunkBytes` | 49152 (48 KiB) | §4.5 — **structural**, not tunable: it is what makes a chunk's position derivable without a manifest |
+| attachment `sealv` | `0x03` | §4.5; `0x01` is the frame seal and `0x02` stays reserved for the epoch-keyed one |
+| sealed chunk size | 49221 B (`1 + 12 + 40 + 49152 + 16`) | §4.5 — sized to stay inside the 64 KiB `maxBlob` |
+| max attachment / `total` | 8 MiB / ≤ 171 chunks | the app's own attachment cap; bounds every allocation sized by a peer-supplied `total` |
+| default per-scope `maxAttachBytes` | 16 MiB | §6.5 — 2× one maximal attachment, so a scope holds a little history without becoming storage |
+| suggested `maxAget` | 32 | ≈1.5 MiB per batch; HELLO-advertised, spool-tunable |
 
 Defaults marked "default"/"suggested" are operator- or config-tunable; the structural constants
 (widths, `sealv`, the digest function) are the protocol.
@@ -632,6 +799,21 @@ blob   = 01e6844e8145bbc9581e53f9b0c4019dba5968bb7216685432e7412e1e9a56c8136af08
          df038f08613fa34fd474f93da53da1a05c0350bf9b681290b880083a5593839b08b2496f79d7ddcaefc40943
          d1c0757ce594a12326d551e07a62528d62744ef30b9b24bea8a58856a6545436d099519a1706e1308b3ffe432e
 blobId = 8e5c2b6d8be66bb1204b644ebcc62f923bb27b659ecffb9344d35f7eb930d9c2
+```
+
+Attachment seal (§4.5; same DM keys/scopeId; `aHash = fixture(32, 6)`, a **one-chunk** attachment —
+`total = 1` makes chunk 0 the final chunk, the one that may be short, so the vector stays quotable
+instead of carrying 48 KiB):
+
+```
+aHash  = fixture(32, 6)  = 060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8df
+chunk0 = fixture(48, 7)  = 070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0
+                           e7eef5fc030a11181f262d343b424950
+aid    = 4bb7dde9341d80ff87ea9f6709699f68f859ff9268fac97aa809e0f8c8d48bb1
+achunk = 036f83df42c1392e66eb87ae260f86d05080e007e9d59c6502eca05fd814664927416d29899375df3405d156
+         4e7122a16eb5a095169dfa56d078b24fcae72a6c2c1089f75ffdd9c427706abc7dba44a5cb2847c95128a2c1
+         d5360cb13980a80f2800bd718b7686b39cce91674728902979241dd815
+cid    = e21f04fd3f95cade1a9a7424f6ab9bb45a9e185c836524c9ae7920a8fdfe0c27
 ```
 
 Digest (§6.3):
@@ -690,4 +872,36 @@ okMissing    = a36174626f6b617103676d697373696e67815820040b121920272e353c434a515
 errScoped    = a461746365727264636f64656a746f6d6273746f6e65646171046573636f7065582001080f161d242b32
                3940474e555c636a71787f868d949ba2a9b0b7bec5ccd3da
 errRate      = a461746365727264636f64656472617465636d736769736c6f7720646f776e6772657472794d73197530
+```
+
+Attachment records (§7.3; `aid = fixture(32, 7)`, `cid = fixture(32, 8)`, `data = fixture(48, 6)`):
+
+```
+helloSpoolAttach = a561746568656c6c6f617601636d696e01666c696d697473a9676d6178426c6f621a00010000696d
+                   61785265636f72641a00020000696d617853636f7065731840676d617850756c6c18406c6d617846
+                   72616d65734361701903e8686d617854746c4d731a240c84006e6d61784174746163684279746573
+                   1a01000000696d6178414368756e6b19c045676d617841676574182067706f774269747314
+ahave            = a461746561686176656171056573636f7065582001080f161d242b323940474e555c636a71787f86
+                   8d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d545b626970777e858c939a
+                   a1a8afb6bdc4cbd2d9e0
+ahas             = a6617464616861736171056573636f7065582001080f161d242b323940474e555c636a71787f868d
+                   949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d545b626970777e858c939aa1
+                   a8afb6bdc4cbd2d9e065746f74616c0364626974734109
+ahasDead         = a7617464616861736171056573636f7065582001080f161d242b323940474e555c636a71787f868d
+                   949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d545b626970777e858c939aa1
+                   a8afb6bdc4cbd2d9e065746f74616c006462697473406464656164f5
+aget             = a6617464616765746171066573636f7065582001080f161d242b323940474e555c636a71787f868d
+                   949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d545b626970777e858c939aa1
+                   a8afb6bdc4cbd2d9e06466726f6d00616e02
+achunk           = a7617466616368756e6b6573636f7065582001080f161d242b323940474e555c636a71787f868d94
+                   9ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d545b626970777e858c939aa1a8
+                   afb6bdc4cbd2d9e0636964780165746f74616c03636369645820080f161d242b323940474e555c63
+                   6a71787f868d949ba2a9b0b7bec5ccd3dae164646174615830060d141b222930373e454c535a6168
+                   6f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f
+aput             = a9617464617075746171076573636f7065582001080f161d242b323940474e555c636a71787f868d
+                   949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d545b626970777e858c939aa1
+                   a8afb6bdc4cbd2d9e0636964780165746f74616c03636369645820080f161d242b323940474e555c
+                   636a71787f868d949ba2a9b0b7bec5ccd3dae164646174615830060d141b222930373e454c535a61
+                   686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f63706f77a261
+                   6e182a61641950c8
 ```

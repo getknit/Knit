@@ -195,6 +195,20 @@ DM chain as the pinned silent no-op. No discovery marker, no `EncEnvelope.v`, no
 no new ctl value is spent. The DB **does** bump (v2 → v3, the `group_roots` table) — local state only,
 with a tested `KnitMigrations` entry.
 
+**Precedent — a whole milestone that touches no mesh wire at all (attachments over spools, M5).** The
+spool plane's second feature milestone shipped image bytes across the Internet and added **no** field, no
+`type`, no ctl value, no capability bit, and no DB migration. Worth recording precisely because the
+default expectation is the opposite: every earlier plane milestone bought its capability with a wire
+change. What made it unnecessary is the DB v19 precedent above — `ChatContent.attachmentHash` /
+`attachmentMime` already ride in cleartext on E2E frames so a blind carrier can custody the image, and
+that is exactly the reference an Internet fetcher needs too. The attachment's *size* never had to join
+them, because the spool reports its chunk count. Everything new lives in the client↔spool record layer
+(`docs/SPOOL_PROTOCOL.md` §7.3), which has its own additive rules and its own vectors, so `GoldenVectorTest`
+is untouched and only `ScopeVectorTest`/`SpoolRecordsTest` gained rows — regenerated together, and
+independently re-pinned by `knit-spool`'s `SpecVectorTest`. *Metadata cost:* unchanged on the mesh; on the
+Internet plane a spool learns a scope holds an object of roughly `total × 48 KiB` (SPOOL_PROTOCOL §10),
+which is stronger than the frame signal and is why the byte quota is per scope.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

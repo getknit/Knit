@@ -31,8 +31,10 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   `docs/SPOOL_PROTOCOL.md` (the normative public spec; its §13 vectors are pinned by
   `ScopeVectorTest`/`SpoolRecordsTest` — change them only together), then the `ScopeSync` invariants in
   `.agents/rules/mesh.md`. The client plane carries DM **and group** scopes, off by default; the
-  scope-config ctl, the spool-list editor, attachments and Tor are still deferred — CHECK
-  `.agents/memory/roadmap.md` before building any of them. A group scope derives from the shared
+  scope-config ctl, the spool-list editor and Tor are still deferred — CHECK
+  `.agents/memory/roadmap.md` before building any of them. The plane also carries **attachments**
+  (`mesh/spool/ScopeAttachments`, spec §4.5/§6.5/§7.3/§9.5) as a separate object class kept out of the
+  scope digest on purpose. A group scope derives from the shared
   **group root** (`GroupKeyPayload.gr`, `mesh/spool/GroupRootPolicy`): any member may mint it, and its
   mint / gossip / adopt / departure-re-mint rules are spec §3.2 — read that before touching them. The
   reference daemon lives in the separate `knit-spool` repo.

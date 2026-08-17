@@ -29,6 +29,12 @@ class ScopeVectorTest {
 
     private fun sealedBlob() = ScopeCrypto.seal(dmKeys(), dmScopeId(), sig = bytes(64, 4), signed = bytes(40, 5))
 
+    // A one-chunk attachment: `total = 1` makes chunk 0 the final chunk, which is the one that may be
+    // short, so the vector stays quotable instead of carrying 48 KiB of fixture.
+    private val attachHash = bytes(32, 6)
+
+    private fun sealedChunk() = ScopeCrypto.sealChunk(dmKeys(), dmScopeId(), attachHash, index = 0, total = 1, chunk = bytes(48, 7))
+
     /** Every pinned value as lowercase hex, in a stable order. */
     private fun vectors(): Map<String, String> {
         val dmKeys = dmKeys()
@@ -44,6 +50,9 @@ class ScopeVectorTest {
             "groupNonceKeyV1" to groupKeys.nonceKey.toHex(),
             "sealBlob" to blob.toHex(),
             "sealBlobId" to ScopeCrypto.blobId(blob).toHex(),
+            "attachId" to ScopeCrypto.attachmentId(dmKeys, dmScopeId(), attachHash).toHex(),
+            "attachChunk" to sealedChunk().toHex(),
+            "attachChunkId" to ScopeCrypto.blobId(sealedChunk()).toHex(),
             "digestSet" to ScopeCrypto.digestBytes(ScopeCrypto.scopeDigest(listOf(bytes(32, 11), bytes(32, 12), bytes(32, 13)))).toHex(),
             "powDigest" to SpoolPow.digest(powScopeId, day = POW_DAY, n = POW_N).toHex(),
         )
@@ -98,6 +107,13 @@ class ScopeVectorTest {
                     "1290b880083a5593839b08b2496f79d7ddcaefc40943d1c0757ce594a12326d551" +
                     "e07a62528d62744ef30b9b24bea8a58856a6545436d099519a1706e1308b3ffe432e",
                 "sealBlobId" to "8e5c2b6d8be66bb1204b644ebcc62f923bb27b659ecffb9344d35f7eb930d9c2",
+                "attachId" to "4bb7dde9341d80ff87ea9f6709699f68f859ff9268fac97aa809e0f8c8d48bb1",
+                "attachChunk" to
+                    "036f83df42c1392e66eb87ae260f86d05080e007e9d59c6502eca05fd814664927" +
+                    "416d29899375df3405d1564e7122a16eb5a095169dfa56d078b24fcae72a6c2c10" +
+                    "89f75ffdd9c427706abc7dba44a5cb2847c95128a2c1d5360cb13980a80f2800bd" +
+                    "718b7686b39cce91674728902979241dd815",
+                "attachChunkId" to "e21f04fd3f95cade1a9a7424f6ab9bb45a9e185c836524c9ae7920a8fdfe0c27",
                 "digestSet" to "834b13d8dc060ce5",
                 "powDigest" to "00b776b91276563998bb57f8f3f73a05e0d8afcd3dce8a2583d6d466aadb620e",
             )

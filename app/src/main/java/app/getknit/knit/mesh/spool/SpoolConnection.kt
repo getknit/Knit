@@ -33,6 +33,13 @@ sealed interface SpoolReply {
         val missing: List<ByteArray>,
     ) : SpoolReply
 
+    /** `ahas` — one attachment's presence at this spool (§7.3). */
+    class Presence(
+        val total: Int,
+        val bits: ByteArray,
+        val dead: Boolean,
+    ) : SpoolReply
+
     /** `err` — [code] is from the append-only registry; unknown codes are terminal-generic. */
     class Failed(
         val code: String,
@@ -77,8 +84,12 @@ class SpoolConnection(
         // Only a PULL collects blobs: they carry no `q`, so a LIST or PUSH outstanding on the same
         // scope must not swallow them.
         val collectsBlobs: Boolean = false,
+        // The same trick for `achunk`, keyed one level finer: chunks carry no `q` either, and two
+        // attachments in one scope can legitimately be in flight at once.
+        val collectsChunksFor: String? = null,
         val reply: CompletableDeferred<SpoolReply> = CompletableDeferred(),
         val blobs: MutableList<SpoolBlob> = mutableListOf(),
+        val chunks: MutableList<SpoolAchunk> = mutableListOf(),
     )
 
     private val nextQ = AtomicLong(1)
@@ -157,6 +168,65 @@ class SpoolConnection(
             )
         }
 
+    /**
+     * Asks what this spool holds for one attachment (§7.3). Callers must gate on
+     * [SpoolLimits.attachments] first: a spool without attachment support skips the record silently,
+     * and this would then block until the request timeout.
+     */
+    suspend fun ahave(
+        scope: ByteArray,
+        aid: ByteArray,
+    ): SpoolReply.Presence? {
+        val reply =
+            request(hex(scope)) { q ->
+                SpoolCodec.encode(SpoolAhave(t = SpoolRecordType.AHAVE, q = q, scope = scope, aid = aid))
+            }
+        return reply as? SpoolReply.Presence
+    }
+
+    /** Fetches up to [n] chunks from [from]; an overshoot of `maxAget` is truncated, never refused. */
+    suspend fun aget(
+        scope: ByteArray,
+        aid: ByteArray,
+        from: Int,
+        n: Int,
+    ): List<SpoolAchunk>? {
+        var pendingEntry: Pending? = null
+        val reply =
+            request(hex(scope), collectsChunksFor = hex(aid), register = { pendingEntry = it }) { q ->
+                SpoolCodec.encode(SpoolAget(t = SpoolRecordType.AGET, q = q, scope = scope, aid = aid, from = from, n = n))
+            }
+        if (reply !is SpoolReply.Ok) return null
+        return pendingEntry?.chunks.orEmpty().toList()
+    }
+
+    /** Stores one sealed attachment chunk. The terminal reply carries `conflict`/`quota`/`tombstoned`. */
+    @Suppress("LongParameterList") // the record's own field list; a parameter object would only relocate it
+    suspend fun aput(
+        scope: ByteArray,
+        aid: ByteArray,
+        idx: Int,
+        total: Int,
+        cid: ByteArray,
+        data: ByteArray,
+        pow: PowStamp? = null,
+    ): SpoolReply =
+        request(hex(scope)) { q ->
+            SpoolCodec.encode(
+                SpoolAput(
+                    t = SpoolRecordType.APUT,
+                    q = q,
+                    scope = scope,
+                    aid = aid,
+                    idx = idx,
+                    total = total,
+                    cid = cid,
+                    data = data,
+                    pow = pow,
+                ),
+            )
+        }
+
     /** Consumes one inbound record. Malformed bytes are dropped — a client never closes on them. */
     @Suppress("ReturnCount") // a flat dispatch over the record registry; nesting it would read worse
     suspend fun onMessage(bytes: ByteArray) {
@@ -167,6 +237,8 @@ class SpoolConnection(
             SpoolRecordType.BLOB -> SpoolCodec.decode<SpoolBlob>(bytes)?.let(::onBlob)
             SpoolRecordType.LIST -> SpoolCodec.decode<SpoolList>(bytes)?.let(::onListing)
             SpoolRecordType.OK -> SpoolCodec.decode<SpoolOk>(bytes)?.let(::onOk)
+            SpoolRecordType.AHAS -> SpoolCodec.decode<SpoolAhas>(bytes)?.let(::onAhas)
+            SpoolRecordType.ACHUNK -> SpoolCodec.decode<SpoolAchunk>(bytes)?.let(::onAchunk)
             SpoolRecordType.ERR -> SpoolCodec.decode<SpoolErr>(bytes)?.let { onErr(it) }
             else -> Unit // unknown `t`: additive evolution — ignore, never close
         }
@@ -214,6 +286,22 @@ class SpoolConnection(
             ?.add(blob)
     }
 
+    private fun onAhas(ahas: SpoolAhas) {
+        pending.remove(ahas.q)?.reply?.complete(
+            SpoolReply.Presence(total = ahas.total, bits = ahas.bits, dead = ahas.dead),
+        )
+    }
+
+    private fun onAchunk(chunk: SpoolAchunk) {
+        // ACHUNK carries no `q`; it belongs to the in-flight AGET for its (scope, aid).
+        val scopeHex = hex(chunk.scope)
+        val aidHex = hex(chunk.aid)
+        pending.values
+            .firstOrNull { it.scopeHex == scopeHex && it.collectsChunksFor == aidHex }
+            ?.chunks
+            ?.add(chunk)
+    }
+
     private fun onListing(listing: SpoolList) {
         pending.remove(listing.q)?.reply?.complete(
             SpoolReply.Listing(listing.blobIds.orEmpty(), listing.tombstones.orEmpty()),
@@ -240,11 +328,12 @@ class SpoolConnection(
     private suspend fun request(
         scopeHex: String?,
         collectsBlobs: Boolean = false,
+        collectsChunksFor: String? = null,
         register: (Pending) -> Unit = {},
         encode: (Long) -> ByteArray,
     ): SpoolReply {
         val q = nextQ.getAndIncrement()
-        val entry = Pending(scopeHex, collectsBlobs)
+        val entry = Pending(scopeHex, collectsBlobs, collectsChunksFor)
         register(entry)
         pending[q] = entry
         if (!send(encode(q))) {

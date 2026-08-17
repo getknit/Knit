@@ -23,9 +23,14 @@ import java.util.concurrent.ConcurrentHashMap
  * list, PUSH with content-address re-verification / tombstone refusal / oldest-first eviction, and
  * EVENT fan-out that excludes the uploader.
  *
+ * The §7.3 attachment family is modelled too: presence bitmaps, first-write-wins at a position, the
+ * per-scope byte quota with whole-attachment eviction, and `aget` truncation at `maxAget`. Set
+ * [attachments] to false to model a v1 spool — one that advertises no attachment limits, and which the
+ * client must therefore never send an attachment record to.
+ *
  * It exists so the whole client plane — including the bidirectional heal loop — is exercised in plain
- * JVM tests. It is deliberately *not* a conformance oracle: `knit-spool`'s own 22-check suite is that,
- * and the byte-level record vectors are pinned by [SpoolRecordsTest] against `docs/SPOOL_PROTOCOL.md`.
+ * JVM tests. It is deliberately *not* a conformance oracle: `knit-spool`'s own suite is that, and the
+ * byte-level record vectors are pinned by [SpoolRecordsTest] against `docs/SPOOL_PROTOCOL.md`.
  */
 class FakeSpool(
     private val maxPull: Int = 64,
@@ -34,10 +39,27 @@ class FakeSpool(
     private val powBits: Int = 0,
     // Version the server advertises; a value below SPOOL_RECORD_VERSION exercises the no-overlap close.
     private val version: Int = SPOOL_RECORD_VERSION,
+    // false = a v1 spool: no attachment limits in HELLO, and any attachment record is silently skipped
+    // (never answered), which is exactly the stall a conforming client must avoid provoking.
+    private val attachments: Boolean = true,
+    private val maxAget: Int = 32,
+    private val maxAChunk: Int = 49_221,
+    private val maxAttachBytes: Int = 16_777_216,
 ) : SpoolDialer {
+    private class Attachment(
+        val total: Int,
+        val arrivedAt: Int,
+    ) {
+        val chunks = HashMap<Int, ByteArray>()
+        val cids = HashMap<Int, String>()
+        val bytes: Int get() = chunks.values.sumOf { it.size }
+    }
+
     private class ScopeState {
         val live = LinkedHashMap<String, ByteArray>()
         val tombstones = LinkedHashSet<String>()
+        val attachments = LinkedHashMap<String, Attachment>()
+        val attachTombstones = LinkedHashSet<String>()
     }
 
     private val scopes = ConcurrentHashMap<String, ScopeState>()
@@ -69,6 +91,9 @@ class FakeSpool(
                             maxPull = maxPull,
                             maxFramesCap = maxFrames,
                             maxTtlMs = 7 * 24 * 60 * 60_000L,
+                            maxAttachBytes = maxAttachBytes.takeIf { attachments },
+                            maxAChunk = maxAChunk.takeIf { attachments },
+                            maxAget = maxAget.takeIf { attachments },
                         ),
                     powBits = powBits,
                 ),
@@ -85,6 +110,51 @@ class FakeSpool(
         val id = hex(sha256(data))
         scopes.getOrPut(scopeHex) { ScopeState() }.live[id] = data
         return id
+    }
+
+    /** Every `aput` the spool accepted, as "aidHex:index" — the outbound attachment assertion hook. */
+    val chunksPut = mutableListOf<String>()
+
+    /** Every `aget` window the spool was asked for, as "aidHex:from+n" — proves the client stopped asking. */
+    val chunkGets = mutableListOf<String>()
+
+    /** Records this spool was sent but does not implement; must stay empty against a v1 spool. */
+    val skippedRecords = mutableListOf<String>()
+
+    /** How many chunks the spool holds for [aidHex] — the simplest "did the upload land" assertion. */
+    fun chunkCount(
+        scopeHex: String,
+        aidHex: String,
+    ): Int =
+        scopes[scopeHex]
+            ?.attachments
+            ?.get(aidHex)
+            ?.chunks
+            ?.size ?: 0
+
+    /** Drops one chunk so a test can model a spool that only ever half-received an attachment. */
+    fun dropChunk(
+        scopeHex: String,
+        aidHex: String,
+        index: Int,
+    ) {
+        scopes[scopeHex]?.attachments?.get(aidHex)?.let {
+            it.chunks.remove(index)
+            it.cids.remove(index)
+        }
+    }
+
+    /** Replaces a stored chunk with bytes no member can open — the attachment analogue of [plantGarbage]. */
+    fun corruptChunk(
+        scopeHex: String,
+        aidHex: String,
+        index: Int,
+    ) {
+        scopes[scopeHex]?.attachments?.get(aidHex)?.let {
+            val garbage = ByteArray(120) { i -> (i * 3 + 1).toByte() }
+            it.chunks[index] = garbage
+            it.cids[index] = hex(sha256(garbage))
+        }
     }
 
     fun liveIds(scopeHex: String): Set<String> =
@@ -135,18 +205,42 @@ class FakeSpool(
         @Synchronized
         private fun handle(bytes: ByteArray) {
             when (SpoolCodec.peekType(bytes)) {
-                SpoolRecordType.HELLO -> Unit
+                SpoolRecordType.HELLO -> {
+                    Unit
+                }
 
                 // the client's answer; nothing to do
-                SpoolRecordType.SUB -> SpoolCodec.decode<SpoolSub>(bytes)?.let(::onSub)
+                SpoolRecordType.SUB -> {
+                    SpoolCodec.decode<SpoolSub>(bytes)?.let(::onSub)
+                }
 
-                SpoolRecordType.LIST -> SpoolCodec.decode<SpoolList>(bytes)?.let(::onList)
+                SpoolRecordType.LIST -> {
+                    SpoolCodec.decode<SpoolList>(bytes)?.let(::onList)
+                }
 
-                SpoolRecordType.PULL -> SpoolCodec.decode<SpoolPull>(bytes)?.let(::onPull)
+                SpoolRecordType.PULL -> {
+                    SpoolCodec.decode<SpoolPull>(bytes)?.let(::onPull)
+                }
 
-                SpoolRecordType.PUSH -> SpoolCodec.decode<SpoolPush>(bytes)?.let(::onPush)
+                SpoolRecordType.PUSH -> {
+                    SpoolCodec.decode<SpoolPush>(bytes)?.let(::onPush)
+                }
 
-                else -> Unit
+                SpoolRecordType.AHAVE -> {
+                    if (attachments) SpoolCodec.decode<SpoolAhave>(bytes)?.let(::onAhave) else skip(SpoolRecordType.AHAVE)
+                }
+
+                SpoolRecordType.AGET -> {
+                    if (attachments) SpoolCodec.decode<SpoolAget>(bytes)?.let(::onAget) else skip(SpoolRecordType.AGET)
+                }
+
+                SpoolRecordType.APUT -> {
+                    if (attachments) SpoolCodec.decode<SpoolAput>(bytes)?.let(::onAput) else skip(SpoolRecordType.APUT)
+                }
+
+                else -> {
+                    Unit
+                }
             }
         }
 
@@ -223,6 +317,102 @@ class FakeSpool(
             }
         }
 
+        /** A v1 spool skips an unknown record without answering — the stall a client must never provoke. */
+        private fun skip(type: String) {
+            skippedRecords.add(type)
+        }
+
+        private fun onAhave(ahave: SpoolAhave) {
+            val state = scopes.getOrPut(hex(ahave.scope)) { ScopeState() }
+            val aidHex = hex(ahave.aid)
+            val held = state.attachments[aidHex]
+            val dead = aidHex in state.attachTombstones
+            emit(
+                SpoolCodec.encode(
+                    SpoolAhas(
+                        t = SpoolRecordType.AHAS,
+                        q = ahave.q,
+                        scope = ahave.scope,
+                        aid = ahave.aid,
+                        total = if (dead || held == null) 0 else held.total,
+                        bits = if (dead || held == null) ByteArray(0) else ScopeAttachments.bitmap(held.chunks.keys, held.total),
+                        dead = dead,
+                    ),
+                ),
+            )
+        }
+
+        private fun onAget(aget: SpoolAget) {
+            chunkGets.add("${hex(aget.aid)}:${aget.from}+${aget.n}")
+            val held = scopes[hex(aget.scope)]?.attachments?.get(hex(aget.aid))
+            if (held != null) {
+                val last = minOf(aget.from + minOf(aget.n, maxAget), held.total)
+                for (index in aget.from until last) {
+                    val data = held.chunks[index] ?: continue
+                    emit(
+                        SpoolCodec.encode(
+                            SpoolAchunk(
+                                t = SpoolRecordType.ACHUNK,
+                                scope = aget.scope,
+                                aid = aget.aid,
+                                idx = index,
+                                total = held.total,
+                                cid = unhex(held.cids.getValue(index)),
+                                data = data,
+                            ),
+                        ),
+                    )
+                }
+            }
+            emit(SpoolCodec.encode(SpoolOk(t = SpoolRecordType.OK, q = aget.q)))
+        }
+
+        @Suppress("ReturnCount") // one guard per §6.5 rejection reason
+        private fun onAput(aput: SpoolAput) {
+            val state = scopes.getOrPut(hex(aput.scope)) { ScopeState() }
+            val aidHex = hex(aput.aid)
+            val cidHex = hex(aput.cid)
+            val refusal =
+                when {
+                    !sha256(aput.data).contentEquals(aput.cid) -> SpoolErrCode.BAD_ID
+
+                    aput.data.size > maxAChunk -> SpoolErrCode.TOO_LARGE
+
+                    aidHex in state.attachTombstones -> SpoolErrCode.TOMBSTONED
+
+                    state.attachments[aidHex]?.let { it.total != aput.total } == true -> SpoolErrCode.CONFLICT
+
+                    state.attachments[aidHex]
+                        ?.cids
+                        ?.get(aput.idx)
+                        ?.let { it != cidHex } == true -> SpoolErrCode.CONFLICT
+
+                    else -> null
+                }
+            if (refusal != null) {
+                emit(SpoolCodec.encode(SpoolErr(t = SpoolRecordType.ERR, code = refusal, q = aput.q, scope = aput.scope)))
+                return
+            }
+            val held = state.attachments.getOrPut(aidHex) { Attachment(aput.total, state.attachments.size) }
+            if (held.chunks.put(aput.idx, aput.data) == null) chunksPut.add("$aidHex:${aput.idx}")
+            held.cids[aput.idx] = cidHex
+            // Whole-attachment, oldest-first eviction once the scope's byte budget is exceeded (§6.5).
+            while (state.attachments.values.sumOf { it.bytes } > maxAttachBytes) {
+                val victim =
+                    state.attachments.entries
+                        .filter { it.key != aidHex }
+                        .minByOrNull { it.value.arrivedAt }
+                if (victim == null) {
+                    state.attachments.remove(aidHex)
+                    emit(SpoolCodec.encode(SpoolErr(t = SpoolRecordType.ERR, code = SpoolErrCode.QUOTA, q = aput.q, scope = aput.scope)))
+                    return
+                }
+                state.attachments.remove(victim.key)
+                state.attachTombstones.add(victim.key)
+            }
+            emit(SpoolCodec.encode(SpoolOk(t = SpoolRecordType.OK, q = aput.q)))
+        }
+
         private fun digestFor(scope: ByteArray): SpoolDigest {
             val state = scopes.getOrPut(hex(scope)) { ScopeState() }
             return SpoolDigest(
@@ -286,13 +476,19 @@ class FakeCustody(
     override suspend fun attachmentHashesNeedingFetch(): List<String> = emptyList()
 }
 
-/** Builds a v2-sealed DM chat frame — the only shape a DM scope carries (spec §4.4). */
+/**
+ * Builds a v2-sealed DM chat frame — the only shape a DM scope carries (spec §4.4). [attachmentHash]
+ * fills the cleartext reference an E2E frame has carried since DB v19, which is what the attachment
+ * plane keys off.
+ */
 fun dmFrame(
     id: String,
     from: String,
     to: String,
     sentAt: Long = 1_000L,
     body: ByteArray = byteArrayOf(1, 2, 3),
+    attachmentHash: String? = null,
+    attachmentMime: String? = if (attachmentHash == null) null else "image/jpeg",
 ): CarriedFrame {
     val enc =
         EncEnvelope(
@@ -309,7 +505,7 @@ fun dmFrame(
             senderId = from,
             sentAt = sentAt,
             recipientId = to,
-            payload = WireCodec.encodePayload(ChatContent(enc = enc)),
+            payload = WireCodec.encodePayload(ChatContent(enc = enc, attachmentHash = attachmentHash, attachmentMime = attachmentMime)),
         )
     val signed = WireCodec.encodeEnvelope(env)
     return CarriedFrame(envelope = env, sig = ByteArray(ScopeCrypto.SIG_BYTES) { id.hashCode().toByte() }, signed = signed)
@@ -323,6 +519,8 @@ fun groupChatFrame(
     members: List<String>,
     sentAt: Long = 1_000L,
     body: ByteArray = byteArrayOf(4, 5, 6),
+    attachmentHash: String? = null,
+    attachmentMime: String? = if (attachmentHash == null) null else "image/jpeg",
 ): CarriedFrame =
     carried(
         id,
@@ -335,6 +533,8 @@ fun groupChatFrame(
             payload =
                 WireCodec.encodePayload(
                     ChatContent(
+                        attachmentHash = attachmentHash,
+                        attachmentMime = attachmentMime,
                         enc =
                             EncEnvelope(
                                 v = EncEnvelope.VERSION_RATCHET,

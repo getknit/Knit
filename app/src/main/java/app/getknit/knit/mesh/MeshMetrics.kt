@@ -149,6 +149,8 @@ class MeshMetrics {
     private val spoolBridged = AtomicLong()
     private val spoolInvalid = AtomicLong()
     private val spoolErrors = AtomicLong()
+    private val spoolAttachPushed = AtomicLong()
+    private val spoolAttachPulled = AtomicLong()
 
     /** A frame this device authored and injected into the mesh. */
     fun onOriginated() {
@@ -360,6 +362,16 @@ class MeshMetrics {
         spoolErrors.incrementAndGet()
     }
 
+    /** One sealed attachment chunk was accepted by a spool (spec §9.5's push half). */
+    fun onSpoolAttachmentPushed() {
+        spoolAttachPushed.incrementAndGet()
+    }
+
+    /** A whole attachment was reassembled from a spool and verified against the hash its frame named. */
+    fun onSpoolAttachmentPulled() {
+        spoolAttachPulled.incrementAndGet()
+    }
+
     fun snapshot(): Snapshot {
         val byReason = drops.mapValues { it.value.get() }
         val connectByReason = connectFails.mapValues { it.value.get() }
@@ -406,6 +418,8 @@ class MeshMetrics {
             spoolBridged = spoolBridged.get(),
             spoolInvalid = spoolInvalid.get(),
             spoolErrors = spoolErrors.get(),
+            spoolAttachPushed = spoolAttachPushed.get(),
+            spoolAttachPulled = spoolAttachPulled.get(),
         )
     }
 
@@ -452,5 +466,7 @@ class MeshMetrics {
         val spoolBridged: Long = 0,
         val spoolInvalid: Long = 0,
         val spoolErrors: Long = 0,
+        val spoolAttachPushed: Long = 0,
+        val spoolAttachPulled: Long = 0,
     )
 }

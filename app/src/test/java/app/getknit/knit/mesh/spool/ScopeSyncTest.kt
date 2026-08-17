@@ -6,6 +6,7 @@ import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import app.getknit.knit.mesh.sha256Hex
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.TestScope
@@ -40,7 +41,30 @@ class ScopeSyncTest {
         val sync: ScopeSync,
         val metrics: MeshMetrics,
         val delivered: MutableList<RelayEnvelope>,
+        val blobs: FakeBlobs,
+        val obtained: MutableList<String>,
     )
+
+    /** The local content-addressed store, in memory. Content-addressed, so a save is write-once. */
+    private class FakeBlobs(
+        vararg initial: Pair<String, ByteArray>,
+    ) : ScopeBlobs {
+        val stored = LinkedHashMap<String, ByteArray>().apply { putAll(initial) }
+        val mimes = LinkedHashMap<String, String>()
+
+        override suspend fun has(aHash: String): Boolean = aHash in stored
+
+        override suspend fun bytes(aHash: String): ByteArray? = stored[aHash]
+
+        override suspend fun save(
+            aHash: String,
+            mime: String,
+            bytes: ByteArray,
+        ) {
+            stored[aHash] = bytes
+            mimes[aHash] = mime
+        }
+    }
 
     private fun member(
         spool: FakeSpool,
@@ -49,9 +73,11 @@ class ScopeSyncTest {
         custody: FakeCustody = FakeCustody(),
         carryGate: suspend (WireEnvelope, RelayEnvelope) -> Boolean = { _, _ -> true },
         groups: List<GroupScopeRoots> = emptyList(),
+        blobs: FakeBlobs = FakeBlobs(),
     ): Member {
         val metrics = MeshMetrics()
         val delivered = mutableListOf<RelayEnvelope>()
+        val obtained = mutableListOf<String>()
         val sync =
             ScopeSync(
                 registry =
@@ -72,11 +98,29 @@ class ScopeSyncTest {
                     delivered.add(env)
                     custody.store(CarriedFrame(env, wire.sig, wire.signed), ForwardStore.ORIGIN_RELAY, now)
                 },
+                blobs = blobs,
+                onAttachmentObtained = { obtained.add(it) },
                 metrics = metrics,
                 clock = { now },
                 jitter = { 0L },
             )
-        return Member(custody, sync, metrics, delivered)
+        return Member(custody, sync, metrics, delivered, blobs, obtained)
+    }
+
+    /** Bytes plus their content address — what a frame's cleartext `attachmentHash` names. */
+    private fun image(size: Int = 100_000): Pair<String, ByteArray> {
+        val bytes = ByteArray(size) { ((it * 13) and 0xFF).toByte() }
+        return sha256Hex(bytes) to bytes
+    }
+
+    private fun aidHex(
+        self: String,
+        peer: String,
+        aHash: String,
+    ): String {
+        val id = ScopeCrypto.dmScopeId(pairwiseRoot, self, peer)
+        val keys = ScopeCrypto.dmSealKeys(pairwiseRoot, self, peer)
+        return hex(ScopeCrypto.attachmentId(keys, id, ScopeAttachments.hashBytes(aHash)!!))
     }
 
     private fun scopeHex(
@@ -464,5 +508,148 @@ class ScopeSyncTest {
             assertTrue("the gated spool must get a valid stamp", stamp != null)
             a.sync.stop()
             b.sync.stop()
+        }
+
+    // --- Attachments, spec §4.5/§9.5 ---
+
+    @Test
+    fun `an image one member holds reaches the other through the spool`() =
+        runTest {
+            val spool = FakeSpool()
+            val (aHash, bytes) = image()
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes))
+            val receiver = member(spool, bob, alice)
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump(rounds = 16)
+
+            // 100 000 bytes at the spec's 48 KiB chunk: three chunks, uploaded whole.
+            val aid = aidHex(alice, bob, aHash)
+            assertEquals(3, spool.chunkCount(scopeHex(alice, bob), aid))
+            assertEquals(3, sender.metrics.snapshot().spoolAttachPushed)
+
+            // The receiver got the frame, then the bytes it names — verified against that same address.
+            assertEquals(listOf("m1"), receiver.delivered.map { it.id })
+            assertTrue("the image landed locally", receiver.blobs.stored.containsKey(aHash))
+            assertTrue(bytes.contentEquals(receiver.blobs.stored.getValue(aHash)))
+            assertEquals(listOf(aHash), receiver.obtained)
+            assertEquals(1, receiver.metrics.snapshot().spoolAttachPulled)
+            assertEquals(0, receiver.metrics.snapshot().spoolInvalid)
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `a spool that advertises no attachment support is never sent an attachment record`() =
+        runTest {
+            val spool = FakeSpool(attachments = false)
+            val (aHash, bytes) = image()
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes))
+            val receiver = member(spool, bob, alice)
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump(rounds = 16)
+
+            // The frame plane is unaffected — that is what makes attachments additive.
+            assertEquals(listOf("m1"), receiver.delivered.map { it.id })
+            // Not one attachment record went out. A v1 spool would have skipped it without answering,
+            // stalling that q until the request timeout.
+            assertEquals(emptyList<String>(), spool.skippedRecords)
+            assertEquals(emptyList<String>(), spool.chunksPut)
+            assertFalse(receiver.blobs.stored.containsKey(aHash))
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `an upload resumes from the spool's bitmap instead of restarting`() =
+        runTest {
+            val spool = FakeSpool()
+            val (aHash, bytes) = image()
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes))
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+            sender.sync.start(backgroundScope)
+            pump(rounds = 12)
+            val aid = aidHex(alice, bob, aHash)
+            assertEquals(3, spool.chunkCount(scopeHex(alice, bob), aid))
+
+            // The spool loses the middle chunk. The bitmap is what tells the client which one.
+            spool.dropChunk(scopeHex(alice, bob), aid, index = 1)
+            spool.chunksPut.clear()
+            sender.sync.onCustodyChanged()
+            pump(rounds = 12)
+
+            assertEquals(3, spool.chunkCount(scopeHex(alice, bob), aid))
+            assertEquals("only the missing chunk is re-sent", listOf("$aid:1"), spool.chunksPut)
+            sender.sync.stop()
+        }
+
+    @Test
+    fun `a chunk that fails to open quarantines the attachment instead of being refetched forever`() =
+        runTest {
+            val spool = FakeSpool()
+            val (aHash, bytes) = image()
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes))
+            val receiver = member(spool, bob, alice)
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+            sender.sync.start(backgroundScope)
+            pump(rounds = 12)
+            // A spool is untrusted storage: it can serve bytes no member ever sealed.
+            spool.corruptChunk(scopeHex(alice, bob), aidHex(alice, bob, aHash), index = 0)
+
+            receiver.sync.start(backgroundScope)
+            pump(rounds = 16)
+            val afterFirst = spool.chunkGets.size
+            pump(rounds = 16)
+
+            assertFalse("the garbage never becomes a stored image", receiver.blobs.stored.containsKey(aHash))
+            assertEquals(1, receiver.metrics.snapshot().spoolInvalid)
+            // The whole point of the invalid set: an accounted failure, not an infinite re-pull.
+            assertEquals("no further aget after the quarantine", afterFirst, spool.chunkGets.size)
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `an attachment whose frame has aged out is not uploaded`() =
+        runTest {
+            val spool = FakeSpool()
+            val (aHash, bytes) = image()
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes))
+            // sentAt far enough back that the scope TTL has lapsed: §9.2's guard, on the frame that
+            // references the image. Custody still holds it (its own TTL is longer than this gap).
+            val stale = now - ScopeRegistry.DEFAULT_TTL_MS
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = stale, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+
+            sender.sync.start(backgroundScope)
+            pump(rounds = 12)
+
+            assertEquals(emptyList<String>(), spool.chunksPut)
+            assertEquals(0, sender.metrics.snapshot().spoolAttachPushed)
+            sender.sync.stop()
         }
 }

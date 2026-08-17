@@ -39,6 +39,14 @@ free). Two invariants that are easy to break:
 - **A blob that fails validation is quarantined per (spool, scope), never merely dropped** (spec §9.3).
   Spools are untrusted storage: a garbage blob folds into *their* digest and never ours, so without the
   invalid set the two digests diverge forever and the client re-pulls it on every heal round.
+- **Attachments are a second object class, deliberately outside the scope digest**
+  (`ScopeAttachments`, spec §4.5/§6.5/§9.5). Presence is discovered by asking (`ahave`), never by
+  anti-entropy, because the quota is in *bytes* and a byte budget cannot be identical on every node —
+  folding it in would make two spools with different budgets diverge forever. Two more traps: the
+  attachment id is **keyed** (`HKDF(nonceKey, …)`), since the plain hash rides the mesh in cleartext
+  and would otherwise let a spool confirm a frame belongs to a scope; and a client must **never** send
+  an attachment record to a spool that omitted the three HELLO limits — an unknown record is skipped
+  without an answer, stranding that `q` until the request timeout.
 - **Group-root minting is damped; group-root adoption is not** (`GroupRootPolicy`, spec §3.2). Several
   members minting version 1 at once is normal and self-healing — `(version, minter)` collapses the
   lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping

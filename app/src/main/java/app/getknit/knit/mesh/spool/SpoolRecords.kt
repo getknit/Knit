@@ -30,6 +30,14 @@ object SpoolRecordType {
     const val EVENT = "event"
     const val OK = "ok"
     const val ERR = "err"
+
+    // The attachment family (§7.3). A spool that does not advertise the attachment limits never sees
+    // these, because it would skip them silently and leave the client's `q` hanging until timeout.
+    const val AHAVE = "ahave"
+    const val AHAS = "ahas"
+    const val AGET = "aget"
+    const val ACHUNK = "achunk"
+    const val APUT = "aput"
 }
 
 /** Error codes a spool may return; the registry is append-only (unknown codes are terminal-generic). */
@@ -44,6 +52,9 @@ object SpoolErrCode {
     const val NOT_SUBSCRIBED = "not_subscribed"
     const val MALFORMED = "malformed"
     const val INTERNAL = "internal"
+
+    /** An APUT whose `cid` differs from the chunk already stored at that position (§7.3, first write wins). */
+    const val CONFLICT = "conflict"
 }
 
 /** WebSocket close codes for failures that happen before or outside the record layer. */
@@ -63,7 +74,14 @@ class SpoolRecordHead(
     val t: String,
 )
 
-/** Hard limits a spool advertises in its HELLO. */
+/**
+ * Hard limits a spool advertises in its HELLO.
+ *
+ * The three attachment limits are the plane's capability signal, and their absence is meaningful:
+ * a v1 spool skips an unknown record type **without answering**, so a client that sent `ahave`
+ * optimistically would stall on that `q` until the request timeout. [attachments] is therefore a gate,
+ * not a hint — see §7.3.
+ */
 @Serializable
 class SpoolLimits(
     val maxBlob: Int,
@@ -72,7 +90,13 @@ class SpoolLimits(
     val maxPull: Int,
     val maxFramesCap: Int,
     val maxTtlMs: Long,
-)
+    val maxAttachBytes: Int? = null,
+    val maxAChunk: Int? = null,
+    val maxAget: Int? = null,
+) {
+    /** Whether this spool speaks the attachment family at all. All three limits, or none. */
+    val attachments: Boolean get() = maxAttachBytes != null && maxAChunk != null && maxAget != null
+}
 
 /** A mined `SpoolPow` stamp: counter [n] for UTC day [d]. */
 @Serializable
@@ -187,6 +211,77 @@ class SpoolOk(
     val t: String,
     val q: Long,
     val missing: List<ByteArray>? = null,
+)
+
+/** Client→spool: what does this spool hold for one attachment (§7.3)? Answered by [SpoolAhas]. */
+@Serializable
+class SpoolAhave(
+    val t: String,
+    val q: Long,
+    val scope: ByteArray,
+    val aid: ByteArray,
+)
+
+/**
+ * Spool→client: one attachment's presence. [total] is 0 when the spool has never seen it; [dead] marks
+ * one it has evicted or expired (the attachment analogue of a tombstone, so a client stops re-uploading
+ * what it would only lose again). [bits] is the presence bitmap — chunk *i* is bit *i % 8*, MSB-first,
+ * of byte *i / 8*, which is what makes "what am I still missing" a local computation.
+ */
+@Serializable
+class SpoolAhas(
+    val t: String,
+    val q: Long,
+    val scope: ByteArray,
+    val aid: ByteArray,
+    val total: Int,
+    val bits: ByteArray,
+    val dead: Boolean = false,
+)
+
+/**
+ * Client→spool: fetch up to [n] chunks starting at [from] (bounded by the HELLO `maxAget`); answered by
+ * [SpoolAchunk]s then a bare OK. Indices the spool lacks simply do not arrive — the client already knows
+ * which those are from the bitmap, so nothing needs to enumerate them back.
+ */
+@Serializable
+class SpoolAget(
+    val t: String,
+    val q: Long,
+    val scope: ByteArray,
+    val aid: ByteArray,
+    val from: Int,
+    val n: Int,
+)
+
+/** Spool→client: one sealed attachment chunk. Carries no [q] — attributed like [SpoolBlob] is. */
+@Serializable
+class SpoolAchunk(
+    val t: String,
+    val scope: ByteArray,
+    val aid: ByteArray,
+    val idx: Int,
+    val total: Int,
+    val cid: ByteArray,
+    val data: ByteArray,
+)
+
+/**
+ * Client→spool: store one sealed chunk. The spool re-verifies `cid = SHA-256(data)` and keeps the first
+ * write at a position: an identical re-push is acked idempotently, a differing one is
+ * [SpoolErrCode.CONFLICT]. Since the chunk seal is deterministic, honest members never differ.
+ */
+@Serializable
+class SpoolAput(
+    val t: String,
+    val q: Long,
+    val scope: ByteArray,
+    val aid: ByteArray,
+    val idx: Int,
+    val total: Int,
+    val cid: ByteArray,
+    val data: ByteArray,
+    val pow: PowStamp? = null,
 )
 
 /** Spool→client: terminal error for [q] (or connection-scoped when [q] is absent). */

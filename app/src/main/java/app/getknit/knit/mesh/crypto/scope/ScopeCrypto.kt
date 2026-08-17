@@ -10,10 +10,9 @@ import javax.crypto.spec.SecretKeySpec
  * The primitive layer of the spool plane's scope crypto (see docs/SPOOL_PROTOCOL.md, the normative
  * spec this object is the reference implementation of): scope-id and sealing-key derivation from the
  * ratchet export secrets, the deterministic outer seal over the frozen custody unit, content-addressed
- * blob ids, and the per-scope set digest. Pure byte-array functions over Tink's subtle HKDF and JDK
- * AES-GCM, so everything runs unchanged under JVM unit tests and doubles as the normative reference
- * for the spool daemon and any non-Kotlin implementation. API-only until `ScopeSync` lands (M3) — the
- * same no-consumer posture as the ratchet §8 exports this consumes.
+ * blob ids, the per-scope set digest, and the attachment chunk seal (§4.5). Pure byte-array functions
+ * over Tink's subtle HKDF and JDK AES-GCM, so everything runs unchanged under JVM unit tests and
+ * doubles as the normative reference for the spool daemon and any non-Kotlin implementation.
  *
  * Domain separation: every derivation is labeled under `knit/scope/v1/...`, disjoint from
  * `knit/dm/v2/...`, `knit/group/v1/...`, and RFC 9180's HPKE labels. The DM input is
@@ -40,6 +39,26 @@ object ScopeCrypto {
     /** Outer-seal scheme version, the blob's first byte; `2` is reserved for an epoch-keyed seal. */
     const val SEAL_VERSION: Byte = 0x01
 
+    /**
+     * Attachment-chunk seal version, the chunk blob's first byte (spec §4.5). Distinct from
+     * [SEAL_VERSION] so a frame blob and a chunk blob can never be fed to each other's opener, and
+     * distinct from the `2` reserved for the epoch-keyed frame seal (§11).
+     */
+    const val ATTACH_SEAL_VERSION: Byte = 0x03
+
+    /**
+     * Plaintext bytes per attachment chunk. **Structural, not tunable**: a fixed size is what makes a
+     * chunk's position derivable from the attachment alone, so no manifest object is needed. Sized so a
+     * sealed chunk (1 + 12 + [ATTACH_HEADER_BYTES] + this + 16) stays inside the 64 KiB `maxBlob`.
+     */
+    const val ATTACH_CHUNK_BYTES = 48 * 1024
+
+    /** The per-chunk header sealed ahead of the data: `aHash(32) ‖ u32be(index) ‖ u32be(total)`. */
+    const val ATTACH_HEADER_BYTES = SCOPE_ID_BYTES + 4 + 4
+
+    /** An attachment's per-scope identifier — the blinded handle a spool stores chunks under. */
+    const val ATTACH_ID_BYTES = 32
+
     /** HKDF output for [sealKeysInternal]: first 32 bytes seal, second 32 key the synthetic nonce. */
     const val SEAL_OKM_BYTES = 64
 
@@ -52,7 +71,10 @@ object ScopeCrypto {
     private val LABEL_GROUP_ID = "knit/scope/v1/group/id".toByteArray()
     private val LABEL_SEAL = "knit/scope/v1/seal".toByteArray()
     private val LABEL_NONCE = "knit/scope/v1/nonce".toByteArray()
+    private val LABEL_AID = "knit/scope/v1/aid".toByteArray()
+    private val LABEL_ANONCE = "knit/scope/v1/anonce".toByteArray()
     private val AAD_PREFIX = "knit/scope/v1".toByteArray()
+    private val AAD_ATTACH_PREFIX = "knit/scope/v1/attach".toByteArray()
 
     // FNV-1a 64-bit, mirrored from mesh/StoreDigest (same fold, raw-byte input instead of UTF-8).
     private const val FNV64_OFFSET = -0x340D631B7BDDDCDBL
@@ -69,6 +91,18 @@ object ScopeCrypto {
     class Unsealed(
         val sig: ByteArray,
         val signed: ByteArray,
+    )
+
+    /**
+     * One attachment chunk recovered from a sealed chunk blob, with the header that binds its position.
+     * [total] is attacker-influenced only within the scope's own membership, but a caller must still
+     * bound it before allocating anything sized by it — see `ScopeAttachments`.
+     */
+    class AttachChunk(
+        val aHash: ByteArray,
+        val index: Int,
+        val total: Int,
+        val data: ByteArray,
     )
 
     /**
@@ -156,8 +190,93 @@ object ScopeCrypto {
         return Unsealed(sig = pt.copyOfRange(0, SIG_BYTES), signed = pt.copyOfRange(SIG_BYTES, pt.size))
     }
 
-    /** A blob's content address: SHA-256 over the entire stored blob (version byte, nonce, ct). */
+    /**
+     * A blob's content address: SHA-256 over the entire stored blob (version byte, nonce, ct). Also the
+     * `cid` of a sealed attachment chunk (§4.5) — the shape is identical, only the plaintext differs.
+     */
     fun blobId(blob: ByteArray): ByteArray = sha256(blob)
+
+    /**
+     * An attachment's identifier **within one scope** (spec §4.5). Keyed by the scope's
+     * [SealKeys.nonceKey], deliberately: the attachment's own content address [aHash] rides the mesh in
+     * cleartext (`ChatContent.attachmentHash`, the DB v19 precedent), so an unkeyed id would hand a
+     * spool that happened to observe the mesh a confirmation oracle linking a frame to a scope. Same
+     * argument as [seal]'s keyed nonce.
+     */
+    fun attachmentId(
+        keys: SealKeys,
+        scopeId: ByteArray,
+        aHash: ByteArray,
+    ): ByteArray {
+        require(aHash.size == BLOB_ID_BYTES) { "aHash must be $BLOB_ID_BYTES bytes" }
+        return Hkdf.computeHkdf(MAC, keys.nonceKey, ZERO_SALT, LABEL_AID + scopeId + aHash, ATTACH_ID_BYTES)
+    }
+
+    /**
+     * Seals one attachment chunk (spec §4.5). Deterministic exactly like [seal], so every member
+     * produces byte-identical chunks and a spool dedupes them by `cid` without coordination.
+     *
+     * [aHash] is the attachment ciphertext's SHA-256 — the value the mesh already carries — and it is
+     * sealed **inside** the chunk together with `index`/`total`, so a chunk cannot be replayed at a
+     * different position or against a different attachment even by a scope member.
+     *
+     * The aad prefix is `knit/scope/v1/attach`, not [seal]'s `knit/scope/v1`. They cannot alias: the
+     * scope id that follows is fixed-width, so a frame aad is always 45 bytes and a chunk aad 52.
+     */
+    fun sealChunk(
+        keys: SealKeys,
+        scopeId: ByteArray,
+        aHash: ByteArray,
+        index: Int,
+        total: Int,
+        chunk: ByteArray,
+    ): ByteArray {
+        require(aHash.size == BLOB_ID_BYTES) { "aHash must be $BLOB_ID_BYTES bytes" }
+        require(total >= 1) { "total must be positive" }
+        require(index in 0 until total) { "index $index outside 0 until $total" }
+        require(chunk.isNotEmpty() && chunk.size <= ATTACH_CHUNK_BYTES) { "chunk must be 1..$ATTACH_CHUNK_BYTES bytes" }
+        val pt = aHash + u32be(index) + u32be(total) + chunk
+        val nonce = Hkdf.computeHkdf(MAC, keys.nonceKey, ZERO_SALT, LABEL_ANONCE + sha256(pt), NONCE_BYTES)
+        val cipher =
+            Cipher.getInstance(TRANSFORMATION).apply {
+                init(Cipher.ENCRYPT_MODE, SecretKeySpec(keys.sealKey, "AES"), GCMParameterSpec(TAG_BITS, nonce))
+                updateAAD(AAD_ATTACH_PREFIX + scopeId)
+            }
+        return byteArrayOf(ATTACH_SEAL_VERSION) + nonce + cipher.doFinal(pt)
+    }
+
+    /**
+     * Opens a sealed attachment chunk back into its header and data. Throws like [open] does —
+     * [IllegalArgumentException] on a structurally invalid chunk, the JDK AEAD exception on a wrong
+     * key, wrong scope, or tamper. The caller still checks the returned header against what it asked
+     * for and, once every chunk is in hand, that the reassembled bytes hash to [AttachChunk.aHash].
+     */
+    fun openChunk(
+        keys: SealKeys,
+        scopeId: ByteArray,
+        blob: ByteArray,
+    ): AttachChunk {
+        require(blob.isNotEmpty() && blob[0] == ATTACH_SEAL_VERSION) { "unknown attachment seal version" }
+        require(blob.size > 1 + NONCE_BYTES + ATTACH_HEADER_BYTES) { "chunk blob too short" }
+        val nonce = blob.copyOfRange(1, 1 + NONCE_BYTES)
+        val ct = blob.copyOfRange(1 + NONCE_BYTES, blob.size)
+        val cipher =
+            Cipher.getInstance(TRANSFORMATION).apply {
+                init(Cipher.DECRYPT_MODE, SecretKeySpec(keys.sealKey, "AES"), GCMParameterSpec(TAG_BITS, nonce))
+                updateAAD(AAD_ATTACH_PREFIX + scopeId)
+            }
+        val pt = cipher.doFinal(ct)
+        require(pt.size > ATTACH_HEADER_BYTES) { "sealed chunk too short" }
+        val index = u32beValue(pt, BLOB_ID_BYTES)
+        val total = u32beValue(pt, BLOB_ID_BYTES + Int.SIZE_BYTES)
+        require(total >= 1 && index in 0 until total) { "chunk header out of range" }
+        return AttachChunk(
+            aHash = pt.copyOfRange(0, BLOB_ID_BYTES),
+            index = index,
+            total = total,
+            data = pt.copyOfRange(ATTACH_HEADER_BYTES, pt.size),
+        )
+    }
 
     /**
      * The per-scope set digest: XOR fold of [fnv64] over the raw blob ids — order-independent and
@@ -219,4 +338,13 @@ object ScopeCrypto {
             (value ushr 8).toByte(),
             value.toByte(),
         )
+
+    /** Reads the big-endian u32 at [offset] — the inverse of [u32be], for the sealed chunk header. */
+    private fun u32beValue(
+        bytes: ByteArray,
+        offset: Int,
+    ): Int =
+        (0 until Int.SIZE_BYTES).fold(0) { acc, i ->
+            (acc shl Byte.SIZE_BITS) or (bytes[offset + i].toInt() and BYTE_MASK.toInt())
+        }
 }

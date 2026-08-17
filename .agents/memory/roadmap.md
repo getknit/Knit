@@ -64,8 +64,15 @@ doc). **Don't start a deferred item without explicit direction.**
   adoption bounds and the never-rate-limit-adoption rule). Still owed on the group half: nothing
   structural, but it has **not been exercised on devices** — the lab bridge trial (two islands, one
   real spool, a departure rotating the scope) is the outstanding verification.
-  Then: sealed attachments over spools. Each lands additively per `docs/WIRE_COMPAT.md` with its
-  golden vectors and precedent entry when it ships.
+  ~~Then: sealed attachments over spools~~ (**done 2026-08-16** — spec §4.5/§6.5/§7.3/§9.5, the
+  `ScopeCrypto` chunk seal + keyed `aid`, `mesh/spool/ScopeAttachments`, five records, and the
+  attachment pass in `ScopeSync`; `knit-spool` gained both stores, the server handlers and four
+  conformance checks. **No mesh wire change, no capability bit, no DB migration** — the cleartext
+  `ChatContent.attachmentHash`/`attachmentMime` of the DB v19 precedent is the whole reference a
+  fetcher needs. ADR 019's M5 amendment records the five shape decisions). Still owed on the
+  attachment half: **persisted partial downloads** (they are in memory today, so a process death
+  mid-transfer refetches — the upload half already resumes off the spool's bitmap), and the same
+  two-island device trial the group half is waiting on.
 
 - **BLE promotion gate on A2DP audio** — the adaptive scan throttle now drops the **scan** to its floor
   while streaming (`ScanDemandPolicy` / the demand-gated `scanLoop`), but **connects** are still not gated

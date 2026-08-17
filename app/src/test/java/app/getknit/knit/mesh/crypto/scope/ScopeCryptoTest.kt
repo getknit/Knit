@@ -120,6 +120,111 @@ class ScopeCryptoTest {
     }
 
     @Test
+    fun attachmentIdMatchesTheReferenceAndIsKeyedByTheScope() {
+        val keys = ScopeCrypto.dmSealKeys(deterministicBytes(1), NODE_A, NODE_B)
+        val scopeId = ScopeCrypto.dmScopeId(deterministicBytes(1), NODE_A, NODE_B)
+        val aHash = deterministicBytes(7)
+
+        val aid = ScopeCrypto.attachmentId(keys, scopeId, aHash)
+
+        val info = "knit/scope/v1/aid".toByteArray() + scopeId + aHash
+        assertArrayEquals(referenceHkdf(keys.nonceKey, ByteArray(32), info, 32), aid)
+        assertEquals(ScopeCrypto.ATTACH_ID_BYTES, aid.size)
+        // The whole point of keying it: aHash is public on the mesh, the aid must not be recomputable.
+        assertFalse(aid.contentEquals(aHash))
+        val otherKeys = ScopeCrypto.dmSealKeys(deterministicBytes(2), NODE_A, NODE_B)
+        val otherScope = ScopeCrypto.dmScopeId(deterministicBytes(2), NODE_A, NODE_B)
+        assertFalse(aid.contentEquals(ScopeCrypto.attachmentId(otherKeys, otherScope, aHash)))
+        assertFalse(aid.contentEquals(ScopeCrypto.attachmentId(keys, scopeId, deterministicBytes(8))))
+    }
+
+    @Test
+    fun chunkSealIsDeterministicAndRoundTrips() {
+        val keys = ScopeCrypto.dmSealKeys(deterministicBytes(1), NODE_A, NODE_B)
+        val scopeId = ScopeCrypto.dmScopeId(deterministicBytes(1), NODE_A, NODE_B)
+        val aHash = deterministicBytes(7)
+        val data = deterministicBytes(9, 300)
+
+        val blob = ScopeCrypto.sealChunk(keys, scopeId, aHash, index = 2, total = 5, chunk = data)
+
+        assertArrayEquals(blob, ScopeCrypto.sealChunk(keys, scopeId, aHash, index = 2, total = 5, chunk = data))
+        assertEquals(ScopeCrypto.ATTACH_SEAL_VERSION, blob[0])
+        val opened = ScopeCrypto.openChunk(keys, scopeId, blob)
+        assertArrayEquals(aHash, opened.aHash)
+        assertEquals(2, opened.index)
+        assertEquals(5, opened.total)
+        assertArrayEquals(data, opened.data)
+    }
+
+    @Test
+    fun chunkNonceMatchesTheReferenceDerivation() {
+        val keys = ScopeCrypto.dmSealKeys(deterministicBytes(1), NODE_A, NODE_B)
+        val scopeId = ScopeCrypto.dmScopeId(deterministicBytes(1), NODE_A, NODE_B)
+        val aHash = deterministicBytes(7)
+        val data = deterministicBytes(9, 300)
+
+        val blob = ScopeCrypto.sealChunk(keys, scopeId, aHash, index = 2, total = 5, chunk = data)
+
+        val pt = aHash + byteArrayOf(0, 0, 0, 2) + byteArrayOf(0, 0, 0, 5) + data
+        val ptHash = MessageDigest.getInstance("SHA-256").digest(pt)
+        val nonce = referenceHkdf(keys.nonceKey, ByteArray(32), "knit/scope/v1/anonce".toByteArray() + ptHash, 12)
+        assertArrayEquals(nonce, blob.copyOfRange(1, 1 + ScopeCrypto.NONCE_BYTES))
+    }
+
+    @Test
+    fun chunkSealBindsPositionAttachmentAndScope() {
+        val keys = ScopeCrypto.dmSealKeys(deterministicBytes(1), NODE_A, NODE_B)
+        val scopeId = ScopeCrypto.dmScopeId(deterministicBytes(1), NODE_A, NODE_B)
+        val aHash = deterministicBytes(7)
+        val data = deterministicBytes(9, 300)
+        val blob = ScopeCrypto.sealChunk(keys, scopeId, aHash, index = 2, total = 5, chunk = data)
+
+        // Position and attachment are inside the seal, so none of these can be forged by relabelling.
+        assertFalse(blob.contentEquals(ScopeCrypto.sealChunk(keys, scopeId, aHash, 3, 5, data)))
+        assertFalse(blob.contentEquals(ScopeCrypto.sealChunk(keys, scopeId, aHash, 2, 6, data)))
+        assertFalse(blob.contentEquals(ScopeCrypto.sealChunk(keys, scopeId, deterministicBytes(8), 2, 5, data)))
+
+        val otherScope = ScopeCrypto.dmScopeId(deterministicBytes(2), NODE_A, NODE_B)
+        assertThrows(GeneralSecurityException::class.java) { ScopeCrypto.openChunk(keys, otherScope, blob) }
+
+        val tampered = blob.copyOf().also { it[it.size - 1] = (it[it.size - 1].toInt() xor 1).toByte() }
+        assertThrows(GeneralSecurityException::class.java) { ScopeCrypto.openChunk(keys, scopeId, tampered) }
+    }
+
+    @Test
+    fun frameAndChunkSealsCannotBeFedToEachOther() {
+        val keys = ScopeCrypto.dmSealKeys(deterministicBytes(1), NODE_A, NODE_B)
+        val scopeId = ScopeCrypto.dmScopeId(deterministicBytes(1), NODE_A, NODE_B)
+        val frame = ScopeCrypto.seal(keys, scopeId, deterministicBytes(4, 64), deterministicBytes(5, 40))
+        val chunk = ScopeCrypto.sealChunk(keys, scopeId, deterministicBytes(7), 0, 1, deterministicBytes(9, 300))
+
+        // First line of defence: the scheme version byte.
+        assertThrows(IllegalArgumentException::class.java) { ScopeCrypto.open(keys, scopeId, chunk) }
+        assertThrows(IllegalArgumentException::class.java) { ScopeCrypto.openChunk(keys, scopeId, frame) }
+
+        // Second, independent line: the aad prefixes differ, so relabelling the version still fails.
+        val relabelled = frame.copyOf().also { it[0] = ScopeCrypto.ATTACH_SEAL_VERSION }
+        assertThrows(GeneralSecurityException::class.java) { ScopeCrypto.openChunk(keys, scopeId, relabelled) }
+    }
+
+    @Test
+    fun sealChunkRejectsOutOfRangeHeadersAndSizes() {
+        val keys = ScopeCrypto.dmSealKeys(deterministicBytes(1), NODE_A, NODE_B)
+        val scopeId = ScopeCrypto.dmScopeId(deterministicBytes(1), NODE_A, NODE_B)
+        val aHash = deterministicBytes(7)
+        val data = deterministicBytes(9, 300)
+
+        assertThrows(IllegalArgumentException::class.java) { ScopeCrypto.sealChunk(keys, scopeId, aHash, 5, 5, data) }
+        assertThrows(IllegalArgumentException::class.java) { ScopeCrypto.sealChunk(keys, scopeId, aHash, -1, 5, data) }
+        assertThrows(IllegalArgumentException::class.java) { ScopeCrypto.sealChunk(keys, scopeId, aHash, 0, 0, data) }
+        assertThrows(IllegalArgumentException::class.java) { ScopeCrypto.sealChunk(keys, scopeId, aHash, 0, 1, ByteArray(0)) }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScopeCrypto.sealChunk(keys, scopeId, aHash, 0, 1, ByteArray(ScopeCrypto.ATTACH_CHUNK_BYTES + 1))
+        }
+        assertThrows(IllegalArgumentException::class.java) { ScopeCrypto.attachmentId(keys, scopeId, ByteArray(16)) }
+    }
+
+    @Test
     fun scopeDigestFoldsOrderIndependentlyAndSelfInverse() {
         val a = deterministicBytes(11)
         val b = deterministicBytes(12)

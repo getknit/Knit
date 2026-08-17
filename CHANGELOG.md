@@ -20,7 +20,8 @@ document:
 
 ## Unreleased
 
-> Forward secrecy for direct messages and group chats, and encrypted delivery receipts and reactions.
+> Forward secrecy for direct messages and group chats, encrypted delivery receipts and reactions, and
+> optional Internet relays for when nobody is in radio range.
 
 ### Added
 
@@ -34,12 +35,39 @@ document:
 - Delivery receipts and reactions are encrypted. Until now they crossed the mesh readable by any phone
   relaying them, so an onlooker could tell when a message reached you, and who reacted to which
   message with what. They now travel sealed and look like ordinary messages on the wire.
+- Knit can now use Internet relays, which you turn on yourself. Knit remains a messenger that works
+  with no internet and no account, but a message to somebody out of radio range used to wait for the
+  two phones, or a chain of phones between them, to meet. With relays on, Knit parks a sealed copy on
+  a relay server, which hands it over the next time the other phone connects. A one-time explanation
+  spells out what a relay can see — your IP address, when you send, and roughly how much — and what it
+  cannot: your messages or photos, who you are talking to, or who else is in a group.
+- A Settings screen for relays lists the ones you use, adds and removes them, and reports each one as
+  connected, still connecting, or why it refused. Knit ships with one relay already listed and unused;
+  it stays inert until you turn the feature on, and removing it sticks.
+- Group chats travel over relays as well as direct messages, without anyone learning from the relay
+  that a group exists or who is in it.
+- Photos travel over relays too, in sealed pieces. A photo waits while a phone that can carry it is
+  still in radio range, so an ordinary in-person exchange never touches a relay. Where a relay cannot
+  take it — no photo support, or the photo is larger than any relay in your list will hold — the
+  message says "Nearby only" rather than reporting a failure: it still arrives over Wi-Fi or Bluetooth
+  as it always did.
+- Changes to your name, status, or photo now reach people you have only ever met across a relay. They
+  previously spread by radio alone, so such a contact kept whatever it saw when you were last in
+  range.
+- A conversation says how it is being carried. A globe appears beside the double tick when the other
+  phone answered over the internet, and beside a message that arrived that way; the connection header
+  says when the radios are dark and a relay is carrying the conversation. The Nearby room is exempt by
+  design — it is public and unencrypted, so it is never uploaded, and says so.
+- Diagnostics gains an Internet relays section: what has been sent and received over them, photo
+  pieces moved, photos left to the radios, and any errors a relay reported.
 
 ### Changed
 
 - Chats with a phone on an older version keep working, on the previous encryption scheme. A group
   falls back the same way while any one member has not updated, and moves over on its own once
   everyone has.
+- The Profile entry in the overflow menu is now called Settings, since the screen also holds settings
+  that are not about you, such as content filtering and the relay switch.
 
 ## [2.2.3](https://github.com/getknit/knit/releases/tag/v2.2.3) — 2026-08-13T02:38:41Z
 

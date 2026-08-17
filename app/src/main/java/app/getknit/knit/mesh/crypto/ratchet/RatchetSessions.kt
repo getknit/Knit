@@ -12,9 +12,12 @@ import kotlinx.coroutines.sync.withLock
  * Android-free — identity access is lambda-mediated (the `KeyExchange`/`ForwardSync` style), so the
  * whole service drives under plain-JVM tests.
  *
- * **Concurrency contract.** All session mutations serialize on one [mutex]; every caller that combines
- * a mutation with other DB writes takes the Room transaction FIRST and the facade call inside it
- * (transaction-outer, mutex-inner — one global order, no inversion). Because the engine is pure,
+ * **Concurrency contract.** All session mutations serialize on one [mutex], and every critical section
+ * takes the Room transaction FIRST via [transact] (transaction-outer, mutex-inner — one global order,
+ * no inversion). That order is enforced *here* rather than asked of callers: every locked block below
+ * touches the store, Room serves this app through a single connection, and a caller that took the lock
+ * without a transaction would deadlock against the decrypt path that takes them the other way round
+ * (see [SessionTransactor] for the full account). Because the engine is pure,
  * decrypt is two-phase: [peekOpen] runs lock-free against a snapshot (its plaintext feeds moderation
  * and row-building, which must not sit under the lock — the text classifier can cold-load for
  * seconds), then [commitOpen] re-runs the engine on FRESH state under the lock and persists the delta
@@ -30,7 +33,18 @@ class RatchetSessions(
     // THE ratchet lock — shared with GroupRatchetSessions (seed adoption runs inside a DM commit, so
     // two locks would nest DM→group; one instance makes the order question vanish by construction).
     private val mutex: Mutex = Mutex(),
+    // Opens the DB transaction that must enclose the lock. Shared with GroupRatchetSessions for the
+    // same reason the mutex is.
+    private val transact: SessionTransactor = SessionTransactor.None,
 ) {
+    /**
+     * One critical section, in the one global order: transaction OUTER, [mutex] INNER. Every locked
+     * block in this class goes through here — including the ones whose caller already opened a
+     * transaction, since Room's is reentrant per coroutine and uniformity is what keeps the rule
+     * un-forgettable.
+     */
+    private suspend fun <T> locked(block: suspend () -> T): T = transact.transact { mutex.withLock { block() } }
+
     /** Per-peer reset heuristic state: the distinct undecryptable frame ids seen (bounded LRU). */
     private val undecryptable = HashMap<String, LinkedHashSet<String>>()
 
@@ -111,10 +125,10 @@ class RatchetSessions(
         now: Long,
         onOpened: suspend () -> Unit,
     ): Boolean =
-        mutex.withLock {
+        locked {
             val header = headerOf(wireHeader)
             val outcome = engine.open(contextFor(selfNodeId, peerId, peerIkPub, header, now), header, nonce, ct, aad, now)
-            if (outcome !is RatchetEngine.OpenOutcome.Opened) return@withLock false
+            if (outcome !is RatchetEngine.OpenOutcome.Opened) return@locked false
             store.applyOpen(peerId, outcome.delta, headerSe = header.se, headerN = header.n)
             if (outcome.delta.purgePeerRecvState) {
                 // A replacement was adopted: start its rate-limit window and clear the reset heuristic —
@@ -145,17 +159,17 @@ class RatchetSessions(
         aad: ByteArray,
         now: Long,
     ): EncEnvelope? =
-        mutex.withLock {
+        locked {
             val existing = store.session(peerId)
             val initiation =
                 if (existing == null) {
-                    peerSpk ?: return@withLock null
+                    peerSpk ?: return@locked null
                     engine.initiate(peerId, dhIdentityPriv(), peerIkPub, peerSpk, now)
                 } else {
                     null
                 }
-            val session = initiation?.session ?: existing ?: return@withLock null
-            val sealed = engine.seal(session, plaintext, aad, peerSpk?.pub, now) ?: return@withLock null
+            val session = initiation?.session ?: existing ?: return@locked null
+            val sealed = engine.seal(session, plaintext, aad, peerSpk?.pub, now) ?: return@locked null
             store.commitSend(sealed.session, initiation?.epoch ?: sealed.newLocalEpoch)
             val h = sealed.header
             EncEnvelope(
@@ -215,8 +229,8 @@ class RatchetSessions(
         aad: ByteArray,
         now: Long,
     ): EncEnvelope? =
-        mutex.withLock {
-            peerSpk ?: return@withLock null
+        locked {
+            peerSpk ?: return@locked null
             val old = store.session(peerId)
             val initiation = engine.initiate(peerId, dhIdentityPriv(), peerIkPub, peerSpk, now)
             val session =
@@ -226,7 +240,7 @@ class RatchetSessions(
                     prevRootExpiresAt = if (old != null) now + RatchetEngine.PREV_ROOT_TTL_MS else 0L,
                     lastResetSentAt = now,
                 )
-            val sealed = engine.seal(session, plaintext, aad, peerSpk.pub, now) ?: return@withLock null
+            val sealed = engine.seal(session, plaintext, aad, peerSpk.pub, now) ?: return@locked null
             store.commitSend(sealed.session, initiation.epoch)
             synchronized(lastResetSentAt) { lastResetSentAt[peerId] = now }
             synchronized(undecryptable) { undecryptable.remove(peerId) }
@@ -249,7 +263,7 @@ class RatchetSessions(
         }
 
     /** Retention GC passthrough (wired into the existing sweep loops). */
-    suspend fun sweep(now: Long) = mutex.withLock { store.sweep(now) }
+    suspend fun sweep(now: Long) = locked { store.sweep(now) }
 
     /**
      * The spool plane's key material for every confirmed session: `pairwiseRoot` exports, never raw
@@ -261,7 +275,7 @@ class RatchetSessions(
      * scope derived from a root that is about to be discarded is churn with no continuity value.
      */
     suspend fun exportedRoots(): List<ExportedRoots> =
-        mutex.withLock {
+        locked {
             store.sessionPeerIds().mapNotNull { peerId ->
                 val state = store.session(peerId)?.takeIf { it.confirmed } ?: return@mapNotNull null
                 ExportedRoots(

@@ -18,13 +18,21 @@ import kotlinx.coroutines.sync.withLock
  * reentrancy question answered by construction: group entry points that take the lock
  * ([commitOpen], [sealGroup], [sweep]) are never called from inside a DM commit, and the ones that
  * are ([adoptSeeds], [onKeyAck]) deliberately take no lock — the DM lock already serializes them.
- * Callers keep the global order: Room transaction OUTER, the shared mutex INNER.
+ *
+ * The global order — Room transaction OUTER, the shared mutex INNER — is enforced by [transact] on
+ * every locked block rather than asked of callers; see [SessionTransactor] for the deadlock that
+ * caller-side convention let through.
  */
 class GroupRatchetSessions(
     private val store: GroupRatchetStore,
     private val engine: GroupRatchetEngine = GroupRatchetEngine(),
     private val mutex: Mutex = Mutex(),
+    // Shared with RatchetSessions for the same reason the mutex is: one order, enforced in one place.
+    private val transact: SessionTransactor = SessionTransactor.None,
 ) {
+    /** One critical section, in the one global order: transaction OUTER, [mutex] INNER. */
+    private suspend fun <T> locked(block: suspend () -> T): T = transact.transact { mutex.withLock { block() } }
+
     /** Adoption timestamps per (groupId, senderId) — the epoch-adoption rate limit's memory. */
     private val adoptionTimes = HashMap<Pair<String, String>, ArrayDeque<Long>>()
 
@@ -81,10 +89,10 @@ class GroupRatchetSessions(
         now: Long,
         onOpened: suspend () -> Unit,
     ): Boolean =
-        mutex.withLock {
+        locked {
             val header = headerOf(wireHeader)
             val outcome = engine.open(contextFor(groupId, senderId, header), header, nonce, ct, aad, now)
-            if (outcome !is GroupRatchetEngine.OpenOutcome.Opened) return@withLock false
+            if (outcome !is GroupRatchetEngine.OpenOutcome.Opened) return@locked false
             store.applyOpen(groupId, senderId, outcome.delta, headerSe = header.se, headerN = header.n)
             onOpened()
             true
@@ -177,14 +185,14 @@ class GroupRatchetSessions(
         aad: ByteArray,
         now: Long,
     ): SealedGroup? =
-        mutex.withLock {
+        locked {
             var chain = store.sendChain(groupId)
             var minted: GroupSeed? = null
             if (engine.needsNewEpoch(chain, now)) {
                 chain = engine.mint(groupId, selfNodeId, prevEpoch = chain?.epoch ?: 0, now = now)
                 minted = GroupSeed(epoch = chain.epoch, seed = chain.seed, mintedAt = chain.mintedAt)
             }
-            val sealed = engine.seal(checkNotNull(chain), plaintext, aad) ?: return@withLock null
+            val sealed = engine.seal(checkNotNull(chain), plaintext, aad) ?: return@locked null
             store.commitSend(sealed.chain)
             SealedGroup(sealed.toEnvelope(), minted)
         }
@@ -192,7 +200,7 @@ class GroupRatchetSessions(
     /** Our retained seeds for [groupId] (current + draining previous), newest first — the
      *  re-distribution payload for key requests and proactive re-sends. */
     suspend fun currentSeeds(groupId: String): List<GroupSeed> =
-        mutex.withLock {
+        locked {
             store.sendChains(groupId).map { GroupSeed(epoch = it.epoch, seed = it.seed, mintedAt = it.mintedAt) }
         }
 
@@ -258,7 +266,7 @@ class GroupRatchetSessions(
     }
 
     /** Retention GC passthrough (wired into the existing sweep loops beside the DM facade's). */
-    suspend fun sweep(now: Long) = mutex.withLock { store.sweep(now) }
+    suspend fun sweep(now: Long) = locked { store.sweep(now) }
 
     companion object {
         /** New-chain adoptions per (group, sender) per day — count + age + leave + wipe all fit. */

@@ -1,7 +1,9 @@
 package app.getknit.knit.di
 
 import android.os.Build
+import androidx.room.withTransaction
 import app.getknit.knit.BuildConfig
+import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.mesh.CompositeMeshTransport
@@ -14,6 +16,7 @@ import app.getknit.knit.mesh.bluetooth.BluetoothMeshTransport
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
+import app.getknit.knit.mesh.crypto.ratchet.SessionTransactor
 import app.getknit.knit.mesh.meshExceptionHandler
 import app.getknit.knit.mesh.power.PowerMonitor
 import app.getknit.knit.mesh.power.PowerStateSource
@@ -82,6 +85,15 @@ val meshModule =
         // THE ratchet lock, shared by the DM and group session services: group seed adoption runs inside
         // a DM commit, so one instance makes the lock-order question vanish by construction.
         single(ratchetMutex) { Mutex() }
+        // The other half of that contract: the transaction both services open BEFORE taking the lock, so
+        // every critical section acquires the DB and the mutex in one global order. Room's withTransaction
+        // is reentrant per coroutine, so the decrypt path (which already wraps its commit) just joins.
+        single<SessionTransactor> {
+            val db = get<KnitDatabase>()
+            object : SessionTransactor {
+                override suspend fun <T> transact(block: suspend () -> T): T = db.withTransaction { block() }
+            }
+        }
         // The DM epoch-ratchet session service (crypto scheme v2). Identity access is lambda-mediated so
         // the service itself stays Android-free and plain-JVM-testable; the store is the Room-backed
         // RatchetStore bound in appModule.
@@ -92,10 +104,11 @@ val meshModule =
                 dhIdentityPriv = identityKeys::dhIdentityPrivate,
                 spkPrivFor = identityKeys::prekeyPrivFor,
                 mutex = get(ratchetMutex),
+                transact = get(),
             )
         }
         // The group sender-key session service (crypto scheme v2's group form, docs/GROUP_FORWARD_SECRECY.md).
-        single { GroupRatchetSessions(store = get(), mutex = get(ratchetMutex)) }
+        single { GroupRatchetSessions(store = get(), mutex = get(ratchetMutex), transact = get()) }
         // The Internet (spool) plane's socket factory. Cleartext `ws://` is a debug-build affordance for a
         // LAN daemon (which terminates no TLS of its own); release and staging accept `wss://` only, so a
         // shipped build cannot be pointed at a plaintext relay. The plane itself stays dark until the user

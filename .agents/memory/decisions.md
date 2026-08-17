@@ -446,6 +446,18 @@ Four decisions worth not relitigating:
    switch. That is what carries a root across a plane-off member sitting between two plane-on ones, and
    it is why `GroupRootStore` is wired in `appModule`, outside `ScopeSync`'s nullable lifetime.
 
+**Amended 2026-08-16 (the M4 device smoke found a deadlock — lock order is now enforced, not
+documented):** the fleet smoke wedged a Pixel 8. Not a crash: an ANR on the debug bridge, with the Room
+connection held by a *suspended* coroutine, so no thread dump showed an owner. Cause was a lock-order
+inversion that predated M4 — `db.withTransaction { commitOpen(…) }` takes **transaction → mutex** while
+`sealDm`/`sealGroup`/`currentSeeds`/`sweep`/`exportedRoots` took **mutex → connection** — which M4 made
+reachable by calling `currentSeeds` from `gossipGroupRoot` on every inbound `CTL_GROUP_KEY` instead of
+only from two rare floored paths. The class docs had stated the order as a rule for *callers*; that was
+the bug's hiding place. It is now enforced inside both facades by the injected `SessionTransactor`
+(`locked { }` = transaction outer, mutex inner, reentrant so the decrypt path just joins), pinned by
+`SessionTransactorOrderTest`, and written up in `rules/mesh.md`. Lesson worth keeping: **a concurrency
+invariant that depends on every caller remembering it is not an invariant.**
+
 The one healing subtlety, added to the spec in the same pass: a root has **no ack**, so the send-side
 dedup (`lastRootGossipVersion`) would suppress a re-send forever after a single lost gossip. The fix is
 the anti-entropy direction — a distribution carrying a root *older* than ours (or none, while we hold

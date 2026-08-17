@@ -45,6 +45,21 @@ free). Two invariants that are easy to break:
   a root everyone else ignores and never converges again. Bound outbound chatter (the per-(group,
   member) seed-send floor), never adoption.
 
+## The DB transaction is taken BEFORE the ratchet mutex — always
+
+Room over SQLCipher serves this app through a **single** connection, and every `mutex.withLock` block in
+`RatchetSessions`/`GroupRatchetSessions` touches the store. So the two acquisitions must always happen in
+one order: **transaction OUTER, mutex INNER**. Both facades enforce it themselves via the injected
+`SessionTransactor` — take the lock through the private `locked { }` helper, never `mutex.withLock`
+directly, and never add a store call under the lock by another route.
+
+Get it backwards and the app deadlocks: the decrypt path (`db.withTransaction { commitOpen(…) }`) holds
+the connection and waits for the mutex, while a seal/sweep/export path holds the mutex and waits for the
+connection. **Both parties are suspended coroutines, so a thread dump shows nothing** — no thread holds a
+transaction, yet every later DB user blocks forever and the process ANRs on whatever reads the database
+next. This wedged a lab device on the M4 smoke; `SessionTransactorOrderTest` is the regression, and it
+fails loudly (a store call with no enclosing transaction) rather than hanging.
+
 ## Keep pure mesh logic Android-free
 
 `MeshRouter`, `SeenSet`, `WireCodec`, `MeshMetrics`, `BlobExchange`, and `Conversations` have no Android

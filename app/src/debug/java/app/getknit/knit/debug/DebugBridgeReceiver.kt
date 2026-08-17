@@ -756,6 +756,10 @@ class DebugBridgeReceiver :
             .put("groupSealedV1Fallback", snap.groupSealedV1Fallback)
             .put("groupSeedsSent", snap.groupSeedsSent)
             .put("groupSeedsAdopted", snap.groupSeedsAdopted)
+            // Read these together: a trickle of adoptions with no local mint is healthy gossip, while
+            // mint/adopt alternating on one device is a lineage that is not collapsing (SPOOL_PROTOCOL §3.2).
+            .put("groupRootsMinted", snap.groupRootsMinted)
+            .put("groupRootsAdopted", snap.groupRootsAdopted)
             .put("dmSealedV1Fallback", snap.dmSealedV1Fallback)
             .put("receiptsSealed", snap.receiptsSealed)
             .put("receiptsSealedFallback", snap.receiptsSealedFallback)

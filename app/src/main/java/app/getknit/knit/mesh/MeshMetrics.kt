@@ -151,6 +151,7 @@ class MeshMetrics {
     private val spoolErrors = AtomicLong()
     private val spoolAttachPushed = AtomicLong()
     private val spoolAttachPulled = AtomicLong()
+    private val spoolAttachDeferred = AtomicLong()
 
     /** A frame this device authored and injected into the mesh. */
     fun onOriginated() {
@@ -372,6 +373,15 @@ class MeshMetrics {
         spoolAttachPulled.incrementAndGet()
     }
 
+    /**
+     * An attachment we hold was held back from a spool this round because the radios are still carrying
+     * it (`AttachmentDeferPolicy`). Counted because a deferral and a broken upload are otherwise
+     * indistinguishable in the field — a silent gate reads exactly like a bug.
+     */
+    fun onSpoolAttachmentDeferred() {
+        spoolAttachDeferred.incrementAndGet()
+    }
+
     fun snapshot(): Snapshot {
         val byReason = drops.mapValues { it.value.get() }
         val connectByReason = connectFails.mapValues { it.value.get() }
@@ -420,6 +430,7 @@ class MeshMetrics {
             spoolErrors = spoolErrors.get(),
             spoolAttachPushed = spoolAttachPushed.get(),
             spoolAttachPulled = spoolAttachPulled.get(),
+            spoolAttachDeferred = spoolAttachDeferred.get(),
         )
     }
 
@@ -468,5 +479,6 @@ class MeshMetrics {
         val spoolErrors: Long = 0,
         val spoolAttachPushed: Long = 0,
         val spoolAttachPulled: Long = 0,
+        val spoolAttachDeferred: Long = 0,
     )
 }

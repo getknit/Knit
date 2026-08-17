@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.forward.ForwardRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
@@ -52,6 +53,7 @@ import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import app.getknit.knit.mesh.spool.AttachmentDeferPolicy
 import app.getknit.knit.mesh.spool.GroupRootPolicy
 import app.getknit.knit.mesh.spool.GroupRootStore
 import app.getknit.knit.mesh.spool.GroupScopeRoots
@@ -243,6 +245,19 @@ class MeshManager(
     private var router = MeshRouter(transport, scope, metrics = metrics, onDeliver = pipeline::onDeliver)
 
     /**
+     * §9.5's push-half deferral: an attachment we authored and whose recipient acked stays off the
+     * Internet while that peer is still on the presence plane. Wired unconditionally (it is pure and
+     * cheap) but only ever consulted by [scopeSync].
+     */
+    private val attachmentDefer =
+        AttachmentDeferPolicy(
+            reachable = { transport.reachable.value.mapTo(mutableSetOf()) { peer -> peer.nodeId } },
+            ackedBySender = { aHash -> messages.attachmentAcked(aHash, identity.nodeId()) },
+            custodyTtlMs = ForwardRepository.DEFAULT_TTL_MS,
+            clock = clock,
+        )
+
+    /**
      * The Internet plane (`docs/SPOOL_PROTOCOL.md`) — a custody-plane sibling of [forwardSync], not a
      * third transport. Null when no dialer is injected (unit tests, and any build that ships without
      * it); off at runtime unless the user opts in and configures a spool, so the default install opens
@@ -272,6 +287,7 @@ class MeshManager(
                 // The same hook a radio pull fires, so NSFW screening, the message rows, and the UI all
                 // run unchanged for a spool-delivered image (§9.5).
                 onAttachmentObtained = pipeline::onObtained,
+                deferAttachment = attachmentDefer::defer,
                 deliver = { wire, env, from -> router.handleInbound(wire, env, from) },
                 metrics = metrics,
                 clock = clock,

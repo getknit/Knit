@@ -657,6 +657,18 @@ Per heal round, per (spool, scope), for a small bounded number of attachments at
    by §9.2's dead-on-arrival guard applied to the newest frame that references the attachment. A
    retiring scope (§3.1/§3.3) is pulled but never refilled, mirroring frames.
 
+A member MAY **defer** the push half for an attachment while it holds positive evidence that the mesh
+is already carrying those bytes — they are the expensive object class, and a photo that crossed a radio
+link needs no second copy at a relay. A deferral is a delay, never a refusal, so it comes with two
+obligations. It MUST re-open on its own when the evidence lapses, without waiting for new local
+activity; and it MUST end while the referencing frame can still drive a push, since a member's want and
+have sets are derived from custody (below) and an attachment stops being nameable once its frame ages
+out. Evidence that only ever accumulates — a delivery receipt, say — does not satisfy the first
+obligation on its own: a frame can be acked while its bytes were never fetched, because an attachment
+travels by a separate demand-driven pull. Nothing here is observable at a spool beyond a later `aput`,
+so a deferring member and an eager one are the same client to the same server, and conformance is
+unaffected. This does sharpen §10's timing signal; it is priced there.
+
 Any failure — AEAD, a header that does not match the request, a final hash mismatch — **quarantines
 the `aid`** per (spool, scope), the §9.3 invalid-set rule extended. The argument is identical: a spool
 is untrusted storage, and without an accounted invalid set a single bad chunk is re-fetched on every
@@ -688,6 +700,11 @@ What a spool (or its disk's taker) observes:
   and un-confirmable against a candidate hash — but "this conversation exchanged a ~4 MB image at
   09:14" is visible in a way "this conversation exchanged some frames" is not. That is the price of
   carrying bytes at all, and it is why the byte quota is per scope.
+- and, where a member defers the §9.5 push half, a **proximity** signal on top of that: an upload that
+  only happens once the radios stopped carrying the bytes tells a spool roughly when a conversation's
+  members were apart. Frames stay unconditional precisely so this does not generalise — it is scoped to
+  the object class that already leaks a size and a time, and it buys not shipping a second copy of
+  every photo that already crossed a radio link. A member that never defers gives up nothing here.
 
 What it cannot do:
 

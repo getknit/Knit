@@ -207,7 +207,10 @@ class ForwardRepository(
         digest.setMessages(dao.liveIdExpiries(now).map { it.id to it.expiresAt }, now)
     }
 
-    private companion object {
+    // Internal rather than private: the spool plane's attachment deferral is bounded by how long a frame
+    // stays in custody to drive a later push (`AttachmentDeferPolicy`), so that number has to be derived
+    // from this one instead of restated next to it.
+    internal companion object {
         /** Carry a DM/group message for at most 24h before the TTL sweep reclaims it. */
         const val DEFAULT_TTL_MS = 24 * 60 * 60_000L
 

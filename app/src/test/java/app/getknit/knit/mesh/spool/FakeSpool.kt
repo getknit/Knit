@@ -118,6 +118,9 @@ class FakeSpool(
     /** Every `aget` window the spool was asked for, as "aidHex:from+n" — proves the client stopped asking. */
     val chunkGets = mutableListOf<String>()
 
+    /** Every `ahave` the spool answered, as aidHex — proves a deferral costs no round trip at all. */
+    val presenceAsks = mutableListOf<String>()
+
     /** Records this spool was sent but does not implement; must stay empty against a v1 spool. */
     val skippedRecords = mutableListOf<String>()
 
@@ -325,6 +328,7 @@ class FakeSpool(
         private fun onAhave(ahave: SpoolAhave) {
             val state = scopes.getOrPut(hex(ahave.scope)) { ScopeState() }
             val aidHex = hex(ahave.aid)
+            presenceAsks.add(aidHex)
             val held = state.attachments[aidHex]
             val dead = aidHex in state.attachTombstones
             emit(

@@ -129,6 +129,10 @@ class ScopeSync(
     // Fired once an attachment's bytes are in hand, so screening, the message row and the UI run the
     // same path a radio pull takes. `InboundPipeline::onObtained` in the app.
     private val onAttachmentObtained: suspend (String) -> Unit = {},
+    // Whether the radios are still carrying an attachment we hold, so its bytes need not cross the
+    // Internet this round (§9.5). A deferral, never a veto — see [AttachmentDeferPolicy]. The default
+    // never defers, which is the pre-gate behaviour every existing test asserts.
+    private val deferAttachment: suspend (Scope, ScopeAttachments.Ref) -> Boolean = { _, _ -> false },
     private val metrics: MeshMetrics = MeshMetrics(),
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val jitter: () -> Long = { Random.nextLong(RECONNECT_JITTER_MS) },
@@ -520,15 +524,27 @@ class ScopeSync(
                     .references(frames, scope, selfId())
                     .filterNot { it.aHash in quarantined }
                     .mapNotNull { ref -> ScopeAttachments.hashBytes(ref.aHash)?.let { ref to it } }
-                    .take(ATTACHMENTS_PER_ROUND)
+                    .take(ATTACHMENT_SCAN_PER_ROUND)
+            var handled = 0
             for ((ref, aHashBytes) in candidates) {
-                val aid = ScopeCrypto.attachmentId(scope.keys, scope.id, aHashBytes)
-                // A dead socket ends the round; there is nothing useful to try against it.
-                val presence = conn.ahave(scope.id, aid) ?: return
-                if (blobStore.has(ref.aHash)) {
-                    pushAttachment(conn, scope, ref, aid, aHashBytes, presence, blobStore)
+                if (handled == ATTACHMENTS_PER_ROUND) break
+                val mine = blobStore.has(ref.aHash)
+                // Deferring *before* the `ahave` is what makes the gate free: an attachment the radios
+                // are still carrying costs no round trip at all this round, not merely no chunks. A
+                // deferral also spends no round-trip budget, so it can never starve an attachment that
+                // does need pushing.
+                if (mine && deferAttachment(scope, ref)) {
+                    metrics.onSpoolAttachmentDeferred()
                 } else {
-                    fetchAttachment(conn, scope, ref, aid, presence, blobStore)
+                    handled++
+                    val aid = ScopeCrypto.attachmentId(scope.keys, scope.id, aHashBytes)
+                    // A dead socket ends the round; there is nothing useful to try against it.
+                    val presence = conn.ahave(scope.id, aid) ?: return
+                    if (mine) {
+                        pushAttachment(conn, scope, ref, aid, aHashBytes, presence, blobStore)
+                    } else {
+                        fetchAttachment(conn, scope, ref, aid, presence, blobStore)
+                    }
                 }
             }
         }
@@ -811,6 +827,13 @@ class ScopeSync(
 
         /** Attachments touched per (spool, scope) per round — one big image must not starve the rest. */
         private const val ATTACHMENTS_PER_ROUND = 4
+
+        /**
+         * Attachments *considered* per (spool, scope) per round. Larger than the round-trip budget
+         * because a deferred one spends none of that budget but still costs two local reads, so the
+         * scan needs a bound of its own.
+         */
+        private const val ATTACHMENT_SCAN_PER_ROUND = 32
 
         /** Concurrent in-memory reassemblies per spool; each is bounded by `MAX_CHUNKS` (8 MiB). */
         private const val MAX_ASSEMBLIES = 2

@@ -335,9 +335,17 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
             }
             // Attachments (spec §9.5) get their own rows: they are counted in chunks out and whole
             // images in, which is the difference between "an upload is progressing" and "a photo arrived".
-            if (metrics.spoolAttachPushed > 0 || metrics.spoolAttachPulled > 0) {
+            if (metrics.spoolAttachPushed > 0 || metrics.spoolAttachPulled > 0 || metrics.spoolAttachDeferred > 0) {
                 MetricRow(stringResource(R.string.diagnostics_metric_spool_attach_pushed), metrics.spoolAttachPushed.toString())
                 MetricRow(stringResource(R.string.diagnostics_metric_spool_attach_pulled), metrics.spoolAttachPulled.toString())
+                // Deferrals are the difference between "the relay isn't carrying this photo" and "the
+                // radios still are" — without the row the gate is indistinguishable from a broken upload.
+                if (metrics.spoolAttachDeferred > 0) {
+                    MetricRow(
+                        stringResource(R.string.diagnostics_metric_spool_attach_deferred),
+                        metrics.spoolAttachDeferred.toString(),
+                    )
+                }
             }
         }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an

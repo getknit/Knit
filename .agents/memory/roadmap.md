@@ -76,6 +76,17 @@ doc). **Don't start a deferred item without explicit direction.**
   mid-transfer refetches — the upload half already resumes off the spool's bitmap), and the same
   two-island device trial the group half is waiting on.
 
+- **Attachment uploads are deferred while the radios carry them, SHIPPED 2026-08-17** (ADR 021,
+  `mesh/spool/AttachmentDeferPolicy`, spec §9.5's MAY + §10): an attachment we authored, whose
+  recipient acked it, waits while that peer is still on `MeshTransport.reachable`, so a photo that
+  already crossed a radio link is not copied to a relay as well. Deliberately **attachments only** —
+  gating frames would make the scope digest a function of local mesh state and it would never converge
+  again — and deliberately a **delay, not a veto**: it re-opens on the sighting expiring and ends 2 h
+  before the frame leaves custody. Groups never defer (the sealed group tick flips on the first
+  member's receipt). Counted as `spoolAttachDeferred` in Diagnostics and the `SPOOL` bridge. Still
+  owed: the same two-island trial — send a photo co-located (expect the deferred counter climbing and
+  no `aput`), separate the devices, expect the upload within one 60 s heal round.
+
 - **Sealed profile updates SHIPPED 2026-08-16** (ADR 020, was never a roadmap item — the gap surfaced in
   field testing after M5): `CTL_PROFILE = 8` carries name/status/avatar to established contacts inside v2
   chat, so profile changes now cross the Internet plane and stay off the cleartext plane for

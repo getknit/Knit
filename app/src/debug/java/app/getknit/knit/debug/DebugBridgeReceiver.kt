@@ -781,6 +781,9 @@ class DebugBridgeReceiver :
             .put("spoolErrors", snap.spoolErrors)
             .put("spoolAttachPushed", snap.spoolAttachPushed)
             .put("spoolAttachPulled", snap.spoolAttachPulled)
+            // The two-island photo trial reads as `spoolAttachDeferred` climbing while the devices are
+            // together and `spoolAttachPushed` starting within a heal round of separating them.
+            .put("spoolAttachDeferred", snap.spoolAttachDeferred)
 
     /**
      * Configures and inspects the Internet (spool) plane — the only way to drive it on a locked lab

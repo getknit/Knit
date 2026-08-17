@@ -97,6 +97,21 @@ interface MessageDao {
     )
     suspend fun hashesNeedingFetch(): List<String>
 
+    /**
+     * Whether a message [me] authored names the ciphertext [hash] and has been acked — the delivery
+     * evidence `AttachmentDeferPolicy` needs before holding an upload back from the Internet plane. A
+     * hash we hold no *authored* row for (a relayed attachment, or an avatar, which writes no message
+     * row at all) reads false, which is the safe answer: it pushes.
+     */
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM messages " +
+            "WHERE attachmentHash = :hash AND senderId = :me AND received = 1)",
+    )
+    suspend fun attachmentAcked(
+        hash: String,
+        me: String,
+    ): Boolean
+
     /** Distinct conversations the local user ([me]) has authored a message in — the "threads I started" signal. */
     @Query("SELECT DISTINCT conversationId FROM messages WHERE senderId = :me")
     suspend fun conversationsIAuthoredIn(me: String): List<String>

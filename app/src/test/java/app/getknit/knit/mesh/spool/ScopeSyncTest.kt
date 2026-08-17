@@ -74,6 +74,7 @@ class ScopeSyncTest {
         carryGate: suspend (WireEnvelope, RelayEnvelope) -> Boolean = { _, _ -> true },
         groups: List<GroupScopeRoots> = emptyList(),
         blobs: FakeBlobs = FakeBlobs(),
+        deferAttachment: suspend (Scope, ScopeAttachments.Ref) -> Boolean = { _, _ -> false },
     ): Member {
         val metrics = MeshMetrics()
         val delivered = mutableListOf<RelayEnvelope>()
@@ -100,6 +101,7 @@ class ScopeSyncTest {
                 },
                 blobs = blobs,
                 onAttachmentObtained = { obtained.add(it) },
+                deferAttachment = deferAttachment,
                 metrics = metrics,
                 clock = { now },
                 jitter = { 0L },
@@ -650,6 +652,113 @@ class ScopeSyncTest {
 
             assertEquals(emptyList<String>(), spool.chunksPut)
             assertEquals(0, sender.metrics.snapshot().spoolAttachPushed)
+            sender.sync.stop()
+        }
+
+    @Test
+    fun `a deferred attachment is neither uploaded nor asked about`() =
+        runTest {
+            val spool = FakeSpool()
+            val (aHash, bytes) = image()
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes), deferAttachment = { _, _ -> true })
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+
+            sender.sync.start(backgroundScope)
+            pump(rounds = 12)
+
+            assertEquals(emptyList<String>(), spool.chunksPut)
+            // Deferring before the `ahave` is the point: no chunks *and* no round trip.
+            assertEquals(emptyList<String>(), spool.presenceAsks)
+            assertEquals(0, sender.metrics.snapshot().spoolAttachPushed)
+            assertTrue("the deferral is counted", sender.metrics.snapshot().spoolAttachDeferred > 0)
+            // The frame itself is untouched by the gate — only its bytes wait.
+            assertEquals(1, sender.metrics.snapshot().spoolPushed)
+            sender.sync.stop()
+        }
+
+    @Test
+    fun `a deferred attachment uploads once the deferral lapses`() =
+        runTest {
+            val spool = FakeSpool()
+            val (aHash, bytes) = image()
+            var deferring = true
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes), deferAttachment = { _, _ -> deferring })
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+
+            sender.sync.start(backgroundScope)
+            pump(rounds = 12)
+            assertEquals(emptyList<String>(), spool.chunksPut)
+
+            // The peer walks out of range: the gate re-opens by itself, no restart, no new custody event.
+            deferring = false
+            pump(rounds = 12)
+
+            val aid = aidHex(alice, bob, aHash)
+            assertEquals(ScopeAttachments.chunkCount(bytes.size), spool.chunkCount(scopeHex(alice, bob), aid))
+            sender.sync.stop()
+        }
+
+    @Test
+    fun `a deferral never blocks the fetch half`() =
+        runTest {
+            val spool = FakeSpool()
+            val (aHash, bytes) = image()
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes))
+            // The receiver defers everything, yet holds none of the bytes: the gate is push-only, so it
+            // must not starve a member of an image it is missing.
+            val receiver = member(spool, bob, alice, deferAttachment = { _, _ -> true })
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump(rounds = 16)
+
+            assertTrue("the image still landed", receiver.blobs.stored.containsKey(aHash))
+            assertTrue(bytes.contentEquals(receiver.blobs.stored.getValue(aHash)))
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `deferred attachments spend none of the round-trip budget`() =
+        runTest {
+            val spool = FakeSpool()
+            // Five attachments against a four-per-round budget: the first four defer, so the fifth must
+            // still be reached in the same round rather than queuing behind them.
+            val images = (1..5).map { image(1_000 * it) }
+            val held = FakeBlobs(*images.toTypedArray())
+            val wanted = images.last().first
+            val sender =
+                member(spool, alice, bob, blobs = held, deferAttachment = { _, ref -> ref.aHash != wanted })
+            images.forEachIndexed { index, (aHash, _) ->
+                sender.custody.store(
+                    dmFrame("m$index", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                    ForwardStore.ORIGIN_SELF,
+                    now,
+                )
+            }
+
+            sender.sync.start(backgroundScope)
+            pump(rounds = 12)
+
+            val aid = aidHex(alice, bob, wanted)
+            assertEquals(listOf(aid), spool.presenceAsks.distinct())
+            assertEquals(
+                ScopeAttachments.chunkCount(images.last().second.size),
+                spool.chunkCount(scopeHex(alice, bob), aid),
+            )
             sender.sync.stop()
         }
 

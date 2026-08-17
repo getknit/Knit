@@ -301,6 +301,7 @@
     <string name="diagnostics_metric_spool_errors">Relay errors</string>
     <string name="diagnostics_metric_spool_attach_pushed">Photo chunks sent to Internet relays</string>
     <string name="diagnostics_metric_spool_attach_pulled">Photos received via Internet relays</string>
+    <string name="diagnostics_metric_spool_attach_deferred">Photos left to nearby radios</string>
     <string name="diagnostics_controls">Mesh controls</string>
     <string name="diagnostics_status_healthy">Mesh status: Healthy</string>
     <string name="diagnostics_status_degraded">Mesh status: Degraded</string>

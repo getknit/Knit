@@ -47,6 +47,15 @@ free). Two invariants that are easy to break:
   and would otherwise let a spool confirm a frame belongs to a scope; and a client must **never** send
   an attachment record to a spool that omitted the three HELLO limits — an unknown record is skipped
   without an answer, stranding that `q` until the request timeout.
+- **The attachment push-half deferral is a delay, never a veto** (`AttachmentDeferPolicy`, spec §9.5,
+  ADR 021). Bytes wait while the radios are still carrying them, and only attachments — gating *frames*
+  would make the scope digest a function of local mesh state and it would never converge again. Two
+  rules keep a deferral from becoming a stranded image: it must **re-open by itself** when the evidence
+  lapses (which is why the expiring `MeshTransport.reachable` sighting is half the rule and the
+  never-expiring delivery tick cannot be the whole of it — a frame can be acked while its bytes were
+  never pulled), and it must **end before the frame leaves custody**, since an attachment stops being
+  nameable once `ScopeAttachments.references` no longer sees its frame. Group scopes never defer: the
+  sealed group tick flips on the *first* member's receipt, so it can never mean "everyone holds it".
 - **A profile has two propagation paths and they order on one number.** The cleartext `profile` frame
   is first contact only (it is self-certifying — the node id IS the hash of the `pubKey` in its own
   payload — so it can never be encrypted); presentation updates to an established contact ride

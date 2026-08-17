@@ -2,6 +2,7 @@ package app.getknit.knit.data
 
 import app.getknit.knit.data.message.ConversationActivity
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageDao
 import app.getknit.knit.data.message.MessageEntity
 import kotlinx.coroutines.flow.Flow
@@ -33,7 +34,15 @@ class MessageRepository(
 
     suspend fun conversationOf(id: String): String? = dao.conversationOf(id)
 
-    suspend fun markReceived(id: String) = dao.markReceived(id)
+    /**
+     * Flips message [id]'s delivery tick, noting the plane the receipt arrived on ([via]). Idempotent, and
+     * the plane is written only by the receipt that first flips the tick — see [MessageDao.markReceived].
+     * This is the enum↔code boundary: the column stores [DeliveryPlane.code].
+     */
+    suspend fun markReceived(
+        id: String,
+        via: DeliveryPlane,
+    ) = dao.markReceived(id, via.code)
 
     /** Outgoing DMs to [recipientId] that are still awaiting the recipient's key before they can be sent. */
     suspend fun pendingForRecipient(recipientId: String): List<MessageEntity> = dao.pendingForRecipient(recipientId)

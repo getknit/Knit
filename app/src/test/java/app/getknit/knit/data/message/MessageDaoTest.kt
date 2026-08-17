@@ -45,12 +45,49 @@ class MessageDaoTest : RoomDbTest() {
         }
 
     @Test
-    fun `markReceived flips the delivery-ack flag`() =
+    fun `markReceived flips the delivery-ack flag and records the receipt's plane`() =
         runTest {
             dao.upsert(msg("m1", received = false))
-            dao.markReceived("m1")
-            val stored = dao.observeAll().first().single { it.id == "m1" }
-            assertTrue(stored.received)
+            dao.markReceived("m1", DeliveryPlane.Nearby.code)
+            val nearby = dao.observeAll().first().single { it.id == "m1" }
+            assertTrue(nearby.received)
+            assertEquals(DeliveryPlane.Nearby, nearby.receivedPlane)
+
+            dao.upsert(msg("m2", received = false))
+            dao.markReceived("m2", DeliveryPlane.Internet.code)
+            val relayed = dao.observeAll().first().single { it.id == "m2" }
+            assertTrue(relayed.received)
+            assertEquals(DeliveryPlane.Internet, relayed.receivedPlane)
+        }
+
+    @Test
+    fun `markReceived keeps the plane of the receipt that first flipped the tick`() =
+        runTest {
+            // A receipt is re-served routinely, and the duplicate can cross on the other plane. The mark
+            // must keep describing the delivery that actually happened, in both directions.
+            dao.upsert(msg("nearby-first", received = false))
+            dao.markReceived("nearby-first", DeliveryPlane.Nearby.code)
+            dao.markReceived("nearby-first", DeliveryPlane.Internet.code)
+            assertEquals(
+                DeliveryPlane.Nearby,
+                dao
+                    .observeAll()
+                    .first()
+                    .single { it.id == "nearby-first" }
+                    .receivedPlane,
+            )
+
+            dao.upsert(msg("relay-first", received = false))
+            dao.markReceived("relay-first", DeliveryPlane.Internet.code)
+            dao.markReceived("relay-first", DeliveryPlane.Nearby.code)
+            assertEquals(
+                DeliveryPlane.Internet,
+                dao
+                    .observeAll()
+                    .first()
+                    .single { it.id == "relay-first" }
+                    .receivedPlane,
+            )
         }
 
     @Test

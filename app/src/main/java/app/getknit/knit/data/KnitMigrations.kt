@@ -120,6 +120,21 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v4 — the delivery tick's plane: one `messages.receivedVia` column holding the `DeliveryPlane` code the
+     * receipt that flipped `received` arrived on (the globe beside the ✓✓ marks the Internet plane). Purely
+     * local presentation state — no wire change, and an upgraded device's already-acked messages default to
+     * 0 = `DeliveryPlane.Unknown`, which is honest: the plane wasn't recorded when they were acked, and the
+     * UI shows nothing for it. Additive only; the SQL must stay byte-equivalent to what Room generates for
+     * `app/schemas/**/4.json`.
+     */
+    val MIGRATION_3_4 =
+        object : Migration(3, 4) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE `messages` ADD COLUMN `receivedVia` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
     /** All migrations, applied by Room in order. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 }

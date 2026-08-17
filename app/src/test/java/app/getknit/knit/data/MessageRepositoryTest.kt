@@ -2,6 +2,7 @@ package app.getknit.knit.data
 
 import app.getknit.knit.data.blob.BlobEntity
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -58,7 +59,7 @@ class MessageRepositoryTest : RoomDbTest() {
         runTest {
             val repo = repo()
             repo.save(msg("m1", received = false))
-            repo.markReceived("m1")
+            repo.markReceived("m1", DeliveryPlane.Nearby)
             assertTrue(
                 repo
                     .observeMessages()

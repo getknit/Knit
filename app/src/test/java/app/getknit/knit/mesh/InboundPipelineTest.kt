@@ -13,6 +13,7 @@ import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
@@ -54,6 +55,7 @@ import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import app.getknit.knit.mesh.spool.ScopeSync
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
 import com.google.crypto.tink.InsecureSecretKeyAccess
@@ -322,11 +324,16 @@ class InboundPipelineTest {
                 )
         }
 
-        /** Signs [env] with [author]'s key and drives it through the pipeline (the common onDeliver call). */
+        /**
+         * Signs [env] with [author]'s key and drives it through the pipeline (the common onDeliver call).
+         * [from] names the source it arrived from — a neighbouring node by default, or a spool-tagged
+         * source (`ScopeSync.SPOOL_SOURCE_PREFIX`) to stand in for a pull off the Internet plane.
+         */
         suspend fun deliver(
             author: Party,
             env: RelayEnvelope,
-        ) = pipeline.onDeliver(author.sign(env), env, author.nodeId)
+            from: String = author.nodeId,
+        ) = pipeline.onDeliver(author.sign(env), env, from)
 
         fun drops(reason: DropReason): Long = metrics.snapshot().dropsByReason[reason] ?: 0L
 
@@ -781,7 +788,23 @@ class InboundPipelineTest {
 
             rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
 
-            coVerify { rig.messages.markReceived("m1") }
+            // Delivered from a neighbouring node, so the tick records the radio plane.
+            coVerify { rig.messages.markReceived("m1", DeliveryPlane.Nearby) }
+        }
+
+    @Test
+    fun receiptPulledOffASpoolMarksTheTickInternetDelivered() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = rig.self.nodeId, recipientId = alice.nodeId, body = "", sentAt = 1L)
+            val env = rig.receipt(alice, ackId = "m1")
+
+            // The same receipt, bridged in by ScopeSync instead of a radio: same delivery, different plane.
+            rig.deliver(alice, env, from = ScopeSync.SPOOL_SOURCE_PREFIX + "spool.example")
+
+            coVerify { rig.messages.markReceived("m1", DeliveryPlane.Internet) }
         }
 
     @Test
@@ -796,7 +819,7 @@ class InboundPipelineTest {
 
             rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
 
-            coVerify(exactly = 0) { rig.messages.markReceived("m2") }
+            coVerify(exactly = 0) { rig.messages.markReceived("m2", any()) }
         }
 
     @Test
@@ -2236,8 +2259,8 @@ class InboundPipelineTest {
 
             rig.deliver(alice, V2Author(alice, rig).dm("ctl-r1", "", ctl = MessageContent.CTL_RECEIPT, ack = "dm-out"))
 
-            // The tick flipped through the sealed path…
-            coVerify(exactly = 1) { rig.messages.markReceived("dm-out") }
+            // The tick flipped through the sealed path, on the radio plane it arrived by…
+            coVerify(exactly = 1) { rig.messages.markReceived("dm-out", DeliveryPlane.Nearby) }
             // …but nothing vaccine-purged: a carrier can't read a sealed receipt, so nobody purges —
             // the delivered DM ages out on the custody TTL uniformly (the retirement contract).
             assertTrue(rig.forwardStore.has("dm-out"))
@@ -2319,7 +2342,7 @@ class InboundPipelineTest {
 
             rig.deliver(alice, V2Author(alice, rig).dm("ctl-r2", "", ctl = MessageContent.CTL_RECEIPT, ack = "dm-bob"))
 
-            coVerify(exactly = 0) { rig.messages.markReceived(any()) }
+            coVerify(exactly = 0) { rig.messages.markReceived(any(), any()) }
         }
 
     @Test
@@ -2334,7 +2357,27 @@ class InboundPipelineTest {
 
             rig.deliver(alice, V2Author(alice, rig).dm("ctl-r3", "", ctl = MessageContent.CTL_RECEIPT, ack = "gm-out"))
 
-            coVerify(exactly = 1) { rig.messages.markReceived("gm-out") }
+            coVerify(exactly = 1) { rig.messages.markReceived("gm-out", DeliveryPlane.Nearby) }
+        }
+
+    @Test
+    fun aSealedDmReceiptPulledOffASpoolMarksTheTickInternetDelivered() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.msgMap["dm-out"] =
+                MessageEntity(id = "dm-out", senderId = rig.self.nodeId, recipientId = alice.nodeId, body = "", sentAt = 1L)
+
+            // The sealed receipt is the DM path's tick, so this is the case that normally paints the globe:
+            // alice was nowhere near a radio and answered us across the spool.
+            rig.deliver(
+                alice,
+                V2Author(alice, rig).dm("ctl-r4", "", ctl = MessageContent.CTL_RECEIPT, ack = "dm-out"),
+                from = ScopeSync.SPOOL_SOURCE_PREFIX + "spool.example",
+            )
+
+            coVerify(exactly = 1) { rig.messages.markReceived("dm-out", DeliveryPlane.Internet) }
         }
 
     @Test

@@ -14,6 +14,12 @@ import kotlinx.serialization.json.Json
  * party's node id for a DM) and is indexed for the per-thread chat queries. [received] is the
  * delivery-ack flag for messages this device sent (drives the ✓/✓✓ tick).
  *
+ * [receivedVia] records which plane the receipt that flipped [received] arrived on (a [DeliveryPlane]
+ * code), so the tick can say *how* the message got there — a globe beside the ✓✓ for the Internet plane.
+ * It is written once, by the receipt that first flips the tick: a later duplicate arriving on another
+ * plane never rewrites it, so the mark keeps describing the delivery that actually happened. Meaningless
+ * while [received] is false.
+ *
  * [mentions] is a JSON-encoded `List<Mention>` ("[]" when none); kept as a string so Room stays a
  * plain TEXT column and (de)serialization lives with the [Mention] type via [MentionStore].
  *
@@ -55,6 +61,7 @@ data class MessageEntity(
     val body: String,
     val sentAt: Long,
     val received: Boolean = false,
+    val receivedVia: Int = DeliveryPlane.Unknown.code,
     val mentions: String = "[]",
     val attachmentHash: String? = null,
     val attachmentMime: String? = null,
@@ -94,6 +101,9 @@ object MentionStore {
 
     fun decode(stored: String): List<Mention> = runCatching { json.decodeFromString<List<Mention>>(stored) }.getOrDefault(emptyList())
 }
+
+/** The plane [receivedVia] names, tolerant of a code this build doesn't know (see [DeliveryPlane.fromCode]). */
+val MessageEntity.receivedPlane: DeliveryPlane get() = DeliveryPlane.fromCode(receivedVia)
 
 /** The quoted-reply reference this row snapshots (see the `replyTo*` columns), or null when it isn't a reply. */
 fun MessageEntity.replyRef(): ReplyRef? =

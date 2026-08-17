@@ -815,6 +815,13 @@ class ScopeSync(
         /** Marks a frame as spool-sourced inbound; it names no peer, so it excludes nobody from the relay. */
         const val SPOOL_SOURCE_PREFIX = "spool:"
 
+        /**
+         * Whether an inbound frame's source names a spool rather than a neighbouring node — i.e. it crossed
+         * the Internet plane, not a radio. The delivery tick reads this to say *how* a message got there;
+         * it is a presentation fact only, and nothing about carry, relay or convergence may depend on it.
+         */
+        fun isSpoolSource(fromNodeId: String): Boolean = fromNodeId.startsWith(SPOOL_SOURCE_PREFIX)
+
         private const val RECONCILE_INTERVAL_MS = 15_000L
         private const val TICK_INTERVAL_MS = 60_000L
         private const val HANDSHAKE_TIMEOUT_MS = 20_000L

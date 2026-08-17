@@ -17,9 +17,11 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
+import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.message.replyRef
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.relay.AttachmentRelay
@@ -63,6 +65,9 @@ data class ChatRow(
     val avatarHash: String?,
     val sentAt: Long,
     val received: Boolean,
+    // The plane the receipt that flipped [received] arrived on; [DeliveryPlane.Internet] paints a globe
+    // beside the tick. Only meaningful on our own delivered messages — see [MessageEntity].
+    val deliveredVia: DeliveryPlane = DeliveryPlane.Unknown,
     // True when the on-device text moderator flagged this message's body; the bubble collapses it
     // behind a tap-to-reveal instead of showing the text outright.
     val moderationFlagged: Boolean = false,
@@ -332,6 +337,7 @@ class ChatViewModel(
                         avatarHash = peersByNode[m.senderId]?.avatarHash,
                         sentAt = m.sentAt,
                         received = m.received,
+                        deliveredVia = m.receivedPlane,
                         moderationFlagged = hideSensitive && m.moderation == MessageEntity.MODERATION_TEXT_FLAGGED,
                         attachmentHash = m.attachmentHash,
                         attachmentMime = m.attachmentMime,

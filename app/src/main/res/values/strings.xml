@@ -92,6 +92,7 @@
     <string name="chat_self_name">You</string>
     <string name="chat_status_sent">Sent</string>
     <string name="chat_status_delivered">Delivered</string>
+    <string name="chat_status_delivered_internet">Delivered over the Internet</string>
     <string name="chat_time_just_now">Just now</string>
     <string name="chat_action_copy">Copy text</string>
     <string name="chat_action_reply">Reply</string>

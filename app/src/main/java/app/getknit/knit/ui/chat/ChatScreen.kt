@@ -74,6 +74,7 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -155,6 +156,7 @@ import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.relay.AttachmentRelay
 import app.getknit.knit.data.relay.RelayReach
@@ -1084,16 +1086,31 @@ private fun MessageBubble(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            // Our own messages show a delivery tick: one check sent, two checks acked.
+                            // Our own messages show a delivery tick: one check sent, two checks acked. A
+                            // globe ahead of the ✓✓ says the receipt came back over the Internet plane
+                            // rather than a nearby radio — how it got there, on the one line that already
+                            // says whether it did. It sits before the tick so the tick keeps the same
+                            // trailing position on every row.
                             if (row.mine) {
+                                val viaInternet = row.received && row.deliveredVia == DeliveryPlane.Internet
+                                if (viaInternet) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Public,
+                                        // Decorative: the tick's own description below already says
+                                        // "Delivered over the Internet", and announcing both repeats it.
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(12.dp).testTag("chat_tick_relay"),
+                                    )
+                                }
                                 Icon(
                                     imageVector = if (row.received) Icons.Filled.DoneAll else Icons.Filled.Done,
                                     contentDescription =
                                         stringResource(
-                                            if (row.received) {
-                                                R.string.chat_status_delivered
-                                            } else {
-                                                R.string.chat_status_sent
+                                            when {
+                                                viaInternet -> R.string.chat_status_delivered_internet
+                                                row.received -> R.string.chat_status_delivered
+                                                else -> R.string.chat_status_sent
                                             },
                                         ),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2231,6 +2248,35 @@ fun MessageBubbleMinePreview() =
                     avatarHash = null,
                     sentAt = PREVIEW_NOW - 2 * 60_000L,
                     received = true,
+                ),
+            now = PREVIEW_NOW,
+            showSenderName = false,
+            onImageClick = {},
+            onOpenProfile = {},
+            onReact = { _, _ -> },
+            onDelete = {},
+            onBlock = {},
+            onCopy = {},
+        )
+    }
+
+/** The same delivered send, acked from out of radio range — the globe says it crossed the Internet. */
+@Preview(showBackground = true)
+@Composable
+fun MessageBubbleMineViaInternetPreview() =
+    KnitPreview {
+        MessageBubble(
+            row =
+                ChatRow(
+                    id = "m3",
+                    body = "Landed. Signal here is terrible, but this got through.",
+                    mine = true,
+                    senderName = "You",
+                    senderNodeId = "node-self",
+                    avatarHash = null,
+                    sentAt = PREVIEW_NOW - 2 * 60_000L,
+                    received = true,
+                    deliveredVia = DeliveryPlane.Internet,
                 ),
             now = PREVIEW_NOW,
             showSenderName = false,

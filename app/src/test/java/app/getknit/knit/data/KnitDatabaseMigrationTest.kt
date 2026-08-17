@@ -43,8 +43,8 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v3) creates and opens from the exported JSON`() {
-        val version = 3 // KnitDatabase @Database(version = 3) — bump alongside the DB (its retention is CLASS,
+    fun `the current schema (v4) creates and opens from the exported JSON`() {
+        val version = 4 // KnitDatabase @Database(version = 4) — bump alongside the DB (its retention is CLASS,
         // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
         helper.createDatabase(version).close()
     }
@@ -129,6 +129,27 @@ class KnitDatabaseMigrationTest {
                 assertTrue(s.step())
                 assertTrue(s.isNull(0))
                 assertEquals(42L, s.getLong(1))
+            }
+        }
+    }
+
+    @Test
+    fun `migrate 3 to 4 keeps messages and leaves their delivery plane unknown`() {
+        // The upgrade case that matters: a message already ticked ✓✓ on an older build has no record of
+        // which plane acked it, so it reads as DeliveryPlane.Unknown (code 0) — not a globe, not a lie.
+        helper.createDatabase(3).use { c ->
+            c.execSQL(
+                "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, mentions, " +
+                    "replyToHasAttachment, moderation, pendingKey, kind) " +
+                    "VALUES ('m1','me','bob','hello',1,1,'[]',0,0,0,0)",
+            )
+        }
+        helper.runMigrationsAndValidate(4, listOf(KnitMigrations.MIGRATION_3_4)).use { c ->
+            c.prepare("SELECT body, received, receivedVia FROM messages WHERE id = 'm1'").use { s ->
+                assertTrue(s.step())
+                assertEquals("hello", s.getText(0))
+                assertEquals(1L, s.getLong(1))
+                assertEquals(0L, s.getLong(2))
             }
         }
     }

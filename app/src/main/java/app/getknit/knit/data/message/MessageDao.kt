@@ -33,8 +33,24 @@ interface MessageDao {
     @Query("SELECT conversationId FROM messages WHERE id = :id")
     suspend fun conversationOf(id: String): String?
 
-    @Query("UPDATE messages SET received = 1 WHERE id = :id")
-    suspend fun markReceived(id: String)
+    /**
+     * Flips the delivery tick for [id], recording the [DeliveryPlane] code ([via]) the receipt that did it
+     * arrived on. Callers pass the enum through [app.getknit.knit.data.MessageRepository.markReceived].
+     *
+     * Stays idempotent (a receipt is re-served routinely), and the plane is **first-evidence-wins**: the
+     * `CASE` reads the pre-update `received`, so only the receipt that actually flips the tick sets the
+     * plane. A duplicate crossing later on another plane leaves the mark alone — it describes how the
+     * message first got there, not every route it has since travelled.
+     */
+    @Query(
+        "UPDATE messages SET " +
+            "receivedVia = CASE WHEN received = 0 THEN :via ELSE receivedVia END, received = 1 " +
+            "WHERE id = :id",
+    )
+    suspend fun markReceived(
+        id: String,
+        via: Int,
+    )
 
     /** How many messages in [conversationId] were authored by [me] — nonzero means the user has replied there. */
     @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId AND senderId = :me")

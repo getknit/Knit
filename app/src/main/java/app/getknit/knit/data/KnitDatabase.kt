@@ -53,7 +53,9 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     // v3: the spool plane's group scopes — one `group_roots` table holding the shared group root the group
     //     scope id and seal keys derive from (docs/SPOOL_PROTOCOL.md §3.2); no wire break, local state only,
     //     migrated by KnitMigrations.MIGRATION_2_3.
-    version = 3,
+    // v4: one `messages.receivedVia` column — the DeliveryPlane code of the receipt that flipped the tick, so
+    //     the ✓✓ can say the message got there over the Internet; migrated by KnitMigrations.MIGRATION_3_4.
+    version = 4,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without

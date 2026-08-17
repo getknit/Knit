@@ -14,6 +14,7 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
@@ -56,6 +57,7 @@ import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.mesh.protocol.isStorable
 import app.getknit.knit.mesh.protocol.mention
+import app.getknit.knit.mesh.spool.ScopeSync
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.NotifConversation
 import app.getknit.knit.notifications.Notifier
@@ -216,9 +218,13 @@ class InboundPipeline(
         wire: WireEnvelope,
         fromNodeId: String,
     ) {
+        // The one thing the source's *plane* is read for: a delivery receipt records which plane it reached
+        // us on, so the ✓✓ can say how the message got there (MessageEntity.receivedVia). It rides the
+        // receipt paths only — carry, relay and convergence stay plane-blind, as ADR 019 requires.
+        val plane = planeOf(fromNodeId)
         when (env.type) {
             FrameType.CHAT -> {
-                handleChat(env)
+                handleChat(env, plane)
             }
 
             FrameType.GROUP_UPDATE -> {
@@ -234,7 +240,7 @@ class InboundPipeline(
             }
 
             FrameType.RECEIPT -> {
-                handleReceipt(env)
+                handleReceipt(env, plane)
             }
 
             FrameType.REACTION -> {
@@ -258,6 +264,20 @@ class InboundPipeline(
             }
         }
     }
+
+    /**
+     * The plane an inbound frame arrived on, from the source the router tagged it with — the single place
+     * that maps a delivery source onto a [DeliveryPlane].
+     *
+     * A spool-tagged source names the Internet plane; anything else is a neighbouring node, i.e. one of the
+     * radios. Which radio is not knowable here today: [MeshTransport.kind] distinguishes them and
+     * `CompositeMeshTransport` tags each child with it, but [InboundFrame] does not carry it up, so every
+     * radio delivery collapses to [DeliveryPlane.Nearby]. Plumbing that kind through the router is all it
+     * would take to return [DeliveryPlane.Bluetooth]/[DeliveryPlane.WifiAware] here instead — everything
+     * downstream (column, threading, UI) already speaks the enum.
+     */
+    private fun planeOf(fromNodeId: String): DeliveryPlane =
+        if (ScopeSync.isSpoolSource(fromNodeId)) DeliveryPlane.Internet else DeliveryPlane.Nearby
 
     /**
      * Records a best-effort "now typing" cue in [typingTracker] so the chat UI can show it. The conversation is
@@ -285,13 +305,17 @@ class InboundPipeline(
      * we additionally require that sender to be the acked message's DM recipient before flipping the tick
      * or purging the carried copy — otherwise any node could forge a receipt to spoof delivery or evict an
      * undelivered DM. A broadcast/group message (recipientId null) keeps the legacy best-effort tick, and a
-     * message we don't hold makes [MessageRepository.markReceived] a harmless no-op.
+     * message we don't hold makes [MessageRepository.markReceived] a harmless no-op. [plane] is the plane
+     * this receipt arrived on, recorded with the tick it flips.
      */
-    private suspend fun handleReceipt(env: RelayEnvelope) {
+    private suspend fun handleReceipt(
+        env: RelayEnvelope,
+        plane: DeliveryPlane,
+    ) {
         val ackId = WireCodec.decodePayload<ReceiptContent>(env.payload)?.ackId ?: return
         val recipientOfAcked = messages.recipientOf(ackId)
         if (recipientOfAcked == null || recipientOfAcked == env.senderId) {
-            messages.markReceived(ackId)
+            messages.markReceived(ackId, plane)
         }
         forwardSync.onAck(ackId, env.senderId)
     }
@@ -406,7 +430,12 @@ class InboundPipeline(
         )
     }
 
-    private suspend fun handleChat(env: RelayEnvelope) {
+    // [plane] is carried purely for the sealed delivery receipt a v2 ctl DM may turn out to be
+    // ([applySealedReceipt]) — nothing on the ordinary message path reads it.
+    private suspend fun handleChat(
+        env: RelayEnvelope,
+        plane: DeliveryPlane,
+    ) {
         val me = identity.nodeId()
         // Blocked sender: never persist, notify, or reconcile their group/roster state — we surface nothing
         // from them. But a broadcast- or group-room message still gets its best-effort delivery tick
@@ -426,13 +455,13 @@ class InboundPipeline(
         // handled before the DM check below (which would otherwise treat them as broadcast).
         val group = env.group
         if (group != null) {
-            if (reconcileGroup(group, env.senderId, env.sentAt, me)) decryptAndDeliver(env, content, me, group.id)
+            if (reconcileGroup(group, env.senderId, env.sentAt, me)) decryptAndDeliver(env, content, me, group.id, plane)
             return
         }
         // A DM addressed to someone else: we're only relaying it (the router floods it onward). It
         // isn't ours, so don't persist, notify, or ack it.
         if (!Conversations.isForMe(env.recipientId, me)) return
-        decryptAndDeliver(env, content, me, Conversations.idFor(env.senderId, env.recipientId, me))
+        decryptAndDeliver(env, content, me, Conversations.idFor(env.senderId, env.recipientId, me), plane)
     }
 
     /**
@@ -471,6 +500,7 @@ class InboundPipeline(
         content: ChatContent,
         me: String,
         conversationId: String,
+        plane: DeliveryPlane,
     ) {
         val enc = content.enc
         if (enc == null) {
@@ -499,7 +529,7 @@ class InboundPipeline(
             }
 
             enc.v == EncEnvelope.VERSION_RATCHET -> {
-                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId) }.getOrElse {
+                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId, plane) }.getOrElse {
                     Log.w(TAG, "drop v2 chat ${env.id}: ${it.message}")
                     metrics.onDropped(DropReason.DECRYPT_FAILED)
                 }
@@ -544,6 +574,7 @@ class InboundPipeline(
         enc: EncEnvelope,
         me: String,
         conversationId: String,
+        plane: DeliveryPlane,
     ) {
         val wireHeader = enc.r
         // v2 is DM-only; a group-addressed or header-less v2 envelope is malformed by construction.
@@ -586,7 +617,7 @@ class InboundPipeline(
             }
         }
         if (plain.ctl != null) {
-            handleCtlDm(env, plain, me, now, commit)
+            handleCtlDm(env, plain, me, now, plane, commit)
             return
         }
         deliverChat(
@@ -614,10 +645,11 @@ class InboundPipeline(
         plain: MessageContent,
         me: String,
         now: Long,
+        plane: DeliveryPlane,
         commit: suspend (suspend () -> Unit) -> Boolean,
     ) {
         var outcome = CtlOutcome()
-        val committed = commit { outcome = applyCtlInTxn(env, plain, now) }
+        val committed = commit { outcome = applyCtlInTxn(env, plain, now, plane) }
         if (!committed) return
         when (plain.ctl) {
             MessageContent.CTL_SESSION_RESET -> {
@@ -677,6 +709,7 @@ class InboundPipeline(
         env: RelayEnvelope,
         plain: MessageContent,
         now: Long,
+        plane: DeliveryPlane,
     ): CtlOutcome {
         when (plain.ctl) {
             MessageContent.CTL_GROUP_KEY -> {
@@ -695,7 +728,7 @@ class InboundPipeline(
             }
 
             MessageContent.CTL_RECEIPT -> {
-                applySealedReceipt(env, plain.ack)
+                applySealedReceipt(env, plain.ack, plane)
             }
 
             MessageContent.CTL_REACTION -> {
@@ -761,15 +794,21 @@ class InboundPipeline(
      * tick's shape). Deliberately NO [ForwardSync.onAck]: a carrier can't read a sealed receipt, so
      * nobody vaccine-purges — the delivered message ages out of custody on the frame-global TTL
      * uniformly on every node (docs/ENCRYPTED_RECEIPTS_REACTIONS.md). Runs inside the ctl commit.
+     *
+     * [plane] is the plane the sealed receipt arrived on, stored with the tick: [DeliveryPlane.Internet]
+     * means the peer answered us across a spool rather than from radio range. This is the DM path, so it is
+     * the one that usually paints the globe — a DM's receipt is sealed, and only the cleartext
+     * broadcast/group tick takes [handleReceipt].
      */
     private suspend fun applySealedReceipt(
         env: RelayEnvelope,
         ackId: String?,
+        plane: DeliveryPlane,
     ) {
         ackId ?: return
         val recipientOfAcked = messages.recipientOf(ackId)
         if (recipientOfAcked == null || recipientOfAcked == env.senderId) {
-            messages.markReceived(ackId)
+            messages.markReceived(ackId, plane)
         }
     }
 

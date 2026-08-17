@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.relay.AttachmentRelay
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.ui.theme.KnitTheme
@@ -31,6 +32,8 @@ class ChatRelayIndicatorTest {
     private fun row(
         mine: Boolean = true,
         attachmentRelay: AttachmentRelay = AttachmentRelay.Silent,
+        received: Boolean = false,
+        deliveredVia: DeliveryPlane = DeliveryPlane.Unknown,
     ) = ChatRow(
         id = "m1",
         body = "look at this",
@@ -39,7 +42,8 @@ class ChatRelayIndicatorTest {
         senderNodeId = if (mine) "me" else "ana",
         avatarHash = null,
         sentAt = 1_700_000_000_000L,
-        received = false,
+        received = received,
+        deliveredVia = deliveredVia,
         attachmentHash = "h1",
         attachmentReady = true,
         attachmentRelay = attachmentRelay,
@@ -166,5 +170,38 @@ class ChatRelayIndicatorTest {
         // Reach and delivery are separate facts: a nearby-only photo is still "Sent".
         render(rows = listOf(row(attachmentRelay = AttachmentRelay.TooLarge)))
         compose.onNodeWithContentDescription("Sent").assertIsDisplayed()
+    }
+
+    @Test
+    fun anInternetDeliveredMessageShowsTheGlobeBesideTheTick() {
+        render(rows = listOf(row(received = true, deliveredVia = DeliveryPlane.Internet)))
+        compose.onNodeWithTag("chat_tick_relay", useUnmergedTree = true).assertIsDisplayed()
+        // One announcement, not two: the globe is decorative and the tick carries the whole fact.
+        compose.onNodeWithContentDescription("Delivered over the Internet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Delivered").assertDoesNotExist()
+    }
+
+    @Test
+    fun aNearbyDeliveredMessageKeepsThePlainTick() {
+        render(rows = listOf(row(received = true, deliveredVia = DeliveryPlane.Nearby)))
+        compose.onNodeWithTag("chat_tick_relay", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Delivered").assertIsDisplayed()
+    }
+
+    @Test
+    fun anUndeliveredMessageNeverShowsTheGlobe() {
+        // The plane is only known once a receipt lands, so a single ✓ can never carry it — a stale flag
+        // on an un-acked row must not paint one either.
+        render(rows = listOf(row(received = false, deliveredVia = DeliveryPlane.Internet)))
+        compose.onNodeWithTag("chat_tick_relay", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Sent").assertIsDisplayed()
+    }
+
+    @Test
+    fun anIncomingMessageShowsNoTickAtAll() {
+        // Ticks are for our own sends; a received message reports nothing about how it travelled.
+        render(rows = listOf(row(mine = false, received = true, deliveredVia = DeliveryPlane.Internet)))
+        compose.onNodeWithTag("chat_tick_relay", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Delivered over the Internet").assertDoesNotExist()
     }
 }

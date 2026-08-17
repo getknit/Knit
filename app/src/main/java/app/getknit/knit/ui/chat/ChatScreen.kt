@@ -487,7 +487,7 @@ internal fun ChatScreenContent(
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.primary,
                                     )
-                                    ConnectionStatusRow(state.neighborCount, state.transportHealth)
+                                    ConnectionStatusRow(state.neighborCount, state.transportHealth, state.relayPlane)
                                 }
                             }
                         }

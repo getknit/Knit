@@ -59,6 +59,30 @@ class RelayReachTest {
     }
 
     @Test
+    fun `the header plane is off whenever the user has nothing armed`() {
+        assertEquals(RelayPlane.Off, planeFor(RelayFacts()))
+        assertEquals(RelayPlane.Off, planeFor(covered.copy(enabled = false)))
+        // Enabled with an empty relay list is still nothing to report — the plane cannot carry anything.
+        assertEquals(RelayPlane.Off, planeFor(covered.copy(configured = 0, connected = 0)))
+    }
+
+    @Test
+    fun `an outage dims the header even though it silences the per-thread notice`() {
+        // Deliberately the opposite call from reachFor on the same facts: one glyph the user can read as
+        // transient, versus a notice that would appear across every open conversation.
+        val outage = covered.copy(connected = 0)
+        assertEquals(RelayPlane.Down, planeFor(outage))
+        assertEquals(RelayReach.Silent, reachFor("peer-a", outage))
+    }
+
+    @Test
+    fun `one connected relay is enough for the header to read live`() {
+        assertEquals(RelayPlane.Live, planeFor(covered.copy(configured = 3, connected = 1)))
+        // Coverage is per conversation; the plane being up says nothing about which scopes exist yet.
+        assertEquals(RelayPlane.Live, planeFor(covered.copy(coveredLabels = emptySet())))
+    }
+
+    @Test
     fun `attachment reach is silent wherever the conversation notice already speaks`() {
         // The thread-level notice covers these; repeating it per photo would be noise.
         assertEquals(AttachmentRelay.Silent, attachmentReach(Conversations.NEARBY, 1_000, covered))

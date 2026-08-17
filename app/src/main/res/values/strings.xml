@@ -70,6 +70,18 @@
     <string name="chat_connection_radio_off">Turn on Wi-Fi or Bluetooth to connect</string>
     <string name="chat_connection_airplane">Airplane mode is on — turn on Wi-Fi or Bluetooth</string>
     <string name="chat_connection_degraded">Mesh radio unavailable — another app may be using it</string>
+    <!--
+      Connection header, Internet plane. These two replace the mesh line only when the Internet plane is
+      carrying the conversation and the radios are not — saying "No mesh nodes connected" then would be
+      false, since messages are still moving. When both planes work the mesh line stands and the glyph
+      alone reports the Internet.
+    -->
+    <string name="chat_connection_relay_only">Relaying over Internet</string>
+    <string name="chat_connection_relay_no_radios">No nearby radios — relaying over Internet</string>
+    <!-- Spoken form of the header's Internet glyph, appended to the visible line for TalkBack. -->
+    <string name="chat_connection_relay_live_desc">Internet relays connected</string>
+    <string name="chat_connection_relay_down_desc">Internet relays not connected</string>
+    <string name="chat_connection_desc">%1$s. %2$s</string>
     <!-- Chat-list radio-off banner -->
     <string name="chatlist_radio_banner_bluetooth_off">Bluetooth is off — tap to turn it on for better range and reliability</string>
     <string name="chatlist_radio_banner_wifi_off">Wi-Fi is off — tap to turn it on for faster, longer-range mesh</string>

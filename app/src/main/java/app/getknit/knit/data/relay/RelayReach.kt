@@ -28,6 +28,23 @@ data class RelayFacts(
 )
 
 /**
+ * The Internet plane's state as the connection header reports it: one answer for the whole device, where
+ * [RelayReach] is the per-conversation one. Coarse on purpose — the header lives in a `TopAppBar` subtitle
+ * with room for a dot, a short line and a glyph, so *which* relays and *how many* stay in the relay
+ * settings screen and Diagnostics.
+ */
+enum class RelayPlane {
+    /** Off, or on with an empty relay list — the header says nothing about the Internet at all. */
+    Off,
+
+    /** Armed and configured, but nothing connected right now: no message crosses the plane. */
+    Down,
+
+    /** At least one relay connected, so a scoped conversation reaches past radio range. */
+    Live,
+}
+
+/**
  * What to tell the user about one conversation's Internet reach.
  *
  * The states are deliberately asymmetric: only [Room] and [Pending] render anything. Coverage is the
@@ -62,6 +79,22 @@ enum class AttachmentRelay {
     /** No connected relay advertises attachment support at all (spec §7.3) — frames only. */
     Unsupported,
 }
+
+/**
+ * The [RelayPlane] for [facts].
+ *
+ * Configured-but-none-connected is [RelayPlane.Down] rather than folded into [RelayPlane.Off] because the
+ * two earn different pixels: Off is a setting the user chose and needs no indicator at all, while Down is
+ * a plane they expect to be working. That split is the opposite call from [reachFor], which *does* fold an
+ * outage into [RelayReach.Silent] — a per-thread notice would be repeated across every open chat, whereas
+ * the header shows one glyph the user can already see the shape of.
+ */
+fun planeFor(facts: RelayFacts): RelayPlane =
+    when {
+        !facts.enabled || facts.configured == 0 -> RelayPlane.Off
+        facts.connected == 0 -> RelayPlane.Down
+        else -> RelayPlane.Live
+    }
 
 /**
  * Whether [conversationId] currently rides the Internet plane.

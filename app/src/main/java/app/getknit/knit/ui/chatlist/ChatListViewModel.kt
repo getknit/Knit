@@ -14,11 +14,15 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.relay.RelayFacts
+import app.getknit.knit.data.relay.RelayPlane
+import app.getknit.knit.data.relay.planeFor
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.TransportHealth
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +56,9 @@ data class ChatListUiState(
     val neighborCount: Int = 0,
     // Radio health, so the connection header can distinguish "nobody nearby" from radios off/seized.
     val transportHealth: TransportHealth = TransportHealth.Healthy,
+    // The Internet plane's state for the same header. [RelayPlane.Off] renders nothing, which is also the
+    // default the plane ships in.
+    val relayPlane: RelayPlane = RelayPlane.Off,
     // The radio-off warning banner to show (or null), already accounting for the user's dismissal.
     val radioWarning: RadioWarning? = null,
     // True only for the initial seed value (see [state]'s stateIn below), before the underlying Room +
@@ -73,6 +80,10 @@ class ChatListViewModel(
     identity: Identity,
     meshManager: MeshController,
     private val groups: GroupRepository,
+    // The facts flow rather than the repository, for the reason spelled out on ChatViewModel's copy of this
+    // parameter: the production flow is an infinite poller, which a test driving this VM with
+    // `advanceUntilIdle()` could never let go idle.
+    relayFacts: Flow<RelayFacts>,
     private val context: Context,
 ) : ViewModel() {
     private val myNodeId = MutableStateFlow<String?>(null)
@@ -90,11 +101,13 @@ class ChatListViewModel(
         val accepted: Set<String>,
     )
 
-    // Neighbor count + radio health + the (already-dismissal-aware) banner, folded into one source.
+    // Neighbor count + radio health + the (already-dismissal-aware) banner + Internet-plane state, folded
+    // into one source.
     private data class MeshStatus(
         val neighborCount: Int,
         val health: TransportHealth,
         val warning: RadioWarning?,
+        val relayPlane: RelayPlane,
     )
 
     private val messagesAndBlocks =
@@ -129,12 +142,19 @@ class ChatListViewModel(
 
     // Neighbor count + radio health + the banner folded into one source so the main state combine stays
     // within its five-flow arity.
+    // Collapsed to the coarse plane state (and de-duped) before it reaches the combine: the facts flow
+    // re-emits on scope-table churn this screen has no opinion about, and every such emission would
+    // otherwise rebuild the whole conversation list.
+    private val relayPlane =
+        relayFacts.map { planeFor(it) }.distinctUntilChanged()
+
     private val meshStatus =
         combine(
             meshManager.neighborCount,
             meshManager.transportHealth,
             visibleWarning,
-        ) { count, health, warning -> MeshStatus(count, health, warning) }
+            relayPlane,
+        ) { count, health, warning, plane -> MeshStatus(count, health, warning, plane) }
 
     val state: StateFlow<ChatListUiState> =
         combine(
@@ -143,7 +163,7 @@ class ChatListViewModel(
             settings.lastReadAll,
             myNodeId,
             meshStatus,
-        ) { bundle, peerList, lastReadAll, me, (neighborCount, health, warning) ->
+        ) { bundle, peerList, lastReadAll, me, mesh ->
             val msgs = bundle.messages
             val blocked = bundle.blocked
             val activeGroups = bundle.groups.filter { !it.left }
@@ -254,9 +274,10 @@ class ChatListViewModel(
             ChatListUiState(
                 conversations = (listOf(nearby) + groupRows + dms).sortedByDescending { it.lastMessageAt ?: 0L },
                 requestCount = requestCount,
-                neighborCount = neighborCount,
-                transportHealth = health,
-                radioWarning = warning,
+                neighborCount = mesh.neighborCount,
+                transportHealth = mesh.health,
+                relayPlane = mesh.relayPlane,
+                radioWarning = mesh.warning,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatListUiState(isLoading = true))
 

@@ -39,7 +39,9 @@ val uiModule =
                 androidContext(),
             )
         }
-        viewModel { ChatListViewModel(get(), get(), get(), get(), get(), get(), androidContext()) }
+        viewModel {
+            ChatListViewModel(get(), get(), get(), get(), get(), get(), get<RelayStatusRepository>().facts, androidContext())
+        }
         viewModel { ContactsViewModel(get(), get(), get(), get(), get(), get()) }
         viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get(), get()) }
         viewModel { ProfileViewModel(get(), get(), get(), get(), get<RelayStatusRepository>().facts) }

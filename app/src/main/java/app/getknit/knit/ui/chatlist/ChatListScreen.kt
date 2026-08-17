@@ -86,6 +86,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
+import app.getknit.knit.data.relay.RelayPlane
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
@@ -219,7 +220,7 @@ internal fun ChatListScreenContent(
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.semantics { heading() },
                         )
-                        ConnectionStatusRow(state.neighborCount, state.transportHealth)
+                        ConnectionStatusRow(state.neighborCount, state.transportHealth, state.relayPlane)
                     }
                 },
                 actions = {
@@ -754,6 +755,7 @@ fun ChatListScreenPopulatedPreview() =
                     conversations = previewConversations(),
                     neighborCount = 3,
                     transportHealth = TransportHealth.Healthy,
+                    relayPlane = RelayPlane.Live,
                 ),
             now = PREVIEW_NOW,
             onOpenConversation = {},

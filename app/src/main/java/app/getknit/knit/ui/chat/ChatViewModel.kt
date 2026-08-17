@@ -26,8 +26,10 @@ import app.getknit.knit.data.message.replyRef
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.relay.AttachmentRelay
 import app.getknit.knit.data.relay.RelayFacts
+import app.getknit.knit.data.relay.RelayPlane
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.data.relay.attachmentReach
+import app.getknit.knit.data.relay.planeFor
 import app.getknit.knit.data.relay.reachFor
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
@@ -146,6 +148,9 @@ data class ChatUiState(
     // [RelayReach.Pending] render anything — coverage is the happy path, and an outage is transient and
     // stays quiet. See [reachFor].
     val relayReach: RelayReach = RelayReach.Silent,
+    // The Internet plane's whole-device state, for the connection header. Coarser than [relayReach] and
+    // about a different thing: whether the plane is up at all, not whether it covers this thread.
+    val relayPlane: RelayPlane = RelayPlane.Off,
 )
 
 class ChatViewModel(
@@ -421,6 +426,7 @@ class ChatViewModel(
                 memberCount = members.size,
                 typingPeers = typingPeers,
                 relayReach = reachFor(conversationId, relay),
+                relayPlane = planeFor(relay),
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState(isRoom = isRoom))
 

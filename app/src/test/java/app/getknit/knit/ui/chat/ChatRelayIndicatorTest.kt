@@ -198,10 +198,27 @@ class ChatRelayIndicatorTest {
     }
 
     @Test
+    fun anIncomingMessageThatCameOffARelayShowsTheGlobe() {
+        // No tick — delivery isn't ours to report — but the same globe, and here it must announce
+        // itself: there is no tick beside it to carry the fact.
+        render(rows = listOf(row(mine = false, deliveredVia = DeliveryPlane.Internet)))
+        compose.onNodeWithTag("chat_arrived_relay", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Arrived over the Internet").assertIsDisplayed()
+    }
+
+    @Test
+    fun anIncomingMessageThatCameOverARadioShowsNothing() {
+        render(rows = listOf(row(mine = false, deliveredVia = DeliveryPlane.Nearby)))
+        compose.onNodeWithTag("chat_arrived_relay", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
     fun anIncomingMessageShowsNoTickAtAll() {
-        // Ticks are for our own sends; a received message reports nothing about how it travelled.
+        // Ticks are for our own sends: a received message says how it arrived, never that it was
+        // "delivered" — that claim belongs to the sender's phone.
         render(rows = listOf(row(mine = false, received = true, deliveredVia = DeliveryPlane.Internet)))
         compose.onNodeWithTag("chat_tick_relay", useUnmergedTree = true).assertDoesNotExist()
         compose.onNodeWithContentDescription("Delivered over the Internet").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Delivered").assertDoesNotExist()
     }
 }

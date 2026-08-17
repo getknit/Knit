@@ -14,11 +14,12 @@ import kotlinx.serialization.json.Json
  * party's node id for a DM) and is indexed for the per-thread chat queries. [received] is the
  * delivery-ack flag for messages this device sent (drives the ✓/✓✓ tick).
  *
- * [receivedVia] records which plane the receipt that flipped [received] arrived on (a [DeliveryPlane]
- * code), so the tick can say *how* the message got there — a globe beside the ✓✓ for the Internet plane.
- * It is written once, by the receipt that first flips the tick: a later duplicate arriving on another
- * plane never rewrites it, so the mark keeps describing the delivery that actually happened. Meaningless
- * while [received] is false.
+ * [receivedVia] records which plane this message crossed to get here (a [DeliveryPlane] code), so the UI
+ * can show a globe for one that came over the Internet. The evidence differs by direction: an **inbound**
+ * message is written with the plane its own frame arrived on — it is its own proof — while one of **our
+ * sends** learns its plane from the receipt that flips [received], and only from the first such receipt (a
+ * duplicate re-served later on another plane never rewrites it, so the mark keeps describing the delivery
+ * that actually happened).
  *
  * [mentions] is a JSON-encoded `List<Mention>` ("[]" when none); kept as a string so Room stays a
  * plain TEXT column and (de)serialization lives with the [Mention] type via [MentionStore].

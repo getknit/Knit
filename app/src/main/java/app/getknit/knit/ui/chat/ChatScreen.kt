@@ -1117,6 +1117,18 @@ private fun MessageBubble(
                                     modifier = Modifier.size(14.dp),
                                 )
                             }
+                            // A received message has no tick — delivery is not ours to report — but the
+                            // same globe still says it reached this phone over the Internet rather than a
+                            // nearby radio. Here it carries its own description: with no tick beside it,
+                            // nothing else would announce it.
+                            if (!row.mine && row.deliveredVia == DeliveryPlane.Internet) {
+                                Icon(
+                                    imageVector = Icons.Filled.Public,
+                                    contentDescription = stringResource(R.string.chat_status_arrived_internet),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(12.dp).testTag("chat_arrived_relay"),
+                                )
+                            }
                         }
                     }
                 }
@@ -2251,6 +2263,35 @@ fun MessageBubbleMinePreview() =
                 ),
             now = PREVIEW_NOW,
             showSenderName = false,
+            onImageClick = {},
+            onOpenProfile = {},
+            onReact = { _, _ -> },
+            onDelete = {},
+            onBlock = {},
+            onCopy = {},
+        )
+    }
+
+/** An incoming message that came in off a relay: same globe, no tick — delivery isn't ours to report. */
+@Preview(showBackground = true)
+@Composable
+fun MessageBubbleTheirsViaInternetPreview() =
+    KnitPreview {
+        MessageBubble(
+            row =
+                ChatRow(
+                    id = "m4",
+                    body = "Made it to the cabin. No bars up here, so this took the long way round.",
+                    mine = false,
+                    senderName = "Ada Lovelace",
+                    senderNodeId = "node-ada",
+                    avatarHash = null,
+                    sentAt = PREVIEW_NOW - 5 * 60_000L,
+                    received = false,
+                    deliveredVia = DeliveryPlane.Internet,
+                ),
+            now = PREVIEW_NOW,
+            showSenderName = true,
             onImageClick = {},
             onOpenProfile = {},
             onReact = { _, _ -> },

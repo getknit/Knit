@@ -15,6 +15,7 @@ import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
@@ -805,6 +806,25 @@ class InboundPipelineTest {
             rig.deliver(alice, env, from = ScopeSync.SPOOL_SOURCE_PREFIX + "spool.example")
 
             coVerify { rig.messages.markReceived("m1", DeliveryPlane.Internet) }
+        }
+
+    @Test
+    fun anIncomingDmRecordsThePlaneItArrivedOn() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+
+            // An inbound message needs no receipt to know how it travelled — the frame IS the evidence.
+            rig.deliver(
+                alice,
+                rig.dmChat(alice, rig.self, id = "in-relay", body = "from far away"),
+                from = ScopeSync.SPOOL_SOURCE_PREFIX + "spool.example",
+            )
+            rig.deliver(alice, rig.dmChat(alice, rig.self, id = "in-radio", body = "from next door"))
+
+            assertEquals(DeliveryPlane.Internet, rig.msgMap["in-relay"]?.receivedPlane)
+            assertEquals(DeliveryPlane.Nearby, rig.msgMap["in-radio"]?.receivedPlane)
         }
 
     @Test

@@ -504,7 +504,7 @@ class InboundPipeline(
     ) {
         val enc = content.enc
         if (enc == null) {
-            deliverChat(env, content, me, conversationId)
+            deliverChat(env, content, me, conversationId, plane)
             return
         }
         // The already-have-it gate: custody re-serves the same ciphertext routinely (the 60s re-offer
@@ -522,7 +522,7 @@ class InboundPipeline(
             // v2's two forms share the version and split on addressing (see EncEnvelope's kdoc):
             // group-addressed carries the sender-key header `g`, a DM the epoch-ratchet header `r`.
             enc.v == EncEnvelope.VERSION_RATCHET && env.group != null -> {
-                runCatching { decryptAndDeliverGroup(env, content, enc, me, conversationId) }.getOrElse {
+                runCatching { decryptAndDeliverGroup(env, content, enc, me, conversationId, plane) }.getOrElse {
                     Log.w(TAG, "drop group ratchet chat ${env.id}: ${it.message}")
                     metrics.onDropped(DropReason.DECRYPT_FAILED)
                 }
@@ -541,7 +541,7 @@ class InboundPipeline(
                         Log.w(TAG, "drop encrypted chat ${env.id}: ${it.message}")
                         null
                     } ?: return
-                deliverChat(env, plaintextContent(content, plain), me, conversationId, plain.attachmentKey)
+                deliverChat(env, plaintextContent(content, plain), me, conversationId, plane, plain.attachmentKey)
             }
         }
     }
@@ -625,6 +625,7 @@ class InboundPipeline(
             plaintextContent(content, plain),
             me,
             conversationId,
+            plane,
             plain.attachmentKey,
             persist = { row -> commit { messages.save(row) } },
         )
@@ -901,6 +902,7 @@ class InboundPipeline(
         enc: EncEnvelope,
         me: String,
         conversationId: String,
+        plane: DeliveryPlane,
     ) {
         val wireHeader = enc.g
         val groupId = env.group?.id
@@ -947,6 +949,7 @@ class InboundPipeline(
             plaintextContent(content, plain),
             me,
             conversationId,
+            plane,
             plain.attachmentKey,
             persist = { row -> commit { messages.save(row) } },
         )
@@ -1520,6 +1523,12 @@ class InboundPipeline(
         content: ChatContent,
         me: String,
         conversationId: String,
+        // The plane this frame reached us on, stored on the row: an inbound message needs no receipt to
+        // know how it travelled — it IS the evidence. (Our own sends learn their plane later, from the
+        // receipt that flips their tick.) The broadcast path re-upserts on every re-serve instead of
+        // early-returning on the exists-gate, but the room never crosses the Internet plane, so the
+        // value it rewrites is the same one every time.
+        plane: DeliveryPlane,
         attachmentKey: String? = null,
         // How the built row is persisted. The default is the plain idempotent upsert; the v2 ratchet
         // path substitutes a hook that commits the ratchet delta + the row in one transaction.
@@ -1548,6 +1557,7 @@ class InboundPipeline(
                 // guard). Honest clock skew within the window is kept as-is.
                 sentAt = minOf(env.sentAt, System.currentTimeMillis() + Protocol.MAX_FUTURE_SKEW_MS),
                 received = false,
+                receivedVia = plane.code,
                 mentions = MentionStore.encode(content.mentions),
                 attachmentHash = hash,
                 attachmentMime = content.attachmentMime,

@@ -179,11 +179,11 @@ class BlobRepositoryTest : RoomDbTest() {
         }
 
     @Test
-    fun `observeHashes reflects stored blobs`() =
+    fun `observeSizes reflects stored blobs and their sizes`() =
         runTest {
             val repo = repo()
             repo.insert("h1", "image/jpeg", byteArrayOf(1))
-            repo.insert("h2", "image/jpeg", byteArrayOf(2))
-            assertEquals(setOf("h1", "h2"), repo.observeHashes().first().toSet())
+            repo.insert("h2", "image/jpeg", byteArrayOf(2, 3))
+            assertEquals(mapOf("h1" to 1, "h2" to 2), repo.observeSizes().first())
         }
 }

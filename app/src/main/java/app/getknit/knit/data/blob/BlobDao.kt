@@ -6,6 +6,12 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 
+/** One stored blob's identity and size, projected by [BlobDao.observeSizes] without reading the bytes. */
+data class BlobSize(
+    val hash: String,
+    val size: Int,
+)
+
 @Dao
 interface BlobDao {
     /** Stores [blob]; content-addressed, so a hash we already hold is silently ignored (dedup). */
@@ -22,9 +28,15 @@ interface BlobDao {
     @Query("SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = :hash)")
     suspend fun exists(hash: String): Boolean
 
-    /** Hashes of all stored blobs (no BLOB read) — drives the chat's "attachment present yet?" state. */
-    @Query("SELECT hash FROM blobs")
-    fun observeHashes(): Flow<List<String>>
+    /**
+     * Hash and byte length of every stored blob — drives both the chat's "attachment present yet?" state
+     * (key membership) and its "can this attachment cross a relay?" state (the size).
+     *
+     * No BLOB read: like [carrierOnlyBlobBytes], `length(bytes)` reads the row's length varint rather
+     * than decrypting the payload, so widening this from a bare hash list costs nothing per row.
+     */
+    @Query("SELECT hash, length(bytes) AS size FROM blobs")
+    fun observeSizes(): Flow<List<BlobSize>>
 
     /**
      * Blob hashes referenced by no message attachment, no peer avatar, no group photo, and no carried

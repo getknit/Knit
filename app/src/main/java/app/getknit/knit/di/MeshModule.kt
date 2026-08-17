@@ -6,6 +6,7 @@ import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.crypto.IdentityKeyStore
+import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.mesh.CompositeMeshTransport
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshManager
@@ -145,4 +146,7 @@ val meshModule =
         // UI ViewModels, MeshService, and the notification/debug entry points bind this narrow facade (not
         // the concrete orchestrator) so they can be tested against a fake; the same singleton backs both keys.
         single<MeshController> { get<MeshManager>() }
+        // One place that turns settings + `spoolStatus()` into the relay facts the chat indicator, the
+        // relay settings screen and Diagnostics all read.
+        single { RelayStatusRepository(get(), get()) }
     }

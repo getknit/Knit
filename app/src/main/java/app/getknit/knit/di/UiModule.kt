@@ -1,5 +1,6 @@
 package app.getknit.knit.di
 
+import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.ui.blocked.BlockedUsersViewModel
 import app.getknit.knit.ui.chat.ChatViewModel
 import app.getknit.knit.ui.chatlist.ChatListViewModel
@@ -8,6 +9,7 @@ import app.getknit.knit.ui.diagnostics.DiagnosticsViewModel
 import app.getknit.knit.ui.group.GroupDetailsViewModel
 import app.getknit.knit.ui.profile.ProfileDetailsViewModel
 import app.getknit.knit.ui.profile.ProfileViewModel
+import app.getknit.knit.ui.relay.InternetRelayViewModel
 import app.getknit.knit.ui.requests.MessageRequestsViewModel
 import app.getknit.knit.ui.verify.VerifyContactViewModel
 import org.koin.android.ext.koin.androidContext
@@ -33,13 +35,14 @@ val uiModule =
                 get(),
                 get(),
                 get(),
+                get<RelayStatusRepository>().facts,
                 androidContext(),
             )
         }
         viewModel { ChatListViewModel(get(), get(), get(), get(), get(), get(), androidContext()) }
         viewModel { ContactsViewModel(get(), get(), get(), get(), get(), get()) }
-        viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get()) }
-        viewModel { ProfileViewModel(get(), get(), get(), get()) }
+        viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get(), get()) }
+        viewModel { ProfileViewModel(get(), get(), get(), get(), get<RelayStatusRepository>().facts) }
         // ProfileDetailsViewModel takes the tapped peer's node id as a runtime param.
         viewModel { params -> ProfileDetailsViewModel(params.get(), get(), get(), get(), get()) }
         // GroupDetailsViewModel takes the group id as a runtime param; the rest are resolved by type.
@@ -49,4 +52,5 @@ val uiModule =
         viewModel { BlockedUsersViewModel(get(), get()) }
         viewModel { MessageRequestsViewModel(get(), get(), get(), get(), get(), androidContext()) }
         viewModel { VerifyContactViewModel(get(), get()) }
+        viewModel { InternetRelayViewModel(get(), get()) }
     }

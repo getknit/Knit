@@ -52,6 +52,8 @@ import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.TransportStatus
+import app.getknit.knit.mesh.spool.SpoolStatus
+import app.getknit.knit.mesh.spool.SpoolUrl
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
 import app.getknit.knit.ui.util.compactTimeAgo
@@ -145,6 +147,13 @@ internal fun DiagnosticsScreenContent(
 
             item { SectionHeader(stringResource(R.string.diagnostics_metrics)) }
             item { MetricsSection(state.metrics) }
+
+            // Shown only while the Internet plane is actually running, so a mesh-only install (the
+            // default) never sees an empty section.
+            if (state.spools.isNotEmpty()) {
+                item { SectionHeader(stringResource(R.string.diagnostics_spools)) }
+                items(state.spools, key = { it.url }) { SpoolSection(it) }
+            }
 
             item {
                 SectionHeader(
@@ -483,6 +492,35 @@ private fun NodeRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/** How much of a scope label (a node id or group id) fits a Diagnostics row without wrapping. */
+private const val SCOPE_LABEL_CHARS = 12
+
+/**
+ * One spool's live state: whether we are connected, its most recent refusal, and per-scope convergence.
+ *
+ * `local` vs `spool` counts are the honest divergence readout the design doc asks for — a spool that
+ * silently withholds shows up here as a persistent gap. Read them together with the retiring flag,
+ * though: a rotating scope is drained and never refilled (spec §3.1/§3.3), so it legitimately sits at
+ * `local > spool` for its whole drain window, and that is the plane working rather than failing.
+ */
+@Composable
+private fun SpoolSection(spool: SpoolStatus) {
+    MetricRow(SpoolUrl.host(spool.url), spool.connected.let { if (it) "connected" else "offline" })
+    spool.lastError?.let { MetricRow("   last error", it) }
+    if (spool.connected) {
+        MetricRow("   photos", if (spool.maxAttachBytes != null) "yes" else "frames only")
+        if (spool.powBits > 0) MetricRow("   proof-of-work", "${spool.powBits} bits")
+    }
+    spool.scopes.forEach { scope ->
+        val suffix = if (scope.retiring) " (retiring)" else ""
+        MetricRow(
+            "   ${scope.label.take(SCOPE_LABEL_CHARS)}$suffix",
+            "${scope.localCount} local / ${scope.spoolCount} spool" +
+                if (scope.invalidCount > 0) " · ${scope.invalidCount} bad" else "",
+        )
     }
 }
 

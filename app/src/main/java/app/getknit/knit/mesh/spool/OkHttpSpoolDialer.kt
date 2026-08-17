@@ -26,13 +26,13 @@ class OkHttpSpoolDialer(
     private val client: OkHttpClient = defaultClient(),
 ) : SpoolDialer {
     override suspend fun dial(url: String): SpoolSocket? {
-        if (!accepts(url)) {
-            Log.w(TAG, "refusing spool url (scheme not allowed): ${redact(url)}")
+        if (!SpoolUrl.isAcceptable(url, allowCleartext)) {
+            Log.w(TAG, "refusing spool url (scheme not allowed): ${SpoolUrl.redact(url)}")
             return null
         }
         val request = runCatching { Request.Builder().url(url).build() }.getOrNull()
         if (request == null) {
-            Log.w(TAG, "unparseable spool url: ${redact(url)}")
+            Log.w(TAG, "unparseable spool url: ${SpoolUrl.redact(url)}")
             return null
         }
         // Bounded rather than unlimited: a hostile spool must not be able to grow our heap by talking
@@ -43,9 +43,6 @@ class OkHttpSpoolDialer(
         socket.attach(client.newWebSocket(request, socket.listener))
         return socket
     }
-
-    /** Whether this URL's scheme is usable in this build. `wss://` always; `ws://` only in debug. */
-    private fun accepts(url: String): Boolean = url.startsWith(WSS_SCHEME) || (allowCleartext && url.startsWith(WS_SCHEME))
 
     private class OkHttpSpoolSocket(
         private val channel: Channel<ByteArray>,
@@ -118,12 +115,7 @@ class OkHttpSpoolDialer(
 
     private companion object {
         const val TAG = "ScopeSync"
-        const val WSS_SCHEME = "wss://"
-        const val WS_SCHEME = "ws://"
         const val INBOX_CAPACITY = 256
-
-        /** Strips any `?k=` bearer token before a URL reaches the log. */
-        fun redact(url: String): String = url.substringBefore('?')
 
         fun defaultClient(): OkHttpClient =
             OkHttpClient

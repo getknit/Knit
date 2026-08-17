@@ -35,6 +35,7 @@ import app.getknit.knit.ui.group.GroupDetailsScreen
 import app.getknit.knit.ui.onboarding.OnboardingScreen
 import app.getknit.knit.ui.profile.ProfileDetailsScreen
 import app.getknit.knit.ui.profile.ProfileScreen
+import app.getknit.knit.ui.relay.InternetRelayScreen
 import app.getknit.knit.ui.requests.MessageRequestsScreen
 import app.getknit.knit.ui.review.RateReviewDialog
 import app.getknit.knit.ui.review.ReviewPromptInbox
@@ -53,6 +54,7 @@ private object Routes {
     const val MESSAGE_REQUESTS = "requests"
     const val DONATE = "donate"
     const val VERIFY = "verify"
+    const val INTERNET_RELAYS = "relays"
     const val SHARE = "share"
     const val CHAT = "chat/{conversationId}"
 
@@ -263,7 +265,13 @@ fun KnitApp(startRoute: String? = null) {
             )
         }
         composable(Routes.PROFILE) {
-            ProfileScreen(onBack = { navController.popBackStack() })
+            ProfileScreen(
+                onBack = { navController.popBackStack() },
+                onOpenRelays = { navController.navigate(Routes.INTERNET_RELAYS) },
+            )
+        }
+        composable(Routes.INTERNET_RELAYS) {
+            InternetRelayScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.DIAGNOSTICS) {
             DiagnosticsScreen(onBack = { navController.popBackStack() })

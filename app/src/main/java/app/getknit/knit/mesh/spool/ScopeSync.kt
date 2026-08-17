@@ -73,10 +73,18 @@ class ScopeStatus(
 )
 
 /**
- * One spool's live state, for the Diagnostics screen and the debug bridge. [lastError] is the most
- * recent `err` code this spool answered with — the difference between "connected but idle" and
- * "connected and refusing us", which is otherwise invisible and is exactly what a field test needs
- * (`quota`, `pow` and `rate` all present as a scope that simply never converges).
+ * One spool's live state, for the Diagnostics screen, the relay settings screen and the debug bridge.
+ * [lastError] is the most recent `err` code this spool answered with — the difference between
+ * "connected but idle" and "connected and refusing us", which is otherwise invisible and is exactly
+ * what a field test needs (`quota`, `pow` and `rate` all present as a scope that simply never
+ * converges).
+ *
+ * [maxAttachBytes] is this spool's HELLO-advertised per-scope attachment budget, or **null** when it
+ * advertised no attachment support at all (spec §7.3 — the three limits arrive together or not at all,
+ * and a client must not send an attachment record to a spool that omitted them). Null is therefore not
+ * "unknown" but "this spool carries frames only", which is what lets the UI say so before a send rather
+ * than leaving a photo silently un-relayed. It is null while disconnected for the same reason a hello
+ * has not happened yet.
  */
 class SpoolStatus(
     val url: String,
@@ -84,6 +92,7 @@ class SpoolStatus(
     val powBits: Int,
     val lastError: String?,
     val scopes: List<ScopeStatus>,
+    val maxAttachBytes: Int? = null,
 )
 
 /**
@@ -264,6 +273,9 @@ class ScopeSync(
                 connected = connection != null,
                 powBits = connection?.powBits ?: 0,
                 lastError = lastError,
+                // Gated on the whole capability, not the single field: §7.3's three limits arrive
+                // together or not at all, and a partial set means we must send no attachment record.
+                maxAttachBytes = connection?.limits?.takeIf { it.attachments }?.maxAttachBytes,
                 scopes =
                     all.map { scope ->
                         ScopeStatus(

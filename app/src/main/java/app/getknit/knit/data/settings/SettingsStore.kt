@@ -135,6 +135,18 @@ class SettingsStore(
      */
     val spoolUrls: Flow<Set<String>> = dataStore.data.map { it[KEY_SPOOL_URLS] ?: emptySet() }
 
+    /**
+     * Whether the user has been shown, and accepted, the disclosure behind [spoolEnabled] — what a spool
+     * can observe (IP, timing, volume) and cannot (content, roster), that the choice is global rather
+     * than per-conversation, and that switching off stops new uploads while sealed copies already at a
+     * spool age out on the scope TTL.
+     *
+     * Kept separate from [spoolEnabled] rather than inferred from it so that turning the plane off and on
+     * again does not re-prompt: consent is about having read the disclosure once, not about the current
+     * switch position.
+     */
+    val spoolConsented: Flow<Boolean> = dataStore.data.map { it[KEY_SPOOL_CONSENTED] ?: false }
+
     suspend fun setDisplayName(value: String) = dataStore.edit { it[KEY_NAME] = value }
 
     suspend fun setStatus(value: String) = dataStore.edit { it[KEY_STATUS] = value }
@@ -213,6 +225,17 @@ class SettingsStore(
     suspend fun setSpoolEnabled(value: Boolean) = dataStore.edit { it[KEY_SPOOL_ENABLED] = value }
 
     /**
+     * Records consent and enables the plane in **one** write, so the two can never disagree: a crash
+     * between two edits would otherwise leave a device either consented-but-off (harmless) or, if the
+     * order were reversed, relaying without having recorded that the disclosure was accepted.
+     */
+    suspend fun acceptSpoolConsent() =
+        dataStore.edit {
+            it[KEY_SPOOL_CONSENTED] = true
+            it[KEY_SPOOL_ENABLED] = true
+        }
+
+    /**
      * Seeds the shipped default spools (`res/values/spools.xml`) into [spoolUrls] exactly once, marking
      * the install as seeded so a **removal sticks**. A default the app kept re-adding would not be a
      * default, it would be a policy — and this list decides which third parties see a conversation's
@@ -255,5 +278,6 @@ class SettingsStore(
         val KEY_SPOOL_ENABLED = booleanPreferencesKey("spool_enabled")
         val KEY_SPOOL_URLS = stringSetPreferencesKey("spool_urls")
         val KEY_SPOOL_SEEDED = booleanPreferencesKey("spool_defaults_seeded")
+        val KEY_SPOOL_CONSENTED = booleanPreferencesKey("spool_consented")
     }
 }

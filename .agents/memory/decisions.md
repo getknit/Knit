@@ -468,6 +468,43 @@ it, "we already sent it" and "they have it" are silently conflated.
 No derivation, no seal, and no §13 vector moved: `ScopeCrypto.groupScopeId`/`groupSealKeys` were
 already written and vector-pinned at M1.
 
+**Amended 2026-08-16 (M6 — the plane gets a face, and the switch ships):** `ui/relay/` adds the
+Internet relays screen (route `relays`, reached from a Profile summary row) with the master switch, a
+relay-list editor, per-relay health, and a one-time consent sheet. `ProfileScreen`'s
+`BuildConfig.DEBUG` gate is **gone**: the editor was the stated hard prerequisite for un-gating, since
+the app seeds a default spool that a release user must be able to remove. No wire, DB or protocol
+change — only `SpoolStatus` gained `maxAttachBytes` and `SettingsStore` a `spool_consented` key.
+
+Five UX decisions worth not relitigating:
+
+1. **A relay refusal is not a failed send, and the UI must never imply it is.** The mesh carries the
+   frame regardless, so every string is about *reach* ("nearby only", "not covered"), tinted
+   `onSurfaceVariant` rather than `error`, and the ✓/✓✓ delivery tick is left completely untouched.
+   Conflating the two would teach users to read a working send as a broken one.
+2. **Only permanent causes are marked.** `rate`, `pow`, `tombstoned` and an unreachable spool all heal
+   on the next heal round, so they stay invisible; the marker fires only on the two conditions that
+   stay true until the user changes something — an attachment larger than every connected relay's
+   `maxAttachBytes`, and relays that advertise no attachment support at all (§7.3's three-limits gate,
+   read through `SpoolLimits.attachments`). A relay outage likewise yields `RelayReach.Silent`, not
+   "not covered", so a transient blip does not paint a notice across every open thread.
+3. **Markers sit at the altitude of the fact.** Scope coverage is a property of the *conversation*
+   (the Nearby room is excluded structurally by §4.4; a DM without a confirmed ratchet session or a
+   group without a root simply has no scope yet), so it renders once under the header — not stamped on
+   every bubble. Only the attachment case is per-message.
+4. **The frame-size case was found to be unreachable and was deliberately not built.**
+   `TextLimits.MESSAGE = 2000` caps a body near 8 KB against a 64 KiB `maxBlob`, so `ScopeSync`'s
+   `blob.size <= maxBlob` filter is a defensive guard no chat message trips. "Over the spool limit" in
+   practice means attachments.
+5. **The scheme rule has exactly one home.** `SpoolUrl.isAcceptable` is shared by the dialer and the
+   editor, so a release build cannot store a `ws://` relay that would then silently never dial. Two
+   copies would eventually disagree, and the one that drifts is the one that lets cleartext in.
+
+Reach derivation is pure and unit-tested (`data/relay/RelayReach.kt`, `RelayReachTest`); the plumbing
+that feeds it is `RelayStatusRepository`, a shared polled read of `MeshController.spoolStatus()`, since
+`ScopeSync` exposes a snapshot rather than a stream and the value changes on connect/disconnect, never
+per frame. One accident kept it cheap: `ScopeFrames.Scope.label` (`peerId ?: groupId`) is already
+identical to `Conversations.idFor`, so scope→thread mapping needed no new key.
+
 Scheme spec: docs/SPOOL_PROTOCOL.md; wire posture: docs/WIRE_COMPAT.md (its `GroupKeyPayload.gr`
 precedent entry); context: context/e2e-encryption.md; deferred remainder: memory/roadmap.md.
 

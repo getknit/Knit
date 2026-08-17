@@ -17,6 +17,7 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
@@ -70,12 +71,15 @@ class ChatViewModelTest {
     private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
     private val reactionsFlow = MutableStateFlow(emptyList<ReactionEntity>())
     private val blockedFlow = MutableStateFlow(emptySet<String>())
-    private val hashesFlow = MutableStateFlow(emptyList<String>())
+    private val sizesFlow = MutableStateFlow(emptyMap<String, Int>())
     private val flaggedFlow = MutableStateFlow(emptyList<String>())
     private val filteringFlow = MutableStateFlow(true)
     private val groupFlow = MutableStateFlow<GroupEntity?>(null)
     private val peersFlow = MutableStateFlow(emptyList<PeerEntity>())
     private val nameFlow = MutableStateFlow("Alice")
+    private val spoolEnabledFlow = MutableStateFlow(false)
+    private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
+    private val relayFactsFlow = MutableStateFlow(RelayFacts())
 
     @Before
     fun setUp() {
@@ -84,12 +88,16 @@ class ChatViewModelTest {
         every { messages.observeMessages(Conversations.NEARBY) } returns messagesFlow
         every { reactions.observeReactions() } returns reactionsFlow
         every { settings.blockedNodeIds } returns blockedFlow
-        every { blobs.observeHashes() } returns hashesFlow
+        every { blobs.observeSizes() } returns sizesFlow
         every { imageScreening.observeFlaggedHashes() } returns flaggedFlow
         every { settings.contentFilteringEnabled } returns filteringFlow
         every { groups.observeGroup(Conversations.NEARBY) } returns groupFlow
         every { peers.observePeers() } returns peersFlow
         every { settings.displayName } returns nameFlow
+        // A relaxed mock would hand back a Flow that never emits, and RelayStatusRepository
+        // combines these — one silent flow would stall every state assertion in this class.
+        every { settings.spoolEnabled } returns spoolEnabledFlow
+        every { settings.spoolUrls } returns spoolUrlsFlow
     }
 
     @After
@@ -112,6 +120,10 @@ class ChatViewModelTest {
             blobs,
             imageScreening,
             gallerySaver,
+            // A finite flow, not the production poller: RelayStatusRepository emits on an infinite
+            // `while(true) { emit; delay }`, and under runTest's virtual clock that delay is instant, so
+            // `advanceUntilIdle()` below would never reach idle.
+            relayFactsFlow,
             context,
         )
 
@@ -199,7 +211,7 @@ class ChatViewModelTest {
                     .attachmentReady,
             )
 
-            hashesFlow.value = listOf("h1")
+            sizesFlow.value = mapOf("h1" to 1_024)
             flaggedFlow.value = listOf("h1")
             advanceUntilIdle()
             assertTrue(

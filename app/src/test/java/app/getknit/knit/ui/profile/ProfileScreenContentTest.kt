@@ -21,26 +21,30 @@ class ProfileScreenContentTest {
     @get:Rule
     val compose = createComposeRule()
 
-    private fun form(isDirty: Boolean) =
-        ProfileFormState(
-            name = "Alice",
-            status = "Hiking",
-            nodeId = "node-abc",
-            alias = "Cool Fox",
-            avatarHash = null,
-            contentFilteringEnabled = true,
-            spoolEnabled = false,
-            isDirty = isDirty,
-        )
+    private fun form(
+        isDirty: Boolean,
+        relay: RelaySummary = RelaySummary(),
+    ) = ProfileFormState(
+        name = "Alice",
+        status = "Hiking",
+        nodeId = "node-abc",
+        alias = "Cool Fox",
+        avatarHash = null,
+        contentFilteringEnabled = true,
+        relay = relay,
+        isDirty = isDirty,
+    )
 
     private fun render(
         isDirty: Boolean,
         onSave: () -> Unit = {},
+        relay: RelaySummary = RelaySummary(),
+        onOpenRelays: () -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
                 ProfileScreenContent(
-                    form = form(isDirty),
+                    form = form(isDirty, relay),
                     batteryExempt = true,
                     onBack = {},
                     onNameChange = {},
@@ -48,7 +52,7 @@ class ProfileScreenContentTest {
                     onStatusChange = {},
                     onStatusCommit = {},
                     onToggleContentFiltering = {},
-                    onToggleSpool = {},
+                    onOpenRelays = onOpenRelays,
                     onPickPhoto = {},
                     onClearPhoto = {},
                     onAllowBattery = {},

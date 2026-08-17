@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.getknit.knit.R
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
@@ -12,6 +13,7 @@ import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.TransportStatus
+import app.getknit.knit.mesh.spool.SpoolStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,6 +45,8 @@ data class DiagnosticsUiState(
     val metrics: MeshMetrics.Snapshot = MeshMetrics.Snapshot(0, 0, 0, 0, 0, 0),
     // Per-radio status (Bluetooth vs Wi-Fi Aware), one entry per active transport.
     val transports: List<TransportStatus> = emptyList(),
+    // Per-spool status for the Internet plane; empty whenever the plane is parked.
+    val spools: List<SpoolStatus> = emptyList(),
 )
 
 /** The three flows folded into the [DiagnosticsViewModel.state] combine's fifth slot (combine tops out at 5). */
@@ -50,6 +54,7 @@ private data class DiagExtras(
     val metrics: MeshMetrics.Snapshot,
     val statuses: List<TransportStatus>,
     val peerTransports: Map<String, Set<TransportKind>>,
+    val spools: List<SpoolStatus>,
 )
 
 /**
@@ -65,6 +70,7 @@ class DiagnosticsViewModel(
     identity: Identity,
     settings: SettingsStore,
     private val metrics: MeshMetrics,
+    relayStatus: RelayStatusRepository,
 ) : ViewModel() {
     private val myNodeId = MutableStateFlow<String?>(null)
 
@@ -108,7 +114,8 @@ class DiagnosticsViewModel(
             metricsTicker,
             meshManager.transportStatuses,
             meshManager.peerTransports,
-        ) { snapshot, statuses, peerTransports -> DiagExtras(snapshot, statuses, peerTransports) }
+            relayStatus.statuses,
+        ) { snapshot, statuses, peerTransports, spools -> DiagExtras(snapshot, statuses, peerTransports, spools) }
 
     val state: StateFlow<DiagnosticsUiState> =
         combine(
@@ -138,6 +145,7 @@ class DiagnosticsViewModel(
                 relayNodes = nodes.filterNot { it.direct }.sortedBy { it.displayName.lowercase() },
                 metrics = extra.metrics,
                 transports = extra.statuses,
+                spools = extra.spools,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DiagnosticsUiState())
 

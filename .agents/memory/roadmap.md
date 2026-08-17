@@ -47,15 +47,17 @@ doc). **Don't start a deferred item without explicit direction.**
     with LWW on `(version, issuer)`. The one *wire* change the plane needs, so it lands additively
     per `docs/WIRE_COMPAT.md` with golden vectors and a precedent entry. Until it ships, the spool
     list is a device setting and bounds are §12 constants in `ScopeRegistry`.
-  - **a spool-list editor** — until then the Settings switch is `BuildConfig.DEBUG`-gated and
-    spools are configured over the debug bridge, so a release build has no way to turn it on.
-    **This is now a hard prerequisite for un-gating that switch**, not a nicety: the app ships a
-    default spool (`res/values/spools.xml`, seeded once by `SettingsStore.seedDefaultSpools`), so a
-    release user who could enable the plane but not edit the list would be stuck with an endpoint
-    they cannot remove. Today the pair is safe — the default is inert because the switch is hidden.
+  - ~~a spool-list editor~~ (**done 2026-08-16** — `ui/relay/InternetRelayScreen`, route `relays`,
+    reached from a Profile summary row. **The switch is un-gated**: `BuildConfig.DEBUG` is gone from
+    `ProfileScreen`, because the hard prerequisite is now met — a release user can edit or remove the
+    seeded default. Ships with it: a one-time consent sheet (`SettingsStore.spoolConsented` /
+    `acceptSpoolConsent`, which records consent and enables in one write), per-relay health rows off
+    `SpoolStatus`, and the shared `SpoolUrl` validator so the editor refuses at entry exactly what
+    `OkHttpSpoolDialer` refuses at dial time. ADR 019's M6 amendment records the UX rules.)
   - a validated-Internet `ConnectivityManager` seam (the MVP reconnects on backoff instead, which
     is why `rules/mesh.md` still reads NAN-only and `ACCESS_NETWORK_STATE` is still undeclared);
-    the Tor SOCKS toggle; per-conversation opt-out.
+    the Tor SOCKS toggle; per-conversation opt-out (deliberately **not** built — the plane is
+    all-or-nothing by product decision, 2026-08-16).
   ~~Then: group scopes~~ (**done 2026-08-16** — the `GroupKeyPayload.gr` wire field, `group_roots`
   at DB v3, `GroupRootPolicy`/`GroupRootStore`, group scopes in `ScopeRegistry`/`ScopeFrames`, and
   the mint/gossip/adopt/re-mint wiring in `MeshManager`/`InboundPipeline`. The spec's §3.2 was

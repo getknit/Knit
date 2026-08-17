@@ -22,6 +22,11 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.replyRef
 import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.data.relay.AttachmentRelay
+import app.getknit.knit.data.relay.RelayFacts
+import app.getknit.knit.data.relay.RelayReach
+import app.getknit.knit.data.relay.attachmentReach
+import app.getknit.knit.data.relay.reachFor
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
@@ -32,6 +37,7 @@ import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -71,6 +77,11 @@ data class ChatRow(
     // True when on-device screening flagged the attachment as explicit; the bubble blurs it behind a
     // tap-to-view. Only meaningful when [attachmentHash] is non-null.
     val attachmentFlagged: Boolean = false,
+    // Whether this attachment can cross the Internet-relay plane. Anything but [AttachmentRelay.Silent]
+    // or [AttachmentRelay.Relayable] marks the bubble "nearby only" — a statement about *reach*, never
+    // about delivery, which the ✓/✓✓ tick keeps to itself. Set only for our own sends; see the mapping
+    // in [ChatViewModel].
+    val attachmentRelay: AttachmentRelay = AttachmentRelay.Silent,
     val mentions: List<Mention> = emptyList(),
     val reactions: List<ReactionSummary> = emptyList(),
     // The message this row quotes (Signal-style reply), or null when it isn't a reply. Denormalized so the
@@ -126,6 +137,10 @@ data class ChatUiState(
     // Peers currently typing in this thread, shown as an animated indicator above the input. Ephemeral
     // (TTL'd in the mesh layer) and best-effort; empty most of the time.
     val typingPeers: List<TypingPeer> = emptyList(),
+    // Whether the Internet-relay plane covers this thread. Only [RelayReach.Room] and
+    // [RelayReach.Pending] render anything — coverage is the happy path, and an outage is transient and
+    // stays quiet. See [reachFor].
+    val relayReach: RelayReach = RelayReach.Silent,
 )
 
 class ChatViewModel(
@@ -142,6 +157,11 @@ class ChatViewModel(
     private val blobs: BlobRepository,
     private val imageScreening: ImageScreeningService,
     private val gallerySaver: GallerySaver,
+    // The facts flow, not the repository that produces it. Narrow on purpose: this ViewModel needs a
+    // Flow<RelayFacts> and nothing else, and the production flow is an infinite poller — under a test's
+    // virtual clock its `delay` is instant, so a test that drives this VM with `advanceUntilIdle()` could
+    // never reach idle. Taking the flow lets a test supply a finite one.
+    private val relayFacts: Flow<RelayFacts>,
     private val context: Context,
 ) : ViewModel() {
     /** This thread is the broadcast room (vs a 1:1 DM keyed by the peer's node id). */
@@ -195,28 +215,29 @@ class ChatViewModel(
     // Bundles the four message-related streams so the outer combine below stays at the 5-flow typed
     // overload (a 6th flow falls back to unchecked Array<*> casts). Blocked senders' messages are
     // filtered out here, so they also drop out of rows and mention candidates. Observing the blob
-    // hashes here is what flips an attachment from "loading" to shown when its bytes arrive.
+    // sizes here is what flips an attachment from "loading" to shown when its bytes arrive — and, since
+    // the same rows carry the byte length, what tells the UI whether those bytes can cross a relay.
     private data class MessagesBundle(
         val messages: List<MessageEntity>,
         val reactions: List<ReactionEntity>,
         val blocked: Set<String>,
-        val presentHashes: Set<String>,
+        val blobSizes: Map<String, Int>,
         val flaggedHashes: Set<String>,
         val hideSensitiveContent: Boolean,
         val group: GroupEntity?,
     )
 
-    // Present + moderation-flagged blob hashes plus the content-filtering setting, combined upstream so
-    // the main bundle stays at the typed 5-flow combine overload. The setting only gates receive-side
+    // Held blob sizes + moderation-flagged hashes plus the content-filtering setting, combined upstream
+    // so the main bundle stays at the typed 5-flow combine overload. The setting only gates receive-side
     // *hiding* (the chat blur + toxic-text collapse below), so toggling it reactively reveals/hides
     // already-received content without re-screening; what you can send is enforced elsewhere regardless.
     private val blobState =
         combine(
-            blobs.observeHashes(),
+            blobs.observeSizes(),
             imageScreening.observeFlaggedHashes(),
             settings.contentFilteringEnabled,
-        ) { present, flagged, hideSensitive ->
-            Triple(present.toSet(), flagged.toSet(), hideSensitive)
+        ) { sizes, flagged, hideSensitive ->
+            Triple(sizes, flagged.toSet(), hideSensitive)
         }
 
     private val messagesWithReactions =
@@ -226,24 +247,25 @@ class ChatViewModel(
             settings.blockedNodeIds,
             blobState,
             groups.observeGroup(conversationId),
-        ) { msgs, reacts, blocked, (present, flagged, hideSensitive), group ->
+        ) { msgs, reacts, blocked, (sizes, flagged, hideSensitive), group ->
             MessagesBundle(
                 msgs.filter { it.senderId !in blocked },
                 reacts,
                 blocked,
-                present,
+                sizes,
                 flagged,
                 hideSensitive,
                 group,
             )
         }
 
-    // Neighbor count + radio health + the "who's typing" map folded into one source so the main state
-    // combine stays within its five-flow arity.
+    // Neighbor count + radio health + the "who's typing" map + Internet-relay reach folded into one
+    // source so the main state combine stays within its five-flow arity.
     private data class MeshStatus(
         val neighborCount: Int,
         val transportHealth: TransportHealth,
         val typing: Map<String, Set<String>>,
+        val relay: RelayFacts,
     )
 
     private val meshStatus =
@@ -251,7 +273,8 @@ class ChatViewModel(
             meshManager.neighborCount,
             meshManager.transportHealth,
             meshManager.typing,
-        ) { count, health, typing -> MeshStatus(count, health, typing) }
+            relayFacts,
+        ) { count, health, typing, relay -> MeshStatus(count, health, typing, relay) }
 
     val state: StateFlow<ChatUiState> =
         combine(
@@ -260,11 +283,15 @@ class ChatViewModel(
             meshStatus,
             myNodeId,
             settings.displayName,
-        ) { bundle, peerList, (count, health, typingMap), me, myName ->
+        ) { bundle, peerList, mesh, me, myName ->
+            val count = mesh.neighborCount
+            val health = mesh.transportHealth
+            val typingMap = mesh.typing
+            val relay = mesh.relay
             val msgs = bundle.messages
             val reacts = bundle.reactions
             val blocked = bundle.blocked
-            val presentHashes = bundle.presentHashes
+            val blobSizes = bundle.blobSizes
             val flaggedHashes = bundle.flaggedHashes
             val hideSensitive = bundle.hideSensitiveContent
             val group = bundle.group
@@ -294,6 +321,7 @@ class ChatViewModel(
                                     ReactionSummary(emoji, group.size, group.any { it.reactorNodeId == me })
                                 }
                             }
+                    val heldBytes = m.attachmentHash?.let { blobSizes[it] }
                     ChatRow(
                         id = m.id,
                         body = m.body,
@@ -308,8 +336,17 @@ class ChatViewModel(
                         attachmentHash = m.attachmentHash,
                         attachmentMime = m.attachmentMime,
                         attachmentKey = m.attachmentKey,
-                        attachmentReady = m.attachmentHash != null && m.attachmentHash in presentHashes,
+                        attachmentReady = heldBytes != null,
                         attachmentFlagged = hideSensitive && m.attachmentHash != null && m.attachmentHash in flaggedHashes,
+                        // Outbound reach only: a received attachment has already arrived, so telling its
+                        // reader it is "nearby only" would describe a journey that is over. Unknown size
+                        // (bytes reclaimed by retention) falls through to Silent rather than guessing.
+                        attachmentRelay =
+                            if (mine && heldBytes != null) {
+                                attachmentReach(conversationId, heldBytes, relay)
+                            } else {
+                                AttachmentRelay.Silent
+                            },
                         mentions = MentionStore.decode(m.mentions),
                         reactions = tallies,
                         replyTo = m.replyRef(),
@@ -377,8 +414,28 @@ class ChatViewModel(
                 isGroup = isGroup,
                 memberCount = members.size,
                 typingPeers = typingPeers,
+                relayReach = reachFor(conversationId, relay),
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState(isRoom = isRoom))
+
+    /**
+     * Reach for the image staged in the composer, so the user learns a photo is nearby-only *before*
+     * sending rather than after. Its own flow rather than a [ChatUiState] field: the staged attachment is
+     * not part of the main combine (which is already at the typed five-flow limit), and the composer is
+     * the only consumer.
+     *
+     * The size comes from the blob table, not from [AttachmentStore.Ingested] — ingestion has already
+     * stored the bytes by the time an image is staged, so the row is there to be read.
+     */
+    val stagedAttachmentRelay: StateFlow<AttachmentRelay> =
+        combine(
+            _pendingAttachment,
+            blobs.observeSizes(),
+            relayFacts,
+        ) { staged, sizes, relay ->
+            val bytes = staged?.hash?.let { sizes[it] } ?: return@combine AttachmentRelay.Silent
+            attachmentReach(conversationId, bytes, relay)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AttachmentRelay.Silent)
 
     /**
      * Double-submit guard: true from the moment a send is accepted until its input is cleared (success)

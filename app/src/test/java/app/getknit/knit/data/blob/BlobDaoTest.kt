@@ -45,11 +45,14 @@ class BlobDaoTest : RoomDbTest() {
         }
 
     @Test
-    fun `observeHashes emits every stored hash`() =
+    fun `observeSizes emits every stored hash with its byte length`() =
         runTest {
             dao.insert(BlobEntity(hash = "A", mime = "image/jpeg", bytes = byteArrayOf(1)))
-            dao.insert(BlobEntity(hash = "B", mime = "image/jpeg", bytes = byteArrayOf(2)))
-            assertEquals(setOf("A", "B"), dao.observeHashes().first().toSet())
+            dao.insert(BlobEntity(hash = "B", mime = "image/jpeg", bytes = byteArrayOf(2, 3, 4)))
+            val rows = dao.observeSizes().first().associate { it.hash to it.size }
+            // The size is what decides whether an attachment can cross an Internet relay, so the
+            // projection has to report the real byte length, not merely that the row exists.
+            assertEquals(mapOf("A" to 1, "B" to 3), rows)
         }
 
     @Test

@@ -1,0 +1,114 @@
+package app.getknit.knit.data.relay
+
+import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
+import app.getknit.knit.mesh.spool.ScopeAttachments
+
+/**
+ * What the Internet-relay plane can currently do, flattened out of `SpoolStatus` into the few facts the
+ * UI actually reasons about. Pure data so the rules below are unit-testable without a socket, a spool,
+ * or Android.
+ *
+ * [coveredLabels] holds the labels of live (non-retiring) scopes on **connected** spools. A scope's
+ * label is `peerId ?: groupId` (`ScopeFrames.Scope.label`), which is exactly what
+ * [Conversations.idFor] produces for the same conversation — so a thread is covered precisely when its
+ * `conversationId` is in this set, with no extra key to keep in sync.
+ *
+ * [maxAttachBytes] is the largest per-scope attachment budget advertised by any connected spool, or
+ * null when none of them carries attachments at all. Taking the **max** rather than the min is correct
+ * because a member converges through the union of whatever every spool holds (spec §9.1): one relay
+ * willing to store the bytes is enough.
+ */
+data class RelayFacts(
+    val enabled: Boolean = false,
+    val configured: Int = 0,
+    val connected: Int = 0,
+    val coveredLabels: Set<String> = emptySet(),
+    val maxAttachBytes: Int? = null,
+)
+
+/**
+ * What to tell the user about one conversation's Internet reach.
+ *
+ * The states are deliberately asymmetric: only [Room] and [Pending] render anything. Coverage is the
+ * happy path and needs no ornament, and [Silent] is the "we have nothing true to say" case — including
+ * a relay outage, which heals by itself and must not paint a notice across every open thread.
+ */
+enum class RelayReach {
+    /** Plane off, no relay configured, or none connected — say nothing. */
+    Silent,
+
+    /** A live scope for this thread exists on at least one connected relay. */
+    Covered,
+
+    /** The broadcast room, which is never scope-eligible (spec §4.4). Permanent and by design. */
+    Room,
+
+    /** Relays are live but this thread has no scope yet — a peer or group still becoming eligible. */
+    Pending,
+}
+
+/** What to tell the user about one attachment's Internet reach. */
+enum class AttachmentRelay {
+    /** Nothing to say — no relays, or the conversation-level notice already says it. */
+    Silent,
+
+    /** Fits, and a connected relay will carry it. */
+    Relayable,
+
+    /** Larger than every connected relay's per-scope budget: refused `quota` (spec §6.5), permanently. */
+    TooLarge,
+
+    /** No connected relay advertises attachment support at all (spec §7.3) — frames only. */
+    Unsupported,
+}
+
+/**
+ * Whether [conversationId] currently rides the Internet plane.
+ *
+ * The broadcast room is checked before coverage rather than after, because it is a *structural*
+ * exclusion — `ScopeFrames.eligibleForDm` requires a recipient and a v2 ratchet header, neither of which
+ * a room frame has — and a permanent fact deserves different copy from a temporary one.
+ */
+fun reachFor(
+    conversationId: String,
+    facts: RelayFacts,
+): RelayReach =
+    when {
+        !facts.enabled || facts.configured == 0 || facts.connected == 0 -> RelayReach.Silent
+        conversationId == Conversations.NEARBY -> RelayReach.Room
+        conversationId in facts.coveredLabels -> RelayReach.Covered
+        else -> RelayReach.Pending
+    }
+
+/**
+ * Whether an attachment of [sizeBytes] can cross the plane for [conversationId].
+ *
+ * Two compositions worth stating, because getting either wrong produces a marker users learn to
+ * distrust:
+ *
+ * - It answers [AttachmentRelay.Silent] for any conversation that is not [RelayReach.Covered]. When the
+ *   whole thread is off-plane the conversation-level notice already says so, and repeating it on every
+ *   photo would be noise dressed as detail.
+ * - It reports only **permanent** causes. A relay that is merely full evicts its oldest attachment and
+ *   accepts this one (spec §6.5); a `rate` or `pow` refusal heals on the next round. Neither is visible
+ *   here, deliberately — the only two answers are "too big for any relay you use" and "none of your
+ *   relays carries photos", both of which stay true until the user changes something.
+ */
+fun attachmentReach(
+    conversationId: String,
+    sizeBytes: Int,
+    facts: RelayFacts,
+): AttachmentRelay {
+    if (reachFor(conversationId, facts) != RelayReach.Covered) return AttachmentRelay.Silent
+    val budget = facts.maxAttachBytes ?: return AttachmentRelay.Unsupported
+    return if (sealedAttachmentBytes(sizeBytes) <= budget) AttachmentRelay.Relayable else AttachmentRelay.TooLarge
+}
+
+/**
+ * What [sizeBytes] of attachment ciphertext occupies at a spool once sealed: whole chunks, each grown by
+ * the §4.5 envelope. An upper bound — the final chunk seals shorter than the rest — which is the safe
+ * direction to round, since over-estimating only declines to relay bytes the mesh still carries.
+ */
+fun sealedAttachmentBytes(sizeBytes: Int): Int =
+    if (sizeBytes <= 0) 0 else ScopeAttachments.chunkCount(sizeBytes) * ScopeCrypto.SEALED_CHUNK_BYTES

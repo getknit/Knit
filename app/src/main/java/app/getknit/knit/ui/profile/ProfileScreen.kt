@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -66,7 +67,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
@@ -84,13 +84,14 @@ internal data class ProfileFormState(
     val alias: String,
     val avatarHash: String?,
     val contentFilteringEnabled: Boolean,
-    val spoolEnabled: Boolean,
+    val relay: RelaySummary,
     val isDirty: Boolean,
 )
 
 @Composable
 fun ProfileScreen(
     onBack: () -> Unit,
+    onOpenRelays: () -> Unit = {},
     viewModel: ProfileViewModel = koinViewModel(),
 ) {
     val name by viewModel.displayName.collectAsStateWithLifecycle()
@@ -100,7 +101,7 @@ fun ProfileScreen(
     val avatarHash by viewModel.avatarHash.collectAsStateWithLifecycle()
     val cropTarget by viewModel.cropTarget.collectAsStateWithLifecycle()
     val contentFilteringEnabled by viewModel.contentFilteringEnabled.collectAsStateWithLifecycle()
-    val spoolEnabled by viewModel.spoolEnabled.collectAsStateWithLifecycle()
+    val relay by viewModel.relaySummary.collectAsStateWithLifecycle()
     val isDirty by viewModel.isDirty.collectAsStateWithLifecycle()
 
     // Navigate back only once Save has finished persisting (the write outlives this composition because
@@ -133,7 +134,7 @@ fun ProfileScreen(
                 alias = alias,
                 avatarHash = avatarHash,
                 contentFilteringEnabled = contentFilteringEnabled,
-                spoolEnabled = spoolEnabled,
+                relay = relay,
                 isDirty = isDirty,
             ),
         batteryExempt = rememberBatteryExempt(),
@@ -143,7 +144,7 @@ fun ProfileScreen(
         onStatusChange = viewModel::setStatus,
         onStatusCommit = viewModel::commitStatus,
         onToggleContentFiltering = viewModel::setContentFilteringEnabled,
-        onToggleSpool = viewModel::setSpoolEnabled,
+        onOpenRelays = onOpenRelays,
         onPickPhoto = {
             picker.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -166,7 +167,7 @@ internal fun ProfileScreenContent(
     onStatusChange: (String) -> Unit,
     onStatusCommit: () -> Unit,
     onToggleContentFiltering: (Boolean) -> Unit,
-    onToggleSpool: (Boolean) -> Unit,
+    onOpenRelays: () -> Unit,
     onPickPhoto: () -> Unit,
     onClearPhoto: () -> Unit,
     onAllowBattery: () -> Unit,
@@ -249,11 +250,7 @@ internal fun ProfileScreenContent(
                 onToggle = onToggleContentFiltering,
             )
 
-            // Debug builds only: the Internet-relay plane has no spool-list editor yet (spools are set
-            // over the debug bridge), so on a release build this switch would have nothing to act on.
-            if (BuildConfig.DEBUG) {
-                InternetRelayRow(enabled = form.spoolEnabled, onToggle = onToggleSpool)
-            }
+            InternetRelayRow(summary = form.relay, onClick = onOpenRelays)
 
             BatteryOptimizationRow(exempt = batteryExempt, onAllow = onAllowBattery)
 
@@ -354,37 +351,50 @@ private fun ContentFilteringRow(
 }
 
 /**
- * Toggle for the Internet (spool) plane. Off by default and stated plainly: this is the one setting that
- * sends anything — sealed, unreadable, but real traffic — to a machine the user doesn't hold.
+ * Entry point to the Internet (spool) plane's own screen, with its current state as the subtitle.
+ *
+ * A navigating row rather than the switch it used to be: the switch alone was `BuildConfig.DEBUG`-gated,
+ * because the app seeds a default relay and a release user who could enable the plane but not edit the
+ * list would be stuck with an endpoint they could not remove. The editor lives behind this row, which is
+ * what makes the control shippable.
  */
 @Composable
 private fun InternetRelayRow(
-    enabled: Boolean,
-    onToggle: (Boolean) -> Unit,
+    summary: RelaySummary,
+    onClick: () -> Unit,
 ) {
+    val subtitle =
+        when {
+            !summary.enabled -> stringResource(R.string.relays_summary_off)
+            summary.configured == 0 -> stringResource(R.string.relays_summary_none)
+            else -> stringResource(R.string.relays_summary_on, summary.connected, summary.configured)
+        }
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
-                // One toggle target, same as ContentFilteringRow: the row owns the switch so a screen
-                // reader announces title + subtitle as the label with an on/off state.
-                .toggleable(value = enabled, onValueChange = onToggle, role = Role.Switch)
-                .padding(top = 8.dp),
+                .clickable(onClick = onClick, role = Role.Button)
+                .padding(top = 8.dp)
+                .testTag("profile_relays"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = stringResource(R.string.settings_internet_relays_title),
+                text = stringResource(R.string.relays_title),
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = stringResource(R.string.settings_internet_relays_subtitle),
+                text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Spacer(Modifier.width(12.dp))
-        Switch(checked = enabled, onCheckedChange = null)
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -484,7 +494,7 @@ fun ProfileScreenPreview() =
                     alias = "Rustling Rabbit",
                     avatarHash = null,
                     contentFilteringEnabled = true,
-                    spoolEnabled = false,
+                    relay = RelaySummary(),
                     isDirty = true,
                 ),
             batteryExempt = false,
@@ -494,7 +504,7 @@ fun ProfileScreenPreview() =
             onStatusChange = {},
             onStatusCommit = {},
             onToggleContentFiltering = {},
-            onToggleSpool = {},
+            onOpenRelays = {},
             onPickPhoto = {},
             onClearPhoto = {},
             onAllowBattery = {},
@@ -516,7 +526,7 @@ fun ProfileScreenNewUserPreview() =
                     alias = "Rustling Rabbit",
                     avatarHash = null,
                     contentFilteringEnabled = true,
-                    spoolEnabled = false,
+                    relay = RelaySummary(),
                     isDirty = false,
                 ),
             batteryExempt = true,
@@ -526,7 +536,7 @@ fun ProfileScreenNewUserPreview() =
             onStatusChange = {},
             onStatusCommit = {},
             onToggleContentFiltering = {},
-            onToggleSpool = {},
+            onOpenRelays = {},
             onPickPhoto = {},
             onClearPhoto = {},
             onAllowBattery = {},

@@ -11,6 +11,7 @@ import app.getknit.knit.data.peer.PeerDao
 import app.getknit.knit.data.settings.SettingsStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 
 /**
  * Single source of truth for content-addressed image blobs (attachments + avatars + group photos) held
@@ -42,8 +43,12 @@ class BlobRepository(
 
     suspend fun exists(hash: String): Boolean = blobs.exists(hash)
 
-    /** Hashes of all stored blobs; the chat list observes this to flip attachments from loading to shown. */
-    fun observeHashes(): Flow<List<String>> = blobs.observeHashes()
+    /**
+     * Hash → byte length for every stored blob. The chat observes this to flip attachments from loading
+     * to shown (a hash being present at all) and to decide whether one can cross an Internet relay
+     * (its size against the relays' advertised budget).
+     */
+    fun observeSizes(): Flow<Map<String, Int>> = blobs.observeSizes().map { rows -> rows.associate { it.hash to it.size } }
 
     /**
      * Deletes the blob for [hash] only if nothing references it any more — no message attachment, no

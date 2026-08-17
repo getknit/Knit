@@ -822,6 +822,10 @@ class DebugBridgeReceiver :
                     .put("connected", spool.connected)
                     .put("powBits", spool.powBits)
                     .put("lastError", spool.lastError ?: JSONObject.NULL)
+                    // null ⇒ this spool advertised no attachment support at all (spec §7.3), which is
+                    // also what makes the UI mark a photo "nearby only" — worth being able to confirm
+                    // from the bridge when a field test sees that marker.
+                    .put("maxAttachBytes", spool.maxAttachBytes ?: JSONObject.NULL)
                     .put("scopes", scopes),
             )
         }

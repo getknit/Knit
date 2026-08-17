@@ -67,6 +67,18 @@ object ScopeCrypto {
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private val ZERO_SALT = ByteArray(KEY_BYTES)
 
+    /**
+     * On-the-wire size of one sealed attachment chunk — `sealv(1) ‖ nonce(12) ‖ header(40) ‖ data ‖ tag(16)`
+     * = 49 221 B, the §12 constant. Derived from its parts rather than written as a literal so it cannot
+     * drift away from what [sealChunk] actually produces.
+     *
+     * Every chunk is this size including the last one: [sliceAt] pads nothing, so a short final slice
+     * seals shorter. Callers sizing a *whole* attachment against a spool's `maxAttachBytes` should
+     * therefore treat `chunkCount × this` as the upper bound it is — which is the safe direction, since
+     * over-estimating only declines to relay an attachment the mesh still carries.
+     */
+    const val SEALED_CHUNK_BYTES = 1 + NONCE_BYTES + ATTACH_HEADER_BYTES + ATTACH_CHUNK_BYTES + TAG_BITS / 8
+
     private val LABEL_DM_ID = "knit/scope/v1/dm/id".toByteArray()
     private val LABEL_GROUP_ID = "knit/scope/v1/group/id".toByteArray()
     private val LABEL_SEAL = "knit/scope/v1/seal".toByteArray()

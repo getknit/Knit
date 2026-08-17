@@ -101,6 +101,8 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun diagnostics() = audit(route = "diagnostics") { awaitText("Maya Okonkwo") }
 
+    @Test fun internetRelays() = audit(route = "relays") { awaitTag("relays_switch") }
+
     /**
      * Launches [route], waits for its seeded content via [awaitContent], then audits the whole screen. A
      * failing ATF ERROR throws `AccessibilityViewCheckException`, whose message enumerates each violation

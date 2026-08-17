@@ -3,6 +3,7 @@ package app.getknit.knit.ui.profile
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AvatarStore
 import app.getknit.knit.data.BlobRepository
+import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import io.mockk.coEvery
@@ -41,6 +42,8 @@ class ProfileViewModelTest {
     private val statusFlow = MutableStateFlow("Hiking")
     private val avatarHashFlow = MutableStateFlow<String?>(null)
     private val filteringFlow = MutableStateFlow(true)
+    private val spoolEnabledFlow = MutableStateFlow(false)
+    private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
 
     @Before
     fun setUp() {
@@ -50,6 +53,8 @@ class ProfileViewModelTest {
         every { settings.status } returns statusFlow
         every { settings.ownAvatarHash } returns avatarHashFlow
         every { settings.contentFilteringEnabled } returns filteringFlow
+        every { settings.spoolEnabled } returns spoolEnabledFlow
+        every { settings.spoolUrls } returns spoolUrlsFlow
     }
 
     @After
@@ -57,7 +62,7 @@ class ProfileViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = ProfileViewModel(settings, identity, avatars, blobs)
+    private fun vm() = ProfileViewModel(settings, identity, avatars, blobs, MutableStateFlow(RelayFacts()))
 
     @Test
     fun loadsPersistedProfileAndIsNotDirty() =

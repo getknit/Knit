@@ -1,0 +1,71 @@
+package app.getknit.knit.data.relay
+
+import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.mesh.MeshController
+import app.getknit.knit.mesh.spool.SpoolStatus
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
+
+/**
+ * The Internet-relay plane's state, as the UI needs it: the two settings that arm it plus a periodic
+ * read of `ScopeSync`'s live per-spool status.
+ *
+ * Polled rather than pushed because `ScopeSync` exposes a snapshot (`status()`), not a stream, and
+ * giving it one would mean threading a `MutableStateFlow` through the worker loop for a value that
+ * changes on connect/disconnect and scope-table edits — never per frame. [POLL_MS] is deliberately
+ * slower than the Diagnostics ticker: this feeds an ambient chat indicator, not a debug readout.
+ *
+ * [statuses] stays available separately because the relay settings screen and Diagnostics both want the
+ * per-spool detail (url, `lastError`, per-scope counts) that [facts] flattens away.
+ *
+ * The flow is cold, so each collector runs its own ticker rather than sharing one. That is deliberate:
+ * `spoolStatus()` is an in-memory read over a handful of workers, at most two of these screens are alive
+ * at once, and sharing would mean giving a repository its own `CoroutineScope` to `shareIn` — lifecycle
+ * for no measurable saving. The singleton exists to share the *derivation*, not a subscription.
+ */
+class RelayStatusRepository(
+    private val settings: SettingsStore,
+    private val mesh: MeshController,
+) {
+    /** Live per-spool status, re-read on a slow ticker. Empty whenever the plane is parked. */
+    val statuses: Flow<List<SpoolStatus>> =
+        flow {
+            while (true) {
+                emit(mesh.spoolStatus())
+                delay(POLL_MS)
+            }
+        }
+
+    /**
+     * The flattened facts the chat UI reasons about.
+     *
+     * `distinctUntilChanged` matters here rather than being hygiene: the ticker re-emits on a fixed
+     * interval whether or not anything moved, and without it every chat row would recompose every
+     * [POLL_MS] for a value that is usually identical.
+     */
+    val facts: Flow<RelayFacts> =
+        combine(
+            settings.spoolEnabled,
+            settings.spoolUrls,
+            statuses,
+        ) { enabled, urls, spools ->
+            val live = spools.filter { it.connected }
+            RelayFacts(
+                enabled = enabled,
+                configured = urls.size,
+                connected = live.size,
+                // Only non-retiring scopes count as coverage: a retiring scope is drained but never
+                // refilled (spec §3.1/§3.3), so a new message would not reach it.
+                coveredLabels = live.flatMap { spool -> spool.scopes.filterNot { it.retiring }.map { it.label } }.toSet(),
+                // The union rule (§9.1): one relay willing to carry the bytes is enough.
+                maxAttachBytes = live.mapNotNull { it.maxAttachBytes }.maxOrNull(),
+            )
+        }.distinctUntilChanged()
+
+    private companion object {
+        const val POLL_MS = 5_000L
+    }
+}

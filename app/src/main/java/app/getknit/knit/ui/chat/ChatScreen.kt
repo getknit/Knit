@@ -27,6 +27,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -65,6 +66,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
@@ -154,6 +156,8 @@ import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.relay.AttachmentRelay
+import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.demo.DemoComposeCommand
 import app.getknit.knit.demo.DemoComposer
 import app.getknit.knit.mesh.TransportHealth
@@ -195,6 +199,7 @@ fun ChatScreen(
     val isSending by viewModel.isSending.collectAsStateWithLifecycle()
     val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
     val confirmAttachment by viewModel.confirmAttachment.collectAsStateWithLifecycle()
+    val stagedAttachmentRelay by viewModel.stagedAttachmentRelay.collectAsStateWithLifecycle()
     val inputState = rememberTextFieldState()
     val shareInbox = koinInject<ShareInbox>()
     // Mentions the user inserted via autocomplete, draft-local alongside inputState (per the AGENTS.md
@@ -309,6 +314,7 @@ fun ChatScreen(
         isSending = isSending,
         inputState = inputState,
         pendingAttachment = pendingAttachment,
+        stagedAttachmentRelay = stagedAttachmentRelay,
         replyingTo = replyingTo,
         now = now,
         onBack = onBack,
@@ -381,6 +387,8 @@ internal fun ChatScreenContent(
     isSending: Boolean = false,
     inputState: TextFieldState,
     pendingAttachment: AttachmentStore.Ingested?,
+    // Reach of the staged photo, so the composer can caption it before the send rather than after.
+    stagedAttachmentRelay: AttachmentRelay = AttachmentRelay.Silent,
     replyingTo: ReplyRef?,
     now: Long,
     onBack: () -> Unit,
@@ -407,6 +415,10 @@ internal fun ChatScreenContent(
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
     var headerMenuOpen by remember { mutableStateOf(false) }
     var showEncryptionInfo by remember { mutableStateOf(false) }
+    var showRelayInfo by remember { mutableStateOf(false) }
+    // The message whose "nearby only" marker was tapped, so the explanation can name its actual cause
+    // (too big vs. relays that carry no photos). Null when no explanation is open.
+    var relayMarkerExplained by remember { mutableStateOf<AttachmentRelay?>(null) }
     val listState = rememberLazyListState()
     // Aspect ratios of already-decoded image attachments, keyed by content hash, kept above the
     // LazyColumn so they survive item disposal. Coil doesn't memory-cache animated GIFs, so each one
@@ -615,6 +627,7 @@ internal fun ChatScreenContent(
                 state = inputState,
                 isSending = isSending,
                 pendingAttachment = pendingAttachment,
+                stagedAttachmentRelay = stagedAttachmentRelay,
                 candidates = state.mentionCandidates,
                 replyingTo = replyingTo,
                 myNodeId = state.myNodeId,
@@ -628,67 +641,75 @@ internal fun ChatScreenContent(
             )
         },
     ) { padding ->
-        if (state.rows.isEmpty() && state.typingPeers.isEmpty()) {
-            EmptyState(modifier = Modifier.fillMaxSize().padding(padding))
-        } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding =
-                    androidx.compose.foundation.layout
-                        .PaddingValues(12.dp),
-                // Bottom-anchored so the thread opens on the newest message with no scroll; the data is
-                // reversed to match, making index 0 the newest row, drawn at the bottom. Arrangement.Bottom
-                // keeps a short thread (fewer rows than fit on screen) resting just above the input rather
-                // than floating at the top with a gap beneath the newest bubble.
-                verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
-                reverseLayout = true,
-            ) {
-                // Reverse layout: the first item is drawn at the visual bottom, so the typing indicator sits
-                // directly above the input and below the newest message (Signal-style, scrolls with content).
-                if (state.typingPeers.isNotEmpty()) {
-                    item(key = "typing_indicator") {
-                        TypingIndicatorRow(peers = state.typingPeers)
+        // Column rather than a list item so the relay notice stays pinned: it states a standing fact
+        // about the whole thread, and one that scrolled away would be found only by accident.
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            RelayNotice(reach = state.relayReach, onClick = { showRelayInfo = true })
+            // weight(1f), not fillMaxSize(): the notice above is an unweighted sibling, so the list must
+            // take the space that is left rather than ask for the whole column.
+            if (state.rows.isEmpty() && state.typingPeers.isEmpty()) {
+                EmptyState(modifier = Modifier.fillMaxWidth().weight(1f))
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentPadding =
+                        androidx.compose.foundation.layout
+                            .PaddingValues(12.dp),
+                    // Bottom-anchored so the thread opens on the newest message with no scroll; the data is
+                    // reversed to match, making index 0 the newest row, drawn at the bottom. Arrangement.Bottom
+                    // keeps a short thread (fewer rows than fit on screen) resting just above the input rather
+                    // than floating at the top with a gap beneath the newest bubble.
+                    verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
+                    reverseLayout = true,
+                ) {
+                    // Reverse layout: the first item is drawn at the visual bottom, so the typing indicator sits
+                    // directly above the input and below the newest message (Signal-style, scrolls with content).
+                    if (state.typingPeers.isNotEmpty()) {
+                        item(key = "typing_indicator") {
+                            TypingIndicatorRow(peers = state.typingPeers)
+                        }
                     }
-                }
-                items(state.rows.asReversed(), key = { it.id }) { row ->
-                    if (row.kind == MessageEntity.KIND_MEMBER_LEFT) {
-                        SystemNotice(stringResource(R.string.chat_group_member_left, row.senderName))
-                    } else {
-                        MessageBubble(
-                            row,
-                            now = now,
-                            // In a 1:1 DM the peer's name is in the top bar, so don't repeat it on every
-                            // received bubble; show it only where multiple people can speak.
-                            showSenderName = state.isRoom || state.isGroup,
-                            myNodeId = state.myNodeId,
-                            imageRatios = imageRatios,
-                            highlighted = row.id == highlightedMessageId,
-                            onImageClick = { fullscreenImage = it },
-                            onOpenProfile = onOpenProfile,
-                            onReact = onReact,
-                            onReply = { msg ->
-                                onStartReply(
-                                    ReplyRef(
-                                        messageId = msg.id,
-                                        authorId = msg.senderNodeId,
-                                        author = msg.senderName,
-                                        snippet = buildReplySnippet(msg.body, msg.moderationFlagged),
-                                        hasAttachment = msg.attachmentHash != null,
-                                    ),
-                                )
-                            },
-                            onQuoteClick = { targetId ->
-                                val idx = state.rows.asReversed().indexOfFirst { it.id == targetId }
-                                if (idx >= 0) {
-                                    highlightedMessageId = targetId
-                                    scrollScope.launch { listState.animateScrollToItem(idx) }
-                                }
-                            },
-                            onDelete = onDeleteMessage,
-                            onBlock = onBlock,
-                            onCopy = onCopy,
-                        )
+                    items(state.rows.asReversed(), key = { it.id }) { row ->
+                        if (row.kind == MessageEntity.KIND_MEMBER_LEFT) {
+                            SystemNotice(stringResource(R.string.chat_group_member_left, row.senderName))
+                        } else {
+                            MessageBubble(
+                                row,
+                                now = now,
+                                // In a 1:1 DM the peer's name is in the top bar, so don't repeat it on every
+                                // received bubble; show it only where multiple people can speak.
+                                showSenderName = state.isRoom || state.isGroup,
+                                myNodeId = state.myNodeId,
+                                imageRatios = imageRatios,
+                                highlighted = row.id == highlightedMessageId,
+                                onImageClick = { fullscreenImage = it },
+                                onOpenProfile = onOpenProfile,
+                                onReact = onReact,
+                                onReply = { msg ->
+                                    onStartReply(
+                                        ReplyRef(
+                                            messageId = msg.id,
+                                            authorId = msg.senderNodeId,
+                                            author = msg.senderName,
+                                            snippet = buildReplySnippet(msg.body, msg.moderationFlagged),
+                                            hasAttachment = msg.attachmentHash != null,
+                                        ),
+                                    )
+                                },
+                                onQuoteClick = { targetId ->
+                                    val idx = state.rows.asReversed().indexOfFirst { it.id == targetId }
+                                    if (idx >= 0) {
+                                        highlightedMessageId = targetId
+                                        scrollScope.launch { listState.animateScrollToItem(idx) }
+                                    }
+                                },
+                                onDelete = onDeleteMessage,
+                                onBlock = onBlock,
+                                onCopy = onCopy,
+                                onExplainRelay = { relayMarkerExplained = it },
+                            )
+                        }
                     }
                 }
             }
@@ -717,6 +738,106 @@ internal fun ChatScreenContent(
             },
         )
     }
+
+    if (showRelayInfo) {
+        val isRoom = state.relayReach == RelayReach.Room
+        AlertDialog(
+            onDismissRequest = { showRelayInfo = false },
+            icon = { Icon(Icons.Filled.CloudOff, contentDescription = null) },
+            title = {
+                Text(stringResource(if (isRoom) R.string.chat_relay_room_title else R.string.chat_relay_pending_title))
+            },
+            text = {
+                Text(stringResource(if (isRoom) R.string.chat_relay_room_body else R.string.chat_relay_pending_body))
+            },
+            confirmButton = {
+                TextButton(onClick = { showRelayInfo = false }) {
+                    Text(stringResource(R.string.action_close))
+                }
+            },
+        )
+    }
+
+    relayMarkerExplained?.let { cause ->
+        // The peer's name makes the fallback concrete ("arrives when you and Ana are in range") rather
+        // than abstract; in the room and in groups the title is already the collective noun.
+        val other = state.title
+        AlertDialog(
+            onDismissRequest = { relayMarkerExplained = null },
+            icon = { Icon(Icons.Filled.CloudOff, contentDescription = null) },
+            title = {
+                Text(
+                    stringResource(
+                        if (cause == AttachmentRelay.Unsupported) {
+                            R.string.chat_relay_unsupported_title
+                        } else {
+                            R.string.chat_relay_too_large_title
+                        },
+                    ),
+                )
+            },
+            text = {
+                Text(
+                    stringResource(
+                        if (cause == AttachmentRelay.Unsupported) {
+                            R.string.chat_relay_unsupported_body
+                        } else {
+                            R.string.chat_relay_too_large_body
+                        },
+                        other,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { relayMarkerExplained = null }) {
+                    Text(stringResource(R.string.action_close))
+                }
+            },
+        )
+    }
+}
+
+/**
+ * The standing statement about a thread's Internet reach, pinned under the header.
+ *
+ * Renders nothing for [RelayReach.Silent] and [RelayReach.Covered] — coverage is the happy path, and a
+ * relay outage is transient and heals itself, so neither earns a permanent line of chrome. Tinted
+ * `surfaceVariant` rather than `errorContainer` on purpose: nothing here has failed. The message is
+ * delivered by radio exactly as it always was; this only says the Internet shortcut is not available.
+ */
+@Composable
+private fun RelayNotice(
+    reach: RelayReach,
+    onClick: () -> Unit,
+) {
+    val label =
+        when (reach) {
+            RelayReach.Room -> R.string.chat_relay_room
+            RelayReach.Pending -> R.string.chat_relay_pending
+            RelayReach.Silent, RelayReach.Covered -> return
+        }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().testTag("chat_relay_notice"),
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onClick, role = Role.Button)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.CloudOff,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(text = stringResource(label), style = MaterialTheme.typography.bodySmall)
+        }
+    }
 }
 
 /**
@@ -738,6 +859,41 @@ private fun EncryptionBadge(onClick: () -> Unit) {
                 .padding(3.dp)
                 .size(18.dp),
     )
+}
+
+/**
+ * The in-bubble "nearby only" marker: this attachment will not cross the Internet plane.
+ *
+ * Deliberately unalarming — `onSurfaceVariant`, not `error`. Nothing has gone wrong: the message is
+ * being delivered by radio exactly as it would be with relays switched off. Only *permanent* causes
+ * reach this marker (too large for every relay, or relays that carry no photos at all), so it never
+ * appears and then quietly disappears once a retry succeeds; see `attachmentReach`.
+ */
+@Composable
+private fun ColumnScope.NearbyOnlyMarker(onClick: () -> Unit) {
+    Row(
+        modifier =
+            Modifier
+                .align(Alignment.End)
+                .clip(RoundedCornerShape(4.dp))
+                .clickable(onClick = onClick, role = Role.Button)
+                .padding(horizontal = 2.dp, vertical = 1.dp)
+                .testTag("chat_relay_marker"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Filled.CloudOff,
+            contentDescription = stringResource(R.string.chat_relay_nearby_only_desc),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(12.dp),
+        )
+        Text(
+            text = stringResource(R.string.chat_relay_nearby_only),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 /** The short set of quick reactions offered when long-pressing a message. */
@@ -765,6 +921,8 @@ private fun MessageBubble(
     onDelete: (messageId: String) -> Unit,
     onBlock: (nodeId: String) -> Unit,
     onCopy: (text: String) -> Unit,
+    // Tapping the "nearby only" marker; defaulted no-op for previews and for bubbles that never show it.
+    onExplainRelay: (AttachmentRelay) -> Unit = {},
 ) {
     val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.8f).dp
     val bubbleShape =
@@ -907,6 +1065,14 @@ private fun MessageBubble(
                                     style = bodyStyle,
                                 )
                             }
+                        }
+                        // Reach, not delivery — kept on its own line above the tick so the two facts stay
+                        // visually separate. This says the photo will not take the Internet shortcut; the
+                        // tick below still reports whether the message itself got there.
+                        if (row.attachmentRelay == AttachmentRelay.TooLarge ||
+                            row.attachmentRelay == AttachmentRelay.Unsupported
+                        ) {
+                            NearbyOnlyMarker(onClick = { onExplainRelay(row.attachmentRelay) })
                         }
                         Row(
                             modifier = Modifier.align(Alignment.End),
@@ -1672,6 +1838,7 @@ private fun MessageInput(
     state: TextFieldState,
     isSending: Boolean = false,
     pendingAttachment: AttachmentStore.Ingested?,
+    stagedAttachmentRelay: AttachmentRelay = AttachmentRelay.Silent,
     candidates: List<MentionCandidate>,
     replyingTo: ReplyRef? = null,
     myNodeId: String = "",
@@ -1796,6 +1963,7 @@ private fun MessageInput(
             if (pendingAttachment != null) {
                 AttachmentPreview(
                     image = BlobImage(pendingAttachment.hash, pendingAttachment.mime),
+                    relay = stagedAttachmentRelay,
                     onClear = onClearAttachment,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -1956,40 +2124,64 @@ private fun ReplyPreview(
     }
 }
 
-/** Thumbnail of the staged attachment with a button to remove it before sending. */
+/**
+ * Thumbnail of the staged attachment with a button to remove it before sending, plus — when the photo
+ * cannot cross the Internet plane — a caption saying so.
+ *
+ * The caption is informational and never blocks the send. Refusing to send would be the wrong trade: the
+ * mesh carries this photo regardless, so the only thing at stake is whether it *also* takes the Internet
+ * shortcut. Telling the user before they tap send is simply kinder than telling them after.
+ */
 @Composable
 private fun AttachmentPreview(
     image: BlobImage,
+    relay: AttachmentRelay,
     onClear: () -> Unit,
 ) {
-    Box {
-        AsyncImage(
-            model = image,
-            contentDescription = stringResource(R.string.chat_attachment_preview_desc),
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
-        )
-        // 48dp touch target (a11y) with the small visible badge kept flush in the corner.
-        Box(
-            modifier =
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onClear, role = Role.Button),
-            contentAlignment = Alignment.TopEnd,
-        ) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.padding(2.dp),
+    val caption =
+        when (relay) {
+            AttachmentRelay.TooLarge -> R.string.chat_relay_staged_too_large
+            AttachmentRelay.Unsupported -> R.string.chat_relay_staged_unsupported
+            AttachmentRelay.Silent, AttachmentRelay.Relayable -> null
+        }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box {
+            AsyncImage(
+                model = image,
+                contentDescription = stringResource(R.string.chat_attachment_preview_desc),
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
+            )
+            // 48dp touch target (a11y) with the small visible badge kept flush in the corner.
+            Box(
+                modifier =
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onClear, role = Role.Button),
+                contentAlignment = Alignment.TopEnd,
             ) {
-                Icon(
-                    Icons.Filled.Close,
-                    contentDescription = stringResource(R.string.chat_remove_attachment),
-                    modifier = Modifier.padding(4.dp).size(16.dp),
-                )
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.padding(2.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.chat_remove_attachment),
+                        modifier = Modifier.padding(4.dp).size(16.dp),
+                    )
+                }
             }
+        }
+        if (caption != null) {
+            Text(
+                text = stringResource(caption),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("chat_relay_staged_caption"),
+            )
         }
     }
 }

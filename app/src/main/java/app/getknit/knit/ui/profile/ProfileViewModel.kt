@@ -8,11 +8,13 @@ import androidx.lifecycle.viewModelScope
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AvatarStore
 import app.getknit.knit.data.BlobRepository
+import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.normalizeSingleLine
 import app.getknit.knit.ui.util.computeAvatarCrop
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,14 +23,26 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+/** The Internet-relay plane, as the Profile row summarises it before handing off to its own screen. */
+data class RelaySummary(
+    val enabled: Boolean = false,
+    val configured: Int = 0,
+    val connected: Int = 0,
+)
 
 class ProfileViewModel(
     private val settings: SettingsStore,
     identity: Identity,
     private val avatars: AvatarStore,
     private val blobs: BlobRepository,
+    // The facts flow, not the repository: the production flow polls forever, and a `runTest` virtual
+    // clock makes its `delay` instant, so a ViewModel test that drives this with `advanceUntilIdle()`
+    // would spin. Taking the flow lets a test supply a finite one.
+    relayFacts: Flow<RelayFacts>,
 ) : ViewModel() {
     val nodeId = MutableStateFlow("")
 
@@ -78,13 +92,13 @@ class ProfileViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     /**
-     * Whether the Internet (spool) plane may run. Default off — see [SettingsStore.spoolEnabled]. The row
-     * that binds this is debug-only for now: the plane has no spool-list editor yet, so on a release build
-     * the switch would have nothing to act on.
+     * Summary of the Internet (spool) plane for the row that navigates to its own screen — the switch
+     * itself lives there now, with the relay-list editor it needs to be actionable.
      */
-    val spoolEnabled: StateFlow<Boolean> =
-        settings.spoolEnabled
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val relaySummary: StateFlow<RelaySummary> =
+        relayFacts
+            .map { RelaySummary(it.enabled, it.configured, it.connected) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RelaySummary())
 
     init {
         viewModelScope.launch {
@@ -145,10 +159,6 @@ class ProfileViewModel(
 
     fun setContentFilteringEnabled(value: Boolean) {
         viewModelScope.launch { settings.setContentFilteringEnabled(value) }
-    }
-
-    fun setSpoolEnabled(value: Boolean) {
-        viewModelScope.launch { settings.setSpoolEnabled(value) }
     }
 
     // The picked image awaiting crop. Held here (not in SavedStateHandle — a Bitmap is large and not

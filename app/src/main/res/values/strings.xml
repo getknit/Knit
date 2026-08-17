@@ -294,8 +294,7 @@
     <string name="diagnostics_metric_reactions_sealed">Reactions sent sealed</string>
     <string name="diagnostics_metric_reactions_sealed_fallback">Reactions sent cleartext (fallback)</string>
     <string name="diagnostics_metric_bt_connect_fails">BT connect failures</string>
-    <string name="settings_internet_relays_title">Use Internet relays</string>
-    <string name="settings_internet_relays_subtitle">Keep conversations flowing when nobody is in radio range, by storing sealed copies on relay servers. Relays cannot read your messages, but they do see that a conversation is active and the IP addresses connecting to it.</string>
+    <string name="diagnostics_spools">Internet relays</string>
     <string name="diagnostics_metric_spool_pushed">Messages sent to Internet relays</string>
     <string name="diagnostics_metric_spool_bridged">Messages received via Internet relays</string>
     <string name="diagnostics_metric_spool_invalid">Relay blobs quarantined</string>
@@ -338,4 +337,71 @@
     <string name="moderation_image_confirm_body">This image may contain explicit content. Pleasure ensure the recipient wants to receive this kind of content.</string>
     <string name="moderation_image_confirm_send">Send anyway</string>
     <string name="moderation_image_hidden">Sensitive image — tap to view</string>
+
+    <!--
+      Internet relays (the spool plane, docs/SPOOL_PROTOCOL.md).
+
+      Two rules hold this copy together. First, a relay refusal is never a failed send: the mesh still
+      carries the message, so every string here talks about *reach* ("nearby only", "not covered")
+      rather than failure. Second, the disclosure is deliberately concrete about what a relay observes
+      — vague reassurance would be the dishonest option for a feature that ships sealed bytes to a
+      machine the user does not hold.
+    -->
+    <string name="relays_title">Internet relays</string>
+    <string name="settings_internet_relays_title">Use Internet relays</string>
+    <string name="settings_internet_relays_subtitle">Keep conversations flowing when nobody is in radio range, by storing sealed copies on relay servers. Relays cannot read your messages, but they do see that a conversation is active and the IP addresses connecting to it.</string>
+    <string name="relays_summary_off">Off</string>
+    <string name="relays_summary_on">On · %1$d of %2$d connected</string>
+    <string name="relays_summary_none">On · no relays added</string>
+    <string name="relays_section_list">Relays</string>
+    <string name="relays_off_note">Turning this off stops new uploads. Sealed copies already on a relay are unreadable to it and expire within 48 hours.</string>
+    <string name="relays_empty">No relays added. The Internet plane stays off until you add one — your messages still travel by Wi-Fi and Bluetooth.</string>
+    <string name="relays_add">Add relay</string>
+    <string name="relays_add_title">Add a relay</string>
+    <string name="relays_add_label">Relay address</string>
+    <string name="relays_add_hint">wss://host/spool/v1</string>
+    <string name="relays_add_invalid">Must start with wss://</string>
+    <string name="relays_add_duplicate">That relay is already in your list</string>
+    <string name="relays_remove">Remove</string>
+    <string name="relays_remove_desc">Remove relay %1$s</string>
+    <string name="relays_status_connected">Connected</string>
+    <string name="relays_status_connecting">Connecting…</string>
+    <string name="relays_status_off">Not in use</string>
+    <plurals name="relays_scope_count">
+        <item quantity="one">%d conversation</item>
+        <item quantity="other">%d conversations</item>
+    </plurals>
+    <string name="relays_no_photos">Carries messages only — no photos</string>
+    <string name="relays_error_unreachable">Cannot be reached</string>
+    <string name="relays_error_auth">Rejected the access token</string>
+    <string name="relays_error_quota">Full — it is holding all it can for this conversation</string>
+    <string name="relays_error_rate">Asking us to slow down</string>
+    <string name="relays_error_pow">Wants more setup work before it accepts this conversation</string>
+    <string name="relays_error_other">Refused a request (%1$s)</string>
+
+    <!-- First-enable consent -->
+    <string name="relays_consent_title">Use Internet relays?</string>
+    <string name="relays_consent_can_title">A relay can see</string>
+    <string name="relays_consent_can_body">Your IP address, and when you send and roughly how much.</string>
+    <string name="relays_consent_cannot_title">A relay cannot see</string>
+    <string name="relays_consent_cannot_body">Your messages or photos, who you are talking to, or who else is in a group.</string>
+    <string name="relays_consent_scope">This applies to every conversation, not just one. You can turn it off at any time; new uploads stop immediately and sealed copies already on a relay expire within 48 hours.</string>
+    <string name="relays_consent_accept">Turn on</string>
+    <string name="relays_consent_decline">Not now</string>
+
+    <!-- Relay reach, shown in a conversation -->
+    <string name="chat_relay_room">Nearby is never sent over the Internet</string>
+    <string name="chat_relay_pending">Not covered by relays yet</string>
+    <string name="chat_relay_room_title">Nearby stays local</string>
+    <string name="chat_relay_room_body">The Nearby room is carried only by Wi-Fi and Bluetooth, by design — it is a public, unencrypted room, so it is never uploaded to a relay.</string>
+    <string name="chat_relay_pending_title">Not covered yet</string>
+    <string name="chat_relay_pending_body">This conversation does not have a relay channel yet. It usually appears on its own once both sides have exchanged encryption keys. Until then, messages travel by Wi-Fi and Bluetooth.</string>
+    <string name="chat_relay_nearby_only">Nearby only</string>
+    <string name="chat_relay_nearby_only_desc">Photo will not be sent over the Internet</string>
+    <string name="chat_relay_too_large_title">Too large for your relays</string>
+    <string name="chat_relay_too_large_body">This photo is bigger than any of your relays will hold, so it is not being uploaded. It still arrives when you and %1$s are in Wi-Fi or Bluetooth range of each other.</string>
+    <string name="chat_relay_unsupported_title">Your relays carry messages only</string>
+    <string name="chat_relay_unsupported_body">None of your relays accepts photos, so this one is not being uploaded. It still arrives when you and %1$s are in Wi-Fi or Bluetooth range of each other.</string>
+    <string name="chat_relay_staged_too_large">Nearby only — too large for your relays</string>
+    <string name="chat_relay_staged_unsupported">Nearby only — your relays carry messages only</string>
 </resources>

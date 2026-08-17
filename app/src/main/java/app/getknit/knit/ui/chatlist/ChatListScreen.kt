@@ -40,8 +40,8 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NetworkCheck
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -251,8 +251,8 @@ internal fun ChatListScreenContent(
                             onDismissRequest = { menuOpen = false },
                         ) {
                             DropdownMenuItem(
-                                text = { Text(stringResource(R.string.profile_title)) },
-                                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
+                                text = { Text(stringResource(R.string.settings_title)) },
+                                leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                                 onClick = {
                                     menuOpen = false
                                     onOpenProfile()

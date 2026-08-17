@@ -219,8 +219,8 @@
         <item quantity="other">%d unread messages</item>
     </plurals>
 
-    <!-- Profile -->
-    <string name="profile_title">Profile</string>
+    <!-- Settings (your own profile) -->
+    <string name="settings_title">Settings</string>
     <string name="profile_display_name_label">Display name</string>
     <string name="profile_status_label">Status</string>
     <string name="profile_node_id">Node ID: %1$s</string>

@@ -205,8 +205,8 @@ Knit is built for situations where there's **no reliable network but people are 
 
 | Area | Choice |
 |------|--------|
-| Language / UI | Kotlin 2.4.0 · Jetpack Compose (Material 3) + Navigation Compose |
-| Build | AGP 9.3.0 / Gradle 9.5.0 · JDK 21 · minSdk 29 / targetSdk 36 / compileSdk 36.1 |
+| Language / UI | Kotlin 2.4.10 · Jetpack Compose (Material 3) + Navigation Compose |
+| Build | AGP 9.3.1 / Gradle 9.7.0 · JDK 21 · minSdk 29 / targetSdk 36 / compileSdk 36.1 |
 | DI | Koin (pure-Kotlin, no Gradle plugin) |
 | Storage | Room + SQLCipher (encrypted at rest) · DataStore |
 | Wire format | kotlinx.serialization **CBOR** (layered `WireEnvelope`) |

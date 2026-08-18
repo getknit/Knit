@@ -9,20 +9,25 @@ junitVersion = "1.3.0"
 # the pipeline pulls in, so the test exercises the real DTN services + crypto without the full DB graph).
 mockk = "1.14.11"
 espressoCore = "3.7.0"
-# 2.11.0 requires minCompileSdk=37; 2.10.0 is the newest lifecycle that still targets API 36 (compileSdk 36.1).
+# 2.11.0's lifecycle-viewmodel-compose AAR requires minCompileSdk=37 (lifecycle-runtime itself is only 34,
+# so check the *compose* artifacts when re-testing); 2.10.0 is the newest lifecycle that still targets
+# API 36 (compileSdk 36.1).
 lifecycle = "2.10.0"
 activityCompose = "1.13.0"
 navigationCompose = "2.9.8"
-kotlin = "2.4.0"
-composeBom = "2026.06.00"
+kotlin = "2.4.10"
+# 2026.08.00 exists but ships Compose UI 1.12.0, whose AAR sets minCompileSdk=37; we deliberately stay on
+# compileSdk 36.1, so 2026.06.01 (Compose UI 1.11.4 / Material3 1.4.0, minCompileSdk 35) is the newest
+# usable BOM. Same API-37 ceiling that pins coreKtx, lifecycle and okhttp below.
+composeBom = "2026.06.01"
 # KSP adopted independent (KSP2) versioning at 2.3.0 — no longer the old <kotlin>-<ksp> scheme. It is
-# decoupled from the compiler and supports Kotlin 2.2+, so this single version tracks Kotlin 2.4.0.
-ksp = "2.3.9"
+# decoupled from the compiler and supports Kotlin 2.2+, so this single version tracks Kotlin 2.4.x.
+ksp = "2.3.11"
 room = "2.8.4"
 # SQLCipher for Android: at-rest encryption for the Room DB. Java + native .so (no Kotlin metadata),
-# so it is immune to the AGP-9.2.1/Kotlin-2.2 metadata constraint that pins Coil. Its only transitive
+# so it is immune to the AGP-bundled-Kotlin metadata constraint that used to pin Coil. Its only transitive
 # dep is androidx.sqlite (already pulled at 2.6.1 by Room, which wins).
-sqlcipher = "4.16.0"
+sqlcipher = "4.17.0"
 coroutines = "1.11.0"
 kotlinxSerializationJson = "1.11.0"
 datastore = "1.2.1"
@@ -54,10 +59,12 @@ coil = "3.5.0"
 # FOREGROUND_SERVICE). Still deliberately chosen over com.google.mediapipe:tasks-vision.
 litert = "1.4.2"
 # Google Tink: app-level E2E crypto (hybrid key-wrap, Ed25519 signatures, AES-GCM AEAD). Like SQLCipher
-# it is Java + native with no Kotlin metadata and no Gradle plugin, so it can't perturb the AGP-9.2.1 /
+# it is Java + native with no Kotlin metadata and no Gradle plugin, so it can't perturb the AGP /
 # Kotlin-2.4 toolchain. Works on minSdk 29 (the platform XDH/Ed25519 APIs are API 33+, which is why we
-# don't use java.security directly).
-tink = "1.18.0"
+# don't use java.security directly). 1.23.0 deprecated the two-arg TinkProtoKeysetFormat
+# parseKeyset/serializeKeyset overloads in favour of the RegistryConfiguration-taking ones — same wire
+# bytes, pure inlining; IdentityKeyStore already passes RegistryConfiguration.get() explicitly.
+tink = "1.23.0"
 # QR identity verification. zxing core is the pure-Java codec — it both *generates* the identity QR
 # (ui/image/QrCode.kt) and *decodes* camera frames (ui/scan/QrDecoder.kt). Being Android-free is what
 # keeps QrDecoder a plain-JVM unit-test target (see QrDecoderTest).
@@ -78,22 +85,23 @@ tink = "1.18.0"
 #   - It ships its own consumer R8 rules, so keepRules/knit-r8.keep needs nothing for it.
 # NEVER add camera-mlkit-vision — it pulls GMS, which this app does not ship.
 cameraX = "1.6.1"
-zxingCore = "3.5.3"
+zxingCore = "3.5.4"
 # On-device APK merge + re-sign for the offline "Share Knit app" flow when Knit was installed from Play
 # as an App Bundle (split APKs). ARSCLib merges the on-disk splits into one universal APK; apksig re-signs
 # it (the merge rewrites the manifest, which breaks the Play signature). Both are pure Java (no Kotlin
-# metadata, no Gradle plugin) — like SQLCipher/Tink/LiteRT above they're immune to the AGP-9.2.1/Kotlin-2.4
+# metadata, no Gradle plugin) — like SQLCipher/Tink/LiteRT above they're immune to the AGP-bundled-Kotlin
 # metadata constraint and can't perturb the toolchain. ARSCLib has zero transitive deps; apksig resolves
-# from google() and also has none. apksig tracks the AGP/build-tools line (9.2.x here); its default signer
-# 16 KB-page-aligns uncompressed lib/*.so, matching the app's own 16 KB alignment requirement (see litert).
+# from google() and also has none. apksig tracks the AGP/build-tools line — keep it equal to `agp` above;
+# its default signer 16 KB-page-aligns uncompressed lib/*.so, matching the app's own 16 KB alignment
+# requirement (see litert).
 arsclib = "1.4.0"
-apksig = "9.2.1"
+apksig = "9.3.1"
 # detekt static analysis, applied as the `dev.detekt` Gradle plugin (see [plugins] below). 2.0.0-alpha.x
 # is the first detekt line that supports Gradle 9 — 1.23.x caps at Gradle 8.12.1, and this build is on
-# 9.4.1 — and it ships the new `dev.detekt` plugin/group id (was io.gitlab.arturbosch.detekt). Runs in its
+# 9.7.0 — and it ships the new `dev.detekt` plugin/group id (was io.gitlab.arturbosch.detekt). Runs in its
 # own isolated task classpath, so it doesn't touch :app's compile/runtime graph. Keep the CI `verify:detekt`
 # job (now `./gradlew detekt`) on this same version.
-detekt = "2.0.0-alpha.5"
+detekt = "2.0.0-alpha.6"
 # ktlint (Kotlin style/format lint), applied via the org.jlleitschuh.gradle.ktlint plugin (ktlintPlugin
 # below). This `ktlint` version is the underlying ktlint *tool* version the plugin runs — pinned in
 # app/build.gradle.kts via `ktlint { version.set(...) }` so rule behavior stays fixed independent of the
@@ -108,16 +116,16 @@ ktlintPlugin = "14.2.0"
 # lower-risk than Hilt's plugin was: it hooks testDebugUnitTest *post-compile* (no compile-time codegen)
 # and only adds Java-only agent/offline-runtime jars to test-scope configurations, so it can't perturb the
 # pinned Kotlin-2.4 metadata graph on :app's compile/runtime classpath. Applied to :app only. 0.9.1 (the
-# 0.9 line's Gradle-9 fix) applied on this Gradle 9.4.1 build but did NOT hook AGP 9.2.1's variants (no
-# per-variant tasks, empty report); 0.9.8 detects the debug variant correctly. Run with
+# 0.9 line's Gradle-9 fix) applied but did NOT hook AGP 9.2.1's variants (no per-variant tasks, empty
+# report); 0.9.8+ detects the debug variant correctly, so don't drop below it. Run with
 # `./gradlew :app:koverHtmlReportDebug` (HTML) / `:app:koverXmlReportDebug` (CI-parseable XML).
-kover = "0.9.8"
+kover = "0.9.9"
 # JVM Room/DAO + migration tests (finding #5): Robolectric supplies a Context + framework SQLite on the JVM
 # so in-memory Room executes the real eviction/GC SQL, and MigrationTestHelper (room-testing) rebuilds the
 # exported schema via androidx.sqlite's AndroidSQLiteDriver on that same shadowed SQLite (BundledSQLiteDriver
 # can't load its Android native lib on the host JVM). androidx.test:core provides ApplicationProvider.
 # Robolectric 4.16 is the first release supporting SDK 36 (Baklava) and requires JDK 21 (this repo's toolchain).
-robolectric = "4.16"
+robolectric = "4.16.1"
 androidxTestCore = "1.7.0"
 # Android Test Orchestrator (instrumentation isolation for Firebase Test Lab): each test runs in its own
 # process with `clearPackageData` wiping app data between tests. The orchestrator/test-services pair is a
@@ -129,9 +137,10 @@ androidxTestOrchestrator = "1.6.1"
 androidxTestServices = "1.6.0"
 # UIAutomator: the black-box driver for the app.getknit.knit.uiauto suite (system shade, process
 # lifecycle, real-field input). testTagsAsResourceId (KnitApp NavHost) surfaces every Compose testTag as
-# a resource-id, so By.res(...) matches the same tags the Compose suite asserts on. 2.3.0 is the newest
-# stable line (2.4.x is alpha). androidTest-only, no APK/runtime impact on the app.
-uiautomator = "2.3.0"
+# a resource-id, so By.res(...) matches the same tags the Compose suite asserts on. 2.4.0 went stable and
+# adds a new Kotlin DSL alongside the classic UiDevice/By/Until API this suite uses (unchanged); its AAR is
+# minCompileSdk=34, well under our 36.1. androidTest-only, no APK/runtime impact on the app.
+uiautomator = "2.4.0"
 # androidx ExifInterface — reads the orientation tag off user-picked photos (ImageDecode). Preferred over
 # the platform android.media.ExifInterface (which AndroidLintExifInterface flags): the androidx one carries
 # the format support and bug fixes the platform class only gains with each OS release, which matters on

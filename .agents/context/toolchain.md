@@ -1,8 +1,27 @@
 # Toolchain (bleeding-edge — do not "fix" these without reading why)
 
-This project intentionally runs on very new tooling (AGP 9.3.0, Gradle 9.5.0, Kotlin 2.4.0,
-Compose BOM 2026.06). That forces several non-obvious choices. **Read this before changing build
+This project intentionally runs on very new tooling (AGP 9.3.1, Gradle 9.7.0, Kotlin 2.4.10,
+Compose BOM 2026.06.01). That forces several non-obvious choices. **Read this before changing build
 config, dependencies, or the DI graph.**
+
+## The compileSdk 36.1 ceiling pins half the graph
+
+`compileSdk` is `release(36) { minorApiLevel = 1 }`. An AAR whose `aar-metadata.properties` declares
+`minCompileSdk=37` **cannot** be consumed, and Google has started shipping 37 across androidx. Before
+bumping any androidx/AAR dependency, check the artifact's metadata rather than trusting the version
+number — for a multi-artifact group, check the *specific* artifacts this app uses (lifecycle 2.11.0's
+`lifecycle-runtime` is minCompileSdk 34, but its `lifecycle-viewmodel-compose` is 37, which is what
+blocks it):
+
+```sh
+curl -sO "https://dl.google.com/dl/android/maven2/<group/path>/<artifact>/<ver>/<artifact>-<ver>.aar"
+unzip -p <artifact>-<ver>.aar META-INF/com/android/build/gradle/aar-metadata.properties
+```
+
+Currently held back by this ceiling (re-check when compileSdk moves to 37): `core-ktx` 1.19.0,
+`lifecycle` 2.11.0, `compose-bom` 2026.08.00 (Compose UI 1.12.0), `okhttp` 5.5.0 — note the last one is
+the plain `com.squareup.okhttp3:okhttp` coordinate, whose Gradle module redirects an Android consumer to
+the `okhttp-android` AAR, so the JVM-jar coordinate does *not* dodge the ceiling.
 
 ## Why these choices
 
@@ -10,10 +29,10 @@ config, dependencies, or the DI graph.**
   (dagger#5083 / #5099). Koin is pure-Kotlin runtime DI with no Gradle plugin / no annotation
   processor, so it can't be broken by AGP. Koin is started in `KnitApplication`; modules live in
   `app/src/main/java/app/getknit/knit/di/`.
-- **Built-in Kotlin is overridden to 2.4.0, not AGP's bundled 2.2.10.** AGP 9.3.0 ships KGP 2.2.10,
+- **Built-in Kotlin is overridden to 2.4.10, not AGP's bundled 2.2.10.** AGP 9.3.1 ships KGP 2.2.10,
   whose Kotlin-2.2 compiler cannot read class metadata produced by Kotlin 2.4 (this is what used to
-  pin Coil to 3.3.0). The root `build.gradle.kts` puts KGP 2.4.0 on the buildscript classpath
-  (`classpath(libs.kotlin.gradle.plugin)`) so built-in Kotlin compiles with 2.4.0 — a supported combo
+  pin Coil to 3.3.0). The root `build.gradle.kts` puts KGP 2.4.10 on the buildscript classpath
+  (`classpath(libs.kotlin.gradle.plugin)`) so built-in Kotlin compiles with 2.4.10 — a supported combo
   (Kotlin 2.4 requires AGP 9.1+ per Google's AGP/Kotlin matrix). **Bumping AGP does not move Kotlin**:
   the 9.3 line we now build on (and 9.4) still bundle 2.2.10, so the override — not an AGP bump — is
   the lever. Keep KGP and the `ksp` version in lockstep with `kotlin`; KSP adopted independent (KSP2)
@@ -24,6 +43,10 @@ config, dependencies, or the DI graph.**
   `kotlin.plugin.compose`, `kotlin.plugin.serialization`, and `ksp` plugins are applied.
 - Pin third-party versions in `gradle/libs.versions.toml` (version catalog); probe Maven before
   bumping anything that could pull in a newer Kotlin stdlib.
+- **Stable releases only**, with one standing exception: `detekt` 2.0.0-alpha.x, because the 1.23.x
+  stable line cannot run on Gradle 9 at all. So `navigation-compose` stays on 2.9.8 (2.10.0 is rc),
+  `cameraX` on 1.6.1 (1.7.0 is alpha), `datastore` on 1.2.1 (1.3.0 is alpha), `robolectric` on the
+  4.16.x line (4.17 is beta), and AGP on 9.3.1 (9.4.0 is rc).
 
 ## Static analysis: detekt / ktlint Gradle plugins
 
@@ -62,7 +85,7 @@ unit-test task). It's low-risk on this toolchain — unlike Hilt it does no comp
 codegen; it hooks `testDebugUnitTest` *post-compile* and only adds Java-only agent/offline-runtime jars to
 test-scope configs, so it never touches `:app`'s Kotlin-2.4 compile/runtime classpath (verified:
 `assembleDebug` + `lint` unaffected). Note: **Kover 0.9.1 applied but silently failed to detect AGP 9.2.1's
-build variants** (no per-variant tasks, empty report) — **0.9.8** fixes it, so don't downgrade below it.
+build variants** (no per-variant tasks, empty report) — **0.9.8+** fixes it, so don't downgrade below it.
 Coverage is measured from the debug unit tests (`koverHtmlReportDebug` / `koverXmlReportDebug` — the
 per-*variant* tasks; the un-suffixed `koverHtmlReport` aggregates all variants). Only *generated* code is
 excluded (Room `*_Impl`, Compose `ComposableSingletons`, `BuildConfig`) via `kover { reports { filters } }`
@@ -77,7 +100,7 @@ rule in `rules/build-and-test.md` after any Kover bump.
 Room's schema JSON is exported by the **`androidx.room` Gradle plugin** (`room { schemaDirectory("$projectDir/schemas") }`
 in `app/build.gradle.kts`), not the raw `ksp { arg("room.schemaLocation", …) }` — the plugin *rejects* an
 explicit `room.schemaLocation` arg, so don't add one back. It requires `exportSchema = true` on
-`KnitDatabase` and Room ≥ 2.7.0-alpha13 for KSP2 support (we're on 2.8.4 / KSP 2.3.9). With only build
+`KnitDatabase` and Room ≥ 2.7.0-alpha13 for KSP2 support (we're on 2.8.4 / KSP 2.3.11). With only build
 types (no product flavors) it writes to the flat `app/schemas/<db-class>/<version>.json` — the same layout
 the KSP arg produced — so the debug-asset wiring and `KnitDatabaseMigrationTest` are unchanged. **Gotcha:**
 KSP incremental caching can skip re-export when the committed schema is unchanged (`copyRoomSchemas` shows

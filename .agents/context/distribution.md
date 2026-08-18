@@ -47,9 +47,11 @@ result that actually matters for `Binaries:`. Recipe, in the buildserver image:
 
 1. `apt-get install -y fdroidserver` (2.4.2 in trixie), then **overwrite
    `/usr/lib/python3/dist-packages/gradlew-fdroid` with `/usr/local/bin/gradle`**. The Debian package
-   ships an old *shell* shim with a hardcoded hash table that stops well before Gradle 9.5 and dies with
-   `No hash for gradle version 9.5.0`; the image's *Python* shim fetches the live transparency log. This
-   is a packaging skew, not an F-Droid limitation.
+   ships an old *shell* shim with a hardcoded hash table that stops well before the Gradle this repo
+   pins and dies with `No hash for gradle version <ver>`; the image's *Python* shim fetches the live
+   transparency log, so it tracks whatever `gradle/wrapper/gradle-wrapper.properties` names. This is a
+   packaging skew, not an F-Droid limitation — but it does mean **a wrapper bump must land on a
+   *released* Gradle**, never an RC/nightly, or the shim has nothing to verify against.
 2. `git config --global --add safe.directory '*'` — the container is root and the source mount is not;
    without it the clone fails with a bare `Git clone failed`.
 3. `fdroid init` in a work dir, **then `git init` + commit the metadata**. `fdroid build` derives

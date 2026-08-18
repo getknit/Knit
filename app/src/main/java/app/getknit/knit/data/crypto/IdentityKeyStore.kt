@@ -129,8 +129,8 @@ class IdentityKeyStore(
     @OptIn(ExperimentalSerializationApi::class)
     private fun parse(blob: ByteArray): Loaded {
         val stored = cryptoCbor.decodeFromByteArray<Stored>(blob)
-        val hybrid = TinkProtoKeysetFormat.parseKeyset(stored.hybridPriv, InsecureSecretKeyAccess.get())
-        val sig = TinkProtoKeysetFormat.parseKeyset(stored.sigPriv, InsecureSecretKeyAccess.get())
+        val hybrid = TinkProtoKeysetFormat.parseKeyset(stored.hybridPriv, InsecureSecretKeyAccess.get(), RegistryConfiguration.get())
+        val sig = TinkProtoKeysetFormat.parseKeyset(stored.sigPriv, InsecureSecretKeyAccess.get(), RegistryConfiguration.get())
         return Loaded(IdentityKeys(hybrid, sig, PublicKeyBundle.fromPrivate(hybrid, sig)), stored)
     }
 
@@ -139,8 +139,8 @@ class IdentityKeyStore(
         val sig = KeysetHandle.generateNew(KeyTemplates.get(SIG_TEMPLATE))
         val stored =
             Stored(
-                hybridPriv = TinkProtoKeysetFormat.serializeKeyset(hybrid, InsecureSecretKeyAccess.get()),
-                sigPriv = TinkProtoKeysetFormat.serializeKeyset(sig, InsecureSecretKeyAccess.get()),
+                hybridPriv = TinkProtoKeysetFormat.serializeKeyset(hybrid, InsecureSecretKeyAccess.get(), RegistryConfiguration.get()),
+                sigPriv = TinkProtoKeysetFormat.serializeKeyset(sig, InsecureSecretKeyAccess.get(), RegistryConfiguration.get()),
             )
         val state = Loaded(IdentityKeys(hybrid, sig, PublicKeyBundle.fromPrivate(hybrid, sig)), stored)
         persist(state)

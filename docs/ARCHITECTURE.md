@@ -726,7 +726,7 @@ before the first message.
 ## 15. Build & tooling decisions
 
 The project runs on intentionally bleeding-edge tooling (AGP 9.3.0, Gradle 9.5.0, Kotlin 2.4.0,
-Compose BOM 2026.06, compileSdk 36.1). Consequences, all load-bearing:
+Compose BOM 2026.08, compileSdk 37.1). Consequences, all load-bearing:
 
 | Decision | Reason |
 |---|---|

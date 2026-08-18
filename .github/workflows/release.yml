@@ -240,7 +240,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install SDK packages
-        run: sdkmanager --install "platforms;android-36.1" "build-tools;$BUILD_TOOLS" > /dev/null
+        run: sdkmanager --install "platforms;android-37.1" "build-tools;$BUILD_TOOLS" > /dev/null
 
       # No Gradle cache here on purpose. A cached task output could satisfy this build from work done on
       # the *other* runner, which is precisely the divergence this job exists to detect. It has to be cold.

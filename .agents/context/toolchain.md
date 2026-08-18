@@ -1,27 +1,40 @@
 # Toolchain (bleeding-edge — do not "fix" these without reading why)
 
 This project intentionally runs on very new tooling (AGP 9.3.1, Gradle 9.7.0, Kotlin 2.4.10,
-Compose BOM 2026.06.01). That forces several non-obvious choices. **Read this before changing build
-config, dependencies, or the DI graph.**
+Compose BOM 2026.08.00, compileSdk 37.1). That forces several non-obvious choices. **Read this before
+changing build config, dependencies, or the DI graph.**
 
-## The compileSdk 36.1 ceiling pins half the graph
+## compileSdk is what gates AAR upgrades — check `minCompileSdk`, not the version number
 
-`compileSdk` is `release(36) { minorApiLevel = 1 }`. An AAR whose `aar-metadata.properties` declares
-`minCompileSdk=37` **cannot** be consumed, and Google has started shipping 37 across androidx. Before
-bumping any androidx/AAR dependency, check the artifact's metadata rather than trusting the version
-number — for a multi-artifact group, check the *specific* artifacts this app uses (lifecycle 2.11.0's
-`lifecycle-runtime` is minCompileSdk 34, but its `lifecycle-viewmodel-compose` is 37, which is what
-blocks it):
+`compileSdk` is `release(37) { minorApiLevel = 1 }` (37.2 is beta). An AAR whose
+`aar-metadata.properties` declares a *higher* `minCompileSdk` **cannot** be consumed at all — the build
+fails in `checkDebugAarMetadata`, not at compile. androidx now moves this gate aggressively (the whole
+API-37 wave — core-ktx 1.19.0, lifecycle 2.11.0, Compose UI 1.12.0, okhttp-android 5.5.0 — is exactly
+why compileSdk moved off 36.1). Before bumping any AAR dependency, read its metadata:
 
 ```sh
 curl -sO "https://dl.google.com/dl/android/maven2/<group/path>/<artifact>/<ver>/<artifact>-<ver>.aar"
 unzip -p <artifact>-<ver>.aar META-INF/com/android/build/gradle/aar-metadata.properties
 ```
 
-Currently held back by this ceiling (re-check when compileSdk moves to 37): `core-ktx` 1.19.0,
-`lifecycle` 2.11.0, `compose-bom` 2026.08.00 (Compose UI 1.12.0), `okhttp` 5.5.0 — note the last one is
-the plain `com.squareup.okhttp3:okhttp` coordinate, whose Gradle module redirects an Android consumer to
-the `okhttp-android` AAR, so the JVM-jar coordinate does *not* dodge the ceiling.
+Two traps that version numbers hide:
+
+- **Check the artifacts this app actually uses, not the group's headline one.** lifecycle 2.11.0's
+  `lifecycle-runtime` is minCompileSdk 34; its `lifecycle-viewmodel-compose` is 37. The strictest one wins.
+- **A JVM-looking coordinate can still resolve to an AAR.** `com.squareup.okhttp3:okhttp` publishes an
+  `androidRuntimeElements` variant whose `available-at` redirects to `okhttp-android`, so an Android
+  consumer gets that AAR's `minCompileSdk`. Inspect `<artifact>-<ver>.module`, not just the `.pom`.
+
+`compileSdk` sets only which APIs the compiler *sees*. Runtime behavior is `targetSdk`, deliberately held
+at **36** — moving it opts into a new release's behavior changes and starts a Play policy clock, and is a
+separate decision from taking a dependency. Lint's `NewApi` keeps guarding every call site against
+minSdk 29 regardless.
+
+Bumping `compileSdk` means installing that exact platform everywhere the build runs. The minor is part
+of the package name (`platforms;android-37.1` ≠ `platforms;android-37`), and two CI files name it
+literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reproducibility job in
+`.github/workflows/release.yml`. Build-tools is *not* coupled to it — that tracks AGP's default revision
+(36.0.0 for AGP 9.3.1).
 
 ## Why these choices
 

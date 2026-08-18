@@ -65,9 +65,15 @@ val nativeSymbols = (project.findProperty("knit.nativeSymbols") as? String)?.toB
 
 android {
     namespace = "app.getknit.knit"
+    // API 37.1 — the newest *stable* platform (37.2 is beta). Bumped off 36.1 to clear the
+    // `minCompileSdk=37` gate that androidx started shipping (core-ktx 1.19.0, lifecycle 2.11.0,
+    // Compose UI 1.12.0, okhttp-android 5.5.0 all declare it). compileSdk only sets which APIs are
+    // *visible* to the compiler — runtime behavior is `targetSdk`, deliberately left at 36, so this
+    // carries no behavior-change or Play-policy consequence. Lint's NewApi still guards every call
+    // against minSdk 29.
     compileSdk {
         version =
-            release(36) {
+            release(37) {
                 minorApiLevel = 1
             }
     }

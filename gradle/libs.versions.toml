@@ -1,25 +1,21 @@
 [versions]
 agp = "9.3.1"
-# 1.19.0 exists but its AAR sets minCompileSdk=37; we deliberately stay on compileSdk 36.1, so this is
-# the newest core that still targets API 36 (activity-compose 1.13.0 also pins core-ktx to exactly 1.18.0).
-coreKtx = "1.18.0"
+coreKtx = "1.19.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 # JVM-only mocking for the InboundPipeline seam test (relaxed mocks of the concrete Room-backed repos
 # the pipeline pulls in, so the test exercises the real DTN services + crypto without the full DB graph).
 mockk = "1.14.11"
 espressoCore = "3.7.0"
-# 2.11.0's lifecycle-viewmodel-compose AAR requires minCompileSdk=37 (lifecycle-runtime itself is only 34,
-# so check the *compose* artifacts when re-testing); 2.10.0 is the newest lifecycle that still targets
-# API 36 (compileSdk 36.1).
-lifecycle = "2.10.0"
+# 2.11.0's lifecycle-viewmodel-compose AAR requires minCompileSdk=37 (lifecycle-runtime itself is only 34 —
+# when re-testing this group, check the *compose* artifacts, not the base one). compileSdk is 37.1, so it
+# fits; 2.12.0 is alpha.
+lifecycle = "2.11.0"
 activityCompose = "1.13.0"
 navigationCompose = "2.9.8"
 kotlin = "2.4.10"
-# 2026.08.00 exists but ships Compose UI 1.12.0, whose AAR sets minCompileSdk=37; we deliberately stay on
-# compileSdk 36.1, so 2026.06.01 (Compose UI 1.11.4 / Material3 1.4.0, minCompileSdk 35) is the newest
-# usable BOM. Same API-37 ceiling that pins coreKtx, lifecycle and okhttp below.
-composeBom = "2026.06.01"
+# Compose UI 1.12.0 / Material3 1.4.0. UI 1.12.0's AAR sets minCompileSdk=37, which compileSdk 37.1 clears.
+composeBom = "2026.08.00"
 # KSP adopted independent (KSP2) versioning at 2.3.0 — no longer the old <kotlin>-<ksp> scheme. It is
 # decoupled from the compiler and supports Kotlin 2.2+, so this single version tracks Kotlin 2.4.x.
 ksp = "2.3.11"
@@ -37,9 +33,10 @@ datastore = "1.2.1"
 # WebSocket support is first-class on Android (it answers the daemon's 30 s pings automatically) and its
 # SOCKS Proxy support is the path to the deferred Tor toggle. Confined by rules/mesh.md to
 # mesh/spool/OkHttpSpoolDialer.kt — nothing else in the app may import okhttp3.
-# 5.5.0 exists but its okhttp-android AAR sets minCompileSdk=37; we deliberately stay on compileSdk 36.1
-# (same constraint that pins coreKtx and lifecycle), so 5.4.0 is the newest usable release.
-okhttp = "5.4.0"
+# NOTE the `okhttp` coordinate looks like a plain JVM jar but its Gradle module redirects an Android
+# consumer (`available-at`) to the okhttp-android AAR, so it is subject to that AAR's minCompileSdk —
+# 37 as of 5.5.0, which compileSdk 37.1 clears. Check okhttp-android, not okhttp, when bumping.
+okhttp = "5.5.0"
 koin = "4.2.2"
 # Coil 3.4.0+ is built with Kotlin 2.4.0. We now compile :app with Kotlin 2.4.0 (built-in Kotlin is
 # overridden off AGP's bundled 2.2.10 — see the buildscript classpath in the root build.gradle.kts), so
@@ -57,6 +54,7 @@ coil = "3.5.0"
 # Do NOT jump to litert 2.x
 # (renames the lib to libLiteRt.so, drops x86, pulls ai-delivery + lifecycle + guava + coroutines +
 # FOREGROUND_SERVICE). Still deliberately chosen over com.google.mediapipe:tasks-vision.
+#noinspection GradleDependency
 litert = "1.4.2"
 # Google Tink: app-level E2E crypto (hybrid key-wrap, Ed25519 signatures, AES-GCM AEAD). Like SQLCipher
 # it is Java + native with no Kotlin metadata and no Gradle plugin, so it can't perturb the AGP /
@@ -75,8 +73,8 @@ tink = "1.23.0"
 # the one it reported makes RawImageData.cropAndScale throw ArrayIndexOutOfBoundsException off the main
 # thread and kills the process. It has no seam to patch (BarcodeView.startDecoderThread is private).
 # See ADR 015. Constraints that pin CameraX 1.6.1 specifically — check ALL of these before bumping:
-#   - minCompileSdk=36. 1.5.x is 35; a future 1.7.x may demand 37, which we can't take (compileSdk 36.1,
-#     same ceiling that pins coreKtx 1.18.0 and lifecycle 2.10.0).
+#   - minCompileSdk=36 (1.5.x is 35), comfortably under our compileSdk 37.1. 1.6.1 is the newest stable —
+#     1.7.x is alpha, which is what holds it here, not the SDK gate.
 #   - Its transitive floors are far below ours (lifecycle-livedata 2.3.1, core 1.3.2), so it applies no
 #     upgrade pressure to the pinned androidx graph.
 #   - camera-core ships prebuilt .so (libimage_processing_util_jni, libsurface_util_jni) for all four

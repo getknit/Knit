@@ -1,5 +1,5 @@
 # Knit — GitLab CI. Stages: build -> test -> verify.
-# Bleeding-edge toolchain (AGP 9.3.0 / Kotlin 2.4.0 / JDK 21 / compileSdk 36.1).
+# Bleeding-edge toolchain (AGP 9.3.1 / Kotlin 2.4.10 / JDK 21 / compileSdk 37.1).
 # Static analysis (detekt/ktlint) and coverage (Kover) run as Gradle plugins via `./gradlew` tasks.
 
 stages:
@@ -20,7 +20,10 @@ variables:
   ANDROID_SDK_ROOT: "${CI_PROJECT_DIR}/.android-sdk"
   # Pinned tool versions — bump deliberately (see .gitlab-ci notes in the repo plan).
   CMDLINE_TOOLS_VERSION: "11076708"   # commandlinetools-linux revision
-  ANDROID_COMPILE_SDK: "36"
+  # Keep in lockstep with app/build.gradle.kts `compileSdk` — the minor matters, `android-37` is a
+  # different package from `android-37.1`. Build-tools tracks AGP's default revision, NOT compileSdk
+  # (AGP 9.3.1 defaults to 36.0.0), so the two move independently.
+  ANDROID_COMPILE_SDK: "37.1"
   ANDROID_BUILD_TOOLS: "36.0.0"
 
 workflow:

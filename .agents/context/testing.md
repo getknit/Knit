@@ -31,7 +31,9 @@ before "simplifying":
   a test. Call `suspend` DAO methods inside `runTest { }`.
 - **`robolectric.properties` forces `application=android.app.Application`.** The real `KnitApplication.onCreate`
   starts Koin, whose static `GlobalContext` isn't reset between tests → `KoinApplicationAlreadyStartedException`
-  on the 2nd test. DAO tests bypass Koin, so a plain Application is correct; `sdk=36` matches compileSdk.
+  on the 2nd test. DAO tests bypass Koin, so a plain Application is correct. `sdk=36` deliberately trails
+  compileSdk 37.1 — Robolectric 4.16.x has no android-all runtime above 36; raise it with Robolectric, not
+  with compileSdk.
 - **`exportSchema = true`** on `KnitDatabase` + the Room Gradle plugin's
   `room { schemaDirectory("$projectDir/schemas") }` emit
   `app/schemas/app.getknit.knit.data.KnitDatabase/<version>.json` (checked in). Regenerate by clearing

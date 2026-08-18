@@ -7,7 +7,7 @@
 Your phones talk directly to each other over Wi-Fi Aware and Bluetooth LE, and relay for one another hop by hop.
 
 ![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029)-3DDC84?logo=android&logoColor=white)
-![Kotlin](https://img.shields.io/badge/Kotlin-2.4.0-7F52FF?logo=kotlin&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-2.4.10-7F52FF?logo=kotlin&logoColor=white)
 ![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)
 ![Transports](https://img.shields.io/badge/radios-Wi--Fi%20Aware%20%2B%20BLE-00BCD4)
 ![Encryption](https://img.shields.io/badge/DMs%20%26%20groups-E2E%20%2B%20forward%20secrecy-2EA043?logo=signal&logoColor=white)
@@ -198,7 +198,7 @@ Knit is built for situations where there's **no reliable network but people are 
   required.
   - Wi-Fi Aware uses Instant Communication Mode + `NEARBY_WIFI_DEVICES` on **API 33+**, falling back to
     `ACCESS_FINE_LOCATION` (location-scoped, no ICM) on **API 29–32**.
-- **JDK 21** and the **Android SDK** (compileSdk 36.1) to build.
+- **JDK 21** and the **Android SDK** (compileSdk 37.1) to build.
 - Real mesh testing needs **two or more physical devices** — see [Running](#-running).
 
 ## 🧰 Tech stack
@@ -206,7 +206,7 @@ Knit is built for situations where there's **no reliable network but people are 
 | Area | Choice |
 |------|--------|
 | Language / UI | Kotlin 2.4.10 · Jetpack Compose (Material 3) + Navigation Compose |
-| Build | AGP 9.3.1 / Gradle 9.7.0 · JDK 21 · minSdk 29 / targetSdk 36 / compileSdk 36.1 |
+| Build | AGP 9.3.1 / Gradle 9.7.0 · JDK 21 · minSdk 29 / targetSdk 36 / compileSdk 37.1 |
 | DI | Koin (pure-Kotlin, no Gradle plugin) |
 | Storage | Room + SQLCipher (encrypted at rest) · DataStore |
 | Wire format | kotlinx.serialization **CBOR** (layered `WireEnvelope`) |
@@ -225,7 +225,7 @@ Knit is built for situations where there's **no reliable network but people are 
 ## 🔨 Build
 
 The source lives at **<https://github.com/getknit/knit>**. You need **JDK 21** and the
-Android SDK (compileSdk 36.1) — Android Studio is optional. When building from the command line without
+Android SDK (compileSdk 37.1) — Android Studio is optional. When building from the command line without
 Studio, point Gradle at your SDK first: create a git-ignored `local.properties` containing
 `sdk.dir=/path/to/Android/Sdk`, or export `ANDROID_HOME`.
 

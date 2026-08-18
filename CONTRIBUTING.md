@@ -36,7 +36,7 @@ The single source of truth for build/test commands, the (deliberately bleeding-e
 mesh architecture, and the hard-won gotchas is **[`AGENTS.md`](AGENTS.md)** — start there before touching
 build config, the mesh layer, or the DI graph. In short:
 
-- **JDK 21** and the Android SDK (compileSdk 36.1) are required.
+- **JDK 21** and the Android SDK (compileSdk 37.1) are required.
 - `./gradlew :app:compileDebugKotlin` — fast compile check of main sources.
 - `./gradlew :app:testDebugUnitTest` — JVM unit tests (mesh/protocol/data, Robolectric Room).
 - `./gradlew detekt ktlintCheck` — static analysis and style (`ktlintFormat` autocorrects).

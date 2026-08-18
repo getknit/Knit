@@ -8,7 +8,7 @@ An Android app (Kotlin/Compose) implementing an offline **mesh messenger** that 
 **Wi-Fi Aware (NAN)** and **Bluetooth LE** — behind a single `MeshTransport` seam
 (`CompositeMeshTransport`). Direct `android.net.wifi.aware.*` / `android.bluetooth.*` implementations, no
 Google Nearby / GMS. Single Gradle module `:app`, package `app.getknit.knit`, minSdk 29 / targetSdk 36 /
-compileSdk 36.1 (minSdk 29 is the shared data-path floor: BLE L2CAP CoC and the Wi-Fi Aware NDP
+compileSdk 37.1 (minSdk 29 is the shared data-path floor: BLE L2CAP CoC and the Wi-Fi Aware NDP
 `WifiAwareNetworkSpecifier.Builder` are both API 29. Wi-Fi Aware uses Instant Communication Mode +
 `NEARBY_WIFI_DEVICES`/`neverForLocation` on 33+ and falls back to `ACCESS_FINE_LOCATION` (location-scoped,
 no ICM, `maxSdkVersion=32`) on 29–32; BLE uses the split `BLUETOOTH_*` perms on 31+ and legacy

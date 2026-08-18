@@ -107,6 +107,18 @@ Four inputs were deliberately de-machine-ified to keep it that way:
   timestamps normalized to `1981-01-01`, and all four ABIs present (which the release workflow also checks).
   Any *new* native dependency must additionally be **16 KB-page-aligned** (`readelf -lW` → `LOAD
   align=0x4000`); that requirement is why litert is pinned to 1.4.x and it was re-verified for CameraX.
+- **Every SDK package must exist in F-Droid's transparency log.** The buildserver image's `sdkmanager` is
+  **F-Droid's own** (25.2.0), which resolves packages from
+  [`f-droid/android-sdk-transparency-log`](https://github.com/f-droid/android-sdk-transparency-log), not
+  Google's repository. A package Google publishes but that log does not carry simply does not exist there:
+  `Warning: Failed to find package 'platforms;android-37.1' / Did you mean 'platforms;android-37.0'?`, exit
+  1. That log currently has `platforms;android-37.0` and **neither `android-37.1` nor a bare
+  `android-37`** — so `compileSdk { release(37) { minorApiLevel = 1 } }` made Knit unbuildable on F-Droid.
+  It shipped that way on main and the release workflow's `build-fdroid` job caught it at the first tag
+  after the bump, which is exactly the divergence that job exists to find. **Any `compileSdk`/build-tools
+  bump has to be checked against that log first**, and mirrored into `release.yml`'s `sdkmanager` line.
+  Check with `docker run --rm registry.gitlab.com/fdroid/fdroidserver:buildserver sdkmanager --install
+  "platforms;android-<ver>"`.
 - **No JDK auto-download.** The `foojay-resolver-convention` plugin is deliberately absent from
   `settings.gradle.kts`, and the `toolchainUrl.*` lines are stripped from
   `gradle/gradle-daemon-jvm.properties`. Both would fetch an unpinned JDK from api.foojay.io. Gradle now

@@ -325,8 +325,12 @@ jobs:
       - name: Trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # Must track app/build.gradle.kts's compileSdk, and the package must exist in
+      # f-droid/android-sdk-transparency-log — this image's sdkmanager is F-Droid's, and resolves against
+      # that log rather than Google's repository. Output is NOT discarded: sdkmanager reports an unknown
+      # package as a `Warning:` line and exits non-zero, so redirecting it leaves a bare "exit code 1".
       - name: Install SDK packages
-        run: sdkmanager --install "platforms;android-37.1" "build-tools;$BUILD_TOOLS" > /dev/null
+        run: sdkmanager --install "platforms;android-37.0" "build-tools;$BUILD_TOOLS"
 
       # No Gradle cache here on purpose. A cached task output could satisfy this build from work done on
       # the *other* runner, which is precisely the divergence this job exists to detect. It has to be cold.

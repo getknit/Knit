@@ -65,16 +65,23 @@ val nativeSymbols = (project.findProperty("knit.nativeSymbols") as? String)?.toB
 
 android {
     namespace = "app.getknit.knit"
-    // API 37.1 — the newest *stable* platform (37.2 is beta). Bumped off 36.1 to clear the
-    // `minCompileSdk=37` gate that androidx started shipping (core-ktx 1.19.0, lifecycle 2.11.0,
-    // Compose UI 1.12.0, okhttp-android 5.5.0 all declare it). compileSdk only sets which APIs are
-    // *visible* to the compiler — runtime behavior is `targetSdk`, deliberately left at 36, so this
-    // carries no behavior-change or Play-policy consequence. Lint's NewApi still guards every call
-    // against minSdk 29.
+    // API 37.0. Bumped off 36.1 to clear the `minCompileSdk=37` gate that androidx started shipping
+    // (core-ktx 1.19.0, lifecycle 2.11.0, Compose UI 1.12.0, okhttp-android 5.5.0 all declare it), which
+    // 37.0 satisfies. compileSdk only sets which APIs are *visible* to the compiler — runtime behavior is
+    // `targetSdk`, deliberately left at 36, so this carries no behavior-change or Play-policy consequence.
+    // Lint's NewApi still guards every call against minSdk 29.
+    //
+    // DO NOT raise the minor to 37.1 without checking F-Droid first. Their buildserver installs SDK
+    // packages through f-droid/android-sdk-transparency-log, which currently publishes
+    // `platforms;android-37.0` and no 37.1 — so 37.1 makes the app unbuildable on F-Droid
+    // (`Failed to find package 'platforms;android-37.1'`), which is a release blocker, not a warning.
+    // It shipped that way briefly and the release workflow's reproducibility job caught it. Any
+    // compileSdk bump must be matched in .github/workflows/release.yml's sdkmanager line, and the
+    // package must exist in that log. See .agents/context/distribution.md.
     compileSdk {
         version =
             release(37) {
-                minorApiLevel = 1
+                minorApiLevel = 0
             }
     }
 

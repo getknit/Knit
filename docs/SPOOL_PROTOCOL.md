@@ -9,7 +9,7 @@
 | This revision | 2026-08-17 |
 | Decision record | ADR 019 (+ M4/M5/M6 amendments, ADR 020, ADR 021) |
 | Client reference | `mesh/crypto/scope/` (`ScopeCrypto`, `SpoolPow`), `mesh/spool/` (`SpoolRecords`, `ScopeFrames`, `ScopeAttachments`, `GroupRootPolicy`, `ScopeRegistry`, `ScopeSync`) |
-| Spool reference | `knit-spool` (AGPL-3.0, separate repository) + its conformance suite |
+| Spool reference | [`knit-spool`](https://github.com/getknit/knit-spool) (AGPL-3.0, separate repository) + its conformance suite |
 | Executable anchors | `ScopeCryptoTest`, `ScopeVectorTest`, `SpoolPowTest`, `SpoolRecordsTest`, `ScopeAttachmentsTest`, `ScopeFramesTest`, `GroupRootPolicyTest`, `AttachmentDeferPolicyTest` |
 
 Both implementations implement *this file*, not each other. §13's vectors are the anchor tests' pinned

@@ -375,13 +375,15 @@ offline app sharing.
 - **Encrypting the broadcast room** — the last cleartext plane, and as much a product question as a
   crypto one: a room with no fixed recipient set has nobody in particular to encrypt to.
 
-**Built, not yet switched on:** an optional Internet layer that carries DMs and group messages between
+**Built, off by default:** an optional Internet layer that carries DMs and group messages between
 contacts you already have when no radio path exists, keeping the mesh's delay-tolerant behaviour and
 running through small relays ("spools") that hold sealed frames without learning whose they are or what
 is in them. The protocol is specified in [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) with
-executable test vectors, and the client half now implements it. **It is off by default and a release
-build has no way to turn it on** — the switch is debug-only until the spool-list editor ships, so a
-release install makes no network calls. Knit is built around proximity meshing either way.
+executable test vectors; the client implements it, and the reference spool daemon lives in
+[`getknit/knit-spool`](https://github.com/getknit/knit-spool). **It stays off until you switch it on** —
+enabling it takes an explicit consent sheet in the relay settings screen that spells out what a spool
+can and cannot see, so a fresh install still makes no network calls. Knit is built around proximity
+meshing either way.
 
 ## 🔐 Security note
 

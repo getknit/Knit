@@ -77,8 +77,10 @@ AllowedAPKSigningKeys: b18a283d11797c2a84a008c1fcb9e1b864e7b4c3b301408f7a4a80624
 # AutoUpdateMode is bare `Version` (NOT `Version v%v`): under UpdateCheckMode: Tags the schema forbids a
 # format string — the tag itself is the version source. `Version v%v` is a UpdateCheckMode: HTTP construct
 # and fails schema validation with Tags.
+# The `Tags` regex is load-bearing: it keeps checkupdates off the `v*-alpha.N` sideload test tags that
+# .github/workflows/release.yml also builds.
 AutoUpdateMode: Version
-UpdateCheckMode: Tags
+UpdateCheckMode: Tags ^v[0-9.]+$
 UpdateCheckData: gradle.properties|knit\.versionCode=(\d+)|.|knit\.versionName=(.*)
 CurrentVersion: 2.2.3
 CurrentVersionCode: 12

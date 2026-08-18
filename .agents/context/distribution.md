@@ -169,6 +169,14 @@ work, ours doesn't. So Knit keeps Google's litert and takes the F-Droid exceptio
 - **`AutoUpdateMode: Version`** (bare, not `Version v%v`). Under `UpdateCheckMode: Tags` the metadata
   schema forbids a format string (`^(None|Version( \+.+)?)$`); `Version v%v` is an `UpdateCheckMode: HTTP`
   construct and fails `check-jsonschema`. The tag itself is the version source.
+- **`UpdateCheckMode: Tags ^v[0-9.]+$`** — the regex is load-bearing, not decoration. `checkupdates` walks
+  *this repo's tags*, not the Releases, so every tag is visible to F-Droid's bot whether or not fdroiddata
+  mentions it (`check_tags()`: `pattern = mode[5:] if len(mode) > 4 else None`, then
+  `re.compile(pattern).match(tag)` against the raw tag name, applied *before* the newest-5 cut). Without the
+  filter a `v2.4.0-alpha.0` pre-release tag would be picked up and auto-turned into a `Builds:` entry
+  shipping an alpha to every F-Droid user as a stable release. Schema-legal (`^Tags( .*)?$`), and
+  `release.yml`'s preflight re-applies the exact same expression to the tag it is building — see
+  "Pre-releases" below.
 
 None of this touches the app or the released APK — the moderation model already runs correctly on Google's
 litert, so the APK ships unchanged and stays byte-reproducible. This is purely a metadata accommodation. **If
@@ -195,6 +203,57 @@ GitHub Release. Prepare the commit first —
 
 The workflow ends at a **draft** Release: the `Binaries:` URL stays 404 until you click publish, which is
 the right state while fdroiddata still points at the previous version. Drop `--draft` to go straight out.
+
+### Pre-releases (sideloadable alphas / betas / RCs)
+
+Same workflow, same tag namespace, **same distribution key** — a `v2.4.0-alpha.0` tag produces a signed,
+reproducibility-verified APK that testers can sideload. Which path a tag takes is decided by the
+versionName alone: a semver pre-release suffix (`-alpha.N` / `-beta.N` / `-rc.N`) means test build,
+anything matching `X.Y[.Z]` means stable release.
+
+| | stable `v2.2.3` | pre-release `v2.4.0-alpha.0` |
+|---|---|---|
+| GitHub Release | **draft**, becomes *Latest* when you publish | **published immediately**, `--prerelease --latest=false` |
+| fdroiddata | must name this version | must **not** name it (enforced) |
+| Signing key | `knit-dist.jks` | `knit-dist.jks` — same key |
+| Reproducibility gate | yes | yes |
+| Changelog | `changelogs/<code>.txt` required | optional; falls back to CHANGELOG.md's `## Unreleased` |
+
+Because it carries the distribution certificate, a pre-release **installs in place over an F-Droid, GitHub
+or mesh-shared install** and keeps the user's data — which is the whole point, and the reason not to cut
+these with a throwaway key. The cost is that a tester cannot go *back*: Android refuses the versionCode
+downgrade, so reverting to the shipped stable means uninstalling. The next stable, whose versionCode is
+higher again, updates over the alpha normally. The Release notes say all of this.
+
+To cut one:
+
+1. Bump **both** `knit.versionCode` and `knit.versionName` in `gradle.properties` — e.g. `13` /
+   `2.4.0-alpha.0`. There is one monotonic versionCode counter shared by stable and pre-release builds;
+   gaps in F-Droid's sequence are fine, a versionCode reused or moving backwards is not. The following
+   stable then takes `14`, so it can update over the alpha.
+2. **Leave `.fdroid.yml` alone.** No `Builds:` entry, no `CurrentVersion*` bump. Preflight fails the
+   release if any of them names the pre-release.
+3. Optionally add `fastlane/metadata/android/en-US/changelogs/<code>.txt`; without one the Release notes
+   use CHANGELOG.md's `## Unreleased` section.
+4. Tag `v<versionName>` and push. The Release is published (not drafted) as soon as CI is green.
+
+**Before the first pre-release tag ever lands, the `UpdateCheckMode` filter must be merged into
+fdroiddata.** Preflight reads `.fdroid.yml`, but `fdroid checkupdates` runs against the merged
+`metadata/app.getknit.knit.yml` — our copy is documentation to F-Droid's bot, nothing more. An alpha tagged
+while fdroiddata still says a bare `UpdateCheckMode: Tags` is exactly the accident preflight exists to
+prevent, and preflight cannot see it. Mirror the line first (it is a one-line MR), confirm it merged, then
+tag.
+
+Preflight enforces the separation in **both** directions, because each failure mode is silent otherwise:
+
+- a pre-release tag that `UpdateCheckMode`'s regex would *match* is refused — that is the alpha-ships-to-
+  everyone accident;
+- a stable tag that the regex would *not* match is also refused — an over-tight regex silently freezes
+  F-Droid on the previous version, with no error anywhere.
+
+The `build-fdroid` reproducibility job runs for pre-releases too. It doubles the CI cost of an alpha, and
+it is worth it: alphas are exactly where toolchain and dependency churn lands, so a repro break surfaces
+while it is cheap to fix rather than at the next stable tag.
 
 ### Keeping `.fdroid.yml` and fdroiddata in sync
 

@@ -4,6 +4,17 @@ name: Release
 # fetches via `Binaries:` and byte-compares against its own rebuild. Background and the reproducibility
 # contract: .agents/context/distribution.md.
 #
+# Two kinds of tag, told apart by the versionName alone:
+#
+#   v2.2.3          stable  -> DRAFT Release, F-Droid's `Binaries:` target, fdroiddata must agree
+#   v2.4.0-alpha.0  test    -> PUBLISHED pre-release, sideload only, fdroiddata must NOT mention it
+#
+# Both are signed with the same distribution key and pass the same reproducibility gate, so a pre-release
+# installs in place over an F-Droid / GitHub / mesh-shared install. They differ only in their relationship
+# to fdroiddata, and `preflight` enforces that relationship in both directions — including the regex on
+# `UpdateCheckMode`, which is the only thing stopping F-Droid's checkupdates bot from picking a tagged
+# alpha up on its own and shipping it as a stable release.
+#
 # IMPORTANT: for tag pushes GitHub runs the copy of this file that exists AT THE TAG. Editing this
 # workflow only affects tags cut afterwards; to apply a change to an existing unpushed tag, move the tag.
 #
@@ -43,6 +54,7 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       version_code: ${{ steps.check.outputs.version_code }}
       apk_name: ${{ steps.check.outputs.apk_name }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
       # Explicit, so `pip install` targets a tool-cache Python rather than the runner's system Python,
@@ -74,41 +86,113 @@ jobs:
           meta = yaml.safe_load(pathlib.Path(".fdroid.yml").read_text())
           errs = []
 
+          # The versionName alone decides which kind of release this is. A semver pre-release suffix
+          # (2.4.0-alpha.0 / -beta.1 / -rc.2) means a sideload-only test build; anything else is a stable
+          # release F-Droid will distribute. Everything below that differs between the two follows from
+          # this one bit, so an unparseable versionName is a hard error rather than a silent "stable".
+          stable = re.fullmatch(r"\d+(\.\d+)*", version)
+          prerelease = re.fullmatch(r"\d+(\.\d+)*-(alpha|beta|rc)\.\d+", version)
+          if not stable and not prerelease:
+              errs.append(
+                  f"knit.versionName {version!r} is neither X.Y[.Z] nor X.Y.Z-(alpha|beta|rc).N — "
+                  "refusing to guess whether this tag is a stable release or a test build"
+              )
+
           # `%v` in Binaries:/AutoUpdateMode expands to versionName, so the tag MUST be v<versionName>.
           # A 2.1 / v2.1.0 style mismatch silently breaks both the download URL and update detection.
           if tag != f"v{version}":
               errs.append(f"tag {tag} != v{version} (knit.versionName in gradle.properties)")
 
-          # F-Droid scrapes fastlane/ from this repo at the built commit; a missing changelog means the
-          # listing ships with no release notes at all.
-          changelog = pathlib.Path(f"fastlane/metadata/android/en-US/changelogs/{code}.txt")
-          if not changelog.is_file():
-              errs.append(f"missing {changelog}")
+          # `fdroid checkupdates` walks this repo's TAGS, so every tag is visible to F-Droid's bot whether
+          # or not fdroiddata mentions it. The regex on UpdateCheckMode is the only thing standing between
+          # a pre-release tag and an auto-generated fdroiddata build entry that ships it to every F-Droid
+          # user as a stable release. Parsed and applied exactly as fdroidserver's check_tags() does —
+          # `pattern = mode[5:] if len(mode) > 4 else None`, then `re.compile(pattern).match(tag)` against
+          # the raw tag name — so this check cannot disagree with the real one.
+          ucm = str(meta.get("UpdateCheckMode", ""))
+          pattern = (ucm[5:] if len(ucm) > 4 else None) if ucm.startswith("Tags") else None
+          pattern = pattern or None
+          if prerelease:
+              if pattern is None:
+                  errs.append(
+                      "UpdateCheckMode has no tag filter, so `fdroid checkupdates` would pick this "
+                      f"pre-release tag up and ship {version} as a stable F-Droid release — set e.g. "
+                      "`UpdateCheckMode: Tags ^v[0-9.]+$` (and mirror it to fdroiddata) first"
+                  )
+              elif re.compile(pattern).match(tag):
+                  errs.append(
+                      f"UpdateCheckMode filter {pattern!r} MATCHES {tag}: F-Droid's bot would ship this "
+                      "pre-release to every F-Droid user"
+                  )
+          elif pattern is not None and not re.compile(pattern).match(tag):
+              # The mirror image, and just as damaging: an over-tight filter silently freezes F-Droid on
+              # the previous version, with no error anywhere.
+              errs.append(
+                  f"UpdateCheckMode filter {pattern!r} does not match {tag}: F-Droid's bot would never "
+                  "see this release"
+              )
 
-          if meta.get("CurrentVersion") != version:
-              errs.append(f".fdroid.yml CurrentVersion {meta.get('CurrentVersion')!r} != {version!r}")
-          if meta.get("CurrentVersionCode") != code:
-              errs.append(f".fdroid.yml CurrentVersionCode {meta.get('CurrentVersionCode')!r} != {code}")
+          if prerelease:
+              # Nothing in fdroiddata may name a pre-release. These are the point-for-point mirror of the
+              # stable checks below: all of them passing means the version is invisible to F-Droid by
+              # construction, not by our remembering to leave it out.
+              if meta.get("CurrentVersion") == version or meta.get("CurrentVersionCode") == code:
+                  errs.append(
+                      f".fdroid.yml Current* names the pre-release {version} ({code}) — a test build must "
+                      "never become F-Droid's recommended release"
+                  )
+              if any(
+                  b.get("versionCode") == code or b.get("versionName") == version
+                  for b in meta.get("Builds", [])
+              ):
+                  errs.append(f".fdroid.yml has a Builds entry for the pre-release {version} ({code})")
 
-          builds = [b for b in meta.get("Builds", []) if b.get("versionCode") == code]
-          if not builds:
-              errs.append(f".fdroid.yml has no Builds entry for versionCode {code}")
+              # A test build that cannot install over the shipped stable is useless to the tester: Android
+              # refuses a versionCode downgrade, so the alpha has to sit above whatever F-Droid ships.
+              current_code = meta.get("CurrentVersionCode")
+              if isinstance(current_code, int) and code <= current_code:
+                  errs.append(
+                      f"knit.versionCode {code} <= the shipped stable's {current_code}: testers could not "
+                      "install this build over their current one"
+                  )
           else:
-              b = builds[0]
-              if b.get("versionName") != version:
-                  errs.append(f".fdroid.yml Builds versionName {b.get('versionName')!r} != {version!r}")
-              # F-Droid builds whatever `commit:` names — if it isn't this tag they verify a different tree.
-              if b.get("commit") != tag:
-                  errs.append(f".fdroid.yml Builds commit {b.get('commit')!r} != {tag!r}")
+              # F-Droid scrapes fastlane/ from this repo at the built commit; a missing changelog means the
+              # listing ships with no release notes at all. (Pre-releases may have one, but need not — they
+              # never reach the listing, and the Release notes fall back to CHANGELOG.md's Unreleased.)
+              changelog = pathlib.Path(f"fastlane/metadata/android/en-US/changelogs/{code}.txt")
+              if not changelog.is_file():
+                  errs.append(f"missing {changelog}")
 
+              if meta.get("CurrentVersion") != version:
+                  errs.append(f".fdroid.yml CurrentVersion {meta.get('CurrentVersion')!r} != {version!r}")
+              if meta.get("CurrentVersionCode") != code:
+                  errs.append(f".fdroid.yml CurrentVersionCode {meta.get('CurrentVersionCode')!r} != {code}")
+
+              builds = [b for b in meta.get("Builds", []) if b.get("versionCode") == code]
+              if not builds:
+                  errs.append(f".fdroid.yml has no Builds entry for versionCode {code}")
+              else:
+                  b = builds[0]
+                  if b.get("versionName") != version:
+                      errs.append(f".fdroid.yml Builds versionName {b.get('versionName')!r} != {version!r}")
+                  # F-Droid builds whatever `commit:` names — if it isn't this tag they verify a different
+                  # tree. (The full-hash pin linsui asked for lands in the follow-up commit, which cannot
+                  # exist yet at the tag; see .agents/context/distribution.md.)
+                  if b.get("commit") != tag:
+                      errs.append(f".fdroid.yml Builds commit {b.get('commit')!r} != {tag!r}")
+
+          # Both kinds of tag are signed with the distribution key, so this pin matters either way — a
+          # pre-release signed with anything else could not install over a real Knit install at all.
           key = meta.get("AllowedAPKSigningKeys")
           if not key or not re.fullmatch(r"[0-9a-f]{64}", str(key)):
               errs.append(f".fdroid.yml AllowedAPKSigningKeys is not a lowercase sha256: {key!r}")
 
           # Derive the asset filename FROM the Binaries: URL rather than hardcoding it, so the published
-          # asset and the URL F-Droid fetches cannot drift apart.
+          # asset and the URL F-Droid fetches cannot drift apart. Pre-releases reuse the same template
+          # (knit-2.4.0-alpha.0.apk) purely so every Knit APK is named the same way; the URL assertion is
+          # stable-only, since no Binaries: URL will ever point at a test build.
           url = str(meta.get("Binaries", "")).replace("%v", version)
-          if f"/releases/download/{tag}/" not in url:
+          if not prerelease and f"/releases/download/{tag}/" not in url:
               errs.append(f"Binaries: URL does not point at {tag}: {url}")
           apk_name = url.rsplit("/", 1)[-1]
 
@@ -117,10 +201,12 @@ jobs:
                   print(f"::error::{e}", file=sys.stderr)
               sys.exit(1)
 
+          kind = "pre-release" if prerelease else "release"
           print(f"version={version}")
           print(f"version_code={code}")
           print(f"apk_name={apk_name}")
-          print(f"OK: {tag} -> {apk_name} (versionCode {code})", file=sys.stderr)
+          print(f"prerelease={'true' if prerelease else 'false'}")
+          print(f"OK: {kind} {tag} -> {apk_name} (versionCode {code})", file=sys.stderr)
           PY
 
   build-signed:
@@ -308,19 +394,57 @@ jobs:
       - name: Compose release notes
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
+          VERSION_CODE: ${{ needs.preflight.outputs.version_code }}
           APK: ${{ needs.preflight.outputs.apk_name }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
         run: |
           set -euo pipefail
           cd signed
           sha256sum "$APK" > "$APK.sha256"
           digest=$(cut -d' ' -f1 "$APK.sha256")
           cert=$(sed -n 's/^AllowedAPKSigningKeys:[[:space:]]*//p' ../.fdroid.yml)
+          changelog="../fastlane/metadata/android/en-US/changelogs/$VERSION_CODE.txt"
+
+          if [ -f "$changelog" ]; then
+            # Always preferred, and for a stable release preflight already proved it exists.
+            cat "$changelog" > body.md
+          else
+            # Pre-release with no per-versionCode changelog: fall back to CHANGELOG.md's Unreleased
+            # section, which is exactly "what a tester gets that the last stable didn't". Read out of the
+            # checkout rather than `git log`, so this needs no tag history and works on a shallow clone.
+            awk '/^## /{ if (p) exit; if ($0 ~ /^## Unreleased/) { p = 1; next } } p' ../CHANGELOG.md > body.md
+            [ -s body.md ] || echo "Test build off \`$GITHUB_SHA\`. See CHANGELOG.md for details." > body.md
+          fi
+
           {
-            cat "../fastlane/metadata/android/en-US/changelogs/${{ needs.preflight.outputs.version_code }}.txt"
-            cat <<EOF
+            cat body.md
+            echo
+            echo "---"
+            echo
+            if [ "$PRERELEASE" = true ]; then
+              cat <<EOF
+          **Pre-release — a test build, not a shipping release.** It is not on F-Droid, is not marked
+          *Latest*, and is not what F-Droid's \`Binaries:\` URL points at. Install it only if you mean to
+          test it.
 
-          ---
+          **\`$APK\`** — \`sha256:$digest\`
 
+          Signed with Knit's distribution key (certificate \`$cert\`) — the same key every off-Play Knit
+          build carries — so it installs straight over an existing F-Droid, GitHub or mesh-shared install
+          without an uninstall, and keeps your messages.
+
+          Going *back* to the current stable is not possible in place: Android refuses the versionCode
+          downgrade, so reverting costs an uninstall and everything stored on the device with it. The next
+          stable release will update over this build normally.
+
+          CI verified this APK is byte-identical, apart from the signature, to an independent unsigned
+          rebuild produced inside F-Droid's own buildserver image — the same reproducibility gate stable
+          releases pass.
+
+          \`mapping-$VERSION.txt.gz\` is the R8 deobfuscation map for symbolicating crash reports from this build.
+          EOF
+            else
+              cat <<EOF
           **\`$APK\`** — \`sha256:$digest\`
 
           Signed with Knit's distribution key (certificate \`$cert\`), the key pinned in F-Droid's
@@ -328,26 +452,41 @@ jobs:
           an independent unsigned rebuild produced inside F-Droid's own buildserver image — so F-Droid's
           rebuild-and-compare check resolves to exactly this APK.
 
-          \`mapping-$VERSION.txt\` is the R8 deobfuscation map for symbolicating crash reports from this build.
+          \`mapping-$VERSION.txt.gz\` is the R8 deobfuscation map for symbolicating crash reports from this build.
           EOF
+            fi
           } > notes.md
 
-      # Draft on purpose: publishing is the irreversible step. Everything above is already verified, so
-      # this is a one-click confirmation that the notes read right — and the Binaries: URL stays 404 until
-      # you click, which is the correct state while fdroiddata still points at the previous version.
-      # Drop `--draft` if you'd rather it go straight out.
-      - name: Create draft GitHub Release
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          APK: ${{ needs.preflight.outputs.apk_name }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
         run: |
           set -euo pipefail
           cd signed
-          gh release create "$TAG" \
-            --draft \
-            --title "Knit ${{ needs.preflight.outputs.version }}" \
+          if [ "$PRERELEASE" = true ]; then
+            # Published, not drafted: nothing in fdroiddata points here, so there is no 404 window to
+            # manage, and the whole point of a test build is that testers can fetch it the moment CI is
+            # green. --prerelease (belt-and-braces with --latest=false) keeps it out of /releases/latest,
+            # which is what the F-Droid listing and every "download Knit" link follow.
+            flags=(--prerelease --latest=false --title "Knit $VERSION (pre-release)")
+          else
+            # Draft on purpose: publishing is the irreversible step. Everything above is already verified,
+            # so this is a one-click confirmation that the notes read right — and the Binaries: URL stays
+            # 404 until you click, which is the correct state while fdroiddata still points at the previous
+            # version. Drop `--draft` if you'd rather it go straight out.
+            flags=(--draft --title "Knit $VERSION")
+          fi
+          gh release create "$TAG" "${flags[@]}" \
             --notes-file notes.md \
-            "${{ needs.preflight.outputs.apk_name }}" \
-            "${{ needs.preflight.outputs.apk_name }}.sha256" \
-            "mapping-${{ needs.preflight.outputs.version }}.txt.gz"
-          echo "::notice::Draft release created for $TAG — review and publish it to make the Binaries: URL live."
+            "$APK" \
+            "$APK.sha256" \
+            "mapping-$VERSION.txt.gz"
+          if [ "$PRERELEASE" = true ]; then
+            echo "::notice::Pre-release $TAG published — the sideload URL is live now. F-Droid is untouched."
+          else
+            echo "::notice::Draft release created for $TAG — review and publish it to make the Binaries: URL live."
+          fi

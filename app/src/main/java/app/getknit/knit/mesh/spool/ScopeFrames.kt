@@ -81,19 +81,33 @@ object ScopeFrames {
         }
 
     /**
-     * The DM half of the §4.4 frame-set rule: `type = chat`, the sender/recipient pair is exactly this
-     * scope's two members, and the payload is v2-sealed with the DM ratchet header.
+     * The DM half of the §4.4 frame-set rule. Two forms ride a DM scope:
      *
-     * Group forms, the plaintext broadcast room, profiles, and the cleartext receipt/reaction frames are
-     * all excluded: a scope-eligible pair is ratchet-capable by construction, so its receipts and
-     * reactions already ride as sealed ctl frames inside chat (`docs/ENCRYPTED_RECEIPTS_REACTIONS.md`).
+     * - `type = chat` — the sender/recipient pair is exactly this scope's two members, and the payload is
+     *   v2-sealed with the DM ratchet header.
+     * - `type = profile` — from either member. It addresses nobody, so it is matched on **sender alone**;
+     *   requiring a recipient pair (as this rule did until ADR 022) is what kept it off the plane.
+     *
+     * The profile form is what carries `ProfileContent.prekey`, and the prekey is the one thing a sealed
+     * `CTL_PROFILE` can never carry — sealing a session-starter under a session that must already exist is
+     * circular. Without it a peer reachable only over the Internet can never learn a rotated prekey, so a
+     * broken DM session can never be re-established and the group sender-key seeds that ride as ctl DMs
+     * never arrive either. A profile is safe inside a scope for the same reason it is safe on the mesh: it
+     * is self-certifying, authenticated against the `pubKey` in its own payload (`InboundPipeline.canCarry`
+     * re-derives the nodeId from it), so carrying it grants the sender nothing a flood does not.
+     *
+     * The plaintext broadcast room and the cleartext receipt/reaction frames stay excluded: a scope-eligible
+     * pair is ratchet-capable by construction, so its receipts and reactions already ride as sealed ctl
+     * frames inside chat (`docs/ENCRYPTED_RECEIPTS_REACTIONS.md`).
      */
     fun eligibleForDm(
         env: RelayEnvelope,
         selfId: String,
         peerId: String,
     ): Boolean {
-        if (env.type != FrameType.CHAT || env.group != null) return false
+        if (env.group != null) return false
+        if (env.type == FrameType.PROFILE) return env.senderId == selfId || env.senderId == peerId
+        if (env.type != FrameType.CHAT) return false
         val recipient = env.recipientId ?: return false
         val pairMatches =
             (env.senderId == selfId && recipient == peerId) ||
@@ -104,8 +118,8 @@ object ScopeFrames {
     }
 
     /**
-     * The group half of the §4.4 frame-set rule: a ratcheted group chat frame, a `groupupdate`, or a
-     * `groupleave` for this scope's group, from a founding-roster sender.
+     * The group half of the §4.4 frame-set rule: a ratcheted group chat frame, a `groupupdate`, a
+     * `groupleave` for this scope's group, or a member's `profile` — all from a founding-roster sender.
      *
      * Two details the rule turns on, both easy to get subtly wrong:
      *
@@ -145,6 +159,14 @@ object ScopeFrames {
 
             FrameType.GROUP_LEAVE -> {
                 WireCodec.decodePayload<GroupLeaveContent>(env.payload)?.groupId == groupId
+            }
+
+            // A member's own profile, carrying the prekey a co-member needs to open a DM session with them
+            // — and therefore to receive the CTL_GROUP_KEY seeds that make this group's frames readable at
+            // all. It names no group, so the founding-roster check above is the whole rule (see
+            // [eligibleForDm] for why a self-certifying frame is safe inside a scope).
+            FrameType.PROFILE -> {
+                true
             }
 
             else -> {

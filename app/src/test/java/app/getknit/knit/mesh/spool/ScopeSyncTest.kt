@@ -27,6 +27,7 @@ import org.junit.Test
  * supervisor, the per-spool worker and the tick loop are all deliberately infinite).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // cohesive single-SUT suite over one shared member()/pump() harness, as InboundPipelineTest
 class ScopeSyncTest {
     private val alice = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
     private val bob = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -472,6 +473,45 @@ class ScopeSyncTest {
 
             assertEquals("only this scope's own DM may ride it", 1, spool.pushed.size)
             sender.sync.stop()
+        }
+
+    @Test
+    fun `a profile crosses the DM scope, which is how a prekey reaches a peer off the radios`() =
+        runTest {
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            val receiver = member(spool, bob, alice)
+            sender.custody.store(profileFrame("p1", from = alice, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump()
+
+            assertEquals(listOf("p1"), receiver.delivered.map { it.id })
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `a co-member's profile crosses the group scope even with no DM session between them`() =
+        runTest {
+            val spool = FakeSpool()
+            // carol shares only the group with bob — no DM scope exists between them, which is exactly the
+            // case that stranded group sender-key seeds: the seed rides a ctl DM that needs carol's prekey.
+            val groupId = "g-00112233445566778899aabb"
+            val roster = setOf(alice, bob, carol)
+            val group = GroupScopeRoots(groupId, roster, groupRoot, rootVersion = 1)
+            val holder = member(spool, alice, bob, groups = listOf(group))
+            val reader = member(spool, bob, alice, groups = listOf(group))
+            holder.custody.store(profileFrame("p2", from = carol, sentAt = now), ForwardStore.ORIGIN_RELAY, now)
+
+            holder.sync.start(backgroundScope)
+            reader.sync.start(backgroundScope)
+            pump()
+
+            assertEquals(listOf("p2"), reader.delivered.map { it.id })
+            holder.sync.stop()
+            reader.sync.stop()
         }
 
     @Test

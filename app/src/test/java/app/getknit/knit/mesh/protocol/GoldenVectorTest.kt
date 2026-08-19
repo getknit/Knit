@@ -177,6 +177,23 @@ class GoldenVectorTest {
                         prekey = PrekeyInfo(id = 7, pub = bytes(32, 9), sig = bytes(64, 11)),
                     ),
                 ),
+            // The additive ProfileContent.version field (ADR 022), appended after `prekey`. It carries the
+            // profile version that used to be implicit in the envelope `sentAt`, freeing `sentAt` to be a
+            // publish stamp the sender refreshes so the frame stays inside custody's `sentAt + ttl` window.
+            "profileContentVersion" to
+                WireCodec.encodePayload(
+                    ProfileContent(
+                        "Ann",
+                        "hiking",
+                        avatarHash = "av1",
+                        pubKey = "pk1",
+                        deviceTag = "dt1",
+                        protoVersion = 1,
+                        capabilities = 31L,
+                        prekey = PrekeyInfo(id = 7, pub = bytes(32, 9), sig = bytes(64, 11)),
+                        version = 1_700_000_000_000L,
+                    ),
+                ),
             // The spool plane's shared group root (docs/SPOOL_PROTOCOL.md §3.2), gossiped as the additive
             // `gr` field of the existing group-key ctl payload. The second fixture is the root-only
             // distribution: `keys` defaults to empty and stays off the wire entirely, which is exactly the
@@ -301,6 +318,12 @@ class GoldenVectorTest {
                     "696365546167636474316c70726f746f56657273696f6e016c6361706162696c6974696573181f667072656b6579a362696407637075" +
                     "6258200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe26373696758400b121920272e353c434a51585f" +
                     "666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4",
+                "profileContentVersion" to
+                    "a9646e616d6563416e6e667374617475736668696b696e676a6176617461724861736863617631667075624b657963706b3169646576" +
+                    "696365546167636474316c70726f746f56657273696f6e016c6361706162696c6974696573181f667072656b6579a362696407637075" +
+                    "6258200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe26373696758400b121920272e353c434a51585f" +
+                    "666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4" +
+                    "6776657273696f6e1b0000018bcfe56800",
                 "profilePayload" to
                     "a4646e616d6563416e6e667374617475736668696b696e676a617661746172486173" +
                     "6863617631" +

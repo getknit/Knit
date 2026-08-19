@@ -229,6 +229,23 @@ What did **not** move, and why it is worth recording: group photos needed no wir
 `groupupdate` already carries `GroupInfo.photoHash` in cleartext and is already scope-eligible, so only
 the client's attachment-reference reader had to learn about it.
 
+**Precedent — the fifth additive content change, splitting a field's two jobs (profiles on the spool
+plane, ADR 022).** `ProfileContent.version: Long?`. Rule 1: nullable, absent from every frame that does not
+set it, so `profileContent`/`profileContentPrekey` did not move and only a new `profileContentVersion`
+vector was added. What makes it worth recording is *why* the field exists — the envelope `sentAt` was doing
+two incompatible jobs at once. It was the profile's LWW version **and** the frame-global custody expiry key
+(`sentAt + ttl`, ADR 006), so a profile nobody had edited for a day was refused as dead on arrival and left
+custody entirely: invisible to a radio late joiner, and unavailable to the Internet plane, which can only
+seal what custody holds. Splitting them lets `sentAt` be a publish stamp refreshed every 12h while `version`
+stays the ordering key.
+
+The compatibility shape is the reverse of the usual one and worth reading before the next such split: a
+*new* build reads `content.version ?: env.sentAt`, which is exact for an old peer because `sentAt` is
+precisely what the version used to be. An *old* build has no such fallback — it reads the publish stamp as
+the version, so its watermark jumps ahead and it then rejects sealed `CTL_PROFILE` updates whose
+`payload.version` is the real (smaller) number. Additive on the wire, then, but not symmetric in behaviour;
+it was taken while the plane is still testers-only.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

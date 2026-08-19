@@ -224,6 +224,41 @@ class ScopeFramesTest {
     }
 
     @Test
+    fun `both members' profiles ride a DM scope, matched on sender since a profile addresses nobody`() {
+        val mine = profileFrame("p1", from = alice).envelope
+        val theirs = profileFrame("p2", from = bob).envelope
+        assertNull("fixture must address nobody, or it is not exercising the sender-only match", mine.recipientId)
+        assertTrue(ScopeFrames.eligibleForDm(mine, alice, bob))
+        assertTrue(ScopeFrames.eligibleForDm(theirs, alice, bob))
+    }
+
+    @Test
+    fun `a third party's profile rides neither form`() {
+        val stranger = profileFrame("p3", from = mallory).envelope
+        assertFalse(ScopeFrames.eligibleForDm(stranger, alice, bob))
+        assertFalse(ScopeFrames.eligibleForGroup(stranger, groupId, founding))
+    }
+
+    @Test
+    fun `a founding-roster member's profile rides a group scope, and the roster is the whole rule`() {
+        val member = profileFrame("p4", from = carol).envelope
+        assertTrue(ScopeFrames.eligibleForGroup(member, groupId, founding))
+        // It names no group, so nothing else can gate it — a roster that excludes the sender is the only
+        // thing standing between a co-member's prekey and this scope.
+        assertFalse(ScopeFrames.eligibleForGroup(member, groupId, setOf(alice, bob)))
+    }
+
+    @Test
+    fun `a profile blob round-trips through the seal and the frame-set rule`() {
+        val frame = profileFrame("p5", from = bob)
+        val sealed = ScopeFrames.seal(scope(), frame.sig, frame.signed)
+        val opened = ScopeFrames.open(scope(), alice, sealed.blobId, sealed.blob)
+        assertNotNull(opened)
+        assertEquals("p5", opened!!.env.id)
+        assertArrayEquals(frame.signed, opened.wire.signed)
+    }
+
+    @Test
     fun `a scope with neither form carries nothing`() {
         val formless = Scope(id = ByteArray(32), keys = ScopeCrypto.dmSealKeys(root, alice, bob), bounds = ScopeRegistry.DEFAULT_BOUNDS)
         assertFalse(ScopeFrames.eligibleFor(dmFrame("m1", alice, bob).envelope, alice, formless))

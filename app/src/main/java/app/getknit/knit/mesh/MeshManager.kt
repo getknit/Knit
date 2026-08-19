@@ -426,6 +426,7 @@ class MeshManager(
             groupRoots.sweep(clock()) // drop rotated-away group roots past their drain window
             replayUndeliveredGroupCustody() // re-try own-custody group frames whose seed arrived late
             rotatePrekeyIfDue()
+            republishProfileIfStale() // refresh the publish stamp before custody would refuse the frame
             mintGroupRootsIfDue() // mint a group's spool root when it is our turn (spec §3.2)
         }
     }
@@ -1443,6 +1444,10 @@ class MeshManager(
             // At startup too, not only on the 15-min heartbeat: this is where a device that just enabled
             // the Internet plane (or just finished its mint grace while the app was closed) actually mints.
             mintGroupRootsIfDue()
+            // Stamp a publish time before building the frame: a device whose profile was last edited days
+            // ago would otherwise seed a frame custody refuses as dead on arrival, and this seeding exists
+            // precisely so first contact has a frame to diverge on.
+            republishProfileIfStale()
             val env = currentProfileEnvelope()
             forwardSync.onSeen(sign(env), env, ForwardStore.ORIGIN_SELF)
         }
@@ -1630,9 +1635,14 @@ class MeshManager(
 
     private suspend fun currentProfileEnvelope(): RelayEnvelope {
         val me = identity.nodeId()
-        // Persisted, so the profile frame's id + sentAt are stable across restarts — an unchanged profile
-        // re-broadcasts as the *same* custodied frame instead of a new one, letting the digests converge.
+        // The LWW key receivers order against. Persisted, so a relaunch is not mistaken for an edit.
         val version = settings.profileVersion.first()
+        // …and separately, when we last published. Custody expiry is `sentAt + ttl`, so stamping the frame
+        // with the *edit* time (as this did until ADR 022) made a profile older than the custody TTL dead on
+        // arrival: it left custody, no late joiner could pull it, and the Internet plane — which seals what
+        // custody holds — could not carry it at all. The id keys on the publish stamp too, so a re-publish is
+        // a genuinely new custody row rather than a `store.has(id)` no-op in ForwardSync.onSeen.
+        val publishedAt = settings.profilePublishedAt.first()
         // The current signed prekey rides every profile (v2 DM bootstrap) — its detached signature lets
         // receivers verify it against the bundle even stored apart from this frame.
         val spk = identity.currentPrekey(clock())
@@ -1648,14 +1658,34 @@ class MeshManager(
                 protoVersion = Protocol.VERSION,
                 capabilities = Protocol.LOCAL_CAPABILITIES,
                 prekey = PrekeyInfo(id = spk.id, pub = spk.pub, sig = spk.sig),
+                version = version,
             )
         return RelayEnvelope(
             type = FrameType.PROFILE,
-            id = "profile-$me-$version",
+            id = "profile-$me-$publishedAt",
             senderId = me,
-            sentAt = version,
+            sentAt = publishedAt,
             payload = WireCodec.encodePayload(content),
         )
+    }
+
+    /**
+     * Refresh the publish stamp when the current profile frame is old enough that custody would soon refuse
+     * it ([PROFILE_REPUBLISH_MS], comfortably inside the custody TTL). Not gated on the Internet plane being
+     * enabled: a profile that ages out of custody is equally invisible to a radio late joiner, which is the
+     * bug this fixes — the plane only made it load-bearing. Bumps no [SettingsStore.profileVersion], so a
+     * re-publish is not an edit and cannot advance any receiver's LWW watermark.
+     */
+    private suspend fun republishProfileIfStale() {
+        val now = clock()
+        if (now - settings.profilePublishedAt.first() < PROFILE_REPUBLISH_MS) return
+        settings.setProfilePublishedAt(now)
+        // Seed the refreshed frame into custody rather than flooding it: it carries no new information, so
+        // the custody digest divergence is enough to move it to neighbors on the next contact. The previous
+        // stamp's frame lingers until its own TTL — same version, so a receiver re-applies it idempotently.
+        val env = currentProfileEnvelope()
+        forwardSync.onSeen(sign(env), env, ForwardStore.ORIGIN_SELF)
+        scopeSync?.onCustodyChanged()
     }
 
     // --- Signed origination ---
@@ -1835,6 +1865,13 @@ class MeshManager(
         // Min spacing between first-contact profile floods (watchReachable): a burst of newcomers costs one
         // origination; custody + the per-link pushProfileTo cover anyone the coalesced flood skipped.
         const val PROFILE_REFLOOD_MIN_MS = 30_000L
+
+        // How often the profile frame is re-stamped and re-seeded (republishProfileIfStale). Must stay
+        // comfortably inside ForwardRepository.DEFAULT_TTL_MS (24h) — custody expiry is `sentAt + ttl`, so a
+        // frame is refused as dead on arrival once its stamp ages past that, and the profile silently
+        // vanishes from custody and from every scope built on it. Half the TTL leaves a full window of slack
+        // for a device that is asleep or offline when a heartbeat is due.
+        const val PROFILE_REPUBLISH_MS = 12 * 60 * 60_000L
 
         /** Avatars are always JPEG on this path (`AvatarStore` re-encodes every input). */
         const val AVATAR_MIME = "image/jpeg"

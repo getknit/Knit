@@ -155,6 +155,15 @@ data class ChatContent(
  * `CAP_RATCHET` bit is a send-time input (v2 DM gating), the rest are diagnostics. [prekey] is the
  * sender's current ratchet signed prekey (v2 session bootstrap); a *newer* profile carrying a null
  * [prekey] clears the pin (the peer downgraded — outbound falls back to v1).
+ *
+ * [version] is the sender's profile version — the LWW key both propagation paths order against (the same
+ * number [ProfilePayload.version] carries). It used to be implicit in the envelope `sentAt`, which forced
+ * `sentAt` to double as an edit stamp: custody expiry is `sentAt + ttl`, so a profile nobody had edited
+ * for a day was refused as dead on arrival and fell out of custody entirely — invisible to a late joiner
+ * and, since the Internet plane seals what custody holds, unable to reach a peer off the radios at all.
+ * Splitting them lets `sentAt` be a *publish* stamp the sender refreshes on a cadence while [version]
+ * stays put, so a re-publish is not mistaken for an edit and cannot advance a receiver's watermark.
+ * Null on a peer predating this field — read `sentAt` for those, which is exactly what it meant.
  */
 @Serializable
 data class ProfileContent(
@@ -166,6 +175,7 @@ data class ProfileContent(
     val protoVersion: Int? = null,
     val capabilities: Long? = null,
     val prekey: PrekeyInfo? = null,
+    val version: Long? = null,
 )
 
 /** Content of a [FrameType.GROUP_LEAVE] frame: the group the (self-asserted) sender is leaving. */

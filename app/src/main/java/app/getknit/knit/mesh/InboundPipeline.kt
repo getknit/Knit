@@ -1817,11 +1817,23 @@ class InboundPipeline(
             return
         }
         val existing = peers.find(env.senderId)
-        // Last-writer-wins: ignore a profile older than the one we already hold. The key is immutable per
-        // nodeId (a different key would be a hash collision, excluded above), so an out-of-order or
-        // re-served copy can never change the pinned key — it could only revert name/status. A first
-        // profile (existing == null) is always accepted, so this never blocks recovering a missing key.
-        if (existing != null && env.sentAt < existing.updatedAt) return
+        // The LWW key is the sender's profile *version*, not the frame's `sentAt` — `sentAt` is now a publish
+        // stamp the sender refreshes on a cadence to keep the frame inside custody's `sentAt + ttl` window
+        // (ADR 022), so it moves without the profile having changed. A peer predating the field sends no
+        // `version`, and for those `sentAt` is exactly what it used to mean, which makes the fallback exact.
+        val version = content.version ?: env.sentAt
+        // Last-writer-wins, split across two watermarks. The key is immutable per nodeId (a different key
+        // would be a hash collision, excluded above), so an out-of-order or re-served copy can never change
+        // the pinned key — it could only revert name/status. A first profile (existing == null) is always
+        // accepted, so this never blocks recovering a missing key.
+        //
+        // Presentation and prekey are gated SEPARATELY because a sealed CTL_PROFILE advances `updatedAt`
+        // while deliberately carrying no prekey (ADR 020). Gating both on that one watermark let a sealed
+        // presentation update suppress the cleartext frame that carries the prekey — and since a live spool
+        // EVENT can outrun a heal-round pull, that race lands exactly when the prekey matters most.
+        val stalePresentation = existing != null && version < existing.updatedAt
+        val stalePrekey = existing != null && version < (existing.prekeyProfileAt ?: 0L)
+        if (stalePresentation && stalePrekey) return
         // Immutable pin: a peer's key is bound to its nodeId, so once pinned it can only "change" via a
         // hash collision — an impersonation attempt. Refuse it: keep the first-pinned key and its verified
         // badge rather than let a swapped-in key inherit a verified contact (finding #14). A first profile
@@ -1839,30 +1851,48 @@ class InboundPipeline(
         val prekey = verifiedPrekey(content, pubKey, env.senderId)
         // The pinned key is guaranteed unchanged here (a differing key was refused above), so carrying
         // the prior [verified] state through the upsert is safe.
+        val base = existing ?: PeerEntity(env.senderId)
         peers.upsert(
-            (existing ?: PeerEntity(env.senderId)).copy(
+            base.copy(
                 // Clamp inbound too: our own cap only bounds what we originate, not what a peer sends.
-                name = content.name.take(TextLimits.DISPLAY_NAME),
-                status = content.status.take(TextLimits.STATUS),
+                name = if (stalePresentation) base.name else content.name.take(TextLimits.DISPLAY_NAME),
+                status = if (stalePresentation) base.status else content.status.take(TextLimits.STATUS),
                 pubKey = pubKey,
                 verified = existing?.verified ?: false,
                 deviceTag = content.deviceTag ?: existing?.deviceTag,
-                avatarHash = resolveAvatarHash(advertised, haveAvatar, existing?.avatarHash),
+                avatarHash =
+                    if (stalePresentation) {
+                        base.avatarHash
+                    } else {
+                        resolveAvatarHash(advertised, haveAvatar, existing?.avatarHash)
+                    },
                 protoVersion = content.protoVersion ?: existing?.protoVersion,
                 capabilities = content.capabilities ?: existing?.capabilities,
-                updatedAt = env.sentAt,
-                // The ratchet prekey rides the same LWW-accepted frame: adopt a verified one, and CLEAR
-                // the pin when this (newer) profile carries none — the peer downgraded, and keeping a
-                // stale prekey would black-hole v2 sends they can no longer open.
-                prekeyId = prekey?.id,
-                prekeyPub = prekey?.let { b64(it.pub) },
-                prekeySig = prekey?.let { b64(it.sig) },
-                prekeyProfileAt = prekey?.let { env.sentAt },
+                // Never regress: a stale-presentation frame still reaches here for its prekey, and must not
+                // drag the presentation watermark backwards on its way through.
+                updatedAt = maxOf(base.updatedAt, version),
+                // The ratchet prekey rides its OWN watermark: adopt a verified one, and CLEAR the pin when
+                // this (prekey-newer) profile carries none — the peer downgraded, and keeping a stale prekey
+                // would black-hole v2 sends they can no longer open.
+                prekeyId = if (stalePrekey) base.prekeyId else prekey?.id,
+                prekeyPub = if (stalePrekey) base.prekeyPub else prekey?.let { b64(it.pub) },
+                prekeySig = if (stalePrekey) base.prekeySig else prekey?.let { b64(it.sig) },
+                // Advances even when this profile carried NO prekey — the downgrade case this column was
+                // always documented to cover. Leaving it null there would reopen the ordering hole the split
+                // exposed: a re-served older profile would look prekey-newer than the clear and re-pin a key
+                // the peer has stopped serving, black-holing v2 sends exactly as a stale pin does.
+                prekeyProfileAt = if (stalePrekey) base.prekeyProfileAt else version,
             ),
         )
-        reclaimRemovedAvatarIfCleared(env.senderId, advertised, existing?.avatarHash)
+        // Avatar follow-ups belong to the presentation half — a frame admitted only for its prekey must not
+        // reclaim or re-fetch against an avatar hash we already decided was stale.
+        if (!stalePresentation) {
+            reclaimRemovedAvatarIfCleared(env.senderId, advertised, existing?.avatarHash)
+        }
         applyDeviceTagBlockContinuity(env.senderId, content.deviceTag)
-        pullRelayAvatarIfNeeded(env.senderId, advertised, haveAvatar)
+        if (!stalePresentation) {
+            pullRelayAvatarIfNeeded(env.senderId, advertised, haveAvatar)
+        }
         // The sender's key is now pinned: retransmit any DMs to them that were stuck awaiting it, and
         // re-send any group epoch seeds their outbox still shows unacked (their prekey may be new).
         flushPending(env.senderId)

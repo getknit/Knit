@@ -366,13 +366,13 @@ blobId  = SHA-256(blob)
 | **C-4.4-3** | The same rule governs the push side: only frames matching it MAY be sealed into a scope. |
 | **C-4.4-4** | A scope with neither a DM peer nor a group id carries nothing. |
 
-**DM scope.** All of:
+**DM scope.** The envelope's group field MUST be unset, and then per type:
 
 | ID | Requirement |
 |---|---|
-| **C-4.4-5** | `type = chat`, and the envelope's group field is unset. |
-| **C-4.4-6** | Sender and recipient are exactly this scope's two members, in either direction. |
-| **C-4.4-7** | The payload is v2-sealed: `EncEnvelope.v = 2` with the DM ratchet header (`r`) present. |
+| **C-4.4-5** | `type` is `chat` or `profile`; anything else is rejected. |
+| **C-4.4-6** | For `chat`: sender and recipient are exactly this scope's two members, in either direction. For `profile`, which addresses nobody, the **sender** is one of the two members — there is no recipient to match. |
+| **C-4.4-7** | For `chat`: the payload is v2-sealed, `EncEnvelope.v = 2` with the DM ratchet header (`r`) present. A `profile` carries no `EncEnvelope` and is exempt. |
 
 **Group scope.** The sender MUST be in the pinned **founding** roster, and then per type:
 
@@ -381,6 +381,7 @@ blobId  = SHA-256(blob)
 | `chat` (group form) | envelope roster field | `EncEnvelope.v = 2` with the group header (`g`) present | **C-4.4-8** |
 | `groupupdate` | envelope roster field | — | **C-4.4-9** |
 | `groupleave` | its **payload**; the envelope field is unset | — | **C-4.4-10** |
+| `profile` | names no group; the founding-roster check is the whole rule | — | **C-4.4-13** |
 | anything else | — | rejected | **C-4.4-11** |
 
 > **Why the per-type id location matters.** A rule that only reads the envelope silently excludes
@@ -396,13 +397,22 @@ blobId  = SHA-256(blob)
 > construction (C-3.3-4), so a v1 frame inside one is a peer that has since regressed, not a case to
 > carry.
 >
-> **Why `profile` is not scope-carried.** The reason is structural, not a deferral. A cleartext `profile`
-> frame is authenticated against the `pubKey` *inside its own payload* (a node id is that key bundle's
-> hash), it addresses no recipient and no group, so no scope is its natural home, and its job is first
-> contact, which a scope by definition never has. Profile *updates* between established contacts do
-> cross, as an ordinary sealed chat frame carrying `CTL_PROFILE`, which needs nothing from this rule. The
-> cleartext frame keeps first contact permanently. Receipts and reactions likewise ride as sealed
-> chat-shaped ctl frames, since a scope-eligible pair is ratchet-capable by construction.
+> **Why `profile` is scope-carried.** It carries `ProfileContent.prekey`, and the prekey is the one thing
+> a sealed `CTL_PROFILE` can never carry: sealing a session-starter under a session that must already
+> exist is circular. Until this rule admitted it, a peer reachable only over the Internet could not learn
+> a rotated prekey at all, so a DM session that broke could never be re-established — and the group
+> sender-key seeds that ride as ctl DMs never arrived either, which made a co-member's group frames
+> permanently unreadable. The earlier reasoning here held that a profile's job is first contact, "which a
+> scope by definition never has"; that is true of the *first* contact and irrelevant to every later one,
+> since prekeys rotate for the life of a contact.
+>
+> Admitting it grants a sender nothing a flood does not. The frame is authenticated against the `pubKey`
+> *inside its own payload* (a node id is that key bundle's hash), so it is self-certifying inside a scope
+> exactly as it is on the mesh, and it discloses strictly less than the cleartext copy already floods to
+> everyone in radio range. It addresses no recipient and no group, which is why the DM half matches it on
+> sender alone and the group half rests entirely on the founding-roster check. Receipts and reactions
+> still ride as sealed chat-shaped ctl frames, since a scope-eligible pair is ratchet-capable by
+> construction.
 
 | ID | Requirement |
 |---|---|
@@ -1138,8 +1148,9 @@ spool configured, the client opens no socket at all.
 
 ## Appendix B. Change log
 
-Non-normative. Wire compatibility is stated per entry: no entry so far has changed a wire field, a
-derivation, or a §13 vector.
+Non-normative. Wire compatibility is stated per entry: no entry has changed a spool record, a derivation,
+or a §13 vector. One entry (2026-08-19) adds a field to a *mesh* frame payload, additively and without
+moving an existing golden vector; the plane itself was unaffected, since a spool never decodes a frame.
 
 | Date | Change | Asks of implementers |
 |---|---|---|
@@ -1149,3 +1160,4 @@ derivation, or a §13 vector.
 | 2026-08-16 | **Attachments (M5).** §4.5, §6.5, §7.3 and §9.5 added as fresh sub-numbers, so no existing cross-reference moved | **Spools only.** An attachment-capable spool advertises three new HELLO limits and answers five new records; one that does not omits them and is left alone |
 | 2026-08-17 | **Deferred attachment uploads (ADR 021).** §9.5's push half became a bounded MAY (C-9.5-5…9), priced in §10.1 | None. Invisible at a spool beyond a later `aput` |
 | 2026-08-17 | **Formalisation and accuracy pass.** Requirement identifiers throughout, rationale separated from normative text, Appendices A and B added. Corrected against the implementations: the DM frame rule's unset-group and ratchet-header conditions and the group rule's exclusion of v1-wrapped chat (§4.4); `groupupdate` group photos as a second attachment reference shape (§9.5); the deferral rule's per-recipient evidence requirement, which is what confines it to DM scopes (§9.5); §5's shipped status | None. No wire field, derivation or vector changed |
+| 2026-08-19 | **Profiles cross the plane (ADR 022).** §4.4 admits `type = profile` into both scope forms — matched on sender alone in the DM half (C-4.4-5…7), on the founding roster in the group half (C-4.4-13). It is the only carrier of `ProfileContent.prekey`, so without it an Internet-only peer could never learn a rotated prekey, re-establish a broken DM session, or receive the group sender-key seeds that ride as ctl DMs | None for spools. Clients: profile blobs now fold into the scope digest, so a member on an older build quarantines them (C-9.3-1) and reports itself unconverged for that scope until it is updated |

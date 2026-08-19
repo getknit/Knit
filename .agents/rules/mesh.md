@@ -35,7 +35,11 @@ free). Two invariants that are easy to break:
   (`ScopeFrames.eligibleFor`, spec §4.4) — a scope is not a general-purpose upload channel. The group
   half has two traps: a `groupleave` carries its group id in the **payload** (never in
   `RelayEnvelope.group`), and the sender is vetted against the **founding** roster (members ∪ departed),
-  because a leaver is already departed when its own leave frame is evaluated.
+  because a leaver is already departed when its own leave frame is evaluated. A cleartext `profile` rides
+  **both** forms (ADR 022) and is the exception to the addressing pattern: it names no recipient and no
+  group, so the DM half matches it on sender alone and the group half rests wholly on the founding roster.
+  Do not "tighten" that back to a recipient match — it is the only carrier of the prekey, and without it a
+  peer off the radios can never bootstrap or repair a DM session, nor receive group sender-key seeds.
 - **A blob that fails validation is quarantined per (spool, scope), never merely dropped** (spec §9.3).
   Spools are untrusted storage: a garbage blob folds into *their* digest and never ours, so without the
   invalid set the two digests diverge forever and the client re-pulls it on every heal round.

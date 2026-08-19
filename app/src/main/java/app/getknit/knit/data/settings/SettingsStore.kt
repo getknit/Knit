@@ -25,12 +25,22 @@ class SettingsStore(
     val avatarUpdatedAt: Flow<Long> = dataStore.data.map { it[KEY_AVATAR_UPDATED_AT] ?: 0L }
 
     /**
-     * Monotonic version of this device's own profile: the profile frame's id and signed `sentAt` both derive
-     * from it, so it must be **stable across app restarts** (persisted here, not a launch timestamp) — otherwise
-     * every relaunch mints a new custodied profile frame and the store-and-forward digests never converge.
-     * Bumped only on a real profile edit (see `MeshManager`); 0 until the first edit.
+     * Monotonic version of this device's own profile — the LWW key receivers order against, carried in
+     * `ProfileContent.version`. Must be **stable across app restarts** (persisted here, not a launch
+     * timestamp), so a relaunch does not look like an edit to every peer. Bumped only on a real profile edit
+     * or a prekey rotation (see `MeshManager`); 0 until the first one.
      */
     val profileVersion: Flow<Long> = dataStore.data.map { it[KEY_PROFILE_VERSION] ?: 0L }
+
+    /**
+     * When this device last *published* its profile frame — the frame's `sentAt` and id, distinct from
+     * [profileVersion]. Custody expiry is `sentAt + ttl`, so a frame stamped with the edit time is refused
+     * as dead on arrival once that edit is a day old: the profile silently leaves custody, a late joiner
+     * cannot pull it, and the Internet plane (which seals what custody holds) cannot carry it at all.
+     * `MeshManager` re-publishes on a cadence inside the custody TTL and records the stamp here so the
+     * cadence survives restarts. 0 until the first publish.
+     */
+    val profilePublishedAt: Flow<Long> = dataStore.data.map { it[KEY_PROFILE_PUBLISHED_AT] ?: 0L }
 
     /**
      * Content hash of the device's own avatar, or null if none is set. The avatar bytes live in the
@@ -164,6 +174,8 @@ class SettingsStore(
 
     suspend fun setProfileVersion(value: Long) = dataStore.edit { it[KEY_PROFILE_VERSION] = value }
 
+    suspend fun setProfilePublishedAt(value: Long) = dataStore.edit { it[KEY_PROFILE_PUBLISHED_AT] = value }
+
     suspend fun setOwnAvatarHash(value: String) = dataStore.edit { it[KEY_OWN_AVATAR_HASH] = value }
 
     /** Removes the stored own-avatar hash so [ownAvatarHash] emits null again (the user cleared their photo). */
@@ -266,6 +278,7 @@ class SettingsStore(
         val KEY_STATUS = stringPreferencesKey("status")
         val KEY_AVATAR_UPDATED_AT = longPreferencesKey("avatar_updated_at")
         val KEY_PROFILE_VERSION = longPreferencesKey("profile_version")
+        val KEY_PROFILE_PUBLISHED_AT = longPreferencesKey("profile_published_at")
         val KEY_OWN_AVATAR_HASH = stringPreferencesKey("own_avatar_hash")
         val KEY_BLOCKED = stringSetPreferencesKey("blocked_node_ids")
         val KEY_BLOCKED_TAGS = stringSetPreferencesKey("blocked_device_tags")

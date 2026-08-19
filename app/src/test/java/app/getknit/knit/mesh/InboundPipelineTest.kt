@@ -46,6 +46,7 @@ import app.getknit.knit.mesh.protocol.KeyReqContent
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
+import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.RatchetHeader
 import app.getknit.knit.mesh.protocol.RatchetInit
@@ -1893,12 +1894,13 @@ class InboundPipelineTest {
             gk: GroupKeyPayload? = null,
             ack: String? = null,
             rp: ReactionPayload? = null,
+            pr: ProfilePayload? = null,
             sentAt: Long = 5L,
             mutateHeader: (RatchetHeader) -> RatchetHeader = { it },
         ): RelayEnvelope {
             val to = rig.self.nodeId
             val aad = MessageCrypto.header(id, party.nodeId, sentAt, to)
-            val plain = MessageContent(body = body, ctl = ctl, gk = gk, ack = ack, rp = rp).encode()
+            val plain = MessageContent(body = body, ctl = ctl, gk = gk, ack = ack, rp = rp, pr = pr).encode()
             val sealed = checkNotNull(engine.seal(session, plain, aad, rig.selfSpk.pub, now = 5L))
             session = sealed.session
             val h = sealed.header
@@ -2125,6 +2127,8 @@ class InboundPipelineTest {
         author: Party,
         sentAt: Long,
         prekey: PrekeyInfo?,
+        version: Long? = null,
+        name: String = "Ann",
     ): RelayEnvelope =
         RelayEnvelope(
             type = FrameType.PROFILE,
@@ -2133,7 +2137,13 @@ class InboundPipelineTest {
             sentAt = sentAt,
             payload =
                 WireCodec.encodePayload(
-                    ProfileContent(name = "Ann", status = "", pubKey = author.bundle.encoded, prekey = prekey),
+                    ProfileContent(
+                        name = name,
+                        status = "",
+                        pubKey = author.bundle.encoded,
+                        prekey = prekey,
+                        version = version,
+                    ),
                 ),
         )
 
@@ -2175,6 +2185,103 @@ class InboundPipelineTest {
 
             assertEquals(null, rig.peerMap[alice.nodeId]?.prekeyPub)
             assertEquals("Ann", rig.peerMap[alice.nodeId]?.name)
+        }
+
+    @Test
+    fun theProfileVersionOrdersLwwAndFallsBackToSentAtForAPeerWithoutTheField() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+
+            // version wins over sentAt: a frame published later but carrying an OLDER version must not
+            // overwrite the newer profile — that is the re-publish case (fresh stamp, unchanged profile).
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 10L, prekey = null, version = 50L, name = "New"))
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 99L, prekey = null, version = 20L, name = "Old"))
+            assertEquals("New", rig.peerMap[alice.nodeId]?.name)
+            assertEquals(50L, rig.peerMap[alice.nodeId]?.updatedAt)
+
+            // A peer predating the field sends no version, and for those sentAt IS the version.
+            val bob = party()
+            rig.deliver(bob, rig.profileWithPrekey(bob, sentAt = 70L, prekey = null, version = null, name = "Legacy"))
+            assertEquals("Legacy", rig.peerMap[bob.nodeId]?.name)
+            assertEquals(70L, rig.peerMap[bob.nodeId]?.updatedAt)
+        }
+
+    @Test
+    fun aRepublishedProfileDoesNotAdvanceTheWatermarkSoItIsNotMistakenForAnEdit() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 10L, prekey = null, version = 10L))
+            // Same profile, refreshed publish stamp — exactly what republishProfileIfStale emits to keep the
+            // frame inside custody's `sentAt + ttl` window. The watermark must track the version, not the stamp.
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 9_000L, prekey = null, version = 10L))
+            assertEquals(10L, rig.peerMap[alice.nodeId]?.updatedAt)
+        }
+
+    @Test
+    fun aSealedProfileUpdateCannotSuppressTheCleartextFrameCarryingThePrekey() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val prekey = signedPrekey(alice)
+            // Pin the key at an early version, so the prekey watermark sits well behind the presentation one.
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 10L, prekey = null, version = 10L, name = "Ann"))
+
+            // A sealed CTL_PROFILE carries presentation only — never a prekey (ADR 020) — yet advances
+            // `updatedAt`. This is the real field race: a live spool EVENT delivers it before the heal round
+            // pulls the cleartext profile behind it.
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("ctl-p1", "", ctl = MessageContent.CTL_PROFILE, pr = ProfilePayload(name = "Newest", status = "", version = 100L)),
+            )
+            assertEquals("Newest", rig.peerMap[alice.nodeId]?.name)
+            assertEquals(100L, rig.peerMap[alice.nodeId]?.updatedAt)
+
+            // Now the cleartext frame carrying the prekey arrives, older on the presentation clock. Under one
+            // shared watermark it was dropped whole, so the prekey never landed and a broken DM session with
+            // an Internet-only peer could never be re-established.
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 50L, prekey = prekey, version = 50L, name = "Older"))
+
+            assertEquals(b64(prekey.pub), rig.peerMap[alice.nodeId]?.prekeyPub)
+            assertEquals("the stale half must not revert presentation", "Newest", rig.peerMap[alice.nodeId]?.name)
+            assertEquals("nor drag the watermark back", 100L, rig.peerMap[alice.nodeId]?.updatedAt)
+        }
+
+    @Test
+    fun aPrekeyOlderThanTheOneWeHoldIsIgnoredOnItsOwnWatermark() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val newer = signedPrekey(alice, id = 9)
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 80L, prekey = newer, version = 80L))
+            assertEquals(9, rig.peerMap[alice.nodeId]?.prekeyId)
+
+            // A re-served older profile must not roll the prekey back, and must not clear it either.
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 40L, prekey = signedPrekey(alice, id = 3), version = 40L))
+            assertEquals(9, rig.peerMap[alice.nodeId]?.prekeyId)
+
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 41L, prekey = null, version = 41L))
+            assertEquals(9, rig.peerMap[alice.nodeId]?.prekeyId)
+        }
+
+    @Test
+    fun aClearedPrekeyPinIsNotReopenedByAReservedOlderProfile() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 80L, prekey = signedPrekey(alice, id = 9), version = 80L))
+            // The peer downgrades: a newer profile carrying no prekey clears the pin (ADR 020).
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 100L, prekey = null, version = 100L))
+            assertEquals(null, rig.peerMap[alice.nodeId]?.prekeyId)
+
+            // Custody re-serves the pre-downgrade profile. The clear advanced the prekey watermark, so this
+            // must not look newer and re-pin a key the peer has stopped serving.
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 50L, prekey = signedPrekey(alice, id = 3), version = 50L))
+            assertEquals(null, rig.peerMap[alice.nodeId]?.prekeyId)
         }
 
     // --- group sender-key ratchet (v2 group form): seed adoption over real ctl DMs + the group decrypt path ---

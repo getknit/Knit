@@ -9,6 +9,7 @@ import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
 import app.getknit.knit.mesh.protocol.GroupRatchetHeader
+import app.getknit.knit.mesh.protocol.ProfileContent
 import app.getknit.knit.mesh.protocol.RatchetHeader
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireCodec
@@ -592,6 +593,31 @@ fun groupUpdateFrame(
             sentAt = sentAt,
             group = GroupInfo(id = groupId, members = members, createdBy = members.first(), photoHash = photoHash),
             payload = ByteArray(0),
+        ),
+    )
+
+/**
+ * Builds a cleartext `profile`. Mirrors `MeshManager.currentProfileEnvelope`: it addresses nobody
+ * (`recipientId` and `group` both null), [sentAt] is the publish stamp rather than the profile version,
+ * and the version travels in the payload. The `pubKey` is left null — the frame-set rule never reads it
+ * (self-certification is `InboundPipeline.canCarry`'s job, deliberately not re-implemented in
+ * `ScopeFrames`), so a fixture that omits it still exercises the rule exactly.
+ */
+fun profileFrame(
+    id: String,
+    from: String,
+    sentAt: Long = 1_000L,
+    version: Long = 1L,
+    name: String = "peer",
+): CarriedFrame =
+    carried(
+        id,
+        RelayEnvelope(
+            type = FrameType.PROFILE,
+            id = id,
+            senderId = from,
+            sentAt = sentAt,
+            payload = WireCodec.encodePayload(ProfileContent(name = name, status = "", version = version)),
         ),
     )
 

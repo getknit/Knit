@@ -784,5 +784,44 @@ construction — a duplicate is benign, so it drives no recovery at all, unlike 
 `RatchetStore.purgePeerRecvState` makes the initiator symmetric with the adopter: whoever abandons a root
 era drops their receive state for it.
 
+A third round, from the same lab pair, closed the loop: with both fixes deployed the receiver still sat at
+**116 duplicates from 4 distinct frames** and had requested no reset at all. Its heuristic read 1, because
+`DUPLICATE` fed nothing and its single `AEAD_FAIL` was one frame custody re-served three times. Every one of
+the sender's five DMs had arrived and been discarded as benign.
+
+So `DUPLICATE` joins the set, and the **distinct-frame-id** rule is what makes that safe rather than a reset
+storm. A replayed frame is one id arriving repeatedly — custody re-serving it, two links delivering it — and
+repetition can never advance a counter keyed on distinct ids. Several *distinct* frames landing on
+already-consumed indices is a different statement: the sender restarted its chain while we kept ours. That
+is precisely what the peer sees for our side of a half-adopted replacement, the mirror of the `AEAD_FAIL` we
+see for theirs. The guard that was supposed to stop one stuck frame from triggering anything was, in the
+stuck case, the thing stopping recovery — the pair could not produce three distinct *countable* failures
+because the failures it could produce did not count.
+
+The accepted cost: a peer whose skipped-key window evicted keys can accumulate distinct duplicates over a
+long period and eventually draw a spurious reset. It is bounded by the 6 h floor and costs one X3DH plus a
+skipped-key wipe, which is cheaper than the deadlock it replaces. `BAD_HEADER` stays out — a malformed frame
+says nothing about our session state.
+
+The last round was the one the earlier fixes made reachable. With every undecryptable outcome now able to
+request a reset, **both** peers reset each other — 13 minutes apart, each landing inside the other's floors —
+and the pair sat with every X3DH input present, two sessions, and neither confirmed. Two gaps kept it there:
+
+- **`RatchetHeader.FLAG_RESET` was written and never read.** An explicit reset request was rate-limited as
+  if it were an incidental init, so a peer that had waited out its own 6 h floor could still be refused for
+  another 60 minutes, silently. It now gets its own short floor: the sender's floor is the real rate limit
+  and is 6× stricter, and a peer ignoring it is a pinned contact churning the one conversation it is already
+  party to.
+- **`resolveRace` adopted the winner's root without purging the loser's receive state.** Its stated
+  invariant — "send-epoch numbering continues monotonically either way, so no `(peer, se)` collision
+  arises" — holds for an ordinary race and fails for a race between two *resets*, because `sealResetDm`
+  restarts numbering by design. The winner's fresh epochs then landed on the loser's surviving rows and read
+  as duplicates. The same omission as the `sealResetDm` one above, in the third of the three places a root
+  era changes: whoever abandons an era must drop the receive state tied to it. The loser branch keeps its
+  own root, changes no era, and correctly keeps its rows.
+
+Verified end to end on the lab pair: a forced reset moved the receiver to `confirmed: true`, and messages
+then flowed both ways with delivery ticks returning, after roughly a day wedged.
+
 Scheme: this file only. No wire field, no derivation, no vector, no spool record — a reset request has
-always been an ordinary v2 DM carrying `CTL_SESSION_RESET` (ADR 016).
+always been an ordinary v2 DM carrying `CTL_SESSION_RESET` (ADR 016). `FLAG_RESET` was already on the wire.

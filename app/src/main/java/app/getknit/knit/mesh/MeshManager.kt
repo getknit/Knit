@@ -406,6 +406,24 @@ class MeshManager(
 
     override fun spoolStatus(): List<SpoolStatus> = scopeSync?.status().orEmpty()
 
+    override suspend fun ratchetState(): List<RatchetPeerState> =
+        peers.observePeers().first().map { peer ->
+            val session = ratchet.sessionFor(peer.nodeId)
+            RatchetPeerState(
+                peerId = peer.nodeId,
+                name = peer.name,
+                capRatchet = ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET) != 0L,
+                peerPrekeyId = peer.prekeyId,
+                peerPrekeyPinned = peer.prekeyPub != null,
+                hasSession = session != null,
+                confirmed = session?.confirmed == true,
+                sendEpoch = session?.sendEpoch ?: 0,
+                lastResetSentAt = session?.lastResetSentAt ?: 0L,
+            )
+        }
+
+    override suspend fun forceRatchetReset(peerId: String): String? = pipeline.sendSessionReset(peerId, identity.nodeId(), clock())
+
     /** Triggers an immediate rescan/reconnect (heartbeat alarm, device motion) and sweeps stale carry. */
     override fun heal() {
         if (!started) return

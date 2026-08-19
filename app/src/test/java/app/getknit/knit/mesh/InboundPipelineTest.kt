@@ -240,6 +240,12 @@ class InboundPipelineTest {
         val groupRatchetStore = GroupRatchetRepository(db.groupRatchetDao())
         val groupRatchet = GroupRatchetSessions(store = groupRatchetStore, mutex = ratchetMutex)
         val originated = mutableListOf<RelayEnvelope>()
+
+        /**
+         * The pipeline's clock. Fixed by default so every existing test behaves exactly as before; a test
+         * that needs time to pass — the per-peer replacement floors are the only such case — advances it.
+         */
+        var nowMs = 42L
         val flushed = mutableListOf<String>()
         val resealed = mutableListOf<String>()
         val redistributed = mutableListOf<Pair<String, String>>()
@@ -293,7 +299,7 @@ class InboundPipelineTest {
                     typingTracker = typingTracker,
                     ratchet = ratchet,
                     groupRatchet = groupRatchet,
-                    clock = { 42L },
+                    clock = { nowMs },
                     originate = { originated += it },
                     flushPending = { flushed += it },
                     classifyText = { _, _, _ -> if (failClassify) error("moderation boom") else false },
@@ -2110,6 +2116,73 @@ class InboundPipelineTest {
             // epochs — whose numbers may reuse these — against a stale chain index, dropping fresh frames
             // as DUPLICATE. That is terminal: a duplicate is benign, so it triggers no further recovery.
             assertNull(rig.ratchetStore.recvEpoch(alice.nodeId, se))
+        }
+
+    @Test
+    fun distinctFramesLandingOnConsumedChainIndicesRequestAReset() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val alicePrekey = RatchetCrypto.generateKeyPair()
+            rig.pinRatchetCapable(alice, alicePrekey.pub)
+            val author = V2Author(alice, rig)
+            // Consume a few indices normally, so replays of them land as DUPLICATE.
+            val consumed = listOf("d1", "d2", "d3").map { author.dm(it, "body-$it") }
+            consumed.forEach { rig.deliver(alice, it) }
+
+            // Now three DISTINCT frames that each claim an already-consumed index — the shape of a sender
+            // that restarted its chain while we kept ours.
+            val consumedIndices = consumed.map { checkNotNull(WireCodec.decodePayload<ChatContent>(it.payload)?.enc?.r).n }
+            consumedIndices.forEachIndexed { i, n ->
+                // Keep the live header — only the chain index goes backwards onto an index we already used.
+                rig.deliver(
+                    alice,
+                    author.dm(
+                        "replayer-$i",
+                        "x",
+                    ) { h -> RatchetHeader(se = h.se, ek = h.ek, pe = h.pe, n = n, init = h.init, flags = h.flags) },
+                )
+            }
+            assertEquals(3L, rig.drops(DropReason.RATCHET_DUPLICATE))
+            assertEquals(
+                1,
+                rig.originated.count {
+                    WireCodec
+                        .decodePayload<ChatContent>(it.payload)
+                        ?.enc
+                        ?.r
+                        ?.init != null
+                },
+            )
+        }
+
+    @Test
+    fun oneFrameReservedFromCustodyNeverRequestsAResetHoweverOftenItArrives() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val alicePrekey = RatchetCrypto.generateKeyPair()
+            rig.pinRatchetCapable(alice, alicePrekey.pub)
+            val author = V2Author(alice, rig)
+            val once = author.dm("d1", "body")
+            rig.deliver(alice, once)
+
+            // The same id over and over — custody re-serving it, or two links delivering it. The router's
+            // SeenSet catches most of these upstream; the heuristic must be safe even when one slips past.
+            repeat(8) { rig.deliver(alice, once) }
+
+            assertEquals(
+                "a replay must never reach the distinct threshold",
+                0,
+                rig.originated.count {
+                    WireCodec
+                        .decodePayload<ChatContent>(it.payload)
+                        ?.enc
+                        ?.r
+                        ?.init !=
+                        null
+                },
+            )
         }
 
     @Test

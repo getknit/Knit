@@ -327,6 +327,30 @@ class RatchetEngineTest {
     }
 
     @Test
+    fun theRaceLoserDropsTheRecvStateOfTheEraItAbandons() {
+        val (a, b) = pair()
+        // Consume a couple of indices under the pre-race era, so B holds recv rows for epoch 1 that a
+        // reset-restarted numbering will later collide with.
+        a.initiate(NOW)
+        assertEquals("one", text(b.open(a.seal("one", NOW), NOW)))
+        assertEquals("two", text(b.open(a.seal("two", NOW), NOW)))
+        assertEquals(setOf(1), b.recvEpochs.keys)
+
+        // Both sides now re-initiate at each other — two peers resetting each other, which is what the
+        // recovery path produces once every undecryptable outcome can request one.
+        a.initiate(NOW + 1)
+        b.initiate(NOW + 1)
+        val fromA = a.seal("after the race", NOW + 1)
+
+        // B loses the nodeId tiebreak and adopts A's root. The rows above describe chains under the era it
+        // just abandoned; keeping them makes A's restarted epoch 1 land on a consumed index and read as a
+        // duplicate — benign per frame, and a permanent one-way deadlock in aggregate.
+        assertEquals("after the race", text(b.open(fromA, NOW + 1)))
+        assertTrue("adopting the winner's root must drop the loser's recv state", checkNotNull(b.lastDelta).purgePeerRecvState)
+        assertEquals("only the freshly-derived epoch survives", setOf(fromA.header.se), b.recvEpochs.keys)
+    }
+
+    @Test
     fun raceLosersInFlightFramesStillDrainViaThePreviousRoot() {
         val (a, b) = pair()
         a.initiate(NOW)

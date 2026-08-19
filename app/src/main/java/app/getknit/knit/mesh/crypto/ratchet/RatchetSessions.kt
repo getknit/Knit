@@ -82,9 +82,22 @@ class RatchetSessions(
             ownIkPriv = dhIdentityPriv(),
             peerIkPub = peerIkPub,
             spkPrivForInit = header.init?.let { spkPrivFor(it.pkid) },
+            // An explicit reset request gets a far shorter floor than an incidental init. `FLAG_RESET` was
+            // minted for this and, until ADR 023, was written on the wire and never read — so a peer that
+            // had waited out its own 6 h reset floor could still be refused here for another 60 minutes,
+            // silently, and the pair stayed wedged. The sender's floor is the real rate limit and is 6×
+            // stricter; a peer ignoring it is buggy or hostile, and since it is a pinned contact the only
+            // conversation it can churn is the one it is already party to. The short floor remains so that
+            // even then the cost is bounded.
             allowReplacement =
                 synchronized(lastReplacementAt) {
-                    now - (lastReplacementAt[peerId] ?: 0L) >= REPLACEMENT_MIN_INTERVAL_MS
+                    val floor =
+                        if (header.flags and RatchetHeader.FLAG_RESET != 0) {
+                            RESET_REPLACEMENT_MIN_INTERVAL_MS
+                        } else {
+                            REPLACEMENT_MIN_INTERVAL_MS
+                        }
+                    now - (lastReplacementAt[peerId] ?: 0L) >= floor
                 },
         )
 
@@ -191,14 +204,19 @@ class RatchetSessions(
 
     /**
      * Records an undecryptable v2 frame ([RatchetEngine.OpenOutcome.Failed.NO_SESSION] /
-     * [RatchetEngine.OpenOutcome.Failed.EPOCH_GONE] / [RatchetEngine.OpenOutcome.Failed.AEAD_FAIL]) from a
-     * pinned peer and decides whether a session reset is due: at least [RESET_DISTINCT_FRAMES] **distinct**
+     * [RatchetEngine.OpenOutcome.Failed.EPOCH_GONE] / [RatchetEngine.OpenOutcome.Failed.AEAD_FAIL] /
+     * [RatchetEngine.OpenOutcome.Failed.DUPLICATE]) from a pinned peer and decides whether a session
+     * reset is due: at least [RESET_DISTINCT_FRAMES] **distinct**
      * frame ids (custody re-serves the same frame endlessly — one stuck frame must not trigger anything),
      * and not more often than [RESET_MIN_INTERVAL_MS] per peer (persisted on the session row where one
      * exists, so restarts don't bypass it; the in-memory fallback covers the no-session case).
      *
      * `AEAD_FAIL` is the split-brain case — both sides hold a session and the roots disagree — and unlike
      * the other two it never resolves on its own, so it must be able to trigger a reset like they do.
+     * `DUPLICATE` is its mirror image, seen from the other end of a half-adopted replacement: the sender
+     * restarted its chain and its indices now collide with our stale rows. The **distinct**-id rule above
+     * is what separates that from ordinary replay — a re-served or double-delivered frame repeats a single
+     * id and can never reach [RESET_DISTINCT_FRAMES], however many times it arrives.
      */
     suspend fun noteUndecryptable(
         peerId: String,
@@ -275,6 +293,9 @@ class RatchetSessions(
             )
         }
 
+    /** Debug-only read of one peer's session row (no mutation), for the bridge's ratchet diagnostics. */
+    suspend fun sessionFor(peerId: String): RatchetEngine.SessionState? = locked { store.session(peerId) }
+
     /** Retention GC passthrough (wired into the existing sweep loops). */
     suspend fun sweep(now: Long) = locked { store.sweep(now) }
 
@@ -323,5 +344,13 @@ class RatchetSessions(
 
         /** Inbound session-replacement floor per peer (in-memory). */
         const val REPLACEMENT_MIN_INTERVAL_MS = 60 * 60_000L
+
+        /**
+         * The same floor for an init carrying [RatchetHeader.FLAG_RESET] — a peer explicitly asking to
+         * re-establish, not an incidental init. Short enough that genuine recovery is never refused (the
+         * sender's own 6 h floor already rate-limits it), long enough to bound the churn a peer ignoring
+         * that floor can cost us.
+         */
+        const val RESET_REPLACEMENT_MIN_INTERVAL_MS = 60_000L
     }
 }

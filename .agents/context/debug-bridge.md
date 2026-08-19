@@ -59,6 +59,18 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   is correct rather than divergence; and `lastError` is the spool's most recent `err` code, which is
   the only thing distinguishing "connected and idle" from "connected and refusing us" (`quota`,
   `pow` and `rate` all otherwise present as a scope that simply never converges).
+- `…debug.RATCHET` — dumps the **DM ratchet's per-peer state** and, with `--es reset <peerNodeId>`, forces a
+  session reset past the heuristic that guards it. Exists because every gate in the recovery path returns
+  *silently*: a peer we hold no prekey for (`peerPrekeyPinned:false` — a reset from this side is impossible
+  until their profile lands), one inside its 6 h floor (`lastResetSentAt` recent), and one whose heuristic
+  has not yet counted three **distinct** undecryptable frames all present identically from outside, as a
+  session that will not heal, and they need opposite remedies. `hasSession:true` with `confirmed:false` is
+  the third state worth knowing: the scope table only exports confirmed sessions, so that thread also reads
+  "Not covered by relays yet" while looking otherwise healthy. The force is the escape hatch for a pair that
+  wedged *before* a fix shipped — the recovery path only runs when the heuristic fires, and a stuck pair may
+  not be able to produce countable failures at all (a re-served frame repeats one id and never advances the
+  distinct counter). Bypasses the floor, not the X3DH inputs: with no pinned prekey it still declines, and
+  says so in `declined`.
 - `…debug.REACT` — `--es id <messageId> --es emoji <emoji>`. `…debug.HEAL` — nudge rescan/re-advertise.
 - `…debug.FLAGMSG` — injects one inbound message **the text moderator flagged** (the UI collapses it behind a
   tap-to-reveal) as the newest row of `--es conv <id>` (default `nearby`), from `--es from <peerNodeId>`

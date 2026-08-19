@@ -32,6 +32,7 @@
                 <action android:name="app.getknit.knit.debug.MKGROUP" />
                 <action android:name="app.getknit.knit.debug.REVIEW" />
                 <action android:name="app.getknit.knit.debug.SPOOL" />
+                <action android:name="app.getknit.knit.debug.RATCHET" />
             </intent-filter>
         </receiver>
     </application>

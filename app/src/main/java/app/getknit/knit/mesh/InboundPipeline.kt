@@ -1058,10 +1058,15 @@ class InboundPipeline(
         // (≥3 distinct frame ids, a 6 h per-peer floor, a pinned ratchet-capable peer) still apply. The
         // group path above already recovers from its own AEAD_FAIL (GROUP_RATCHET_AEAD_FAIL →
         // maybeRequestGroupKey); the DM path was the outlier, not this the novelty.
-        if (reason == DropReason.RATCHET_NO_SESSION ||
-            reason == DropReason.RATCHET_EPOCH_GONE ||
-            reason == DropReason.RATCHET_AEAD_FAIL
-        ) {
+        // DUPLICATE counts too, and the distinct-frame-id rule is what makes that safe. A *replayed* frame
+        // is the same id arriving twice — custody re-serving it, or two links delivering it — and that can
+        // never advance the distinct counter however often it repeats. Several DISTINCT frames all landing
+        // on already-consumed chain indices means something else: the sender restarted its chain while we
+        // kept ours, so its epoch numbers now collide with our old rows. That is a desync, and it is the
+        // failure the peer sees for OUR side of a half-adopted replacement, exactly as we see AEAD_FAIL for
+        // theirs. Leaving it out is what let a stuck pair sit at 116 duplicates from 4 distinct frames with
+        // the heuristic still reading 1: a duplicate is "benign" per frame and terminal in aggregate.
+        if (reason in RESET_TRIGGERING_DROPS) {
             maybeRequestReset(env, me, now)
         }
     }
@@ -1078,34 +1083,53 @@ class InboundPipeline(
         now: Long,
     ) {
         if (!ratchet.noteUndecryptable(env.senderId, env.id, now)) return
-        val peer = peers.find(env.senderId) ?: return
-        if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return
-        val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return
-        val prekeyId = peer.prekeyId ?: return
-        val prekeyPub = peer.prekeyPub?.let { runCatching { b64d(it) }.getOrNull() } ?: return
+        sendSessionReset(env.senderId, me, now)
+    }
+
+    /**
+     * Seals and floods a `CTL_SESSION_RESET` to [peerId], with no heuristic in front of it. Split out of
+     * [maybeRequestReset] so the debug bridge can drive it directly: every gate below returns silently, so
+     * a wedged pair in the field is otherwise indistinguishable from one whose heuristic simply has not
+     * fired yet. Returns why it declined, or null on success.
+     *
+     * The gates are the peer material an X3DH initiation needs, and any of them can be the real reason a
+     * stuck session never recovers — a peer we hold no prekey for can never be re-established from this
+     * side at all, however many undecryptable frames it sends us.
+     */
+    suspend fun sendSessionReset(
+        peerId: String,
+        me: String,
+        now: Long,
+    ): String? {
+        val peer = peers.find(peerId) ?: return "no peer row"
+        if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return "peer is not ratchet-capable"
+        val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return "no pinned pubKey"
+        val prekeyId = peer.prekeyId ?: return "no pinned prekey id"
+        val prekeyPub = peer.prekeyPub?.let { runCatching { b64d(it) }.getOrNull() } ?: return "no pinned prekey pub"
         val id = FrameId.new()
-        val aad = MessageCrypto.header(id, me, now, env.senderId)
+        val aad = MessageCrypto.header(id, me, now, peerId)
         val plaintext = MessageContent(body = "", ctl = MessageContent.CTL_SESSION_RESET).encode()
         val sealed =
             ratchet.sealResetDm(
-                peerId = env.senderId,
+                peerId = peerId,
                 peerIkPub = bundle.dhPublicKey(),
                 peerSpk = RatchetEngine.PeerPrekey(id = prekeyId, pub = prekeyPub),
                 plaintext = plaintext,
                 aad = aad,
                 now = now,
-            ) ?: return
-        Log.w(TAG, "requesting ratchet session reset with ${env.senderId}")
+            ) ?: return "sealResetDm refused (unusable prekey)"
+        Log.w(TAG, "requesting ratchet session reset with $peerId")
         originate(
             RelayEnvelope(
                 type = FrameType.CHAT,
                 id = id,
                 senderId = me,
                 sentAt = now,
-                recipientId = env.senderId,
+                recipientId = peerId,
                 payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
             ),
         )
+        return null
     }
 
     /**
@@ -2112,5 +2136,18 @@ class InboundPipeline(
         // Same tag as MeshManager on purpose: these inbound verify/drop log lines are grepped in field
         // diagnostics, so the extraction must not change them.
         const val TAG = "MeshManager"
+
+        /**
+         * The v2 DM failures that feed the session-reset heuristic (ADR 023) — every ratchet outcome that
+         * can mean "this pair's state has diverged", which after field testing is all of them but
+         * BAD_HEADER (a malformed frame says nothing about our session).
+         */
+        val RESET_TRIGGERING_DROPS =
+            setOf(
+                DropReason.RATCHET_NO_SESSION,
+                DropReason.RATCHET_EPOCH_GONE,
+                DropReason.RATCHET_AEAD_FAIL,
+                DropReason.RATCHET_DUPLICATE,
+            )
     }
 }

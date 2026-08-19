@@ -108,6 +108,11 @@ import java.nio.ByteBuffer
  *   debug-only on/off switch: `--es url <ws(s)://…/spool/v1>` adds a spool, `--es drop <url>` removes one,
  *   `--ez on <bool>` flips the global opt-in, and no extras at all just dumps state. The per-scope
  *   `local` vs `spool` counts are the convergence oracle, the way `liveFingerprint` parity is for custody.
+ * - [ACTION_RATCHET] — dumps the DM ratchet's per-peer state (X3DH inputs, session/confirmed, send epoch,
+ *   the reset floor's anchor) and, with `--es reset <peerNodeId>`, forces a session reset past the
+ *   heuristic. Every gate in the recovery path returns silently, so a peer we hold no prekey for, one
+ *   inside its 6 h floor, and one whose heuristic has not counted three distinct failures all look the
+ *   same from outside; the dump says which, and the force unwedges a pair that broke before a fix shipped.
  * - [ACTION_HEAL] — nudges the transport to rescan/re-advertise.
  *
  * Each action replies as a one-line JSON object: it is returned via the ordered-broadcast result
@@ -202,6 +207,10 @@ class DebugBridgeReceiver :
 
                         ACTION_SPOOL -> {
                             handleSpool(intent)
+                        }
+
+                        ACTION_RATCHET -> {
+                            handleRatchet(intent)
                         }
 
                         ACTION_HEAL -> {
@@ -786,6 +795,48 @@ class DebugBridgeReceiver :
             .put("spoolAttachDeferred", snap.spoolAttachDeferred)
 
     /**
+     * Dumps the DM ratchet's per-peer state and, with `--es reset <peerNodeId>`, forces a session reset
+     * past the heuristic that normally guards it.
+     *
+     * Both halves exist because every gate in the recovery path returns **silently**. A peer we hold no
+     * prekey for, a peer whose reset floor has not elapsed, and a peer whose heuristic simply has not
+     * counted three distinct failures yet all present identically from outside — as a session that does
+     * not heal — and they need opposite remedies. The dump names which one it is; the force is the escape
+     * hatch for a pair that wedged before a fix shipped, since the recovery path only runs when the
+     * heuristic fires and a stuck pair may not be able to produce countable failures at all.
+     */
+    private suspend fun handleRatchet(intent: Intent): JSONObject {
+        val forced = intent.getStringExtra(EXTRA_RESET_PEER)?.takeIf { it.isNotBlank() }?.trim()
+        val reply = reply("ok", if (forced == null) "ratchet state" else "reset requested for $forced")
+        if (forced != null) {
+            val declined = mesh.forceRatchetReset(forced)
+            reply.put("forcedReset", forced).put("declined", declined ?: JSONObject.NULL)
+        }
+        val peers = JSONArray()
+        mesh.ratchetState().forEach { p ->
+            peers.put(
+                JSONObject()
+                    .put("peer", p.peerId)
+                    .put("name", p.name)
+                    // The X3DH inputs. Any false/null here and a reset from THIS side is impossible,
+                    // whatever the heuristic decides — the peer's profile has to land first.
+                    .put("capRatchet", p.capRatchet)
+                    .put("peerPrekeyId", p.peerPrekeyId ?: JSONObject.NULL)
+                    .put("peerPrekeyPinned", p.peerPrekeyPinned)
+                    // `hasSession` without `confirmed` is a session the scope table will not export, so
+                    // the thread also reads "Not covered by relays yet" while looking otherwise healthy.
+                    .put("hasSession", p.hasSession)
+                    .put("confirmed", p.confirmed)
+                    .put("sendEpoch", p.sendEpoch)
+                    // The per-peer floor's anchor: a recent value is why an otherwise-eligible reset is
+                    // not being sent, and is exactly when `--es reset` is the right tool.
+                    .put("lastResetSentAt", p.lastResetSentAt),
+            )
+        }
+        return reply.put("peers", peers)
+    }
+
+    /**
      * Configures and inspects the Internet (spool) plane — the only way to drive it on a locked lab
      * device, since there is no spool-list editor in the UI yet. With no extras it just dumps state.
      *
@@ -796,6 +847,7 @@ class DebugBridgeReceiver :
      * The dump's `local` and `spool` counts per scope are the convergence oracle: they agree once the
      * heal loop has settled, exactly like `liveFingerprint` parity for mesh custody.
      */
+
     private suspend fun handleSpool(intent: Intent): JSONObject {
         intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() }?.let { settings.addSpoolUrl(it.trim()) }
         intent.getStringExtra(EXTRA_DROP)?.takeIf { it.isNotBlank() }?.let { settings.removeSpoolUrl(it.trim()) }
@@ -898,6 +950,7 @@ class DebugBridgeReceiver :
         const val ACTION_MKGROUP = "app.getknit.knit.debug.MKGROUP"
         const val ACTION_REVIEW = "app.getknit.knit.debug.REVIEW"
         const val ACTION_SPOOL = "app.getknit.knit.debug.SPOOL"
+        const val ACTION_RATCHET = "app.getknit.knit.debug.RATCHET"
 
         const val EXTRA_TEXT = "text"
         const val EXTRA_CONV = "conv"
@@ -915,6 +968,7 @@ class DebugBridgeReceiver :
         const val EXTRA_URL = "url"
         const val EXTRA_ON = "on"
         const val EXTRA_DROP = "drop"
+        const val EXTRA_RESET_PEER = "reset"
 
         /** Default sender + hidden body for [ACTION_FLAGMSG]'s synthetic flagged inbound message. */
         const val FLAGGED_SENDER_ID = "flagger0"

@@ -126,6 +126,10 @@ class RatchetEngine(
          * adopted this call. The caller rate-limits replacements (an attacker can't forge one — the
          * frame is signed — but a buggy peer could churn); false makes the init inert, so the frame
          * is judged under the existing roots only.
+         *
+         * The caller uses a much shorter floor for an init flagged `FLAG_RESET`: an explicit reset request
+         * is the recovery path, and refusing it silently is how two peers that had *both* reset each other
+         * stayed unreadable in both directions with every X3DH input present (ADR 023).
          */
         val allowReplacement: Boolean = true,
     )
@@ -409,8 +413,13 @@ class RatchetEngine(
 
     /**
      * Both sides initiated concurrently. Deterministic winner on both ends: the init whose initiator
-     * has the lexicographically smaller nodeId. The loser's root drains as [SessionState.prevRoot];
-     * send-epoch numbering continues monotonically either way, so no `(peer, se)` collision arises.
+     * has the lexicographically smaller nodeId. The loser's root drains as [SessionState.prevRoot].
+     *
+     * The side that adopts the winner's root purges its receive state with it: those rows describe chains
+     * under the era being abandoned. Send-epoch numbering continuing monotonically is *not* enough on its
+     * own — that holds for an ordinary race, but two peers resetting each other race with inits whose
+     * sender restarted its numbering, so the winner's fresh epochs collide with the loser's surviving rows.
+     * The side that keeps its own root changes no era and keeps its rows.
      */
     private fun resolveRace(
         ctx: OpenContext,
@@ -441,6 +450,13 @@ class RatchetEngine(
                         RootCandidate(peerRoot, senderIsInitiator = true),
                         RootCandidate(session.root, senderIsInitiator = false),
                     ),
+                // We just swapped roots, so every recv row we hold describes a chain under the era we are
+                // abandoning — exactly the replacement case, and it must purge for the same reason. The
+                // numbering argument below does not save us: it holds for an ordinary race, but a race
+                // whose inits are RESET requests is one where the winner restarted its epoch numbering
+                // (`sealResetDm`), so its fresh epochs land straight on our stale rows and are judged
+                // against a consumed chain index — a DUPLICATE, which triggers nothing and never heals.
+                purge = true,
             )
         } else {
             ResolvedSession(

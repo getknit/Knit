@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
  * mesh through this interface to get them — which is why all consumers inject `MeshController`, not the
  * concrete class.
  */
+@Suppress("TooManyFunctions") // the app's whole mesh surface behind one seam; splitting it would only scatter it
 interface MeshController {
     /** Number of nearby peers for the UI status header — the smoothed reachable set. */
     val neighborCount: StateFlow<Int>
@@ -58,6 +59,22 @@ interface MeshController {
     fun spoolStatus(): List<SpoolStatus> = emptyList()
 
     /**
+     * Per-peer DM ratchet state, for diagnosing a session that will not recover. Debug-only observability:
+     * every gate in the reset path returns silently, so from outside there is no way to tell a peer whose
+     * heuristic has not fired from one we hold no prekey for — states that look identical and need opposite
+     * remedies. Empty when the mesh is not running.
+     */
+    suspend fun ratchetState(): List<RatchetPeerState> = emptyList()
+
+    /**
+     * Seals and floods a session reset to [peerId] with **no** heuristic in front of it — no distinct-frame
+     * threshold, no per-peer time floor. The escape hatch for a pair already wedged before a fix shipped:
+     * the recovery path only runs when the heuristic fires, and a pair that cannot produce countable
+     * failures never gets there. Returns null on success, or why it declined.
+     */
+    suspend fun forceRatchetReset(peerId: String): String? = "mesh not running"
+
+    /**
      * Composes a chat message (optionally with an ingested image [attachment]), stores it locally, and
      * floods it. [recipientId] null + null [group] is the broadcast room; a node id is a 1:1 DM; a non-null
      * [group] is a group message. Returns false without sending if on-device filtering flags [text].
@@ -93,3 +110,25 @@ interface MeshController {
     /** Broadcasts a best-effort "now typing" cue for [conversationId] to nearby peers. */
     suspend fun sendTyping(conversationId: String)
 }
+
+/**
+ * One peer's DM ratchet state, as the reset path sees it — each field is a gate that can silently stop a
+ * wedged session from recovering (see [MeshController.ratchetState]).
+ *
+ * [capRatchet], [peerPrekeyId] and [peerPrekeyPinned] are the peer material an X3DH initiation needs: with
+ * any of them missing we can never re-establish from this side, no matter what the peer sends us.
+ * [lastResetSentAt] is the per-peer floor's anchor, [confirmed] says whether the session is one the scope
+ * table will even export, and [sendEpoch] moving while the peer still cannot read us is the signature of a
+ * split brain rather than a missing session.
+ */
+class RatchetPeerState(
+    val peerId: String,
+    val name: String,
+    val capRatchet: Boolean,
+    val peerPrekeyId: Int?,
+    val peerPrekeyPinned: Boolean,
+    val hasSession: Boolean,
+    val confirmed: Boolean,
+    val sendEpoch: Int,
+    val lastResetSentAt: Long,
+)

@@ -54,6 +54,17 @@ interface RatchetStore {
         newLocalEpoch: RatchetEngine.LocalEpoch?,
     )
 
+    /**
+     * Drops our **receive-side** state for [peerId] — recv epochs and skipped keys — leaving the session
+     * row and our own epoch privs alone. The mirror of [RatchetEngine.OpenDelta.purgePeerRecvState], for
+     * the case where *we* abandon a root era instead of adopting the peer's: after sealing a reset our recv
+     * rows describe chains under a root neither side will use again, and the peer's post-replacement epochs
+     * can reuse their numbers. A surviving row then decides a fresh frame against a stale chain index and
+     * judges it a duplicate (or opens it to the wrong key), which is a deadlock the ratchet cannot escape —
+     * a duplicate is benign by definition, so it drives no recovery.
+     */
+    suspend fun purgePeerRecvState(peerId: String)
+
     /** Drops the session and ALL per-peer ratchet state (an explicit local reset; not used in normal flow). */
     suspend fun deletePeer(peerId: String)
 

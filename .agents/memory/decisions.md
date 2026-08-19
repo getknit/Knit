@@ -744,3 +744,45 @@ Three decisions worth not relitigating:
 Scheme: this file plus `docs/SPOOL_PROTOCOL.md` §4.4 (C-4.4-5…7, C-4.4-13) and `docs/WIRE_COMPAT.md` (the
 fifth additive `ProfileContent`/`MessageContent` change). No spool record, derivation or §13 vector moved —
 a spool never decodes a frame, so the plane cannot tell the difference.
+
+## 023. A split-brain ratchet root requests a reset, like every other unreadable v2 DM
+
+Status: Accepted (2026-08-19; `DropReason.RATCHET_AEAD_FAIL` split out of `DECRYPT_FAILED` and added to the
+reset trigger — no wire change, no DB change)
+
+Field testing ADR 022 found two lab devices that had finally exchanged prekeys, established sessions, and
+then could not read each other in **either** direction: symmetric `AEAD_FAIL`. Both held session state; the
+roots disagreed. The reset heuristic that exists for exactly this class of trouble never fired.
+
+`AEAD_FAIL` was folded into the generic `DECRYPT_FAILED` (shared with the v1 path), and the trigger tested
+only `RATCHET_NO_SESSION` and `RATCHET_EPOCH_GONE`. Those two mean *we are missing something* and are
+self-correcting — the peer's own traffic eventually supplies it. `AEAD_FAIL` means *we both have something
+and it disagrees*, which nothing supplies: the pair re-serves the same undecryptable custody at each other
+until the frames age out, and then does it again with the next message. It was the one ratchet failure that
+could not recover, and it was the only one excluded.
+
+Two things worth not relitigating:
+
+1. **Acting on `AEAD_FAIL` is safe because the frame is already authenticated.** `verifyInbound` checks the
+   Ed25519 signature against the pinned bundle *before* any decrypt, so a signature-valid frame that fails
+   the AEAD is a real peer whose era diverged, never a tampered or corrupted one — those fail the signature
+   first and never reach the ratchet. The trigger therefore cannot be driven by an off-path attacker, and
+   the existing bounds (≥3 **distinct** frame ids, a 6 h per-peer floor, a pinned CAP_RATCHET peer with a
+   prekey) still hold it to one X3DH init per burst.
+2. **The group path already did this.** `GROUP_RATCHET_AEAD_FAIL` has always driven `maybeRequestGroupKey`
+   alongside `GROUP_RATCHET_NO_KEY`. The DM path was the inconsistent one, so this is closing a gap rather
+   than introducing a policy — which is also why `AEAD_FAIL` deserved its own `DropReason`: a split brain
+   filed under the same counter as a v1 decrypt failure is invisible in Diagnostics and the `STATE` bridge,
+   and that is precisely how it stayed unnoticed.
+
+A second half surfaced the moment the first shipped: with resets finally firing, the pair deadlocked again
+in **one** direction, now as `DUPLICATE`. `sealResetDm` abandoned the old root era but purged only its send
+side — our **recv** epochs and skipped keys for that peer survived. The peer adopts our init, purges its own
+rows (`OpenDelta.purgePeerRecvState`) and restarts its epoch numbering; its fresh epochs then meet our
+surviving row from the dead era and are judged against its stale chain index. `DUPLICATE` is terminal by
+construction — a duplicate is benign, so it drives no recovery at all, unlike the `AEAD_FAIL` above.
+`RatchetStore.purgePeerRecvState` makes the initiator symmetric with the adopter: whoever abandons a root
+era drops their receive state for it.
+
+Scheme: this file only. No wire field, no derivation, no vector, no spool record — a reset request has
+always been an ordinary v2 DM carrying `CTL_SESSION_RESET` (ADR 016).

@@ -1042,11 +1042,26 @@ class InboundPipeline(
                 RatchetEngine.OpenOutcome.Failed.EPOCH_GONE -> DropReason.RATCHET_EPOCH_GONE
                 RatchetEngine.OpenOutcome.Failed.DUPLICATE -> DropReason.RATCHET_DUPLICATE
                 RatchetEngine.OpenOutcome.Failed.BAD_HEADER -> DropReason.RATCHET_BAD_HEADER
+                RatchetEngine.OpenOutcome.Failed.AEAD_FAIL -> DropReason.RATCHET_AEAD_FAIL
                 else -> DropReason.DECRYPT_FAILED
             }
         metrics.onDropped(reason)
         Log.w(TAG, "drop v2 chat ${env.id}: $outcome")
-        if (reason == DropReason.RATCHET_NO_SESSION || reason == DropReason.RATCHET_EPOCH_GONE) {
+        // AEAD_FAIL joins the two missing-state cases as a reset trigger. It is the *split-brain* failure —
+        // both sides hold a session and the roots disagree — and it is the only one that cannot resolve
+        // itself: NO_SESSION and EPOCH_GONE each say "we lack something", and the peer's own traffic
+        // eventually supplies it, whereas two disagreeing roots re-serve undecryptable custody at each
+        // other indefinitely. Safe to act on because the frame is already authenticated: `verifyInbound`
+        // checks the Ed25519 signature against the pinned bundle BEFORE any decrypt, so a signature-valid
+        // frame that fails the AEAD is a real peer whose era diverged, not a tampered one. Corruption in
+        // transit cannot reach here either — it would fail the signature first. The heuristic's own bounds
+        // (≥3 distinct frame ids, a 6 h per-peer floor, a pinned ratchet-capable peer) still apply. The
+        // group path above already recovers from its own AEAD_FAIL (GROUP_RATCHET_AEAD_FAIL →
+        // maybeRequestGroupKey); the DM path was the outlier, not this the novelty.
+        if (reason == DropReason.RATCHET_NO_SESSION ||
+            reason == DropReason.RATCHET_EPOCH_GONE ||
+            reason == DropReason.RATCHET_AEAD_FAIL
+        ) {
             maybeRequestReset(env, me, now)
         }
     }

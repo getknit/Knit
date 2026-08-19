@@ -2031,6 +2031,88 @@ class InboundPipelineTest {
         }
 
     @Test
+    fun aSplitBrainRootRequestsAResetInsteadOfDeadlockingForever() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val alicePrekey = RatchetCrypto.generateKeyPair()
+            rig.pinRatchetCapable(alice, alicePrekey.pub)
+            val author = V2Author(alice, rig)
+
+            // Key material resolves (the init establishes the session) but the AEAD refuses, because the
+            // header claims a chain index the sender never sealed at. That is the shape of a divergent root
+            // era: both sides hold a session, neither can read the other. Three DISTINCT frames, since one
+            // stuck frame re-served from custody must never trigger anything.
+            listOf("sb1", "sb2", "sb3").forEach { id ->
+                rig.deliver(
+                    alice,
+                    author.dm(
+                        id,
+                        "unreadable",
+                    ) { h -> RatchetHeader(se = h.se, ek = h.ek, pe = h.pe, n = h.n + 5, init = h.init, flags = h.flags) },
+                )
+            }
+
+            assertEquals(3L, rig.drops(DropReason.RATCHET_AEAD_FAIL))
+            assertEquals("a split brain must not be filed under the generic v1 failure", 0L, rig.drops(DropReason.DECRYPT_FAILED))
+            // Exactly one reset for the burst — the per-peer floor holds, so a peer re-serving custody at us
+            // cannot turn every undecryptable frame into a fresh X3DH init.
+            val resets =
+                rig.originated.filter {
+                    WireCodec
+                        .decodePayload<ChatContent>(it.payload)
+                        ?.enc
+                        ?.r
+                        ?.init != null
+                }
+            assertEquals(1, resets.size)
+            assertEquals(alice.nodeId, resets.single().recipientId)
+        }
+
+    @Test
+    fun sealingAResetDropsOurOwnRecvStateSoThePeersFreshEpochsAreNotJudgedStale() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val alicePrekey = RatchetCrypto.generateKeyPair()
+            rig.pinRatchetCapable(alice, alicePrekey.pub)
+            val author = V2Author(alice, rig)
+
+            // A good frame first, so we actually hold a recv epoch for alice to go stale.
+            val good = author.dm("ok-1", "hello")
+            rig.deliver(alice, good)
+            val se = checkNotNull(WireCodec.decodePayload<ChatContent>(good.payload)?.enc?.r).se
+            assertNotNull("precondition: a recv epoch exists", rig.ratchetStore.recvEpoch(alice.nodeId, se))
+
+            // Now drive the reset heuristic, which seals a reset and abandons that root era.
+            listOf("sb1", "sb2", "sb3").forEach { id ->
+                rig.deliver(
+                    alice,
+                    author.dm(
+                        id,
+                        "unreadable",
+                    ) { h -> RatchetHeader(se = h.se, ek = h.ek, pe = h.pe, n = h.n + 5, init = h.init, flags = h.flags) },
+                )
+            }
+            assertTrue(
+                "precondition: a reset was actually sent",
+                rig.originated.any {
+                    WireCodec
+                        .decodePayload<ChatContent>(it.payload)
+                        ?.enc
+                        ?.r
+                        ?.init !=
+                        null
+                },
+            )
+
+            // The dead era's recv rows must be gone. Left behind, they judge alice's post-replacement
+            // epochs — whose numbers may reuse these — against a stale chain index, dropping fresh frames
+            // as DUPLICATE. That is terminal: a duplicate is benign, so it triggers no further recovery.
+            assertNull(rig.ratchetStore.recvEpoch(alice.nodeId, se))
+        }
+
+    @Test
     fun aCtlFrameAdvancesTheChainButNeverPersistsNotifiesOrAcks() =
         runTest {
             val rig = Rig(backgroundScope)

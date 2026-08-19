@@ -86,6 +86,11 @@ class RatchetRepository(
         }
     }
 
+    override suspend fun purgePeerRecvState(peerId: String) {
+        dao.deleteRecvEpochsFor(peerId)
+        dao.deleteSkippedKeysFor(peerId)
+    }
+
     override suspend fun deletePeer(peerId: String) {
         dao.deleteSession(peerId)
         dao.deleteLocalEpochsFor(peerId)

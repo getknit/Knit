@@ -54,6 +54,16 @@ enum class DropReason {
     /** A v2 envelope with a structurally invalid ratchet header (missing `r`, bound violations, group-addressed). */
     RATCHET_BAD_HEADER,
 
+    /**
+     * A v2 DM whose key material resolved but whose AEAD refused — the peer holds a session with us and we
+     * with them, and the two roots disagree (a "split brain"). Broken out of the generic [DECRYPT_FAILED],
+     * which also covers the v1 path, because this is the one ratchet failure that means *both* sides have
+     * state: [RATCHET_NO_SESSION] and [RATCHET_EPOCH_GONE] say we are missing something, and both already
+     * drive the reset heuristic. Without its own reason this deadlocked silently — neither side could
+     * decrypt, neither asked for a reset, and the pair re-served the same undecryptable custody forever.
+     */
+    RATCHET_AEAD_FAIL,
+
     /** A group frame CLAIMING US whose roster failed vetting (unverifiable founding set, smuggled
      *  member, non-founding sender, oversized roster) — see `InboundPipeline.vetRoster`. Frames for
      *  groups we simply aren't in are refused silently (that is every relayed foreign-group frame). */

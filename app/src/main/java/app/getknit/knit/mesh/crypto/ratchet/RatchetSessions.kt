@@ -191,11 +191,14 @@ class RatchetSessions(
 
     /**
      * Records an undecryptable v2 frame ([RatchetEngine.OpenOutcome.Failed.NO_SESSION] /
-     * [RatchetEngine.OpenOutcome.Failed.EPOCH_GONE]) from a pinned peer and decides whether a session
-     * reset is due: at least [RESET_DISTINCT_FRAMES] **distinct** frame ids (custody re-serves the same
-     * frame endlessly — one stuck frame must not trigger anything), and not more often than
-     * [RESET_MIN_INTERVAL_MS] per peer (persisted on the session row where one exists, so restarts
-     * don't bypass it; the in-memory fallback covers the no-session case).
+     * [RatchetEngine.OpenOutcome.Failed.EPOCH_GONE] / [RatchetEngine.OpenOutcome.Failed.AEAD_FAIL]) from a
+     * pinned peer and decides whether a session reset is due: at least [RESET_DISTINCT_FRAMES] **distinct**
+     * frame ids (custody re-serves the same frame endlessly — one stuck frame must not trigger anything),
+     * and not more often than [RESET_MIN_INTERVAL_MS] per peer (persisted on the session row where one
+     * exists, so restarts don't bypass it; the in-memory fallback covers the no-session case).
+     *
+     * `AEAD_FAIL` is the split-brain case — both sides hold a session and the roots disagree — and unlike
+     * the other two it never resolves on its own, so it must be able to trigger a reset like they do.
      */
     suspend fun noteUndecryptable(
         peerId: String,
@@ -220,6 +223,10 @@ class RatchetSessions(
      * root drains via prevRoot; our epoch numbering restarts, and the peer's replacement handling
      * purges its stale rows), carrying [plaintext] (the `ctl` reset marker) with [RatchetHeader.FLAG_RESET].
      * Also stamps the outbound rate limit. Null when the peer has no usable prekey.
+     *
+     * Purges **our own** receive state too ([RatchetStore.purgePeerRecvState]) — the half this used to leave
+     * behind. Abandoning a root era is symmetric: the peer drops its stale rows when it adopts this init, and
+     * we must drop ours, or its post-replacement epochs meet a surviving chain index from the dead era.
      */
     suspend fun sealResetDm(
         peerId: String,
@@ -241,6 +248,12 @@ class RatchetSessions(
                     lastResetSentAt = now,
                 )
             val sealed = engine.seal(session, plaintext, aad, peerSpk.pub, now) ?: return@locked null
+            // Abandon our receive side along with the root. The peer purges its stale rows when it adopts
+            // this init; nothing was doing the same for ours, so a recv epoch from the dead era survived and
+            // the peer's post-replacement frames — whose epoch numbers may reuse the old ones — were judged
+            // against its stale chain index and dropped as DUPLICATE. That is unrecoverable by construction:
+            // a duplicate is benign, so it drives no reset, and the pair deadlocks in the one direction.
+            store.purgePeerRecvState(peerId)
             store.commitSend(sealed.session, initiation.epoch)
             synchronized(lastResetSentAt) { lastResetSentAt[peerId] = now }
             synchronized(undecryptable) { undecryptable.remove(peerId) }

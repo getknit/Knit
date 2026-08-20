@@ -44,6 +44,7 @@ Single Gradle module `:app`, package root `app.getknit.knit`.
 | `data/` | Room (`KnitDatabase`, `message/`, `peer/`, `reaction/`, `blob/`, `group/`, `forward/`), repositories (`MessageRepository`, `PeerRepository`, `ReactionRepository`, `GroupRepository`, `BlobRepository`, `forward/ForwardRepository`), `AttachmentStore`, `AvatarStore`, `settings/SettingsStore` (DataStore), `crypto/` (`DatabaseKey`, `IdentityKeyStore`, `KeystoreSecret` — AndroidKeyStore-wrapped secrets) |
 | `identity/` | `Identity` (stable node id **+ E2E public-key bundle**), `NodeId` (derivation), `DeviceIdSource` (`AndroidDeviceIdSource`), `DeviceTag`, `Alias` (deterministic display-name fallback) |
 | `notifications/` | `Notifier` (interface) + `MessageNotifier`, `NotificationChannels`, `NotificationHistory`, `NotificationActionReceiver` |
+| `crash/` | Manual crash reporting (ADR 028): `CrashHandler` (uncaught-exception capture, installed before Koin so startup crashes are caught), `CrashStore` (five reports under `noBackupFilesDir`), `CrashRedactor` (structural at capture, contact names on read), `CrashReports` (reader + share staging), `CrashIssueUrl` (prefilled GitHub bug form). No upload path — the user hands the report over |
 | `di/` | Koin modules: `appModule`, `meshModule`, `moderationModule`, `uiModule` |
 
 ### Data flow

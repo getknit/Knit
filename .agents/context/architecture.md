@@ -46,6 +46,8 @@ data/          Room (messages, peers, reactions, blobs, groups, blob_verdicts, f
                moderation/ImageScreeningService) · message/Conversations (DM keys) · crypto/ DatabaseKey +
                IdentityKeyStore (AndroidKeyStore-wrapped secrets) + KeystoreSecret
 identity/      Identity (stable nodeId + E2E keypair) · NodeId (derive) · DeviceIdSource · DeviceTag · Alias
+crash/         CrashHandler (uncaught-exception capture, installed pre-Koin) · CrashStore (noBackupFilesDir,
+               5 reports) · CrashRedactor (two-phase) · CrashReports (reader) · CrashIssueUrl (GitHub prefill)
 notifications/ Notifier + MessageNotifier (per-context channels: nearby, groups, DMs, mentions)
 di/            Koin modules: appModule, meshModule, moderationModule, uiModule
 ```

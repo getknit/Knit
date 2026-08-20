@@ -103,6 +103,10 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun internetRelays() = audit(route = "relays") { awaitTag("relays_switch") }
 
+    // The seeded build plants one synthetic crash (DemoSeeder.seedCrashReport), so this audits the real
+    // screen — dense monospace trace and the error-tinted destructive action — not the empty state.
+    @Test fun crashLog() = audit(route = "crash") { awaitTag("screen_crash_log") }
+
     /**
      * Launches [route], waits for its seeded content via [awaitContent], then audits the whole screen. A
      * failing ATF ERROR throws `AccessibilityViewCheckException`, whose message enumerates each violation

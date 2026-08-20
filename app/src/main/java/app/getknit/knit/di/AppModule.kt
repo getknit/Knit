@@ -4,6 +4,8 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
+import app.getknit.knit.crash.CrashReports
+import app.getknit.knit.crash.crashStore
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.AvatarStore
 import app.getknit.knit.data.BlobRepository
@@ -82,6 +84,14 @@ val appModule =
         single { get<KnitDatabase>().groupRootDao() }
         single { MessageRepository(get()) }
         single { PeerRepository(get()) }
+        // Crash reports. The capture-side CrashStore is built by hand in KnitApplication.onCreate BEFORE
+        // startKoin, so a crash inside startup itself is still captured; this is the reader side over the
+        // same fixed directory (crashStore() is the single definition of the path, so the two can't drift).
+        // Two instances is deliberate and harmless — CrashStore holds no state beyond that File.
+        single { crashStore(androidContext()) }
+        // Applies the known-contact-name redaction pass the dying handler couldn't run (the names live in
+        // the encrypted DB and DataStore) and stages the share copy under cacheDir/crash.
+        single { CrashReports(androidContext(), get(), get(), get(), get()) }
         single { ReactionRepository(get(), get()) }
         // BlobRepository: blobDao, messageDao, peerDao, settings, blobVerdictDao, groupDao, forwardDao, db.
         single { BlobRepository(get(), get(), get(), get(), get(), get(), get(), get()) }

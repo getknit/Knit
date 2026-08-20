@@ -336,6 +336,32 @@
     <string name="diagnostics_tag_nan">NAN</string>
     <string name="diagnostics_transport_audio">audio</string>
 
+    <!-- Crash log — a manual, opt-in report the user reads and hands over themselves. Reached from
+         Diagnostics; nothing here is ever uploaded. See ui/diagnostics/CrashLogScreen.kt. -->
+    <string name="crash_section">Problem reports</string>
+    <string name="crash_last_label">Last crash</string>
+    <string name="crash_open_action">Open crash details</string>
+    <string name="crash_title">Last crash</string>
+    <string name="crash_when">Saved %1$s</string>
+    <string name="crash_empty">No crashes have been recorded on this phone.</string>
+    <string name="crash_explainer">Knit saved this on your phone the last time it closed unexpectedly. It stays here — nothing is sent anywhere unless you send it yourself.</string>
+    <string name="crash_native_note">Not every crash can be recorded. If Knit closed and nothing new turned up here, that\'s a kind of failure this can\'t capture — describe what you were doing instead.</string>
+    <string name="crash_trace_header">Details</string>
+    <string name="crash_action_report">Report on GitHub</string>
+    <string name="crash_action_copy">Copy</string>
+    <string name="crash_action_share">Share as a file</string>
+    <string name="crash_action_delete">Delete</string>
+    <string name="crash_copied">Copied</string>
+    <string name="crash_share_chooser_title">Send crash details</string>
+    <string name="crash_share_error">Couldn\'t prepare the file to share.</string>
+    <string name="crash_report_title">Report this on GitHub?</string>
+    <string name="crash_report_body">GitHub issues are public — anyone can read what you post. Knit removed ids, names and message text from this report before showing it to you, but read it over first. Your browser will open a bug form with the details filled in, and the full report will be on your clipboard to paste in.</string>
+    <string name="crash_report_confirm">Open the form</string>
+    <string name="crash_delete_title">Delete crash details?</string>
+    <string name="crash_delete_body">This removes every saved crash report from this phone. It can\'t be undone.</string>
+    <string name="crash_delete_confirm">Delete all</string>
+    <string name="crash_deleted">Crash details deleted</string>
+
     <!-- Generic actions / content descriptions -->
     <string name="action_send">Send</string>
     <string name="action_attach_photo">Attach photo</string>

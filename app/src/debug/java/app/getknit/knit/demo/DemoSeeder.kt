@@ -2,7 +2,10 @@ package app.getknit.knit.demo
 
 import android.util.Log
 import app.getknit.knit.BuildConfig
+import app.getknit.knit.crash.CrashStore
+import app.getknit.knit.crash.currentCrashEnvironment
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.MeshManager
 import org.koin.core.Koin
 
@@ -44,6 +47,26 @@ class DemoSeeder(
         // would race a static capture; this bypasses the TTL. For a DM the conversationId is the peer's
         // nodeId (see seedDms), so both args are the same slot.
         koin.get<MeshManager>().seedDemoTyping(conversationId = SAM, senderId = SAM)
+
+        seedCrashReport()
+    }
+
+    /**
+     * Plants one synthetic crash report so the "Last crash" row and the crash screen have something to
+     * render. Without it the accessibility audit would only ever see the empty state, and the dense
+     * monospace trace plus the error-tinted destructive action — exactly what the checks exist for —
+     * would ship unaudited. Goes through the real [CrashStore.record], so what is audited is what a real
+     * crash produces, redaction included.
+     */
+    private fun seedCrashReport() {
+        val store = koin.get<CrashStore>()
+        if (store.latest() != null) return
+        store.record(
+            environment = currentCrashEnvironment(),
+            threadName = "DefaultDispatcher-worker-3",
+            throwable =
+                IllegalStateException("hello reply ${NodeId.derive(SAM)} != expected ${NodeId.derive(DANI)}"),
+        )
     }
 
     companion object {

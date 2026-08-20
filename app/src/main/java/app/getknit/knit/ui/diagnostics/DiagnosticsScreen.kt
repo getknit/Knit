@@ -2,6 +2,7 @@ package app.getknit.knit.ui.diagnostics
 
 import android.text.format.Formatter
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,6 +21,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
@@ -42,12 +46,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
+import app.getknit.knit.crash.CrashReportRef
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
@@ -59,6 +66,7 @@ import app.getknit.knit.ui.preview.PREVIEW_NOW
 import app.getknit.knit.ui.util.compactTimeAgo
 import app.getknit.knit.ui.util.rememberCurrentTimeMillis
 import org.koin.androidx.compose.koinViewModel
+import java.io.File
 
 /**
  * Read-only mesh diagnostics: this device's identity, the live mesh metrics, directly-connected
@@ -67,10 +75,18 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun DiagnosticsScreen(
     onBack: () -> Unit,
+    onOpenCrashLog: () -> Unit,
     viewModel: DiagnosticsViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val health by viewModel.health.collectAsStateWithLifecycle()
+    val lastCrash by viewModel.lastCrash.collectAsStateWithLifecycle()
+    // Inside a NavHost composable the lifecycle owner is this back-stack entry, so this fires again when
+    // the crash screen pops — which is how deleting the report over there clears this row over here.
+    LifecycleResumeEffect(Unit) {
+        viewModel.refreshLastCrash()
+        onPauseOrDispose { }
+    }
     // A ticking clock so each node's "profile updated N ago" label recomposes as time passes; a bare
     // System.currentTimeMillis() read would freeze at first composition (see rememberCurrentTimeMillis).
     val now by rememberCurrentTimeMillis()
@@ -91,11 +107,13 @@ fun DiagnosticsScreen(
     DiagnosticsScreenContent(
         state = state,
         health = health,
+        lastCrash = lastCrash,
         now = now,
         snackbarHostState = snackbarHostState,
         onBack = onBack,
         onRestartMesh = viewModel::restartMesh,
         onScan = viewModel::rescan,
+        onOpenCrashLog = onOpenCrashLog,
     )
 }
 
@@ -104,11 +122,13 @@ fun DiagnosticsScreen(
 internal fun DiagnosticsScreenContent(
     state: DiagnosticsUiState,
     health: TransportHealth,
+    lastCrash: CrashReportRef?,
     now: Long,
     snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
     onRestartMesh: () -> Unit,
     onScan: () -> Unit,
+    onOpenCrashLog: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.testTag("screen_diagnostics"),
@@ -132,6 +152,15 @@ internal fun DiagnosticsScreenContent(
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             item { SelfSection(name = state.myName, nodeId = state.myNodeId) }
+
+            // Only when something was actually captured — the same conditional-row idiom MetricsSection
+            // uses, so a phone that has never crashed sees this screen exactly as it was. It sits above
+            // the controls because a user told "open Diagnostics and send me the crash" should not have
+            // to scroll past forty metric rows to find it.
+            if (lastCrash != null) {
+                item { SectionHeader(stringResource(R.string.crash_section)) }
+                item { CrashRow(crash = lastCrash, now = now, onClick = onOpenCrashLog) }
+            }
 
             item { SectionHeader(stringResource(R.string.diagnostics_controls)) }
             item {
@@ -532,8 +561,57 @@ private fun SpoolSection(spool: SpoolStatus) {
     }
 }
 
+/**
+ * The one-line "Last crash" entry. Interactive, so it takes the 48 dp minimum touch target — `clickable`
+ * goes **before** `padding` so the target covers the whole row, unlike the non-interactive [MetricRow]
+ * next door, which is ~32 dp tall.
+ *
+ * Labelled with `onClickLabel` rather than `clearAndSetSemantics`: the two visible texts already read
+ * correctly, and a redundant contentDescription is exactly what the accessibility checks flag as a
+ * duplicate — it also keeps `onNodeWithText` working in the screen tests.
+ */
 @Composable
-private fun SectionHeader(text: String) {
+private fun CrashRow(
+    crash: CrashReportRef,
+    now: Long,
+    onClick: () -> Unit,
+) {
+    val label = stringResource(R.string.crash_open_action)
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable(onClickLabel = label, role = Role.Button, onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.BugReport,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = stringResource(R.string.crash_last_label), style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = stringResource(R.string.crash_when, compactTimeAgo(crash.at, now)),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+internal fun SectionHeader(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.titleSmall,
@@ -544,7 +622,7 @@ private fun SectionHeader(text: String) {
 }
 
 @Composable
-private fun EmptyLine(text: String) {
+internal fun EmptyLine(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.bodyMedium,
@@ -675,6 +753,23 @@ fun DiagnosticsRowsPreview() =
         }
     }
 
+private val PREVIEW_CRASH =
+    CrashReportRef(
+        at = PREVIEW_NOW - 2 * 60 * 60_000L,
+        summary = "IllegalStateException at BluetoothMeshTransport.kt:552",
+        appVersion = "2.3.0 (13) release",
+        device = "Google Pixel 8 (shiba)",
+        androidVersion = "16 (SDK 36)",
+        file = File("crash-1700000000000-deadbeef.txt"),
+    )
+
+@Preview(showBackground = true)
+@Composable
+fun CrashRowPreview() =
+    KnitPreview {
+        CrashRow(crash = PREVIEW_CRASH, now = PREVIEW_NOW, onClick = {})
+    }
+
 @Preview(showBackground = true)
 @Composable
 fun DiagnosticsScreenPopulatedPreview() =
@@ -726,11 +821,13 @@ fun DiagnosticsScreenPopulatedPreview() =
                         ),
                 ),
             health = TransportHealth.Healthy,
+            lastCrash = PREVIEW_CRASH,
             now = PREVIEW_NOW,
             snackbarHostState = remember { SnackbarHostState() },
             onBack = {},
             onRestartMesh = {},
             onScan = {},
+            onOpenCrashLog = {},
         )
     }
 
@@ -745,10 +842,12 @@ fun DiagnosticsScreenEmptyDegradedPreview() =
                     myName = "Ada Lovelace",
                 ),
             health = TransportHealth.Degraded,
+            lastCrash = null,
             now = PREVIEW_NOW,
             snackbarHostState = remember { SnackbarHostState() },
             onBack = {},
             onRestartMesh = {},
             onScan = {},
+            onOpenCrashLog = {},
         )
     }

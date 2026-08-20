@@ -29,6 +29,7 @@ import app.getknit.knit.ui.blocked.BlockedUsersScreen
 import app.getknit.knit.ui.chat.ChatScreen
 import app.getknit.knit.ui.chatlist.ChatListScreen
 import app.getknit.knit.ui.contacts.ContactsScreen
+import app.getknit.knit.ui.diagnostics.CrashLogScreen
 import app.getknit.knit.ui.diagnostics.DiagnosticsScreen
 import app.getknit.knit.ui.donate.DonateScreen
 import app.getknit.knit.ui.group.GroupDetailsScreen
@@ -50,6 +51,7 @@ private object Routes {
     const val CONTACTS = "contacts"
     const val PROFILE = "profile"
     const val DIAGNOSTICS = "diagnostics"
+    const val CRASH_LOG = "crash"
     const val BLOCKED_USERS = "blocked"
     const val MESSAGE_REQUESTS = "requests"
     const val DONATE = "donate"
@@ -274,7 +276,13 @@ fun KnitApp(startRoute: String? = null) {
             InternetRelayScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.DIAGNOSTICS) {
-            DiagnosticsScreen(onBack = { navController.popBackStack() })
+            DiagnosticsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenCrashLog = { navController.navigate(Routes.CRASH_LOG) },
+            )
+        }
+        composable(Routes.CRASH_LOG) {
+            CrashLogScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.BLOCKED_USERS) {
             BlockedUsersScreen(onBack = { navController.popBackStack() })

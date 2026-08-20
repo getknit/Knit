@@ -1,6 +1,9 @@
 package app.getknit.knit
 
 import android.app.Application
+import app.getknit.knit.crash.CrashHandler
+import app.getknit.knit.crash.crashStore
+import app.getknit.knit.crash.currentCrashEnvironment
 import app.getknit.knit.data.blob.BlobDao
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.di.appModule
@@ -32,6 +35,13 @@ class KnitApplication :
 
     override fun onCreate() {
         super.onCreate()
+        // Before startKoin, deliberately. The crashes worth capturing most are the ones in startup itself:
+        // an AndroidKeyStore fault in KeystoreSecret/DatabaseKey, a SQLCipher or tflite .so that won't load,
+        // a Koin graph that throws while building KnitDatabase. Every one of those kills the app before any
+        // injectable object exists, which is also why the store is built by hand here rather than resolved.
+        // Chains to whatever handler was already default, so the "Knit keeps stopping" dialog and the
+        // process kill still happen exactly as before.
+        CrashHandler.install(crashStore(this), currentCrashEnvironment())
         val koinApp =
             startKoin {
                 androidLogger()

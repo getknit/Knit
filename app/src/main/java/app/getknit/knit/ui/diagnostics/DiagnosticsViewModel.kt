@@ -3,6 +3,8 @@ package app.getknit.knit.ui.diagnostics
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.getknit.knit.R
+import app.getknit.knit.crash.CrashReportRef
+import app.getknit.knit.crash.CrashReports
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.data.settings.SettingsStore
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
@@ -71,11 +74,26 @@ class DiagnosticsViewModel(
     settings: SettingsStore,
     private val metrics: MeshMetrics,
     relayStatus: RelayStatusRepository,
+    private val crashes: CrashReports,
 ) : ViewModel() {
     private val myNodeId = MutableStateFlow<String?>(null)
 
+    /**
+     * The newest stored crash, or null. Deliberately **not** part of [state]: that combine is already at
+     * its five-source limit (hence [DiagExtras]), and a crash cannot change while this screen is alive —
+     * a new one would mean the process died and took this ViewModel with it.
+     */
+    private val _lastCrash = MutableStateFlow<CrashReportRef?>(null)
+    val lastCrash: StateFlow<CrashReportRef?> = _lastCrash.asStateFlow()
+
     init {
         viewModelScope.launch { myNodeId.value = identity.nodeId() }
+        refreshLastCrash()
+    }
+
+    /** Re-reads the store. Called on resume, so deleting the report on the crash screen clears this row. */
+    fun refreshLastCrash() {
+        viewModelScope.launch { _lastCrash.value = crashes.latest() }
     }
 
     /** Live radio health, shown as a status line above the mesh controls. */

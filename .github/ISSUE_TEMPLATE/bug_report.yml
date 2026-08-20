@@ -1,3 +1,6 @@
+# NOTE: the field ids below are a contract with the app. Knit's "Report on GitHub" action builds a
+# prefilled URL from them (app/src/main/java/app/getknit/knit/crash/CrashIssueUrl.kt); renaming or
+# removing one silently stops that prefill working. CrashIssueUrlTest pins them.
 name: 🐛 Bug report
 description: Report a defect in Knit, the offline Android mesh messenger.
 title: "[Bug]: "

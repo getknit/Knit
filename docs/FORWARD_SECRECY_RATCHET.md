@@ -94,7 +94,8 @@ invariant, not a new requirement.
 Each direction advances through numbered **epochs**. The sender of epoch `se` mints a fresh X25519
 pair `(ek, ekPriv)` and DHs against the peer's newest contribution (`pe` = which of the *receiver's*
 epochs supplied the base; `pe = 0` means the receiver's SPK, which is only legal while an init is
-attached):
+attached; both numbers are bounded `0..MAX_EPOCH_NUMBER` on the wire, and a header outside those
+bounds is `BAD_HEADER` — never a missing-key report, which would drive the reset heuristic below):
 
 ```
 epochSecret = HKDF-SHA256(ikm = X25519(ekPriv, basePub), salt = sessionRoot,
@@ -133,9 +134,21 @@ out of reach even with the root.
 `ek` rides **every** frame, not just the first of an epoch: with permanent holes, no particular
 frame's arrival can be load-bearing. Each frame fully describes how to derive its epoch.
 
-**Numbering is monotone for the life of the local state**, across root replacements (§7): only a
-device wipe resets `se` to 1 — and a wipe also discards the old epoch privs, so a reused `(peer,
-se)` can only follow a session replacement, which purges the receiver's stale rows.
+**Numbering is monotone across an *adopted* replacement** (§7): the receiving side keeps its own
+`se` counter running, so a reused `(peer, se)` can only follow a device wipe — which also discards the
+old epoch privs — or a locally-originated **reset**, which re-initiates from scratch and does restart
+`se` at 1. Either way the peer purges its stale rows for that numbering, so there is no collision.
+
+**Adopting the peer's newest epoch as our next DH base is jump-damped.** Once we have an anchor
+(`peerBaseEpoch >= 1`), an `se` more than `MAX_EPOCH_JUMP` beyond it is not adopted: the frame still
+decrypts and delivers, we simply keep the older base. Without the damping a peer that jumped its own
+numbering — buggy or hostile — pinned `peerBaseEpoch` where no later epoch could pass the monotone
+test, and the healing advance rule never fired again for the life of the session. The bound is
+deliberately **not** applied while unanchored (`peerBaseEpoch == 0`), because adopting a replacement
+zeroes our anchor while the peer's numbering keeps climbing; refusing there would reject the peer's
+next legitimate frame, and refusing a *frame* is `BAD_HEADER`, which drives no reset and so has no way
+back. Refusing an *adoption* is recoverable by construction: our sends then name an epoch the peer has
+swept, they report `EPOCH_GONE`, and that does trigger a reset.
 
 ## 5. Wire form (additive; see docs/WIRE_COMPAT.md)
 
@@ -254,6 +267,8 @@ today); group/broadcast coverage (separate designs).
 | Constant | Value | Tied to |
 |---|---|---|
 | `MAX_EPOCH_MESSAGES` | 200 | per-sender custody quota |
+| `MAX_EPOCH_NUMBER` | 2^24 | header sanity ceiling (unreachable by a real conversation) |
+| `MAX_EPOCH_JUMP` | 1024 | per-adoption epoch jump bound, once anchored |
 | `MAX_EPOCH_AGE_MS` | 24 h | custody TTL |
 | `PREV_ROOT_TTL_MS` | 48 h | 2× custody TTL |
 | recv-epoch / skipped-key sweep | 48 h after last use | 2× custody TTL |

@@ -312,9 +312,17 @@ class RatchetEngine(
 
     // ---- internals ----------------------------------------------------------------------------------
 
+    /**
+     * Structural bounds only — nothing here consults the session, so a frame this refuses is
+     * `BAD_HEADER`, which is deliberately outside `RESET_TRIGGERING_DROPS`. Both epoch numbers are
+     * bounded on *both* sides: a negative or absurd `pe` used to fall through to a missing-key report
+     * (`EPOCH_GONE`), which is reset-triggering, so a structurally invalid header could walk the reset
+     * heuristic. `pe = 0` names the receiver's SPK and is legal only while an init rides along.
+     */
     private fun headerSane(header: FrameHeader): Boolean =
-        header.se >= 1 && header.n in 0 until MAX_EPOCH_MESSAGES &&
-            header.ek.size == RatchetCrypto.KEY_BYTES && (header.pe >= 1 || header.init != null)
+        header.se in 1..MAX_EPOCH_NUMBER && header.n in 0 until MAX_EPOCH_MESSAGES &&
+            header.ek.size == RatchetCrypto.KEY_BYTES &&
+            header.pe in 0..MAX_EPOCH_NUMBER && (header.pe >= 1 || header.init != null)
 
     private class ResolvedSession(
         val session: SessionState,
@@ -575,7 +583,16 @@ class RatchetEngine(
         now: Long,
     ): SessionState {
         var out = session
-        if (header.se > out.peerBaseEpoch) {
+        // Damp the DH-base adoption. A peer that jumps its own numbering (buggy or hostile) would
+        // otherwise pin `peerBaseEpoch` somewhere no later epoch can pass the `>` test, and the
+        // turnaround-rekey advance rule (`needsNewEpoch`'s `healing`) would never fire again for the
+        // life of the session. An *unanchored* session accepts anything under the ceiling: after a
+        // reset our anchor is 0 while the peer's numbering keeps climbing (see the replacement branch
+        // in `resolveSession`), so a relative bound would refuse legitimate traffic there. Refusing to
+        // adopt never drops the frame — it still decrypts and delivers; we simply keep the older base,
+        // the peer eventually reports EPOCH_GONE, and that IS reset-triggering, so the pair recovers.
+        val anchored = out.peerBaseEpoch >= 1
+        if (header.se > out.peerBaseEpoch && (!anchored || header.se <= out.peerBaseEpoch + MAX_EPOCH_JUMP)) {
             out = out.copy(peerBasePub = header.ek, peerBaseEpoch = header.se)
         }
         if (header.pe > out.highestPeAcked) out = out.copy(highestPeAcked = header.pe)
@@ -641,6 +658,22 @@ class RatchetEngine(
     companion object {
         /** Epoch length cap — matches the mesh's 200-per-sender custody quota (design doc §advance rules). */
         const val MAX_EPOCH_MESSAGES = 200
+
+        /**
+         * Absolute epoch-number ceiling (the `MAX_ROOT_VERSION` half of `GroupRootPolicy`'s shape).
+         * Epochs advance at most once per message — the healing rule fires on every turnaround — so
+         * this is ~16M messages to one peer, unreachable by a real conversation, while a header near
+         * `Int.MAX_VALUE` is refused before it can pin `peerBaseEpoch`.
+         */
+        const val MAX_EPOCH_NUMBER = 1 shl 24
+
+        /**
+         * Per-adoption jump bound on the peer's epoch number (the `MAX_ROOT_VERSION_JUMP` half).
+         * Custody holds 200 frames per sender over a 24 h TTL and the peer's advance rules cap it at
+         * roughly one epoch per frame plus one per day, so nothing we can still receive is more than a
+         * few hundred epochs ahead of our anchor.
+         */
+        const val MAX_EPOCH_JUMP = 1024
 
         /** Epoch age cap — matches the 24h custody TTL. */
         const val MAX_EPOCH_AGE_MS = 24 * 60 * 60_000L

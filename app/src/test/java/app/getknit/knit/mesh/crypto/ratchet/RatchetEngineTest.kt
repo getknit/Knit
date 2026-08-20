@@ -272,23 +272,92 @@ class RatchetEngineTest {
         a.initiate(NOW)
         val frame = a.seal("hello", NOW)
 
-        val noInitAtPeZero =
-            Frame(RatchetEngine.FrameHeader(se = 1, ek = frame.header.ek, pe = 0, n = 0, init = null), frame.nonce, frame.ct)
-        assertTrue(b.open(noInitAtPeZero, NOW) === OpenOutcome.Failed.BAD_HEADER)
+        // Rebuild the header around the real nonce/ct: only the header is under test, and every one of
+        // these must be refused before the session machinery sees it.
+        fun tamper(
+            se: Int = 1,
+            ek: ByteArray = frame.header.ek,
+            pe: Int = 0,
+            n: Int = 0,
+            init: RatchetEngine.InitPayload? = frame.header.init,
+        ) = b.open(Frame(RatchetEngine.FrameHeader(se, ek, pe, n, init), frame.nonce, frame.ct), NOW)
 
-        val overflowIndex =
-            Frame(
-                RatchetEngine.FrameHeader(
-                    se = 1,
-                    ek = frame.header.ek,
-                    pe = 0,
-                    n = RatchetEngine.MAX_EPOCH_MESSAGES,
-                    init = frame.header.init,
-                ),
-                frame.nonce,
-                frame.ct,
-            )
-        assertTrue(b.open(overflowIndex, NOW) === OpenOutcome.Failed.BAD_HEADER)
+        assertTrue(tamper(init = null) === OpenOutcome.Failed.BAD_HEADER)
+        assertTrue(tamper(n = RatchetEngine.MAX_EPOCH_MESSAGES) === OpenOutcome.Failed.BAD_HEADER)
+        assertTrue(tamper(n = -1) === OpenOutcome.Failed.BAD_HEADER)
+        assertTrue(tamper(se = 0) === OpenOutcome.Failed.BAD_HEADER)
+        assertTrue(tamper(ek = frame.header.ek.copyOf(31)) === OpenOutcome.Failed.BAD_HEADER)
+
+        // A negative pe used to slip through on the strength of the attached init: contextFor resolves
+        // ownBasePriv only for pe >= 1 and openNewEpoch's SPK branch is `pe == 0`, so the frame landed
+        // as EPOCH_GONE — which IS reset-triggering. Structurally invalid must mean BAD_HEADER.
+        assertTrue(tamper(pe = -1) === OpenOutcome.Failed.BAD_HEADER)
+
+        // Both epoch numbers are bounded above too, or an absurd one reaches the same wrong report.
+        assertTrue(tamper(se = RatchetEngine.MAX_EPOCH_NUMBER + 1) === OpenOutcome.Failed.BAD_HEADER)
+        assertTrue(tamper(pe = RatchetEngine.MAX_EPOCH_NUMBER + 1) === OpenOutcome.Failed.BAD_HEADER)
+    }
+
+    /**
+     * A peer that jumps its own epoch numbering must not pin our DH base. The frame still decrypts and
+     * delivers — refusing the *adoption* is not a drop — but `peerBaseEpoch` stays where it was, so the
+     * turnaround-rekey rule keeps firing for the rest of the session.
+     */
+    @Test
+    fun anAbsurdEpochJumpIsNotAdoptedAsOurDhBase() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("hello", NOW), NOW)
+        b.open(a.seal("again", NOW), NOW)
+        val anchor = checkNotNull(b.session).peerBaseEpoch
+        assertEquals(1, anchor)
+
+        // Force a's numbering far past anything it could legitimately reach; the frame is sealed for
+        // real, so it opens — only the adoption is in question.
+        a.session = checkNotNull(a.session).copy(sendEpoch = anchor + RatchetEngine.MAX_EPOCH_JUMP)
+        val jumped = a.seal("still readable", NOW, force = true)
+        assertEquals(anchor + RatchetEngine.MAX_EPOCH_JUMP + 1, jumped.header.se)
+        assertEquals("still readable", text(b.open(jumped, NOW)))
+        assertEquals("the out-of-range epoch is not adopted as our base", anchor, checkNotNull(b.session).peerBaseEpoch)
+
+        // The session is undamaged: a's next in-range epoch is still adopted, so healing survives.
+        a.session = checkNotNull(a.session).copy(sendEpoch = anchor)
+        val inRange = a.seal("in range", NOW, force = true)
+        assertEquals(anchor + 1, inRange.header.se)
+        assertEquals("in range", text(b.open(inRange, NOW)))
+        assertEquals(anchor + 1, checkNotNull(b.session).peerBaseEpoch)
+    }
+
+    /** The jump bound is inclusive at the boundary. */
+    @Test
+    fun anEpochExactlyAtTheJumpBoundIsAdopted() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("hello", NOW), NOW)
+        val anchor = checkNotNull(b.session).peerBaseEpoch
+
+        a.session = checkNotNull(a.session).copy(sendEpoch = anchor + RatchetEngine.MAX_EPOCH_JUMP - 1)
+        val atBound = a.seal("edge", NOW, force = true)
+        assertEquals(anchor + RatchetEngine.MAX_EPOCH_JUMP, atBound.header.se)
+        assertEquals("edge", text(b.open(atBound, NOW)))
+        assertEquals(anchor + RatchetEngine.MAX_EPOCH_JUMP, checkNotNull(b.session).peerBaseEpoch)
+    }
+
+    /**
+     * With no anchor yet the jump bound must not apply. This is the post-reset shape: adopting a
+     * replacement zeroes `peerBaseEpoch` while the peer's own numbering keeps climbing, so a relative
+     * bound here would refuse the peer's very next legitimate frame — and BAD_HEADER drives no reset,
+     * so the pair would stay dark with no way back.
+     */
+    @Test
+    fun anUnanchoredSessionAdoptsAnyLegalEpoch() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        a.session = checkNotNull(a.session).copy(sendEpoch = 5 * RatchetEngine.MAX_EPOCH_JUMP)
+        val farAhead = a.seal("after a reset", NOW, force = true)
+        assertEquals(5 * RatchetEngine.MAX_EPOCH_JUMP + 1, farAhead.header.se)
+        assertEquals("after a reset", text(b.open(farAhead, NOW)))
+        assertEquals(farAhead.header.se, checkNotNull(b.session).peerBaseEpoch)
     }
 
     @Test

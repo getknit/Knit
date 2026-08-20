@@ -224,7 +224,7 @@ class GroupRatchetEngine(
         aad: ByteArray,
         now: Long,
     ): OpenOutcome {
-        if (header.se < 1 || header.n < 0 || header.n >= MAX_EPOCH_MESSAGES) return OpenOutcome.Failed.BAD_HEADER
+        if (header.se !in 1..MAX_EPOCH_NUMBER || header.n !in 0 until MAX_EPOCH_MESSAGES) return OpenOutcome.Failed.BAD_HEADER
         openFromSkipped(ctx, header, nonce, ct, aad)?.let { return it }
         return openOnChains(ctx, header, nonce, ct, aad, now)
     }
@@ -322,5 +322,12 @@ class GroupRatchetEngine(
 
         /** The custody TTL: no legitimately re-deliverable frame belongs to an older epoch. */
         const val MAX_EPOCH_AGE_MS = 24 * 60 * 60_000L
+
+        /**
+         * Absolute epoch-number ceiling, mirroring the DM engine's. Exposure here is weaker — a group
+         * `se` selects a recv chain rather than a DH base — but it is the same unbounded wire int, and
+         * an absurd one should be `BAD_HEADER` rather than a missing-key report that drives a key request.
+         */
+        const val MAX_EPOCH_NUMBER = 1 shl 24
     }
 }

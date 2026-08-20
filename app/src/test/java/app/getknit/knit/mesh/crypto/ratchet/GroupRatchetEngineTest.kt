@@ -255,6 +255,10 @@ class GroupRatchetEngineTest {
         assertEquals(GroupRatchetEngine.OpenOutcome.Failed.BAD_HEADER, tamper(se = 0, n = 0))
         assertEquals(GroupRatchetEngine.OpenOutcome.Failed.BAD_HEADER, tamper(se = 1, n = -1))
         assertEquals(GroupRatchetEngine.OpenOutcome.Failed.BAD_HEADER, tamper(se = 1, n = GroupRatchetEngine.MAX_EPOCH_MESSAGES))
+        assertEquals(
+            GroupRatchetEngine.OpenOutcome.Failed.BAD_HEADER,
+            tamper(se = GroupRatchetEngine.MAX_EPOCH_NUMBER + 1, n = 0),
+        )
     }
 
     @Test

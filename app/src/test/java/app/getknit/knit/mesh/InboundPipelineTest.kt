@@ -2422,6 +2422,33 @@ class InboundPipelineTest {
             assertEquals(1, after)
         }
 
+    /**
+     * A structurally invalid header says nothing about our session, so it must never walk the reset
+     * heuristic. `pe = -1` used to slip past `headerSane` on the strength of its init and land as
+     * `EPOCH_GONE` — a member of `RESET_TRIGGERING_DROPS` — so three of them bought a reset request.
+     */
+    @Test
+    fun structurallyInvalidHeadersNeverTriggerAResetRequest() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val author = V2Author(alice, rig)
+
+            repeat(RatchetSessions.RESET_DISTINCT_FRAMES) { i ->
+                rig.deliver(
+                    alice,
+                    author.dm("bad-$i", "malformed") { h ->
+                        RatchetHeader(se = h.se, ek = h.ek, pe = -1, n = h.n, init = h.init, flags = h.flags)
+                    },
+                )
+            }
+
+            assertEquals(RatchetSessions.RESET_DISTINCT_FRAMES.toLong(), rig.drops(DropReason.RATCHET_BAD_HEADER))
+            assertEquals(0L, rig.drops(DropReason.RATCHET_EPOCH_GONE))
+            assertEquals("a malformed header is not evidence the session is broken", 0, rig.resetsSent())
+        }
+
     @Test
     fun anInboundResetReplacesTheSessionAndTriggersTheUnackedReseal() =
         runTest {

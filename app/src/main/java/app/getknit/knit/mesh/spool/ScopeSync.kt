@@ -411,6 +411,10 @@ class ScopeSync(
                 val outcome = conn.pull(scope.id, batch) ?: return gone
                 outcome.blobs.forEach { blob -> accept(scope, blob.blobId, blob.data) }
                 outcome.missing.forEach { gone.add(hex(it)) }
+                // An id we asked for and got an unusable answer for is quarantined, not merely dropped
+                // (§9.3) — and deliberately not added to `gone`, since the spool still holds it and
+                // `reanchor` must keep folding it into the digest we compare against.
+                outcome.oversize.forEach { quarantine(scope, hex(it)) }
             }
             return gone
         }
@@ -453,7 +457,9 @@ class ScopeSync(
             tombstoned: Set<String>,
             quarantined: Set<String>,
         ): List<Held> {
-            val maxBlob = conn.limits?.maxBlob ?: scope.bounds.maxBlob
+            // The tighter of the two, not the spool's: pushing past the bound we declared at SUB is wrong
+            // whatever the spool says it would accept.
+            val maxBlob = minOf(conn.limits?.maxBlob ?: Int.MAX_VALUE, scope.bounds.maxBlob)
             val now = clock()
             return local
                 .filterKeys { it !in spoolIds && it !in tombstoned && it !in quarantined }
@@ -604,7 +610,15 @@ class ScopeSync(
             val maxAget = (conn.limits?.maxAget ?: DEFAULT_MAX_AGET).coerceAtLeast(1)
             val wanted = (0 until presence.total).filter { it !in assembly.held && ScopeAttachments.bitSet(presence.bits, it) }
             for (window in ScopeAttachments.windows(wanted, maxAget)) {
-                val chunks = conn.aget(scope.id, aid, window.first, window.last - window.first + 1) ?: return false
+                val outcome = conn.aget(scope.id, aid, window.first, window.last - window.first + 1) ?: return false
+                // A chunk outside the window we named, or over the structural chunk size, never reaches
+                // `absorb` — so quarantine the aid here instead, exactly as `absorb` would (C-9.5-4).
+                if (outcome.rejected) {
+                    quarantineAttachment(scope, ref.aHash)
+                    assemblies.remove(key)
+                    return false
+                }
+                val chunks = outcome.chunks
                 if (chunks.isEmpty()) return false // nothing served; the next round re-reads the bitmap
                 for (chunk in chunks) {
                     if (!absorb(scope, ref, assembly, presence.total, chunk)) {
@@ -709,13 +723,23 @@ class ScopeSync(
 
         private fun handleDigest(digest: SpoolDigest) {
             val scopeHex = hex(digest.scope)
+            // Anchors are keyed by scope with no other bound, so a spool naming scopes we do not carry
+            // would grow these maps without limit. We only ever asked about our own.
+            if (scopes.none { it.idHex == scopeHex }) return
             spoolDigests[scopeHex] = ScopeCrypto.digestValue(digest.digest)
             spoolCounts[scopeHex] = digest.count
             wake()
         }
 
+        /**
+         * Live fan-out (§7.2). Unsolicited by design, so the correlation gate that bounds `pull` cannot
+         * reach it and size is the only bound left: a frame over the `maxBlob` we declared for this scope
+         * can never be one we would hold. Without the gate an event flood churns the two bounded sets
+         * `accept` writes — evicting genuine entries and re-opening the §9.3 re-pull loop.
+         */
         private suspend fun handleEvent(event: SpoolEvent) {
             val scope = scopes.firstOrNull { it.idHex == hex(event.scope) } ?: return
+            if (event.data.size > scope.bounds.maxBlob) return
             if (accept(scope, event.blobId, event.data)) wake()
         }
 

@@ -103,6 +103,15 @@ class FakeSpool(
         return socket
     }
 
+    /**
+     * Says something the client never asked for. The one hostile primitive on this otherwise honest
+     * fake: everything else here models the reference daemon, and a test that needs a spool to *lie*
+     * needs to state the lie itself rather than have it hidden in the fake's normal answers.
+     */
+    fun gossip(record: ByteArray) {
+        synchronized(sockets) { sockets.toList() }.forEach { it.emit(record) }
+    }
+
     /** Plants a blob the spool folds into its digest but no member can open — the §9.3 divergence trap. */
     fun plantGarbage(
         scopeHex: String,

@@ -69,6 +69,13 @@ document:
 - The Profile entry in the overflow menu is now called Settings, since the screen also holds settings
   that are not about you, such as content filtering and the relay switch.
 
+### Fixed
+
+- A relay you have configured can no longer flood the app's memory. Knit now holds only what it
+  actually asked a relay for, ignores anything else the relay volunteers, and treats the relay's
+  stated size limits as a claim to be capped rather than a fact. Relays were always untrusted with
+  the contents of your messages; now they are untrusted with how much of your phone they can use.
+
 ## [2.2.3](https://github.com/getknit/knit/releases/tag/v2.2.3) — 2026-08-13T02:38:41Z
 
 > A themed launcher icon, and a launch screen that follows the system light/dark theme.

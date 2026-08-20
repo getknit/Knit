@@ -14,6 +14,15 @@ object SpoolPow {
     /** Default difficulty a spool advertises in HELLO (`0` disables); operator-tunable. */
     const val DEFAULT_BITS = 20
 
+    /**
+     * The most difficulty a client will attempt. `powBits` is a HELLO field, so it is the spool's claim
+     * about itself: at 20 bits (§12's recommendation) a stamp costs ~1 M hashes, and each bit doubles
+     * that — a spool asking for 64 guarantees the whole mining budget is burned and still fails. 24 bits
+     * is 16× the recommendation and comfortably inside the budget; beyond it, refusing to mine is the
+     * only sane answer, since the work is spent per scope on every heal round that re-subscribes.
+     */
+    const val MAX_BITS = 24
+
     private val LABEL = "knit/spool/v1/pow".toByteArray()
 
     /** The UTC day bucket a stamp is minted for. */

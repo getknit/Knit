@@ -420,6 +420,57 @@ class ScopeSyncTest {
         }
 
     @Test
+    fun `a blob over the bound we declared at sub is quarantined, never buffered`() =
+        runTest {
+            val spool = FakeSpool()
+            val victim = member(spool, bob, alice)
+            // Bigger than the `maxBlob` this scope declares at SUB, so it can never be a frame we hold —
+            // but the spool still lists it, so merely dropping it would diverge the digests forever.
+            val id = spool.plantGarbage(scopeHex(bob, alice), ByteArray(200_000))
+
+            victim.sync.start(backgroundScope)
+            pump()
+            val afterFirst = victim.metrics.snapshot().spoolInvalid
+            pump()
+
+            assertTrue("an oversize answer must still be accounted", afterFirst >= 1)
+            assertTrue(victim.delivered.isEmpty())
+            assertEquals("a quarantined id is never re-pulled", afterFirst, victim.metrics.snapshot().spoolInvalid)
+            assertEquals("...so it is asked for exactly once", 1, spool.pulled.count { it == id })
+            victim.sync.stop()
+        }
+
+    @Test
+    fun `an oversize live event never reaches the quarantine set`() =
+        runTest {
+            val spool = FakeSpool()
+            val victim = member(spool, bob, alice)
+            val scope = unhex(scopeHex(bob, alice))
+
+            victim.sync.start(backgroundScope)
+            pump()
+            // An event is unsolicited by design, so nothing correlates it — without a size gate a flood
+            // of these evicts genuine entries from the bounded per-scope sets `accept` writes.
+            repeat(20) { n ->
+                spool.gossip(
+                    SpoolCodec.encode(
+                        SpoolEvent(
+                            t = SpoolRecordType.EVENT,
+                            scope = scope,
+                            blobId = sha256(byteArrayOf(n.toByte())),
+                            data = ByteArray(200_000),
+                        ),
+                    ),
+                )
+            }
+            pump()
+
+            assertEquals("an oversize event is not ours to quarantine", 0, victim.metrics.snapshot().spoolInvalid)
+            assertTrue(victim.delivered.isEmpty())
+            victim.sync.stop()
+        }
+
+    @Test
     fun `a blob whose sender fails the mesh carry gate is quarantined, not delivered`() =
         runTest {
             val spool = FakeSpool()

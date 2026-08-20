@@ -68,6 +68,29 @@ object SpoolCloseCode {
 /** Record-layer protocol version negotiated in HELLO. */
 const val SPOOL_RECORD_VERSION = 1
 
+/**
+ * The largest inbound record this client will even materialize, applied at the socket before decode.
+ *
+ * A spool is untrusted storage, and every *protocol* size cap it offers is one it advertised itself in
+ * HELLO — so the outermost bound has to be a constant we own. Derived rather than picked: the largest
+ * record a conforming spool can send is a `blob` carrying one sealed frame at the applied `maxBlob`
+ * (§6.2 clamps our SUB declaration *down*, never up), and doubling that clears the other two contenders —
+ * a sealed chunk (49 221 B, §12.1) and a maximal `list` (400 ids + 1024 tombstones × 32 B ≈ 47 KB, §12.2).
+ * Deriving it also means this tracks `DEFAULT_MAX_BLOB` if §5's scope-config ctl ever moves that.
+ */
+const val MAX_INBOUND_RECORD = 2 * ScopeRegistry.DEFAULT_MAX_BLOB
+
+/**
+ * How much of an `err` code we retain. The code is an arbitrary spool-supplied string that outlives the
+ * connection in `ScopeSync.lastError` and is rendered raw by the relay and diagnostics screens when it is
+ * outside the registry — so an unbounded one is held for the process life and handed to text layout. The
+ * registry is append-only and its longest member is `not_subscribed` at 14 characters; 32 is headroom.
+ */
+const val SPOOL_ERR_CODE_MAX = 32
+
+/** Scope ids, blob ids, roots and keys are all `bstr32` (§12.1) — the one shape check the record layer owns. */
+const val SPOOL_ID_BYTES = 32
+
 /** Decode-first view of any record: just the discriminator (unknown keys are ignored). */
 @Serializable
 class SpoolRecordHead(

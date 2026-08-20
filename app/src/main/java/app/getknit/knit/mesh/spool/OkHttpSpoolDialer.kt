@@ -63,6 +63,13 @@ class OkHttpSpoolDialer(
                     bytes: ByteString,
                 ) {
                     // Records are binary by definition (§7.1); a text frame is not one of ours.
+                    // Cap before the copy: OkHttp has already buffered the message, but nothing above
+                    // this line bounds one, so an arbitrarily large "record" would be materialized into
+                    // our heap before the record layer ever saw a discriminator.
+                    if (bytes.size > MAX_INBOUND_RECORD) {
+                        Log.w(TAG, "oversize spool record dropped (${bytes.size} B) — the heal loop will recover")
+                        return
+                    }
                     if (channel.trySend(bytes.toByteArray()).isFailure) {
                         Log.w(TAG, "spool inbox full, dropped a record — the heal loop will recover")
                     }

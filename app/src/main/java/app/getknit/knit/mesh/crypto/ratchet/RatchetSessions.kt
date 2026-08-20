@@ -294,7 +294,11 @@ class RatchetSessions(
             )
         }
 
-    /** Debug-only read of one peer's session row (no mutation), for the bridge's ratchet diagnostics. */
+    /**
+     * Read-only snapshot of one peer's session row (no mutation). Drives the bridge's ratchet
+     * diagnostics and, since ADR 024, the inbound path's `InboundPipeline.isLiveEvidence` gate — so it
+     * is on the decrypt-failure hot path, not debug-only.
+     */
     suspend fun sessionFor(peerId: String): RatchetEngine.SessionState? = locked { store.session(peerId) }
 
     /** Retention GC passthrough (wired into the existing sweep loops). */
@@ -342,6 +346,18 @@ class RatchetSessions(
 
         /** Outbound reset floor per peer (persisted on the session row). */
         const val RESET_MIN_INTERVAL_MS = 6 * 60 * 60_000L
+
+        /**
+         * How long a tail sealed under an era we have left can still be re-served at us: the mesh
+         * custody TTL (`ForwardRepository.DEFAULT_TTL_MS`, 24 h) doubled — which is also the spool's own
+         * default scope retention (`ScopeRegistry.DEFAULT_TTL_MS`) and the margin behind
+         * `RatchetRepository.SKIPPED_TTL_MS` / `RECV_EPOCH_TTL_MS`. Past it nothing from the old era
+         * survives anywhere to be re-served, so an unreadable frame cannot be a remnant of it.
+         *
+         * `InboundPipeline.isLiveEvidence` uses this as the escape hatch that keeps clock skew from
+         * disabling the heuristic outright — see ADR 026.
+         */
+        const val STRANDED_TAIL_MS = 48 * 60 * 60_000L
 
         /** Inbound session-replacement floor per peer (in-memory). */
         const val REPLACEMENT_MIN_INTERVAL_MS = 60 * 60_000L

@@ -2224,6 +2224,125 @@ class InboundPipelineTest {
             )
         }
 
+    /**
+     * Drives the rig into the INITIATOR half of the era gate — the half `establishedAt` is stamped from
+     * OUR clock, and the only one `env.sentAt` cannot be compared against directly (ADR 026). [era] is
+     * both the session's era stamp and its outbound-reset stamp, so placing it further back than
+     * `RESET_MIN_INTERVAL_MS` is what leaves the heuristic reachable again.
+     */
+    private suspend fun Rig.initiateEraAt(
+        peer: Party,
+        era: Long,
+    ) {
+        pinRatchetCapable(peer, RatchetCrypto.generateKeyPair().pub)
+        assertNull(pipeline.sendSessionReset(peer.nodeId, self.nodeId, era))
+        val session = checkNotNull(ratchetStore.session(peer.nodeId))
+        assertTrue("the rig must be the initiator for these cases", session.weAreInitiator)
+        assertEquals(era, session.establishedAt)
+    }
+
+    /** Reset requests we have originated: a v2 DM whose header carries a fresh X3DH init. */
+    private fun Rig.resetsSent(): Int =
+        originated.count {
+            WireCodec
+                .decodePayload<ChatContent>(it.payload)
+                ?.enc
+                ?.r
+                ?.init != null
+        }
+
+    /**
+     * [count] undecryptable frames from [peer], each stamped [sentAt] on the PEER's clock. The init is
+     * dropped and the base epoch moved to our own live one: steady-state traffic from a peer that
+     * considers the session settled, DHing against a key we hold but sealed under a root we no longer
+     * share. That is the split-brain shape — signature-valid, authenticated, and `AEAD_FAIL` — so with
+     * distinct ids only the era gate stands between these and a reset request.
+     */
+    private suspend fun Rig.deliverUnreadable(
+        peer: Party,
+        tag: String,
+        sentAt: Long,
+        count: Int = RatchetSessions.RESET_DISTINCT_FRAMES,
+    ) {
+        val author = V2Author(peer, this)
+        repeat(count) { i ->
+            deliver(
+                peer,
+                author.dm("$tag-$i", "unreadable", sentAt = sentAt) { h ->
+                    RatchetHeader(se = h.se, ek = h.ek, pe = 1, n = h.n, init = null, flags = h.flags)
+                },
+            )
+        }
+    }
+
+    @Test
+    fun aPeerWhoseClockLagsOursStillProvesTheSessionIsBroken() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val era = System.currentTimeMillis() - 7 * HOUR_MS
+            rig.initiateEraAt(alice, era)
+            val before = rig.resetsSent()
+
+            // Alice authored these AFTER our era began, but her clock lags ours, so they carry a `sentAt`
+            // behind our `establishedAt`. Raw, that comparison spans two devices' clocks: it read live
+            // failures as a doomed pre-era tail and silently disarmed the heuristic in this direction for
+            // as long as the skew lasted (GitLab #22). Within MAX_FUTURE_SKEW_MS the house tolerance
+            // covers it — beyond that only the retention-window escape below does.
+            rig.deliverUnreadable(alice, "lag", sentAt = era - (Protocol.MAX_FUTURE_SKEW_MS - 60_000L))
+
+            assertEquals(3L, rig.drops(DropReason.RATCHET_AEAD_FAIL))
+            assertEquals(
+                "clock skew within the house tolerance must not disarm the reset heuristic",
+                before + 1,
+                rig.resetsSent(),
+            )
+        }
+
+    @Test
+    fun aTailFromTheEraWeLeftIsStillNotEvidenceOnTheInitiatorSide() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val era = System.currentTimeMillis() - 7 * HOUR_MS
+            rig.initiateEraAt(alice, era)
+            val before = rig.resetsSent()
+
+            // 23 h before the era — far past any clock disagreement worth tolerating, and the era is still
+            // young enough that custody could genuinely be re-serving that tail. ADR 024's case, unchanged.
+            rig.deliverUnreadable(alice, "tail", sentAt = System.currentTimeMillis() - 30 * HOUR_MS)
+
+            assertEquals(3L, rig.drops(DropReason.RATCHET_AEAD_FAIL))
+            assertEquals(
+                "ciphertext from an era we already left is unreadable by construction",
+                before,
+                rig.resetsSent(),
+            )
+        }
+
+    @Test
+    fun anEraOlderThanEveryRetentionWindowRearmsTheHeuristic() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            // Older than RatchetSessions.STRANDED_TAIL_MS: custody (24 h) and the spool's default scope
+            // retention (48 h) have both expired, so nothing sealed under the previous era survives
+            // anywhere to be re-served at us.
+            val era = System.currentTimeMillis() - 49 * HOUR_MS
+            rig.initiateEraAt(alice, era)
+            val before = rig.resetsSent()
+
+            // Stamped well before the era, which on this half proves nothing — the peer's clock could be
+            // set to any year. The local elapsed measure is what decides, and it says no tail can survive.
+            rig.deliverUnreadable(alice, "stale", sentAt = System.currentTimeMillis() - 60 * HOUR_MS)
+
+            assertEquals(
+                "past every retention window an unreadable frame is real divergence, whatever the clocks say",
+                before + 1,
+                rig.resetsSent(),
+            )
+        }
+
     @Test
     fun oneFrameReservedFromCustodyNeverRequestsAResetHoweverOftenItArrives() =
         runTest {
@@ -3180,6 +3299,9 @@ class InboundPipelineTest {
 
     private companion object {
         const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"
+
+        /** Era/skew offsets in the reset-heuristic cases are all whole hours. */
+        const val HOUR_MS = 60 * 60_000L
 
         /** The prekey id the Rig's fake identity serves (mirrors IdentityKeyStore.prekeyPrivFor). */
         const val SPK_ID = 1

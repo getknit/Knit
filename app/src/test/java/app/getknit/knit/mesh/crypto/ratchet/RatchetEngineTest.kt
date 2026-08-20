@@ -540,6 +540,58 @@ class RatchetEngineTest {
         assertTrue(b.open(old1, NOW + 10_000) === OpenOutcome.Failed.AEAD_FAIL)
     }
 
+    /**
+     * The invariant `InboundPipeline.isLiveEvidence` rests on (ADR 026): [RatchetEngine.SessionState.establishedAt]
+     * is OUR clock exactly when [RatchetEngine.SessionState.weAreInitiator], and the peer's `InitPayload.at` otherwise.
+     * That is what lets the era gate know whether it may compare `establishedAt` against a frame's
+     * `sentAt` at all — the responder half is single-clock and exact, the initiator half is not.
+     *
+     * Every site that writes `establishedAt` is walked here, each with a *local* clock deliberately
+     * different from the init's `at`, so a site that starts sourcing the wrong one cannot pass by
+     * coincidence. A fifth site added without honouring this silently disarms the heuristic under skew.
+     */
+    @Test
+    fun establishedAtIsOurOwnClockExactlyWhenWeAreTheInitiator() {
+        val aEra = NOW
+        val bLocal = NOW + 3 * 60 * 60_000L
+
+        // 1. initiate: our own clock.
+        val (a, b) = pair()
+        a.initiate(aEra)
+        assertTrue(checkNotNull(a.session).weAreInitiator)
+        assertEquals(aEra, checkNotNull(a.session).establishedAt)
+
+        // 2. responder establish: the peer's init.at, NOT the clock we opened it on.
+        b.open(a.seal("hello", aEra), bLocal)
+        assertFalse(checkNotNull(b.session).weAreInitiator)
+        assertEquals(aEra, checkNotNull(b.session).establishedAt)
+
+        // 3. replacement adopt (the peer lost its state and re-initiated): the new init.at.
+        val reEra = aEra + 10_000
+        a.wipe()
+        a.initiate(reEra)
+        b.open(a.seal("after my wipe", reEra), bLocal + 10_000)
+        assertFalse(checkNotNull(b.session).weAreInitiator)
+        assertEquals(reEra, checkNotNull(b.session).establishedAt)
+
+        // 4. both-initiate race. The smaller nodeId wins, so `c` keeps its own stamp and `d` — adopting
+        //    the winner's root — takes the winner's clock with it.
+        val (c, d) = pair()
+        val cEra = NOW + 60_000
+        val dEra = NOW + 90_000
+        c.initiate(cEra)
+        d.initiate(dEra)
+        val fromC = c.seal("mine", cEra)
+        val fromD = d.seal("no, mine", dEra)
+        d.open(fromC, dEra)
+        c.open(fromD, cEra)
+
+        assertFalse("the larger nodeId adopts the winner's root", checkNotNull(d.session).weAreInitiator)
+        assertEquals(cEra, checkNotNull(d.session).establishedAt)
+        assertTrue("the race winner stays the initiator", checkNotNull(c.session).weAreInitiator)
+        assertEquals(cEra, checkNotNull(c.session).establishedAt)
+    }
+
     private companion object {
         const val NOW = 1_700_000_000_000L
         val AAD = "id|sender|1700000000000|thread".toByteArray()

@@ -1085,7 +1085,19 @@ class InboundPipeline(
         me: String,
         now: Long,
     ) {
-        if (!isLiveEvidence(env)) return
+        val session = ratchet.sessionFor(env.senderId)
+        if (session != null && !isLiveEvidence(env, session, now)) {
+            // Never silent: a pair wedged in the field otherwise presents exactly like one whose
+            // heuristic simply has not reached three distinct failures yet. Rate-limited by sitting on
+            // the drop path — this only runs for frames already counted as an undecryptable drop.
+            Log.d(
+                TAG,
+                "reset gate: ${env.id} from ${env.senderId} pre-era " +
+                    "sentAt=${env.sentAt} establishedAt=${session.establishedAt} " +
+                    "weAreInitiator=${session.weAreInitiator}",
+            )
+            return
+        }
         if (!ratchet.noteUndecryptable(env.senderId, env.id, now)) return
         sendSessionReset(env.senderId, me, now)
     }
@@ -1098,22 +1110,39 @@ class InboundPipeline(
      *
      * Re-rooting is exactly what discards the keys the previous era was sealed under, so every frame
      * authored before [RatchetEngine.SessionState.establishedAt] is permanently unreadable by
-     * construction — arriving late says nothing about the session we hold now. `establishedAt` is the era
-     * stamp both peers converge on (the initiator writes it into `InitPayload.at`, the responder adopts
-     * it), so this reads identically on both ends.
+     * construction — arriving late says nothing about the session we hold now. Without that gate the
+     * heuristic is self-sustaining, which is what ADR 024 was opened for: each reset strands a custody
+     * TTL's worth of ciphertext, the re-serves of it trip the peer's heuristic, its reset strands ours,
+     * and the pair re-roots past each other indefinitely — a six-hour blackout per cycle in the field.
      *
-     * Without it the heuristic is self-sustaining, which is what ADR 024 was opened for: each reset
-     * strands a custody TTL's worth of ciphertext, the re-serves of it trip the peer's heuristic, its
-     * reset strands ours, and the pair re-roots past each other indefinitely — a six-hour blackout per
-     * cycle in the field. Frames sent *since* the era began still trigger, unchanged, and that is the
-     * whole population that can actually prove a session is broken.
+     * **The comparison is only single-clock in one direction** (ADR 026; ADR 024's claim that it "reads
+     * identically on both ends" was wrong). [RelayEnvelope.sentAt] is always the *sender's* clock, while
+     * `establishedAt` follows [RatchetEngine.SessionState.weAreInitiator] exactly:
+     *
+     * - `weAreInitiator == false` — we adopted the peer's `InitPayload.at` (establish, replacement, or
+     *   race-loser), so `establishedAt` is that same peer's clock. Exact; compared as-is.
+     * - `weAreInitiator == true` — `RatchetEngine.initiate` wrote OUR clock. Comparing it against the
+     *   peer's `sentAt` spans two devices, and a peer whose clock lags ours has every frame classified
+     *   pre-era until the skew is worked off — the heuristic silently disabled in that direction, on a
+     *   population that often runs for weeks without network time.
+     *
+     * For that half: [Protocol.MAX_FUTURE_SKEW_MS] absorbs ordinary disagreement, and
+     * [RatchetSessions.STRANDED_TAIL_MS] bounds the rest. The second is the part skew cannot defeat — it
+     * compares our own clock against our own stamp, and once the era has outlived every retention window
+     * there is no stranded tail left anywhere to protect, so continued undecryptable traffic is real
+     * divergence whatever the peer thinks the time is.
      *
      * No session means no era to compare against, and nothing to protect: a reset is the correct and only
-     * response to a peer we cannot read at all, so those frames pass.
+     * response to a peer we cannot read at all, so those frames pass (the caller's null check).
      */
-    private suspend fun isLiveEvidence(env: RelayEnvelope): Boolean {
-        val establishedAt = ratchet.sessionFor(env.senderId)?.establishedAt ?: return true
-        return env.sentAt >= establishedAt
+    private fun isLiveEvidence(
+        env: RelayEnvelope,
+        session: RatchetEngine.SessionState,
+        now: Long,
+    ): Boolean {
+        if (!session.weAreInitiator) return env.sentAt >= session.establishedAt
+        if (now - session.establishedAt >= RatchetSessions.STRANDED_TAIL_MS) return true
+        return env.sentAt >= session.establishedAt - Protocol.MAX_FUTURE_SKEW_MS
     }
 
     /**

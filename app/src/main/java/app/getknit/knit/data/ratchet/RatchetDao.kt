@@ -35,10 +35,20 @@ interface RatchetDao {
         epoch: Int,
     ): ByteArray?
 
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    // REPLACE, not IGNORE: epoch numbering restarts at 1 when a session reset re-initiates, so a
+    // re-minted number can collide with a surviving dead-era row. The live era must win — keeping the
+    // dead key makes every peer frame based on the fresh epoch fail its AEAD with nothing to see in the
+    // header. The frames the old key could still have served are pre-reset ciphertext, already stranded
+    // by the re-root itself.
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLocalEpoch(row: RatchetLocalEpochEntity)
 
-    @Query("SELECT * FROM ratchet_local_epochs WHERE peerId = :peerId ORDER BY epoch DESC")
+    // Newest = most recently MINTED, never the highest number. Epoch numbers restart on a session
+    // reset, so a long-lived session banks high-numbered dead-era rows that outrank every live-era row
+    // forever under numeric order — the sweep then keeps 16 dead keys and deletes each fresh epoch
+    // within one cycle of minting it, wedging the pair in a reset-relapse loop (ADR 027). The epoch
+    // tiebreak only orders rows minted in the same millisecond.
+    @Query("SELECT * FROM ratchet_local_epochs WHERE peerId = :peerId ORDER BY createdAt DESC, epoch DESC")
     suspend fun localEpochsNewestFirst(peerId: String): List<RatchetLocalEpochEntity>
 
     @Query("DELETE FROM ratchet_local_epochs WHERE peerId = :peerId AND epoch IN (:epochs)")

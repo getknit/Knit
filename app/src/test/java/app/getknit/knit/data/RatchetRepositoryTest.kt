@@ -200,6 +200,60 @@ class RatchetRepositoryTest : RoomDbTest() {
         }
 
     @Test
+    fun aNumberingRestartDoesNotLetDeadEraRowsStarveTheLiveEra() =
+        runTest {
+            val peer = "peer0000"
+            // A long-lived session banked 16 high-numbered epochs (the per-peer cap, exactly what the
+            // field tables showed), then reset: numbering restarted at 1. Recent enough that no TTL or
+            // acked-retirement applies — the cap is the only rule in play.
+            repo.upsertSession(session(peer, sendEpoch = 3, highestPeAcked = 0))
+            (47..62).forEach { epoch ->
+                db.ratchetDao().insertLocalEpoch(
+                    RatchetLocalEpochEntity(peer, epoch = epoch, priv = ByteArray(32), pub = ByteArray(32), createdAt = NOW - 3_600_000L),
+                )
+            }
+            (1..3).forEach { epoch ->
+                db.ratchetDao().insertLocalEpoch(
+                    RatchetLocalEpochEntity(peer, epoch = epoch, priv = ByteArray(32), pub = ByteArray(32), createdAt = NOW),
+                )
+            }
+
+            repo.sweep(NOW)
+
+            // Ranked by epoch number, the dead era's 47..62 outrank the live era's 1..3 forever: the cap
+            // keeps 16 dead keys and deletes every fresh epoch within one cycle of minting it — the peer
+            // then bases its next epoch on a contribution whose priv is gone (EPOCH_GONE) and the pair
+            // relapses on the reset floor's cadence. Ranked by mint time, the live rows survive and the
+            // cap trims the OLDEST dead rows instead.
+            assertNotNull(repo.localEpochPriv(peer, 1))
+            assertNotNull(repo.localEpochPriv(peer, 2))
+            assertNotNull(repo.localEpochPriv(peer, 3))
+            assertNull(repo.localEpochPriv(peer, 47))
+            assertNull(repo.localEpochPriv(peer, 49))
+            assertNotNull(repo.localEpochPriv(peer, 50))
+            assertNotNull(repo.localEpochPriv(peer, 62))
+        }
+
+    @Test
+    fun reMintingACollidingEpochNumberReplacesTheDeadErasKey() =
+        runTest {
+            val peer = "peer0000"
+            // Epoch 5 from the era being abandoned survives (inside its retention window), and the fresh
+            // era's numbering climbs back to 5. The live key must win the collision: keeping the dead one
+            // makes every peer frame based on the fresh epoch fail its AEAD with nothing in the header to
+            // show why.
+            db.ratchetDao().insertLocalEpoch(
+                RatchetLocalEpochEntity(peer, epoch = 5, priv = ByteArray(32) { 1 }, pub = ByteArray(32), createdAt = NOW - 3_600_000L),
+            )
+            repo.commitSend(
+                session(peer, sendEpoch = 5),
+                RatchetEngine.LocalEpoch(epoch = 5, priv = ByteArray(32) { 2 }, pub = ByteArray(32), createdAt = NOW),
+            )
+
+            assertArrayEquals(ByteArray(32) { 2 }, repo.localEpochPriv(peer, 5))
+        }
+
+    @Test
     fun deletePeerDropsEverything() =
         runTest {
             val peer = "peer0000"

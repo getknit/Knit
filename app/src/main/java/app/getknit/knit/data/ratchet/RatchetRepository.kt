@@ -91,6 +91,9 @@ class RatchetRepository(
         dao.deleteSkippedKeysFor(peerId)
     }
 
+    override suspend fun debugLocalEpochs(peerId: String): List<Pair<Int, Long>> =
+        dao.localEpochsNewestFirst(peerId).map { it.epoch to it.createdAt } // most recently minted first
+
     override suspend fun deletePeer(peerId: String) {
         dao.deleteSession(peerId)
         dao.deleteLocalEpochsFor(peerId)
@@ -112,6 +115,11 @@ class RatchetRepository(
      * and 48 h have passed (late custody re-serves based on it are done), or unconditionally past the
      * 30-day hard TTL / the 16-per-peer cap. The newest [KEEP_NEWEST_LOCAL_EPOCHS] always survive so an
      * in-flight peer epoch based on a recent one keeps decrypting.
+     *
+     * "Newest" is by **mint time**, not epoch number (the DAO orders by `createdAt`): a session reset
+     * restarts numbering at 1, and ranking numerically let a long-lived session's dead-era rows outrank
+     * every live-era row — the cap then deleted each fresh epoch within one sweep cycle and the pair
+     * relapsed into undecryptability on the reset floor's cadence, forever (ADR 027).
      */
     private suspend fun sweepLocalEpochs(
         peerId: String,

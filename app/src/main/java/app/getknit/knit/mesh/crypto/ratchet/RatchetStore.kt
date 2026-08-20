@@ -8,6 +8,7 @@ package app.getknit.knit.mesh.crypto.ratchet
  * `db.withTransaction` as the message row so ratchet advance and plaintext persistence commit
  * atomically (Room transactions are reentrant across suspend calls in the same context).
  */
+@Suppress("TooManyFunctions") // A persistence seam mirrors its table set; splitting it would hide the atomicity contract.
 interface RatchetStore {
     suspend fun session(peerId: String): RatchetEngine.SessionState?
 
@@ -67,6 +68,14 @@ interface RatchetStore {
 
     /** Drops the session and ALL per-peer ratchet state (an explicit local reset; not used in normal flow). */
     suspend fun deletePeer(peerId: String)
+
+    /**
+     * The (epoch, createdAt) of every local epoch priv held for [peerId], most recently minted first —
+     * the debug bridge's ground truth for an `EPOCH_GONE` diagnosis (which of our epochs actually
+     * survive, and from which era their `createdAt` says they came). Defaulted so test fakes need not
+     * implement it.
+     */
+    suspend fun debugLocalEpochs(peerId: String): List<Pair<Int, Long>> = emptyList()
 
     /**
      * Retention GC, riding the existing sweep loops (10-min forward sweep, 15-min heal, startup):

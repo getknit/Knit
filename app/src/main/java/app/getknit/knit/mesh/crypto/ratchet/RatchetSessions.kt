@@ -301,6 +301,9 @@ class RatchetSessions(
      */
     suspend fun sessionFor(peerId: String): RatchetEngine.SessionState? = locked { store.session(peerId) }
 
+    /** Debug-bridge ground truth for `EPOCH_GONE`: which of our epoch privs for [peerId] actually survive. */
+    suspend fun debugLocalEpochs(peerId: String): List<Pair<Int, Long>> = locked { store.debugLocalEpochs(peerId) }
+
     /** Retention GC passthrough (wired into the existing sweep loops). */
     suspend fun sweep(now: Long) = locked { store.sweep(now) }
 

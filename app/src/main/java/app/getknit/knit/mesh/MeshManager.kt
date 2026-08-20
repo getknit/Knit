@@ -419,6 +419,13 @@ class MeshManager(
                 confirmed = session?.confirmed == true,
                 sendEpoch = session?.sendEpoch ?: 0,
                 lastResetSentAt = session?.lastResetSentAt ?: 0L,
+                establishedAt = session?.establishedAt ?: 0L,
+                weAreInitiator = session?.weAreInitiator == true,
+                highestPeAcked = session?.highestPeAcked ?: 0,
+                rootHash = session?.root?.let { r -> sha256Hex(r).take(ROOT_HASH_HEX_CHARS) },
+                prevRootExpiresAt = session?.prevRootExpiresAt ?: 0L,
+                hasPeerInitAnchor = session?.peerInitEphPub != null,
+                localEpochs = ratchet.debugLocalEpochs(peer.nodeId),
             )
         }
 
@@ -1869,6 +1876,9 @@ class MeshManager(
     }
 
     private companion object {
+        /** Debug-bridge root fingerprint length — enough to compare eras across devices, nothing more. */
+        const val ROOT_HASH_HEX_CHARS = 8
+
         const val TAG = "MeshManager"
         const val TEXT_MODERATION_TAG = "TextModeration"
         const val METRICS_LOG_INTERVAL_MS = 60_000L

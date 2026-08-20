@@ -131,4 +131,15 @@ class RatchetPeerState(
     val confirmed: Boolean,
     val sendEpoch: Int,
     val lastResetSentAt: Long,
+    /** The era stamp both peers converge on — two devices disagreeing here are in different eras. */
+    val establishedAt: Long = 0L,
+    val weAreInitiator: Boolean = false,
+    val highestPeAcked: Int = 0,
+    /** First 8 hex of SHA-256(root): comparable across devices without exposing the root itself. */
+    val rootHash: String? = null,
+    val prevRootExpiresAt: Long = 0L,
+    /** Whether the resolved-init idempotence anchor is set ([RatchetEngine.SessionState.peerInitEphPub]). */
+    val hasPeerInitAnchor: Boolean = false,
+    /** Our surviving local epoch privs for this peer, most recently minted first, as (epoch, createdAt). */
+    val localEpochs: List<Pair<Int, Long>> = emptyList(),
 )

@@ -830,7 +830,19 @@ class DebugBridgeReceiver :
                     .put("sendEpoch", p.sendEpoch)
                     // The per-peer floor's anchor: a recent value is why an otherwise-eligible reset is
                     // not being sent, and is exactly when `--es reset` is the right tool.
-                    .put("lastResetSentAt", p.lastResetSentAt),
+                    .put("lastResetSentAt", p.lastResetSentAt)
+                    // Era forensics: two devices whose `rootHash` disagree are in different eras, and
+                    // `establishedAt` says whose is older. `localEpochs` is the EPOCH_GONE ground truth —
+                    // each entry is one of OUR epoch privs as "epoch@createdAt", so a peer sealing against
+                    // an epoch number missing here (or one whose createdAt predates the current era) is the
+                    // diagnosis in one line.
+                    .put("establishedAt", p.establishedAt)
+                    .put("weAreInitiator", p.weAreInitiator)
+                    .put("highestPeAcked", p.highestPeAcked)
+                    .put("rootHash", p.rootHash ?: JSONObject.NULL)
+                    .put("prevRootExpiresAt", p.prevRootExpiresAt)
+                    .put("hasPeerInitAnchor", p.hasPeerInitAnchor)
+                    .put("localEpochs", JSONArray(p.localEpochs.map { (epoch, at) -> "$epoch@$at" })),
             )
         }
         return reply.put("peers", peers)

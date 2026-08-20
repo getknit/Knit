@@ -2,13 +2,16 @@ name: Stale
 
 # Two independent sweeps, both issues-only.
 #
-# 1. `needs-repro` — an unreproducible report is not a backlog item. Marked stale after 10 days of
-#    silence and closed 4 days later (the ~2 weeks the needs-repro reply promises). Any comment
-#    clears the `stale` label and restarts the clock.
+# 1. `needs-repro` / `needs-info` — a report nobody can act on is not a backlog item. Marked stale
+#    after 10 days of silence and closed 4 days later (the ~2 weeks the needs-repro reply promises).
+#    Any comment clears the `stale` label and restarts the clock — and on `needs-info` it also
+#    re-runs needs-info.yml, which clears its own label once the gaps are filled. `any-of-issue-labels`
+#    (not `only-labels`) because either label alone qualifies: one is the maintainer's judgment call,
+#    the other is the completeness bot's.
 # 2. Everything else — 90 days of silence, closed 14 days after that. This is the honest version of
 #    the CONTRIBUTING.md posture: issues may never be triaged, so an untouched tracker shouldn't
 #    imply someone is on it. Exempt: `pinned`, `deferred` (deliberately-parked roadmap scope, which
-#    the deferred canned reply promises is exempt), and `needs-repro` (owned by sweep 1).
+#    the deferred canned reply promises is exempt), and `needs-repro` / `needs-info` (owned by sweep 1).
 #
 # Pull requests are left alone entirely (`days-before-pr-stale: -1`) — auto-closing a contributor's
 # work on a project that already warns reviews may be slow would be hostile. `pull-requests: write`
@@ -28,12 +31,12 @@ permissions:
 
 jobs:
   needs-repro:
-    name: Sweep needs-repro
+    name: Sweep needs-repro / needs-info
     runs-on: ubuntu-latest
     steps:
       - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
-          only-labels: 'needs-repro'
+          any-of-issue-labels: 'needs-repro,needs-info'
           days-before-issue-stale: 10
           days-before-issue-close: 4
           days-before-pr-stale: -1
@@ -41,14 +44,14 @@ jobs:
           stale-issue-label: 'stale'
           close-issue-reason: 'not_planned'
           stale-issue-message: |
-            No reproduction details have come in for 10 days, so this is being marked stale and will
-            close in 4 days.
+            No further details have come in for 10 days, so this is being marked stale and will close
+            in 4 days.
 
-            Nothing is lost by that — comment with the version, devices, and radios involved and it
-            reopens. See the earlier comment for what to include.
+            Nothing is lost by that — comment with the missing pieces and it reopens. See the earlier
+            comment for the specific list.
           close-issue-message: |
-            Closing as not reproducible. Comment with the missing details any time and this can be
-            reopened.
+            Closing as not actionable as filed. Comment with the missing details any time and this can
+            be reopened.
 
   aged:
     name: Sweep aged issues
@@ -56,7 +59,7 @@ jobs:
     steps:
       - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
-          exempt-issue-labels: 'pinned,deferred,needs-repro'
+          exempt-issue-labels: 'pinned,deferred,needs-repro,needs-info'
           exempt-all-issue-milestones: true
           days-before-issue-stale: 90
           days-before-issue-close: 14

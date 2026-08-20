@@ -1,0 +1,425 @@
+name: Needs info
+
+# Mechanical completeness check on bug reports. The issue form's `required: true` only proves a field
+# is non-empty, so a report can pass validation and still say "What happened: crash" with no stack
+# trace (getknit/knit#9 is the canonical example). This workflow parses the rendered form back into
+# fields, judges each one against a per-field rule, and asks the reporter for exactly what is
+# missing — nothing more.
+#
+# DELIBERATELY NOT `label-actions.yml`. That file speaks in the maintainer's voice and fires on a
+# label a human applied; `needs-info` is deliberately absent from it. This bot's comment is a
+# machine checklist and says so in its own first line. Keeping the two labels separate also keeps
+# the maintainer's `needs-repro` judgment call distinct from a regex's guess.
+#
+# WHAT IT WILL NOT DO: it never closes, never removes a label it did not add, never comments on a
+# complete report, and never posts twice — the comment carries a hidden marker and is edited in
+# place on every re-run. If a human removes `needs-info`, the timeline scan below makes it stand
+# down on that issue permanently. Same trap `triage.yml` documents for its `edited` trigger: there
+# is no way to tell "the rule was wrong" from "the text changed", so the human wins.
+#
+# Teeth come from `stale.yml` sweep 1, which now sweeps `needs-info` alongside `needs-repro`
+# (10 days to stale, 4 more to close). Any comment restarts that clock and re-runs this check.
+#
+# ON DEMAND, two ways, both maintainer-only and both able to `force` past the gates above:
+#
+#   * Actions › Needs info › Run workflow, with an issue number ("9", "#9", or the issue URL).
+#     `workflow_dispatch` only exists on the default branch, so this appears once this is merged.
+#   * Comment `/recheck` on the issue. Every comment already re-runs the check; what `/recheck` adds
+#     is the force flag, and it is honored only from OWNER / MEMBER / COLLABORATOR.
+#
+# Forcing skips the stand-down and the human-ruled labels — a maintainer asking for the list again
+# IS the newer human decision. It does not skip the form fingerprint or the open-state check, since
+# neither has anything to override. Dispatching a workflow needs write access, so the force path
+# cannot be reached by a drive-by.
+#
+# Pinned by commit SHA: this holds `issues: write` and is triggered by anyone who can open an issue.
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue to re-check — number, #number, or URL'
+        required: true
+        type: string
+      force:
+        description: 'Re-check even if a human removed needs-info or already ruled on the thread'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+# One writer per thread. `cancel-in-progress: true` because every run recomputes the whole verdict
+# from current state and edits the same comment — the latest run's answer is the only correct one,
+# and anything a cancelled run would have written is redone by the run that replaced it.
+concurrency:
+  group: needs-info-${{ github.event.issue.number || github.event.inputs.issue }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Completeness check
+    # Skips PRs (issue_comment fires on those too), closed threads, and anything a bot said —
+    # GITHUB_TOKEN comments cannot retrigger a workflow, but the guard is free.
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.issue.pull_request == null &&
+        github.event.issue.state == 'open' &&
+        github.event.sender.type != 'Bot'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const MARKER = '<!-- knit-needs-info -->';
+            const LABEL = 'needs-info';
+
+            // A human has already made a call on threads carrying these, so the bot has no opinion
+            // left to offer. `needs-repro` is the maintainer's own version of this ask; `confirmed`
+            // means it reproduced regardless of what the form said.
+            const STOP_LABELS = [
+              'needs-repro', 'confirmed', 'upstream', 'duplicate', 'wontfix',
+              'invalid', 'question', 'deferred', 'declined', 'enhancement', 'documentation',
+            ];
+
+            const norm = (s) => (s || '').replace(/\r\n?/g, '\n');
+
+            // ---- field parsing -------------------------------------------------------------
+
+            // Issue forms render as `### Label` + value. Parse back to that map rather than
+            // regexing the whole blob, so a rule about the logs field cannot be satisfied by text
+            // that happens to sit in the summary.
+            function parseSections(body) {
+              const out = new Map();
+              let key = null;
+              let buf = [];
+              for (const line of body.split('\n')) {
+                const m = /^\s{0,3}###\s+(.+?)\s*$/.exec(line);
+                if (m) {
+                  if (key !== null) out.set(key, buf.join('\n').trim());
+                  key = m[1].toLowerCase();
+                  buf = [];
+                } else if (key !== null) {
+                  buf.push(line);
+                }
+              }
+              if (key !== null) out.set(key, buf.join('\n').trim());
+              // GitHub writes this literal for a skipped optional field.
+              for (const [k, v] of out) if (/^_no response_$/i.test(v)) out.set(k, '');
+              return out;
+            }
+
+            const WORD = /[A-Za-z0-9][A-Za-z0-9'.\u2019-]*/g;
+            const distinctWords = (s) => new Set((String(s).match(WORD) || []).map((w) => w.toLowerCase())).size;
+
+            // Prose floors must not be cleared by a pasted log, so strip machine text first.
+            function stripMachineText(s) {
+              return String(s)
+                .replace(/```[\s\S]*?```/g, ' ')
+                .replace(/^\s{4,}.*$/gm, ' ')
+                .replace(/^\s*at\s+\S+\(.*$/gm, ' ')
+                .replace(/^\s*\d\d-\d\d\s+\d\d:\d\d:\d\d.*$/gm, ' ')
+                .replace(/^.*AndroidRuntime.*$/gm, ' ');
+            }
+
+            const titleNorm = (t) => String(t).replace(/^\s*\[[^\]]*\]:?\s*/, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+            // The reporter's own words get quoted back in the ask. Flatten so a crafted answer
+            // cannot forge a heading or the marker inside our comment.
+            function quote(s, max = 90) {
+              const flat = String(s).replace(/[`<>\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+              return flat.length > max ? flat.slice(0, max - 1) + '\u2026' : flat;
+            }
+
+            // ---- rules ---------------------------------------------------------------------
+
+            const CRASHY = /\b(crash(?:es|ed|ing)?|force[ -]clos\w*|fatal|anr|stopped working|closes itself|quits by itself)\b/i;
+            const TRACE = /(FATAL EXCEPTION|AndroidRuntime|^\s*at\s+[\w$.]+\.[\w$<>]+\(|^\s*Caused by:|^\s*backtrace:|signal\s+\d+\s+\(SIG)/m;
+            const DEVICE = /\b(pixel|nexus|galaxy|sm-[a-z0-9]{3,}|moto|motorola|oneplus|nothing phone|fairphone|xperia|sony|xiaomi|redmi|poco|oppo|vivo|realme|honor|huawei|nokia|zenfone|asus|rog phone|shiftphone|teracube|blackview|umidigi|doogee|zte|lenovo|surface duo|hisense|tcl|infinix|tecno|itel|aquos|emulator|avd)\b/i;
+            const VERSION_SHAPE = /\bv?\d+\.\d+(?:\.\d+)?(?:[-+][0-9a-z.]+)?\b/i;
+            const SHA_SHAPE = /\b[0-9a-f]{7,40}\b/;
+
+            const MIN_WORDS = 5;      // distinct words before a form answer counts as an answer
+            const MIN_FOLLOWUP = 15;  // distinct prose words in the reporter's replies that cure the prose floors
+
+            // Pure: takes the parsed report, returns the list of asks. Everything below the
+            // entrypoint marker touches the API; everything above is testable in isolation.
+            function evaluate({ title, sections, supplement, releases }) {
+              const get = (k) => sections.get(k) || '';
+              const summary = get('summary');
+              const steps = get('steps to reproduce');
+              const actual = get('what happened');
+              const expected = get('what you expected');
+              const version = get('knit version / commit');
+              const devices = get('devices and android version');
+              const logs = get('logs / screenshots');
+
+              // Hard evidence can arrive in a follow-up comment instead of a form edit.
+              const evidence = (field) => field + '\n' + supplement;
+              const prose = distinctWords(stripMachineText(supplement)) >= MIN_FOLLOWUP;
+
+              const findings = [];
+              const tn = titleNorm(title);
+
+              if (CRASHY.test([title, summary, actual].join('\n')) && !TRACE.test(evidence(logs))) {
+                findings.push({
+                  id: 'stack-trace',
+                  heading: 'The crash stack trace',
+                  body: [
+                    'This reads as a crash, but no trace was attached. On a crash the trace usually *is* the',
+                    'diagnosis — without it there is nothing to look at but the symptom.',
+                    '',
+                    'Reproduce the crash, then:',
+                    '',
+                    '```',
+                    'adb logcat -b crash -d',
+                    '```',
+                    '',
+                    'Paste the block starting at `FATAL EXCEPTION`. No adb available? Any log-reader app that can',
+                    'export the crash buffer works, and a photo of the "Knit keeps stopping" dialog is better than nothing.',
+                  ],
+                });
+              }
+
+              if (!DEVICE.test(evidence(devices))) {
+                findings.push({
+                  id: 'device-model',
+                  heading: 'The device model',
+                  body: [
+                    devices ? `"${quote(devices)}" names the OS but not the hardware.` : 'No device was named.',
+                    'Knit drives Wi-Fi Aware and Bluetooth LE directly with no Google Play Services layer in',
+                    'between, so radio faults are usually chipset- and vendor-specific — a bug on one SoC often',
+                    'does not exist on another. The model narrows this far more than the Android version does.',
+                    '',
+                    'The marketing name is enough. If you have a shell:',
+                    '',
+                    '```',
+                    'adb shell getprop ro.product.model',
+                    'adb shell getprop ro.board.platform',
+                    '```',
+                  ],
+                });
+              }
+
+              const versionEvidence = evidence(version);
+              if (!VERSION_SHAPE.test(versionEvidence) && !SHA_SHAPE.test(versionEvidence)) {
+                findings.push({
+                  id: 'version',
+                  heading: 'The Knit version or commit',
+                  body: [
+                    'No version number or commit SHA was found. Settings \u203A About shows the version; if you built',
+                    'it yourself, the commit SHA you built from is what identifies it.',
+                  ],
+                });
+              } else if (releases && releases.length && !SHA_SHAPE.test(versionEvidence)) {
+                const m = VERSION_SHAPE.exec(versionEvidence);
+                const claimed = m[0].replace(/^v/i, '');
+                if (!releases.some((r) => r === claimed || r.startsWith(claimed + '.') || r.startsWith(claimed + '-'))) {
+                  findings.push({
+                    id: 'version-unknown',
+                    heading: `Version "${quote(claimed, 20)}" is not a published release`,
+                    body: [
+                      `Published releases include: ${releases.slice(0, 5).map((r) => '`' + r + '`').join(', ')}.`,
+                      'If that was a typo, correct it; if you built from source, paste the commit SHA instead, since a',
+                      'build from an arbitrary tree is a different program from any release.',
+                    ],
+                  });
+                }
+              }
+
+              const thin = [
+                ['actual', actual, 'What happened', [
+                  'Describe what you actually saw: a system "Knit keeps stopping" dialog, a silent drop back to the',
+                  'launcher, a frozen screen, an ANR? Every time, or intermittently? Does it get past the permission',
+                  'prompts first? Those all point at different code.',
+                ]],
+                ['expected', expected, 'What you expected', [
+                  'Say what should have happened at the moment it went wrong, specifically enough to tell a wrong',
+                  'outcome from a right one — e.g. "the chat list should have stayed open".',
+                ]],
+                ['steps', steps, 'Steps to reproduce', [
+                  'Numbered steps someone else can follow from a fresh install. Real mesh behavior usually needs two',
+                  'or more physical devices to show up at all, so say what each device was doing.',
+                ]],
+                ['summary', summary, 'Summary', [
+                  'One or two sentences describing the defect.',
+                ]],
+              ];
+
+              for (const [id, text, heading, help] of thin) {
+                if (prose) continue;
+                const echo = id !== 'summary' && text && tn.includes(titleNorm(text));
+                if (distinctWords(text) >= MIN_WORDS && !echo) continue;
+                findings.push({
+                  id: `thin-${id}`,
+                  heading: `A real answer for "${heading}"`,
+                  body: [
+                    text ? `The form says "${quote(text)}", which restates the question rather than answering it.` : 'This was left blank.',
+                    ...help,
+                  ],
+                });
+              }
+
+              return findings;
+            }
+
+            function renderAsk(author, findings) {
+              const lines = [
+                MARKER,
+                `Thanks for the report, @${author}.`,
+                '',
+                '**This is an automated completeness check, not a maintainer\u2019s verdict.** The bug form was filled',
+                `in, but ${findings.length === 1 ? 'one item is' : findings.length + ' items are'} missing the detail needed to act on it:`,
+                '',
+              ];
+              findings.forEach((f, i) => {
+                lines.push(`### ${i + 1}. ${f.heading}`, '', ...f.body, '');
+              });
+              lines.push(
+                '---',
+                '',
+                'Reply here with whatever you can get — this check re-runs on your comment and clears itself, and',
+                'partial answers still help. Knit is a best-effort hobby project shipped as-is, so a report that',
+                'cannot be reproduced generally cannot be fixed.',
+                '',
+                `Tagged \`${LABEL}\`: with no reply it goes stale in 10 days and closes 4 days after that. That is not a`,
+                'dismissal \u2014 a comment reopens it at any point.',
+                '',
+                `<sub>Maintainers: \`/recheck\` re-runs this; removing the \`${LABEL}\` label stops it on this issue for good.</sub>`,
+              );
+              return lines.join('\n');
+            }
+
+            const renderCleared = (author) => [
+              MARKER,
+              `Thanks @${author} \u2014 the missing details came in, so the automated \`${LABEL}\` hold is cleared.`,
+              '',
+              'This is still awaiting a human; no timeline attached.',
+            ].join('\n');
+
+            // ---- entrypoint (everything above is pure) -------------------------------------
+
+            const { owner, repo } = context.repo;
+
+            // Dispatch takes a number, a #number, or a pasted issue URL — first integer wins.
+            const dispatched = context.eventName === 'workflow_dispatch';
+            const rawTarget = dispatched ? String(context.payload.inputs.issue || '') : '';
+            const issue_number = dispatched
+              ? Number((rawTarget.match(/\d+/) || [])[0])
+              : context.payload.issue.number;
+            if (!Number.isInteger(issue_number) || issue_number <= 0) {
+              core.setFailed(`cannot read an issue number out of "${rawTarget}"`);
+              return;
+            }
+
+            // `/recheck` only matters as a force switch: an ordinary comment already re-runs this.
+            // Author association is GitHub's own answer to "does this person have write access".
+            const RECHECK = /^\s*\/recheck\b/m;
+            const MAINTAINER = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+            const comment = context.payload.comment;
+            const force = dispatched
+              ? String(context.payload.inputs.force) === 'true'
+              : Boolean(comment && RECHECK.test(comment.body || '') && MAINTAINER.includes(comment.author_association));
+            if (force) core.info(`forced re-check of #${issue_number}`);
+
+            // Every exit reports, so a manual dispatch that decides to do nothing still says so in
+            // the run summary instead of finishing green and silent.
+            async function report(line) {
+              core.info(`#${issue_number}: ${line}`);
+              await core.summary.addRaw(`**#${issue_number}** \u2014 ${line}`, true).write();
+            }
+
+            const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number });
+            if (issue.state !== 'open' || issue.pull_request) {
+              await report('skipped: not an open issue');
+              return;
+            }
+
+            const body = norm(issue.body);
+            const sections = parseSections(body);
+            // Fingerprint of the bug form. Free-form issues and the feature form are not parseable
+            // into these fields, so there is nothing to judge and the bot stays out.
+            if (!sections.has('steps to reproduce') || !sections.has('knit version / commit')) {
+              await report('skipped: not a bug-form report, so there are no fields to judge');
+              return;
+            }
+
+            const labels = (issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+            const stopped = labels.filter((l) => STOP_LABELS.includes(l));
+            if (stopped.length && !force) {
+              await report(`skipped: carries ${stopped.join(', ')}, so a human already ruled on it (\`/recheck\` forces)`);
+              return;
+            }
+
+            const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const stoodDown = timeline.some(
+              (e) => e.event === 'unlabeled' && e.label && e.label.name === LABEL && e.actor && e.actor.type !== 'Bot',
+            );
+            if (stoodDown && !force) {
+              await report(`skipped: \`${LABEL}\` was removed by hand, so this stands down (\`/recheck\` forces)`);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            // Only the reporter's own follow-ups count as evidence. A maintainer confirming it from
+            // their own device does not fill in the reporter's gaps — `confirmed` stops the bot instead.
+            const supplement = norm(
+              comments.filter((c) => c.user && c.user.login === issue.user.login).map((c) => c.body || '').join('\n\n'),
+            );
+            // A user cannot have type Bot, so this can never select someone else's comment to edit.
+            const existing = comments.find((c) => c.user && c.user.type === 'Bot' && (c.body || '').includes(MARKER));
+
+            let releases = null;
+            try {
+              const list = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
+              releases = list.map((r) => (r.tag_name || '').replace(/^v/i, '')).filter(Boolean);
+            } catch (e) {
+              core.info(`release lookup failed (${e.message}); skipping the version cross-check`);
+            }
+
+            const findings = evaluate({ title: issue.title || '', sections, supplement, releases });
+
+            if (findings.length) {
+              const ask = renderAsk(issue.user.login, findings);
+              if (!existing) {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body: ask });
+              } else if (existing.body.trim() !== ask.trim()) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: ask });
+              }
+              if (!labels.includes(LABEL)) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [LABEL] });
+              }
+              await report(`asked for: ${findings.map((f) => f.id).join(', ')}`);
+              return;
+            }
+
+            // Complete. Say nothing at all unless this bot had previously spoken.
+            if (!existing && !labels.includes(LABEL)) {
+              await report('complete as filed; saying nothing');
+              return;
+            }
+            if (existing) {
+              const cleared = renderCleared(issue.user.login);
+              if (existing.body.trim() !== cleared.trim()) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: cleared });
+              }
+            }
+            if (labels.includes(LABEL)) {
+              // 404 if a human pulled the label between the read above and here — that is the
+              // outcome this branch wanted anyway, so it is not a failure.
+              await github.rest.issues
+                .removeLabel({ owner, repo, issue_number, name: LABEL })
+                .catch((e) => core.info(`removeLabel skipped: ${e.message}`));
+            }
+            await report('complete now; hold cleared');

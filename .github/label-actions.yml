@@ -5,6 +5,10 @@
 # missing details; apply `upstream` and it explains and closes. Nothing here fires from an issue's
 # own content — .github/workflows/triage.yml only adds `area:` / `dist:` labels and never these.
 #
+# `needs-info` is deliberately ABSENT from this file. It is applied by needs-info.yml, which writes
+# its own comment naming the specific fields that came up short — a canned reply here would post a
+# second, vaguer copy of the same ask on every one of those issues.
+#
 # Tone follows CONTRIBUTING.md: Knit is best-effort, shipped as-is, and saying so plainly beats
 # silence. `{issue-author}` is a placeholder the action substitutes.
 #

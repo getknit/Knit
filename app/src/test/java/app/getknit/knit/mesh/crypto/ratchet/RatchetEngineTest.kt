@@ -59,6 +59,7 @@ class RatchetEngineTest {
         fun open(
             frame: Frame,
             now: Long,
+            resetRequested: Boolean = false,
         ): OpenOutcome {
             val ctx =
                 RatchetEngine.OpenContext(
@@ -74,6 +75,7 @@ class RatchetEngineTest {
                         frame.header.init
                             ?.takeIf { spkResolvable && it.pkid == 1 }
                             ?.let { spk.priv },
+                    resetRequested = resetRequested,
                 )
             val outcome = engine.open(ctx, frame.header, frame.nonce, frame.ct, AAD, now)
             if (outcome is OpenOutcome.Opened) apply(outcome.delta, frame.header)
@@ -411,6 +413,71 @@ class RatchetEngineTest {
         assertTrue(outcome === OpenOutcome.Failed.AEAD_FAIL)
         assertArrayEquals(winningRoot, checkNotNull(a.session).root)
         assertTrue(checkNotNull(a.session).confirmed)
+    }
+
+    @Test
+    fun anExplicitResetIsAdoptedEvenByTheUnanchoredRaceWinner() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.initiate(NOW + 5_000)
+
+        // A wins the race on nodeId and confirms WITHOUT ever processing B's init, so it holds no
+        // idempotence anchor — the state the race-remnant guard exists for.
+        b.open(a.seal("from a", NOW), NOW)
+        a.open(b.seal("reply under the winner", NOW), NOW)
+        assertTrue(checkNotNull(a.session).confirmed)
+        assertNull(checkNotNull(a.session).peerInitEphPub)
+        assertTrue("precondition: B is the higher nodeId the guard refuses", b.nodeId > a.nodeId)
+
+        // B loses its state and explicitly asks to re-establish. Unflagged this is indistinguishable
+        // from a re-served race remnant and is refused (aLateRaceInitAfterConfirmationNeverDefects...);
+        // flagged, it must be adopted, because refusing it leaves B unable to recover from its own side
+        // at all — only A's 6 h reset heuristic could ever clear it, and that is the six-hour
+        // one-directional blackout ADR 024 was opened for.
+        b.wipe()
+        b.initiate(NOW + 600_000)
+        val outcome = a.open(b.seal("re-establish", NOW + 600_000), NOW + 600_000, resetRequested = true)
+
+        assertEquals("re-establish", text(outcome))
+        assertFalse("adopting a reset makes us the responder", checkNotNull(a.session).weAreInitiator)
+        assertArrayEquals(checkNotNull(b.session).root, checkNotNull(a.session).root)
+    }
+
+    @Test
+    fun adoptingAResetAnchorsItSoItsOwnReServesAreInert() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.initiate(NOW + 5_000)
+        b.open(a.seal("from a", NOW), NOW)
+        a.open(b.seal("reply under the winner", NOW), NOW)
+
+        b.wipe()
+        b.initiate(NOW + 600_000)
+        val reset = b.seal("re-establish", NOW + 600_000)
+        a.open(reset, NOW + 600_000, resetRequested = true)
+        val adopted = checkNotNull(a.session).root
+
+        // Custody re-serves the reset for a full TTL. The ephemeral recorded on adoption is what makes
+        // every one of those inert, so the exemption cannot be turned into a re-rooting loop.
+        val again = a.open(reset, NOW + 900_000, resetRequested = true)
+        assertTrue(again === OpenOutcome.Failed.DUPLICATE)
+        assertArrayEquals(adopted, checkNotNull(a.session).root)
+    }
+
+    @Test
+    fun theSideThatAdoptedAReplacementCanStillSendBack() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        b.open(a.seal("hello", NOW), NOW)
+        a.open(b.seal("hi", NOW), NOW)
+
+        // A re-initiates (a reset): B must adopt it, which nulls B's peer base epoch.
+        a.initiate(NOW + 600_000)
+        assertEquals("re-established", text(b.open(a.seal("re-established", NOW + 600_000), NOW + 600_000)))
+
+        // B, the adopter, replies. Its peerBaseEpoch is 0, so the frame carries pe=0 and no init.
+        val back = a.open(b.seal("reply after adopting", NOW + 601_000), NOW + 601_000)
+        assertEquals("reply after adopting", text(back))
     }
 
     // --- wipe and replacement ---

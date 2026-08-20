@@ -82,6 +82,7 @@ class RatchetSessions(
             ownIkPriv = dhIdentityPriv(),
             peerIkPub = peerIkPub,
             spkPrivForInit = header.init?.let { spkPrivFor(it.pkid) },
+            resetRequested = header.flags and RatchetHeader.FLAG_RESET != 0,
             // An explicit reset request gets a far shorter floor than an incidental init. `FLAG_RESET` was
             // minted for this and, until ADR 023, was written on the wire and never read — so a peer that
             // had waited out its own 6 h reset floor could still be refused here for another 60 minutes,
@@ -204,19 +205,19 @@ class RatchetSessions(
 
     /**
      * Records an undecryptable v2 frame ([RatchetEngine.OpenOutcome.Failed.NO_SESSION] /
-     * [RatchetEngine.OpenOutcome.Failed.EPOCH_GONE] / [RatchetEngine.OpenOutcome.Failed.AEAD_FAIL] /
-     * [RatchetEngine.OpenOutcome.Failed.DUPLICATE]) from a pinned peer and decides whether a session
-     * reset is due: at least [RESET_DISTINCT_FRAMES] **distinct**
+     * [RatchetEngine.OpenOutcome.Failed.EPOCH_GONE] / [RatchetEngine.OpenOutcome.Failed.AEAD_FAIL]) from a
+     * pinned peer and decides whether a session reset is due: at least [RESET_DISTINCT_FRAMES] **distinct**
      * frame ids (custody re-serves the same frame endlessly — one stuck frame must not trigger anything),
      * and not more often than [RESET_MIN_INTERVAL_MS] per peer (persisted on the session row where one
      * exists, so restarts don't bypass it; the in-memory fallback covers the no-session case).
      *
      * `AEAD_FAIL` is the split-brain case — both sides hold a session and the roots disagree — and unlike
      * the other two it never resolves on its own, so it must be able to trigger a reset like they do.
-     * `DUPLICATE` is its mirror image, seen from the other end of a half-adopted replacement: the sender
-     * restarted its chain and its indices now collide with our stale rows. The **distinct**-id rule above
-     * is what separates that from ordinary replay — a re-served or double-delivered frame repeats a single
-     * id and can never reach [RESET_DISTINCT_FRAMES], however many times it arrives.
+     *
+     * The distinct-id rule bounds one stuck frame, not a stuck *era*: a re-served backlog is many distinct
+     * ids and walks straight through it. Callers must therefore gate on liveness first — see
+     * `InboundPipeline.isLiveEvidence` — so frames that were unreadable before they arrived never reach
+     * this counter at all.
      */
     suspend fun noteUndecryptable(
         peerId: String,

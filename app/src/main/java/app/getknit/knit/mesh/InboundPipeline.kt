@@ -1046,7 +1046,12 @@ class InboundPipeline(
                 else -> DropReason.DECRYPT_FAILED
             }
         metrics.onDropped(reason)
-        Log.w(TAG, "drop v2 chat ${env.id}: $outcome")
+        // The header fields are the whole diagnosis for these: EPOCH_GONE says only "we could not find a
+        // base key", and which one — our local epoch `pe`, or the signed prekey when `pe` is 0 — is what
+        // separates two peers sitting in different eras from a swept retention window. Cheap, and drops are
+        // already rate-limited by being drops.
+        val r = WireCodec.decodePayload<ChatContent>(env.payload)?.enc?.r
+        Log.w(TAG, "drop v2 chat ${env.id}: $outcome se=${r?.se} pe=${r?.pe} n=${r?.n} init=${r?.init != null}")
         // AEAD_FAIL joins the two missing-state cases as a reset trigger. It is the *split-brain* failure —
         // both sides hold a session and the roots disagree — and it is the only one that cannot resolve
         // itself: NO_SESSION and EPOCH_GONE each say "we lack something", and the peer's own traffic
@@ -1058,14 +1063,12 @@ class InboundPipeline(
         // (≥3 distinct frame ids, a 6 h per-peer floor, a pinned ratchet-capable peer) still apply. The
         // group path above already recovers from its own AEAD_FAIL (GROUP_RATCHET_AEAD_FAIL →
         // maybeRequestGroupKey); the DM path was the outlier, not this the novelty.
-        // DUPLICATE counts too, and the distinct-frame-id rule is what makes that safe. A *replayed* frame
-        // is the same id arriving twice — custody re-serving it, or two links delivering it — and that can
-        // never advance the distinct counter however often it repeats. Several DISTINCT frames all landing
-        // on already-consumed chain indices means something else: the sender restarted its chain while we
-        // kept ours, so its epoch numbers now collide with our old rows. That is a desync, and it is the
-        // failure the peer sees for OUR side of a half-adopted replacement, exactly as we see AEAD_FAIL for
-        // theirs. Leaving it out is what let a stuck pair sit at 116 duplicates from 4 distinct frames with
-        // the heuristic still reading 1: a duplicate is "benign" per frame and terminal in aggregate.
+        // DUPLICATE used to count too, on the theory that several DISTINCT frames landing on consumed chain
+        // indices meant the sender had restarted its chain while we kept ours. ADR 024 removed it: the
+        // distinct-id rule does not separate that from the benign case, because a re-served *backlog* is
+        // many distinct ids, not one id repeating. And a consumed index is proof we already decrypted that
+        // frame, so the re-serve is our own delivered history — the one shape that can never mean divergence.
+        // The desync it was proxying for is fixed at the source now, at all three sites that change a root.
         if (reason in RESET_TRIGGERING_DROPS) {
             maybeRequestReset(env, me, now)
         }
@@ -1082,8 +1085,35 @@ class InboundPipeline(
         me: String,
         now: Long,
     ) {
+        if (!isLiveEvidence(env)) return
         if (!ratchet.noteUndecryptable(env.senderId, env.id, now)) return
         sendSessionReset(env.senderId, me, now)
+    }
+
+    /**
+     * Whether an undecryptable frame is evidence that the session we hold *now* is broken, rather than
+     * ciphertext that was already doomed before it arrived. Gates the heuristic ahead of
+     * [RatchetSessions.noteUndecryptable] so doomed frames never enter the distinct-id LRU either — eight
+     * slots is small enough that a re-served backlog would otherwise evict the real failures.
+     *
+     * Re-rooting is exactly what discards the keys the previous era was sealed under, so every frame
+     * authored before [RatchetEngine.SessionState.establishedAt] is permanently unreadable by
+     * construction — arriving late says nothing about the session we hold now. `establishedAt` is the era
+     * stamp both peers converge on (the initiator writes it into `InitPayload.at`, the responder adopts
+     * it), so this reads identically on both ends.
+     *
+     * Without it the heuristic is self-sustaining, which is what ADR 024 was opened for: each reset
+     * strands a custody TTL's worth of ciphertext, the re-serves of it trip the peer's heuristic, its
+     * reset strands ours, and the pair re-roots past each other indefinitely — a six-hour blackout per
+     * cycle in the field. Frames sent *since* the era began still trigger, unchanged, and that is the
+     * whole population that can actually prove a session is broken.
+     *
+     * No session means no era to compare against, and nothing to protect: a reset is the correct and only
+     * response to a peer we cannot read at all, so those frames pass.
+     */
+    private suspend fun isLiveEvidence(env: RelayEnvelope): Boolean {
+        val establishedAt = ratchet.sessionFor(env.senderId)?.establishedAt ?: return true
+        return env.sentAt >= establishedAt
     }
 
     /**
@@ -2138,16 +2168,20 @@ class InboundPipeline(
         const val TAG = "MeshManager"
 
         /**
-         * The v2 DM failures that feed the session-reset heuristic (ADR 023) — every ratchet outcome that
-         * can mean "this pair's state has diverged", which after field testing is all of them but
-         * BAD_HEADER (a malformed frame says nothing about our session).
+         * The v2 DM failures that feed the session-reset heuristic (ADR 023) — the ratchet outcomes that
+         * can mean "this pair's state has diverged".
+         *
+         * BAD_HEADER is out because a malformed frame says nothing about our session. DUPLICATE is out as
+         * of ADR 024: a consumed chain index is proof we *did* decrypt that index, so the frame is a
+         * re-serve of our own delivered history, and a whole re-served backlog carries distinct ids that
+         * walk straight past the distinct-frame rule. It was added as a proxy for the peer-restarted-its-
+         * chain desync, which the three purge sites now fix at the source.
          */
         val RESET_TRIGGERING_DROPS =
             setOf(
                 DropReason.RATCHET_NO_SESSION,
                 DropReason.RATCHET_EPOCH_GONE,
                 DropReason.RATCHET_AEAD_FAIL,
-                DropReason.RATCHET_DUPLICATE,
             )
     }
 }

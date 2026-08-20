@@ -2119,7 +2119,7 @@ class InboundPipelineTest {
         }
 
     @Test
-    fun distinctFramesLandingOnConsumedChainIndicesRequestAReset() =
+    fun distinctFramesLandingOnConsumedChainIndicesNeverRequestAReset() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
@@ -2130,8 +2130,11 @@ class InboundPipelineTest {
             val consumed = listOf("d1", "d2", "d3").map { author.dm(it, "body-$it") }
             consumed.forEach { rig.deliver(alice, it) }
 
-            // Now three DISTINCT frames that each claim an already-consumed index — the shape of a sender
-            // that restarted its chain while we kept ours.
+            // Three DISTINCT frames each claiming an already-consumed index. This is what a re-served
+            // BACKLOG looks like — many ids, every one of them ciphertext we already read — and the
+            // distinct-id rule cannot tell it from a sender that restarted its chain. Since a consumed
+            // index is proof the frame decrypted once, the benign reading is the only sound one, and
+            // acting on it re-roots a healthy session and strands a whole TTL of custody (ADR 024).
             val consumedIndices = consumed.map { checkNotNull(WireCodec.decodePayload<ChatContent>(it.payload)?.enc?.r).n }
             consumedIndices.forEachIndexed { i, n ->
                 // Keep the live header — only the chain index goes backwards onto an index we already used.
@@ -2144,6 +2147,71 @@ class InboundPipelineTest {
                 )
             }
             assertEquals(3L, rig.drops(DropReason.RATCHET_DUPLICATE))
+            assertEquals(
+                "a duplicate is our own delivered history coming back, never evidence of divergence",
+                0,
+                rig.originated.count {
+                    WireCodec
+                        .decodePayload<ChatContent>(it.payload)
+                        ?.enc
+                        ?.r
+                        ?.init != null
+                },
+            )
+        }
+
+    @Test
+    fun framesSealedBeforeTheCurrentEraAreNotEvidenceThatItIsBroken() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+
+            // Establish an era at t=1000. `establishedAt` is the init's `at`, which both peers converge on.
+            val live = V2Author(alice, rig, at = 1_000L)
+            rig.deliver(alice, live.dm("era-1", "hello", sentAt = 1_000L))
+            assertEquals(1_000L, rig.ratchetStore.session(alice.nodeId)?.establishedAt)
+
+            // Three DISTINCT undecryptable frames authored BEFORE that era — the tail every reset leaves
+            // in custody, re-served for a full TTL. Past the distinct-frame rule (three ids, not one
+            // repeated) and past the 6 h floor, so the era stamp is the only thing standing between us and
+            // re-rooting a session that is working.
+            listOf("old1", "old2", "old3").forEach { id ->
+                rig.deliver(
+                    alice,
+                    live.dm(
+                        id,
+                        "unreadable",
+                        sentAt = 900L,
+                    ) { h -> RatchetHeader(se = h.se, ek = h.ek, pe = h.pe, n = h.n + 5, init = h.init, flags = h.flags) },
+                )
+            }
+
+            assertEquals(3L, rig.drops(DropReason.RATCHET_AEAD_FAIL))
+            assertEquals(
+                "ciphertext from an era we already left is unreadable by construction",
+                0,
+                rig.originated.count {
+                    WireCodec
+                        .decodePayload<ChatContent>(it.payload)
+                        ?.enc
+                        ?.r
+                        ?.init != null
+                },
+            )
+
+            // Same failure, authored inside the live era: still a reset, so the gate narrows the
+            // population rather than disarming the heuristic.
+            listOf("new1", "new2", "new3").forEach { id ->
+                rig.deliver(
+                    alice,
+                    live.dm(
+                        id,
+                        "unreadable",
+                        sentAt = 1_000L,
+                    ) { h -> RatchetHeader(se = h.se, ek = h.ek, pe = h.pe, n = h.n + 9, init = h.init, flags = h.flags) },
+                )
+            }
             assertEquals(
                 1,
                 rig.originated.count {

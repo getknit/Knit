@@ -132,6 +132,17 @@ class RatchetEngine(
          * stayed unreadable in both directions with every X3DH input present (ADR 023).
          */
         val allowReplacement: Boolean = true,
+        /**
+         * Whether this frame's init carries the wire's `FLAG_RESET` — the peer explicitly asking to
+         * re-establish, as opposed to an incidental init riding ordinary traffic. Supplied by the caller
+         * for the same reason [allowReplacement] is: the engine is wire-agnostic and must not own the bit.
+         *
+         * It exempts the init from the [resolveSession] race-remnant refusal. That guard reads a *stale
+         * re-serve* out of a confirmed winner's history, and a reset can never be one: it is minted fresh
+         * per request, and once adopted its ephemeral becomes the idempotence anchor that makes every
+         * re-serve of it inert.
+         */
+        val resetRequested: Boolean = false,
     )
 
     sealed interface OpenOutcome {
@@ -379,10 +390,17 @@ class RatchetEngine(
         // — and their init can re-serve from custody with a *newer* timestamp for a full TTL. An init
         // that loses the nodeId tiebreak in this state is that remnant, never a replacement: adopting
         // it would defect to the losing root while the peer sits on the winning one (both "confirmed",
-        // permanently diverged). A genuine wipe of the higher-id peer is still recovered — their
-        // undecryptable traffic trips OUR reset heuristic, and a reset init from us re-establishes.
+        // permanently diverged).
+        //
+        // `FLAG_RESET` is exempt, and must be (ADR 024). The remnant this refuses is a re-served init from
+        // an era the peer has already left; a reset is the opposite — freshly minted, deliberate, and the
+        // only signal a peer that lost its state can send. Refusing it made the blackout one-directional
+        // and unrecoverable from the peer's side: only our OWN 6 h heuristic could clear it, so a pair
+        // that reset in the wrong order stayed dark for up to six hours per cycle while every X3DH input
+        // was present. Adopting it cannot defect to a losing root, because a reset abandons the losing
+        // root on the sender's side too.
         val unanchoredRaceWinner = session.confirmed && session.weAreInitiator && session.peerInitEphPub == null
-        if (unanchoredRaceWinner && session.peerId > ctx.selfNodeId) {
+        if (unanchoredRaceWinner && !ctx.resetRequested && session.peerId > ctx.selfNodeId) {
             return ResolvedSession(session, candidates)
         }
         // Replacement (peer reset / re-init after losing state): their epoch numbering restarts at 1,

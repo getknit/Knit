@@ -1064,6 +1064,11 @@ Deliberately out of scope, and the UI says so rather than implying coverage it d
 crashes (Tink, SQLCipher, the tflite moderator), ANRs, `WifiAwareTransport`'s deliberate
 `Process.killProcess` on a NAN wedge, and `meshExceptionHandler`'s non-fatal swallow. The natural next
 step for the first two is `ActivityManager.getHistoricalProcessExitReasons` (API 30+, and it returns an
-ANR trace); the last two are a few lines each once someone wants them. The
-`<!-- knit-crash-report -->` marker in every app-filed issue is there for a triage workflow that has not
-been written yet.
+ANR trace); the last two are a few lines each once someone wants them.
+
+The `<!-- knit-crash-report -->` marker in every app-filed issue is consumed by
+`.github/workflows/crash-report.yml`: it labels the report, links prior ones sharing a crash signature
+(exception class plus top frame *locations*, which is what R8 preserves), flags a stale app version, and
+names the `mapping-<version>.txt.gz` asset needed to deobfuscate release frames. It is separate from
+`needs-info.yml` on purpose — an app-filed report satisfies that bot's trace/device/version rules by
+construction, so the two never speak on the same thread.

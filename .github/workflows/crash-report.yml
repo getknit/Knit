@@ -1,0 +1,409 @@
+name: Crash report triage
+
+# Triage note for bug reports filed by the app's own "Report on GitHub" action (ADR 028). Those
+# arrive carrying `<!-- knit-crash-report -->` and a redacted, machine-generated report block, so
+# unlike a hand-written report their contents can be parsed with confidence — the header keys and the
+# `----` separator are written by `crash/CrashStore.render`, not typed by a person.
+#
+# WHAT IT ADDS that the other three issue workflows cannot:
+#   * duplicate detection by crash signature — exception class plus the top frames — across every
+#     issue already carrying the `crash-report` label, which is the one thing a maintainer otherwise
+#     does by hand and the reason repeat crashes get triaged twice;
+#   * "you are N releases behind", the most common way triage time is wasted on an already-fixed bug;
+#   * the exact `mapping-<version>.txt.gz` asset needed to deobfuscate a release build's frames
+#     (ADR 012), including whether that asset actually exists for the reported version;
+#   * a nudge when the app's excerpt was truncated and the reporter never pasted the rest.
+#
+# DELIBERATELY NOT `needs-info.yml`. That bot asks the reporter for fields that came up short; an
+# app-filed report already satisfies its trace / device / version rules by construction, so the two
+# do not overlap and must not share a comment. This one addresses the maintainer, asks the reporter
+# for nothing except the truncated tail, and applies no `needs-info` label — the ask there has teeth
+# from `stale.yml`, and a machine note about a duplicate must never start a close clock.
+#
+# DELIBERATELY NOT `triage.yml` either. That one keyword-matches prose on `opened` only. This reads
+# structure, and re-reads on `edited` because the reporter pasting the full trace is exactly the edit
+# worth reacting to.
+#
+# WHAT IT WILL NOT DO: never closes, never removes a label it did not add, never posts twice — the
+# comment carries a hidden marker and is edited in place. It adds `crash-report` (which is also its
+# own duplicate index) and, when the trace names one of our packages, the matching `area:` label,
+# which is strictly better evidence than the prose regexes in triage.yml.
+#
+# Pinned by commit SHA: this holds `issues: write` and is triggered by anyone who can open an issue.
+
+on:
+  issues:
+    types: [opened, edited]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue to re-triage — number, #number, or URL'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+# One writer per thread; the latest run recomputes the whole note and edits the same comment.
+concurrency:
+  group: crash-report-${{ github.event.issue.number || github.event.inputs.issue }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    name: Crash report triage
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.issue.pull_request == null &&
+        github.event.issue.state == 'open' &&
+        github.event.sender.type != 'Bot'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const MARKER = '<!-- knit-crash-triage -->';
+            const APP_MARKER = '<!-- knit-crash-report -->';
+            const LABEL = 'crash-report';
+            const MAX_SCAN = 100;   // prior crash reports compared for duplicates
+            const SIG_FRAMES = 3;   // frames beyond the exception line that form the signature
+
+            const norm = (s) => (s || '').replace(/\r\n?/g, '\n');
+
+            // ---- parsing -------------------------------------------------------------------
+
+            // Issue forms render as `### Label` + value. Same shape as needs-info.yml parses.
+            function parseSections(body) {
+              const out = new Map();
+              let key = null;
+              let buf = [];
+              for (const line of body.split('\n')) {
+                const m = /^\s{0,3}###\s+(.+?)\s*$/.exec(line);
+                if (m) {
+                  if (key !== null) out.set(key, buf.join('\n').trim());
+                  key = m[1].toLowerCase();
+                  buf = [];
+                } else if (key !== null) {
+                  buf.push(line);
+                }
+              }
+              if (key !== null) out.set(key, buf.join('\n').trim());
+              for (const [k, v] of out) if (/^_no response_$/i.test(v)) out.set(k, '');
+              return out;
+            }
+
+            // Pull the report out of the logs field. Anchors on `FATAL EXCEPTION:` rather than on the
+            // ```text fence, so this still works when the reporter pastes the full trace raw or
+            // appends it after the excerpt. Longest region wins for exactly that case: the pasted
+            // full report beats the excerpt it was meant to replace.
+            function extractReport(logs) {
+              const parts = norm(logs).split(/^(?=FATAL EXCEPTION:)/m).filter((p) => /^FATAL EXCEPTION:/.test(p));
+              if (parts.length === 0) return null;
+              const region = parts.sort((a, b) => b.length - a.length)[0].replace(/^```+.*$/gm, '').trimEnd();
+              const lines = region.split('\n');
+              const cut = lines.indexOf('----');
+              const header = new Map();
+              for (const line of cut < 0 ? lines : lines.slice(0, cut)) {
+                const m = /^([a-z]+):\s+(.*)$/.exec(line);
+                if (m) header.set(m[1], m[2].trim());
+              }
+              return {
+                header,
+                trace: cut < 0 ? lines : lines.slice(cut + 1),
+                truncated: /^\.\.\. truncated, full trace on clipboard\s*$/m.test(region),
+              };
+            }
+
+            const FRAME = /^\s*at\s+(\S+?)\((.*?)\)\s*$/;
+
+            // Exception class plus the first few frame locations. Locations, not method names,
+            // because `-keepattributes SourceFile,LineNumberTable` (ADR 012) survives R8 while the
+            // class and method names do not — so this still groups repeats of an obfuscated release
+            // crash. It does NOT reliably match the same bug across two versions, since line numbers
+            // move; the note says so rather than claiming more than it can deliver.
+            function signature(report) {
+              const body = report.trace.filter((l) => l.trim() !== '');
+              if (body.length === 0) return null;
+              const head = body[0];
+              const cls = (/^([\w$.]+)(?::|$)/.exec(head) || [null, head])[1];
+              const locs = [];
+              for (const line of body) {
+                const m = FRAME.exec(line);
+                if (m) locs.push(m[2]);
+                if (locs.length >= SIG_FRAMES) break;
+              }
+              if (locs.length === 0) return null;
+              return `${cls.split('.').pop()}|${locs.join('|')}`;
+            }
+
+            const OURS = /^\s*at\s+app\.getknit\.knit\.([\w.$]+)/;
+
+            // Area labels from the trace's own package names — evidence, where triage.yml only has
+            // prose keywords. Obfuscated builds match nothing here, which is the correct outcome:
+            // silence beats a guess.
+            function areaLabels(report) {
+              const found = new Set();
+              for (const line of report.trace) {
+                const m = OURS.exec(line);
+                if (!m) continue;
+                const pkg = m[1];
+                if (pkg.startsWith('mesh.wifiaware.')) found.add('area: wifi-aware');
+                else if (pkg.startsWith('mesh.bluetooth.')) found.add('area: ble');
+                else if (pkg.startsWith('mesh.crypto.') || pkg.startsWith('data.crypto.')) found.add('area: crypto');
+                else if (pkg.startsWith('mesh.')) found.add('area: mesh');
+                else if (pkg.startsWith('ui.')) found.add('area: ui');
+              }
+              return [...found];
+            }
+
+            // `app: 2.2.1 (13) debug`
+            function parseAppLine(header) {
+              const m = /^(\S+)\s+\((\d+)\)\s+(\S+)$/.exec(header.get('app') || '');
+              return m ? { version: m[1], code: Number(m[2]), buildType: m[3] } : null;
+            }
+
+            // Semver-ish ordering: numeric parts first, then a pre-release suffix sorts BEFORE the
+            // same numbers without one (2.3.0-alpha.0 < 2.3.0).
+            function compareVersions(a, b) {
+              const split = (v) => {
+                const [core, pre] = String(v).split('-');
+                return [core.split('.').map(Number), pre || ''];
+              };
+              const [an, ap] = split(a);
+              const [bn, bp] = split(b);
+              for (let i = 0; i < Math.max(an.length, bn.length); i++) {
+                const d = (an[i] || 0) - (bn[i] || 0);
+                if (d !== 0) return d < 0 ? -1 : 1;
+              }
+              if (ap === bp) return 0;
+              if (!ap) return 1;
+              if (!bp) return -1;
+              return ap < bp ? -1 : 1;
+            }
+
+            function quote(s, max = 80) {
+              const flat = String(s).replace(/[`<>\n\r|]+/g, ' ').replace(/\s+/g, ' ').trim();
+              return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
+            }
+
+            // ---- entrypoint ----------------------------------------------------------------
+
+            const dispatched = context.eventName === 'workflow_dispatch';
+            const number = dispatched
+              ? Number(String(context.payload.inputs.issue).match(/(\d+)\s*$/)?.[1])
+              : context.payload.issue.number;
+            if (!Number.isInteger(number)) {
+              core.setFailed('could not read an issue number from the dispatch input');
+              return;
+            }
+
+            const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number: number });
+            if (issue.pull_request || issue.state !== 'open') {
+              core.info(`#${number} is a PR or closed; nothing to do`);
+              return;
+            }
+
+            const body = norm(issue.body);
+            if (!body.includes(APP_MARKER)) {
+              core.info(`#${number} was not filed by the in-app reporter; leaving it alone`);
+              return;
+            }
+
+            const report = extractReport(parseSections(body).get('logs / screenshots') || '');
+            if (!report) {
+              core.info(`#${number} carries the marker but no parsable report block`);
+              return;
+            }
+
+            const app = parseAppLine(report.header);
+            const sig = signature(report);
+
+            // Labels on `opened` and on an explicit re-run only, NEVER on `edited` — the same trap
+            // triage.yml documents: an edit cannot be told apart from "the maintainer just removed
+            // that label", so re-adding on every edit would overrule a human by accident. A dispatch
+            // is itself a newer human decision, which is why it is allowed through (needs-info.yml
+            // treats its `force` flag the same way). `crash-report` doubles as this workflow's
+            // duplicate index, so removing it by hand also takes the issue out of dedup — deliberate.
+            const mayLabel = dispatched || context.payload.action === 'opened';
+            const existing = new Set(issue.labels.map((l) => (typeof l === 'string' ? l : l.name)));
+            const wanted = [LABEL, ...areaLabels(report)].filter((l) => !existing.has(l));
+            if (mayLabel && wanted.length > 0) {
+              // Every other label in this repo carries a colour and a description; `addLabels` on a
+              // name that does not exist yet would invent one with a random colour and none. Create
+              // it properly on first use instead of leaving a manual setup step that only shows up
+              // as an ugly label months later. Every `area:` label already exists, so this is only
+              // ever the crash-report one.
+              await github.rest.issues.getLabel({ ...context.repo, name: LABEL }).catch(async (err) => {
+                if (err.status !== 404) throw err;
+                await github.rest.issues.createLabel({
+                  ...context.repo,
+                  name: LABEL,
+                  color: 'c5def5',
+                  description: 'Filed by the in-app crash reporter — carries a machine-generated report',
+                });
+                core.info(`created the ${LABEL} label`);
+              });
+              await github.rest.issues.addLabels({ ...context.repo, issue_number: number, labels: wanted });
+              core.info(`labeled #${number}: ${wanted.join(', ')}`);
+            }
+
+            // Dedup keys off the label, so an unlabeled issue is invisible to it and to the scan below.
+            const indexed = existing.has(LABEL) || (mayLabel && wanted.includes(LABEL));
+
+            // ---- duplicates ----------------------------------------------------------------
+
+            const duplicates = [];
+            if (sig && indexed) {
+              const prior = await github.paginate(
+                github.rest.issues.listForRepo,
+                { ...context.repo, labels: LABEL, state: 'all', per_page: 100 },
+                (res, done) => {
+                  if (res.data.length >= MAX_SCAN) done();
+                  return res.data;
+                },
+              );
+              for (const other of prior.slice(0, MAX_SCAN)) {
+                if (other.number === number || other.pull_request) continue;
+                const otherBody = norm(other.body);
+                if (!otherBody.includes(APP_MARKER)) continue;
+                const otherReport = extractReport(parseSections(otherBody).get('logs / screenshots') || '');
+                if (otherReport && signature(otherReport) === sig) {
+                  duplicates.push({ number: other.number, state: other.state });
+                }
+              }
+            }
+
+            // ---- release context -----------------------------------------------------------
+
+            let behind = null;
+            let mapping = null;
+            if (app) {
+              const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 })
+                .catch((e) => { core.info(`could not list releases: ${e.message}`); return []; });
+              const published = releases.filter((r) => !r.draft);
+              const stable = published.filter((r) => !r.prerelease);
+              const latest = stable[0] || published[0];
+              if (latest) {
+                const latestVersion = String(latest.tag_name).replace(/^v/, '');
+                if (compareVersions(app.version, latestVersion) < 0) {
+                  behind = { reported: app.version, latest: latestVersion, url: latest.html_url };
+                }
+              }
+              if (String(report.header.get('obfuscated') || '').startsWith('yes')) {
+                const own = published.find((r) => String(r.tag_name).replace(/^v/, '') === app.version);
+                const asset = `mapping-${app.version}.txt.gz`;
+                mapping = {
+                  asset,
+                  url: own ? own.html_url : null,
+                  present: Boolean(own && (own.assets || []).some((a) => a.name === asset)),
+                };
+              }
+            }
+
+            // ---- the note ------------------------------------------------------------------
+
+            const head = report.trace.find((l) => l.trim() !== '') || '';
+            const firstFrame = report.trace.map((l) => FRAME.exec(l)).find(Boolean);
+
+            const lines = [
+              MARKER,
+              'Filed from the app’s own crash reporter, so the report below was generated and redacted',
+              'on-device. **This is an automated triage note, not a maintainer’s verdict.**',
+              '',
+              '| | |',
+              '| --- | --- |',
+              `| Crash | \`${quote(head, 100)}\` |`,
+            ];
+            if (firstFrame) lines.push(`| Top frame | \`${quote(firstFrame[1])}(${quote(firstFrame[2], 40)})\` |`);
+            if (app) lines.push(`| Build | ${quote(app.version)} (${app.code}) \`${quote(app.buildType, 20)}\` |`);
+            const device = report.header.get('device');
+            const soc = /soc:\s*(.+)$/.exec(report.header.get('board') || '');
+            if (device) lines.push(`| Device | ${quote(device)}${soc ? ` · ${quote(soc[1], 40)}` : ''} |`);
+            const android = report.header.get('android');
+            if (android) lines.push(`| Android | ${quote(android)} |`);
+            lines.push('');
+
+            if (duplicates.length > 0) {
+              const refs = duplicates.map((d) => `#${d.number}${d.state === 'closed' ? ' (closed)' : ''}`).join(', ');
+              lines.push(
+                `### Possible duplicate of ${refs}`,
+                '',
+                'Same exception and same top frame locations. Frame *locations* are what R8 preserves, so this',
+                'groups repeats of the same build reliably; across two versions the line numbers move, so treat a',
+                'cross-version match as a hint rather than a fact.',
+                '',
+              );
+            }
+
+            if (behind) {
+              lines.push(
+                `### Reported on ${behind.reported}; ${behind.latest} is current`,
+                '',
+                `Worth confirming against [${behind.latest}](${behind.url}) before this is dug into — a crash that`,
+                'is already fixed is the most common way triage time gets spent twice.',
+                '',
+              );
+            }
+
+            if (mapping) {
+              lines.push('### Frames are obfuscated', '');
+              if (mapping.present) {
+                lines.push(
+                  `R8 renamed the classes in this build. Deobfuscate with \`${mapping.asset}\` from the`,
+                  `[matching release](${mapping.url}):`,
+                  '',
+                  '```',
+                  `gunzip -c ${mapping.asset} > mapping.txt && retrace mapping.txt trace.txt`,
+                  '```',
+                  '',
+                );
+              } else {
+                lines.push(
+                  `R8 renamed the classes in this build, and no \`${mapping.asset}\` was found on a published`,
+                  'release — so these frames cannot be symbolicated here. That usually means a self-built or',
+                  'unreleased APK; the class and method names in the trace are not the real ones.',
+                  '',
+                );
+              }
+            }
+
+            if (report.truncated) {
+              lines.push(
+                '### The trace is truncated',
+                '',
+                `@${issue.user.login} — the form carries an excerpt because a full trace does not fit in a link.`,
+                'The complete report was copied to your clipboard at the same time; pasting it into **Logs /',
+                'screenshots** would fill in the frames below the cut. If the clipboard has moved on since, the',
+                'report is still on your phone under **Diagnostics → Last crash**.',
+                '',
+              );
+            }
+
+            lines.push(
+              '<sub>Maintainers: re-run via Actions › Crash report triage. Editing the issue body re-runs this',
+              'automatically.</sub>',
+            );
+
+            const note = lines.join('\n');
+
+            // ---- upsert --------------------------------------------------------------------
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: number,
+              per_page: 100,
+            });
+            const mine = comments.find((c) => (c.body || '').includes(MARKER));
+            if (mine) {
+              if (norm(mine.body).trim() === note.trim()) {
+                core.info(`#${number} note is already current`);
+                return;
+              }
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body: note });
+              core.info(`updated the triage note on #${number}`);
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: number, body: note });
+              core.info(`posted the triage note on #${number}`);
+            }

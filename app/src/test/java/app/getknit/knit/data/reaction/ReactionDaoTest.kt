@@ -41,6 +41,27 @@ class ReactionDaoTest : RoomDbTest() {
         }
 
     @Test
+    fun `observeForMessage returns only that message's live reactions, oldest first`() =
+        runTest {
+            dao.upsert(ReactionEntity("m1", "u2", emoji = "❤️", updatedAt = 20L))
+            dao.upsert(ReactionEntity("m1", "u1", emoji = "👍", updatedAt = 10L))
+            dao.upsert(ReactionEntity("m1", "u3", emoji = null, updatedAt = 30L)) // retracted → hidden
+            dao.upsert(ReactionEntity("m2", "u1", emoji = "😂", updatedAt = 15L)) // another message → excluded
+
+            val rows = dao.observeForMessage("m1").first()
+
+            assertEquals(listOf("u1", "u2"), rows.map { it.reactorNodeId })
+            assertEquals(listOf("👍", "❤️"), rows.map { it.emoji })
+        }
+
+    @Test
+    fun `observeForMessage is empty for a message no one has reacted to`() =
+        runTest {
+            dao.upsert(ReactionEntity("m1", "u1", emoji = "👍", updatedAt = 1L))
+            assertTrue(dao.observeForMessage("m_none").first().isEmpty())
+        }
+
+    @Test
     fun `upsert replaces on the composite key (messageId, reactorNodeId)`() =
         runTest {
             dao.upsert(ReactionEntity("m1", "u", emoji = "👍", updatedAt = 1L))

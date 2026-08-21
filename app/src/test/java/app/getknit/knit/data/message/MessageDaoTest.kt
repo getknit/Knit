@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -183,6 +184,20 @@ class MessageDaoTest : RoomDbTest() {
         }
 
     @Suppress("LongParameterList") // a test data builder — optional params with defaults, not a real API surface
+    @Test
+    fun `observeById follows one message and goes null once it is deleted`() =
+        runTest {
+            dao.upsert(msg("m1", sender = "sam", sentAt = 7L))
+            dao.upsert(msg("m2"))
+
+            val loaded = dao.observeById("m1").first()
+            assertEquals("sam", loaded?.senderId)
+            assertEquals(7L, loaded?.sentAt)
+
+            dao.deleteById("m1")
+            assertNull(dao.observeById("m1").first())
+        }
+
     private fun msg(
         id: String,
         recipientId: String? = null,

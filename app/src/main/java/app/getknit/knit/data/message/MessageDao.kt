@@ -15,6 +15,13 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY sentAt ASC")
     fun observeForConversation(conversationId: String): Flow<List<MessageEntity>>
 
+    /**
+     * The whole stored row for [id], or null once it is gone — lets the message-details screen follow a
+     * single message (and close itself when that message is deleted out from under it).
+     */
+    @Query("SELECT * FROM messages WHERE id = :id")
+    fun observeById(id: String): Flow<MessageEntity?>
+
     @Upsert
     suspend fun upsert(message: MessageEntity)
 

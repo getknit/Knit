@@ -11,6 +11,14 @@ interface ReactionDao {
     @Query("SELECT * FROM reactions WHERE emoji IS NOT NULL ORDER BY updatedAt ASC")
     fun observeAll(): Flow<List<ReactionEntity>>
 
+    /**
+     * Live reactions on one message, oldest first — the per-reactor rows the message-details screen
+     * lists by name. Same tombstone filter as [observeAll] (a retraction is `emoji IS NULL`, not a
+     * deleted row), narrowed by the existing `messageId` index.
+     */
+    @Query("SELECT * FROM reactions WHERE messageId = :messageId AND emoji IS NOT NULL ORDER BY updatedAt ASC")
+    fun observeForMessage(messageId: String): Flow<List<ReactionEntity>>
+
     /** The stored last-writer-wins clock for this reactor on this message, or null if none yet. */
     @Query("SELECT updatedAt FROM reactions WHERE messageId = :messageId AND reactorNodeId = :reactorNodeId")
     suspend fun updatedAtFor(

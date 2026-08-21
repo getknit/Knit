@@ -25,6 +25,9 @@ class MessageRepository(
     /** Messages in a single thread (the broadcast room or a 1:1 DM), oldest first. */
     fun observeMessages(conversationId: String): Flow<List<MessageEntity>> = dao.observeForConversation(conversationId)
 
+    /** One message by id, null once it is deleted — backs the message-details screen. */
+    fun observeMessage(id: String): Flow<MessageEntity?> = dao.observeById(id)
+
     suspend fun save(message: MessageEntity) = dao.upsert(message)
 
     suspend fun exists(id: String): Boolean = dao.exists(id)

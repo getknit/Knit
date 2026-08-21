@@ -3,6 +3,7 @@ package app.getknit.knit.di
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.ui.blocked.BlockedUsersViewModel
 import app.getknit.knit.ui.chat.ChatViewModel
+import app.getknit.knit.ui.chat.MessageDetailsViewModel
 import app.getknit.knit.ui.chatlist.ChatListViewModel
 import app.getknit.knit.ui.contacts.ContactsViewModel
 import app.getknit.knit.ui.diagnostics.CrashLogViewModel
@@ -49,6 +50,8 @@ val uiModule =
         viewModel { ProfileViewModel(get(), get(), get(), get(), get<RelayStatusRepository>().facts) }
         // ProfileDetailsViewModel takes the tapped peer's node id as a runtime param.
         viewModel { params -> ProfileDetailsViewModel(params.get(), get(), get(), get(), get()) }
+        // MessageDetailsViewModel takes the long-pressed message's id as a runtime param.
+        viewModel { params -> MessageDetailsViewModel(params.get(), get(), get(), get(), get(), get()) }
         // GroupDetailsViewModel takes the group id as a runtime param; the rest are resolved by type.
         viewModel { params ->
             GroupDetailsViewModel(params.get(), get(), get(), get(), get(), get(), get(), androidContext())

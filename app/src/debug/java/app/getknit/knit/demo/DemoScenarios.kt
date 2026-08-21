@@ -172,7 +172,14 @@ private val HIKING_SCENARIO =
                     Slot.ME,
                     "Works for me. I'll grab snacks.",
                     290,
-                    reactions = listOf(DemoReaction(Slot.SAM, "👍", 289)),
+                    // Several reactors, deliberately: this is the message the seeded/a11y runs open
+                    // "Message info" on, and one reactor would not exercise the emoji filter chips.
+                    reactions =
+                        listOf(
+                            DemoReaction(Slot.SAM, "👍", 289),
+                            DemoReaction(Slot.PRIYA, "👍", 288),
+                            DemoReaction(Slot.THEO, "❤️", 287),
+                        ),
                     replyTo = "demo-group-3",
                 ),
                 DemoMsg("demo-group-5", Slot.PRIYA, "You're the best 🥟", 288),

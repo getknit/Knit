@@ -27,6 +27,7 @@ import app.getknit.knit.mesh.MeshService
 import app.getknit.knit.review.ReviewPrompter
 import app.getknit.knit.ui.blocked.BlockedUsersScreen
 import app.getknit.knit.ui.chat.ChatScreen
+import app.getknit.knit.ui.chat.MessageDetailsScreen
 import app.getknit.knit.ui.chatlist.ChatListScreen
 import app.getknit.knit.ui.contacts.ContactsScreen
 import app.getknit.knit.ui.diagnostics.CrashLogScreen
@@ -69,6 +70,11 @@ private object Routes {
     const val GROUP_DETAILS = "groupDetails/{groupId}"
 
     fun groupDetails(groupId: String) = "groupDetails/$groupId"
+
+    const val MESSAGE_DETAILS = "messageDetails/{messageId}"
+
+    // Message ids are FrameId's 22-char base64url, so they need no escaping to ride a route.
+    fun messageDetails(messageId: String) = "messageDetails/$messageId"
 }
 
 /**
@@ -222,6 +228,18 @@ fun KnitApp(startRoute: String? = null) {
                 onBack = { navController.popBackStack() },
                 onOpenProfile = { id -> navController.navigate(Routes.profileDetails(id)) },
                 onOpenGroupDetails = { id -> navController.navigate(Routes.groupDetails(id)) },
+                onOpenMessageDetails = { id -> navController.navigate(Routes.messageDetails(id)) },
+            )
+        }
+        composable(
+            route = Routes.MESSAGE_DETAILS,
+            arguments = listOf(navArgument("messageId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val messageId = backStackEntry.arguments?.getString("messageId") ?: return@composable
+            MessageDetailsScreen(
+                messageId = messageId,
+                onBack = { navController.popBackStack() },
+                onOpenProfile = { id -> navController.navigate(Routes.profileDetails(id)) },
             )
         }
         composable(

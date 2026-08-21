@@ -15,6 +15,9 @@ class ReactionRepository(
 ) {
     fun observeReactions(): Flow<List<ReactionEntity>> = dao.observeAll()
 
+    /** Live reactions on a single message, oldest first — who reacted, with what (message details). */
+    fun observeReactionsFor(messageId: String): Flow<List<ReactionEntity>> = dao.observeForMessage(messageId)
+
     /**
      * Applies a reaction, keeping the existing one when this update is not strictly newer. This is
      * the single guard that makes out-of-order add/retract/replace frames (and plain duplicates)

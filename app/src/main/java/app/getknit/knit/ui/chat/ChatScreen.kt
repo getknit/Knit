@@ -78,6 +78,7 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -113,6 +114,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboard
@@ -195,6 +197,7 @@ fun ChatScreen(
     onBack: () -> Unit,
     onOpenProfile: (nodeId: String) -> Unit,
     onOpenGroupDetails: (conversationId: String) -> Unit,
+    onOpenMessageDetails: (messageId: String) -> Unit,
     viewModel: ChatViewModel = koinViewModel { parametersOf(conversationId) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -336,6 +339,7 @@ fun ChatScreen(
         onBack = onBack,
         onOpenProfile = onOpenProfile,
         onOpenGroupDetails = onOpenGroupDetails,
+        onOpenMessageDetails = onOpenMessageDetails,
         onSend = {
             val text = inputState.text.toString()
             val applied = pendingMentions.filter { text.contains("@${it.name}") }
@@ -411,6 +415,9 @@ internal fun ChatScreenContent(
     onBack: () -> Unit,
     onOpenProfile: (nodeId: String) -> Unit,
     onOpenGroupDetails: (conversationId: String) -> Unit,
+    // Opens a message's details screen from its long-press menu. Defaulted so previews and the
+    // content-level tests can leave it out.
+    onOpenMessageDetails: (messageId: String) -> Unit = {},
     onSend: () -> Unit,
     onAttachClick: () -> Unit,
     // Long-pressing the attach affordance; opens the in-app camera. Defaulted so previews and the
@@ -728,6 +735,7 @@ internal fun ChatScreenContent(
                                 onDelete = onDeleteMessage,
                                 onBlock = onBlock,
                                 onCopy = onCopy,
+                                onOpenMessageDetails = onOpenMessageDetails,
                                 onExplainRelay = { relayMarkerExplained = it },
                             )
                         }
@@ -942,6 +950,8 @@ private fun MessageBubble(
     onDelete: (messageId: String) -> Unit,
     onBlock: (nodeId: String) -> Unit,
     onCopy: (text: String) -> Unit,
+    // Opens this message's details screen ("Message info"); defaulted no-op for previews.
+    onOpenMessageDetails: (messageId: String) -> Unit = {},
     // Tapping the "nearby only" marker; defaulted no-op for previews and for bubbles that never show it.
     onExplainRelay: (AttachmentRelay) -> Unit = {},
 ) {
@@ -1126,11 +1136,16 @@ private fun MessageBubble(
                                     imageVector = if (row.received) Icons.Filled.DoneAll else Icons.Filled.Done,
                                     contentDescription =
                                         stringResource(
-                                            when {
-                                                viaInternet -> R.string.chat_status_delivered_internet
-                                                row.received -> R.string.chat_status_delivered
-                                                else -> R.string.chat_status_sent
-                                            },
+                                            deliveryLabel(
+                                                status =
+                                                    if (row.received) {
+                                                        DeliveryStatus.Delivered
+                                                    } else {
+                                                        DeliveryStatus.Sent
+                                                    },
+                                                plane = row.deliveredVia,
+                                                mine = true,
+                                            ),
                                         ),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(14.dp),
@@ -1143,7 +1158,10 @@ private fun MessageBubble(
                             if (!row.mine && row.deliveredVia == DeliveryPlane.Internet) {
                                 Icon(
                                     imageVector = Icons.Filled.Public,
-                                    contentDescription = stringResource(R.string.chat_status_arrived_internet),
+                                    contentDescription =
+                                        stringResource(
+                                            deliveryLabel(DeliveryStatus.Delivered, row.deliveredVia, mine = false),
+                                        ),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(12.dp).testTag("chat_arrived_relay"),
                                 )
@@ -1171,6 +1189,10 @@ private fun MessageBubble(
                             } else {
                                 null
                             },
+                        onDetails = {
+                            showPicker = false
+                            onOpenMessageDetails(row.id)
+                        },
                         onDelete = {
                             showPicker = false
                             showDeleteConfirm = true
@@ -1281,15 +1303,17 @@ private fun QuotedMessage(
 
 /**
  * Floating menu shown just above a long-pressed bubble: a "Reply" action, a row of quick-reaction emoji,
- * an optional "Copy text" action ([onCopy] is null for messages with no copyable text), an optional
- * "Block user" action ([onBlock] is null for your own messages), and an always-present "Delete message"
- * action that removes the message from this device only.
+ * an optional "Copy text" action ([onCopy] is null for messages with no copyable text), a "Message info"
+ * action ([onDetails]) opening the per-message details screen, an optional "Block user" action ([onBlock]
+ * is null for your own messages), and an always-present "Delete message" action that removes the message
+ * from this device only.
  */
 @Composable
 private fun ReactionPicker(
     onPick: (String) -> Unit,
     onReply: () -> Unit,
     onCopy: (() -> Unit)?,
+    onDetails: () -> Unit,
     onDelete: () -> Unit,
     onBlock: (() -> Unit)?,
     onDismiss: () -> Unit,
@@ -1350,90 +1374,73 @@ private fun ReactionPicker(
                 // Delete is always offered, so the divider below the emoji row always shows.
                 HorizontalDivider()
                 // Reply leads the action list (Signal-style: it's the primary action).
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onReply() }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Reply,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Text(
-                        text = stringResource(R.string.chat_action_reply),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
+                PickerAction(
+                    icon = Icons.AutoMirrored.Filled.Reply,
+                    label = stringResource(R.string.chat_action_reply),
+                    onClick = onReply,
+                )
                 if (onCopy != null) {
-                    Row(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { onCopy() }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ContentCopy,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Text(
-                            text = stringResource(R.string.chat_action_copy),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
+                    PickerAction(
+                        icon = Icons.Filled.ContentCopy,
+                        label = stringResource(R.string.chat_action_copy),
+                        onClick = onCopy,
+                    )
                 }
+                PickerAction(
+                    icon = Icons.Outlined.Info,
+                    label = stringResource(R.string.chat_action_details),
+                    onClick = onDetails,
+                )
                 if (onBlock != null) {
-                    Row(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { onBlock() }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Block,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Text(
-                            text = stringResource(R.string.chat_action_block),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onDelete() }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Text(
-                        text = stringResource(R.string.chat_action_delete),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
+                    PickerAction(
+                        icon = Icons.Filled.Block,
+                        label = stringResource(R.string.chat_action_block),
+                        onClick = onBlock,
                     )
                 }
+                PickerAction(
+                    icon = Icons.Filled.Delete,
+                    label = stringResource(R.string.chat_action_delete),
+                    onClick = onDelete,
+                    tint = MaterialTheme.colorScheme.error,
+                )
             }
         }
+    }
+}
+
+/**
+ * One full-width row of the long-press menu: leading icon + label. Extracted because the menu holds five
+ * of these and the only differences are the icon, the label and whether it is destructive ([tint]).
+ */
+@Composable
+private fun PickerAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    tint: Color = LocalContentColor.current,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable { onClick() }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            // Decorative: the label beside it already names the action.
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = tint,
+        )
     }
 }
 
@@ -2458,6 +2465,7 @@ fun ReactionPickerPreview() =
             onPick = {},
             onReply = {},
             onCopy = {},
+            onDetails = {},
             onDelete = {},
             onBlock = {},
             onDismiss = {},

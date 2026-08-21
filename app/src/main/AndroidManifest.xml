@@ -39,9 +39,11 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
-    <!-- QR identity verification (scan a peer's key) — CameraX + zxing core, see ui/scan/. required=false
-         because a camera-less device can still *show* its own code for someone else to scan; the scanner
-         surfaces an explanatory message instead (QrScanner probes FEATURE_CAMERA_ANY at runtime). -->
+    <!-- Two camera surfaces, both CameraX (see ui/camera/ for the shared permission gate): QR identity
+         verification (scan a peer's key, ui/scan/) and taking a photo to send from inside a chat
+         (ui/camera/PhotoCaptureContent.kt). required=false because a camera-less device can still *show*
+         its own code for someone else to scan and can still attach a photo from the picker; both surfaces
+         probe FEATURE_CAMERA_ANY at runtime and surface an explanatory message instead. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 

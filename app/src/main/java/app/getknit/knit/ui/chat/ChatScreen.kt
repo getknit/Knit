@@ -83,7 +83,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -165,6 +164,7 @@ import app.getknit.knit.demo.DemoComposer
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.ui.camera.PhotoCapture
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
 import app.getknit.knit.ui.components.GroupAvatar
@@ -310,6 +310,20 @@ fun ChatScreen(
     val clipboard = LocalClipboard.current
     val copyScope = rememberCoroutineScope()
 
+    // The camera takes over the whole screen rather than launching an Activity — same in-place shape
+    // as the QR scanner, see [app.getknit.knit.ui.camera.PhotoCapture] and ADR 015.
+    var capturing by remember { mutableStateOf(false) }
+    if (capturing) {
+        PhotoCapture(
+            onCaptured = {
+                capturing = false
+                viewModel.attachCaptured(it)
+            },
+            onCancel = { capturing = false },
+        )
+        return
+    }
+
     ChatScreenContent(
         conversationId = conversationId,
         state = state,
@@ -334,6 +348,7 @@ fun ChatScreen(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
             )
         },
+        onCameraClick = { capturing = true },
         onClearAttachment = viewModel::clearAttachment,
         onReceiveImage = viewModel::attach,
         onTyping = viewModel::onUserTyping,
@@ -398,6 +413,9 @@ internal fun ChatScreenContent(
     onOpenGroupDetails: (conversationId: String) -> Unit,
     onSend: () -> Unit,
     onAttachClick: () -> Unit,
+    // Long-pressing the attach affordance; opens the in-app camera. Defaulted so previews and the
+    // existing content tests don't all have to name it.
+    onCameraClick: () -> Unit = {},
     onClearAttachment: () -> Unit,
     onReceiveImage: (Uri) -> Unit,
     onTyping: () -> Unit,
@@ -636,6 +654,7 @@ internal fun ChatScreenContent(
                 onCancelReply = onCancelReply,
                 onMentionAdded = onMentionAdded,
                 onAttachClick = onAttachClick,
+                onCameraClick = onCameraClick,
                 onClearAttachment = onClearAttachment,
                 onReceiveImage = onReceiveImage,
                 onSend = onSend,
@@ -1874,6 +1893,7 @@ private fun MessageInput(
     onCancelReply: () -> Unit = {},
     onMentionAdded: (Mention) -> Unit,
     onAttachClick: () -> Unit,
+    onCameraClick: () -> Unit = {},
     onClearAttachment: () -> Unit,
     onReceiveImage: (Uri) -> Unit,
     onSend: () -> Unit,
@@ -2042,45 +2062,75 @@ private fun MessageInput(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                FilledIconButton(
-                    // Swallow taps while a send is in flight (the ViewModel guard also drops re-entrant
-                    // sends, but suppressing the click keeps the button from feeling dead-but-pressable).
-                    onClick = {
-                        if (!showSending) {
-                            if (canSend) {
-                                onSend()
-                            } else {
-                                onAttachClick()
-                            }
-                        }
-                    },
+                // Deliberately a Surface + combinedClickable rather than a FilledIconButton: the
+                // latter wraps Surface(onClick = ...), whose own `clickable` sits inside whatever
+                // modifier we pass and consumes the gesture, so an outer long-press never fires.
+                // The colours and shape below are FilledIconButton's own defaults, so it looks the same.
+                val takePhotoLabel = stringResource(R.string.action_take_photo)
+                Surface(
                     shape = CircleShape,
-                    modifier = Modifier.size(48.dp).align(Alignment.CenterVertically).testTag("chat_send"),
-                ) {
-                    if (showSending) {
-                        val sendingLabel = stringResource(R.string.chat_sending)
-                        CircularProgressIndicator(
-                            modifier =
-                                Modifier
-                                    .size(24.dp)
-                                    .semantics { contentDescription = sendingLabel },
-                            strokeWidth = 2.dp,
-                            // LocalContentColor is the button's onPrimary content color, so the spinner
-                            // reads against the filled container.
-                            color = LocalContentColor.current,
-                        )
-                    } else {
-                        Icon(
-                            imageVector =
-                                if (canSend) Icons.AutoMirrored.Filled.Send else Icons.Filled.AddPhotoAlternate,
-                            contentDescription =
-                                if (canSend) {
-                                    stringResource(R.string.action_send)
-                                } else {
-                                    stringResource(R.string.action_attach_photo)
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier =
+                        Modifier
+                            .size(48.dp)
+                            .align(Alignment.CenterVertically)
+                            .testTag("chat_send")
+                            .combinedClickable(
+                                role = Role.Button,
+                                // Swallow taps while a send is in flight (the ViewModel guard also drops
+                                // re-entrant sends, but suppressing the click keeps the button from
+                                // feeling dead-but-pressable).
+                                onClick = {
+                                    if (!showSending) {
+                                        if (canSend) {
+                                            onSend()
+                                        } else {
+                                            onAttachClick()
+                                        }
+                                    }
                                 },
-                            modifier = Modifier.size(24.dp),
-                        )
+                                // Only in attach mode: long-pressing *Send* to open a camera would be
+                                // surprising, and could interrupt the send it looks like it triggers.
+                                onLongClickLabel = takePhotoLabel.takeIf { !canSend && !showSending },
+                                onLongClick =
+                                    if (!canSend && !showSending) {
+                                        { onCameraClick() }
+                                    } else {
+                                        null
+                                    },
+                            ),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (showSending) {
+                            val sendingLabel = stringResource(R.string.chat_sending)
+                            CircularProgressIndicator(
+                                modifier =
+                                    Modifier
+                                        .size(24.dp)
+                                        .semantics { contentDescription = sendingLabel },
+                                strokeWidth = 2.dp,
+                                // LocalContentColor is the Surface's onPrimary content colour, so the
+                                // spinner reads against the filled container.
+                                color = LocalContentColor.current,
+                            )
+                        } else {
+                            Icon(
+                                imageVector =
+                                    if (canSend) {
+                                        Icons.AutoMirrored.Filled.Send
+                                    } else {
+                                        Icons.Filled.AddPhotoAlternate
+                                    },
+                                contentDescription =
+                                    if (canSend) {
+                                        stringResource(R.string.action_send)
+                                    } else {
+                                        stringResource(R.string.action_attach_photo)
+                                    },
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
                     }
                 }
             }

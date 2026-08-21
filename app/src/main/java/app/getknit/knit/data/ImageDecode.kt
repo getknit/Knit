@@ -6,6 +6,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayInputStream
+import java.io.InputStream
 import kotlin.math.min
 
 /*
@@ -23,11 +25,30 @@ internal fun decodeOrientedBounded(
     context: Context,
     uri: Uri,
     maxDim: Int,
+): Bitmap? = decodeOrientedBounded(maxDim) { context.contentResolver.openInputStream(uri) }
+
+/**
+ * The in-memory twin of the [Uri] overload above, for an image that never had a Uri — the in-app
+ * camera's captured JPEG. Note this is *not* [decodeBoundedFromBytes], which skips EXIF orientation
+ * because it only feeds the content classifier; a photo decoded without it is stored sideways.
+ */
+internal fun decodeOrientedBounded(
+    bytes: ByteArray,
+    maxDim: Int,
+): Bitmap? = decodeOrientedBounded(maxDim) { ByteArrayInputStream(bytes) }
+
+/**
+ * Shared body of the two overloads above. [source] is opened three times — the bounds pre-pass, the
+ * sub-sampled decode, and the EXIF read — because each consumes the stream.
+ */
+private fun decodeOrientedBounded(
+    maxDim: Int,
+    source: () -> InputStream?,
 ): Bitmap? {
     // inJustDecodeBounds populates bounds.outWidth/outHeight and returns null by design, so the
-    // null check must be on openInputStream, not on decodeStream's (always-null) result.
+    // null check must be on the source, not on decodeStream's (always-null) result.
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    (context.contentResolver.openInputStream(uri) ?: return null).use {
+    (source() ?: return null).use {
         BitmapFactory.decodeStream(it, null, bounds)
     }
 
@@ -36,12 +57,12 @@ internal fun decodeOrientedBounded(
             inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, maxDim)
         }
     val bitmap =
-        (context.contentResolver.openInputStream(uri) ?: return null).use {
+        (source() ?: return null).use {
             BitmapFactory.decodeStream(it, null, options)
         } ?: return null
 
     val orientation =
-        context.contentResolver.openInputStream(uri)?.use {
+        source()?.use {
             ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
         } ?: ExifInterface.ORIENTATION_NORMAL
     return rotatedForExif(bitmap, orientation)

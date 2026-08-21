@@ -598,35 +598,55 @@ class ChatViewModel(
     }
 
     /**
-     * Ingests a picked or keyboard-inserted image and stages it in the input bar. A picture flagged as
-     * explicit by on-device screening is handled by context: the public Nearby room **blocks** it
-     * outright (no confirmation bypass), while DMs/groups route it to [confirmAttachment] for a
-     * "send anyway?" confirmation. A decode failure is silently ignored, as before.
+     * Ingests a picked or keyboard-inserted image and stages it in the input bar. A decode failure is
+     * silently ignored, as before — the picture is still sitting in the picker, so there is nothing to
+     * explain.
      */
     fun attach(uri: Uri) {
-        viewModelScope.launch {
-            when (val result = attachments.ingest(uri)) {
-                is AttachmentStore.IngestResult.Success -> {
-                    when {
-                        !result.flagged -> {
-                            _pendingAttachment.value = result.ingested
-                        }
+        viewModelScope.launch { stage(attachments.ingest(uri), notifyFailure = false) }
+    }
 
-                        isRoom -> {
-                            // Hard block in the broadcast room; drop the ingested-but-unsent blob.
-                            blobs.deleteIfUnreferenced(result.ingested.hash)
-                            _events.tryEmit(R.string.moderation_image_blocked)
-                        }
+    /**
+     * Ingests a photo just taken with the in-app camera ([app.getknit.knit.ui.camera.PhotoCapture]) and
+     * stages it exactly like a picked one. The bytes arrive in memory and are never written to disk.
+     *
+     * Unlike [attach] this **does** surface a failure: the shot exists nowhere else, so silently
+     * dropping it would look like the camera simply did nothing.
+     */
+    fun attachCaptured(jpeg: ByteArray) {
+        viewModelScope.launch { stage(attachments.ingest(jpeg, "image/jpeg"), notifyFailure = true) }
+    }
 
-                        else -> {
-                            _confirmAttachment.value = result.ingested
-                        }
+    /**
+     * Stages an ingested image, or handles its verdict. A picture flagged as explicit by on-device
+     * screening is handled by context: the public Nearby room **blocks** it outright (no confirmation
+     * bypass), while DMs/groups route it to [confirmAttachment] for a "send anyway?" confirmation.
+     */
+    private suspend fun stage(
+        result: AttachmentStore.IngestResult,
+        notifyFailure: Boolean,
+    ) {
+        when (result) {
+            is AttachmentStore.IngestResult.Success -> {
+                when {
+                    !result.flagged -> {
+                        _pendingAttachment.value = result.ingested
+                    }
+
+                    isRoom -> {
+                        // Hard block in the broadcast room; drop the ingested-but-unsent blob.
+                        blobs.deleteIfUnreferenced(result.ingested.hash)
+                        _events.tryEmit(R.string.moderation_image_blocked)
+                    }
+
+                    else -> {
+                        _confirmAttachment.value = result.ingested
                     }
                 }
+            }
 
-                AttachmentStore.IngestResult.Failed -> {
-                    Unit
-                }
+            AttachmentStore.IngestResult.Failed -> {
+                if (notifyFailure) _events.tryEmit(R.string.chat_image_capture_failed)
             }
         }
     }

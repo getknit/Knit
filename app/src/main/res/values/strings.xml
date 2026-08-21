@@ -99,6 +99,7 @@
     <string name="chat_image_viewer_desc">Photo</string>
     <string name="chat_image_saved">Saved to Pictures/Knit</string>
     <string name="chat_image_save_failed">Couldn\'t save image</string>
+    <string name="chat_image_capture_failed">Couldn\'t attach that photo</string>
     <string name="chat_attachment_preview_desc">Attachment preview</string>
     <string name="chat_remove_attachment">Remove attachment</string>
     <string name="chat_self_name">You</string>
@@ -271,9 +272,15 @@
     <!-- QR scanner (camera) -->
     <string name="scan_hint">Point the camera at the other person\'s code.</string>
     <string name="scan_permission_denied">Knit needs camera access to scan a contact\'s code. You can turn it on in Settings.</string>
-    <string name="scan_open_settings">Open settings</string>
     <string name="scan_no_camera">This device has no camera, so codes can\'t be scanned. You can still show your own code for someone else to scan.</string>
-    <string name="scan_camera_unavailable">The camera couldn\'t be opened. Close any other app using it and try again.</string>
+
+    <!-- In-chat photo capture, and the states shared with the QR scanner above -->
+    <string name="camera_unavailable">The camera couldn\'t be opened. Close any other app using it and try again.</string>
+    <string name="camera_permission_denied">Knit needs camera access to take a photo. You can turn it on in Settings.</string>
+    <string name="camera_no_camera">This device has no camera, so there\'s nothing to take a photo with. You can still attach one from your photos.</string>
+    <string name="camera_capture_failed">That photo couldn\'t be taken. Try again.</string>
+    <string name="camera_capturing">Taking photo</string>
+    <string name="camera_switch_lens">Switch camera</string>
 
     <!-- Diagnostics -->
     <string name="diagnostics_title">Diagnostics</string>
@@ -365,6 +372,8 @@
     <!-- Generic actions / content descriptions -->
     <string name="action_send">Send</string>
     <string name="action_attach_photo">Attach photo</string>
+    <string name="action_take_photo">Take photo</string>
+    <string name="action_open_settings">Open settings</string>
     <string name="action_back">Back</string>
     <string name="action_close">Close</string>
     <string name="action_cancel">Cancel</string>

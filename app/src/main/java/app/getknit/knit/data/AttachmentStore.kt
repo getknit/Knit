@@ -12,7 +12,7 @@ import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 
 /**
- * Ingests picked/keyboard images into the encrypted, content-addressed `blobs` table (see
+ * Ingests picked/keyboard/captured images into the encrypted, content-addressed `blobs` table (see
  * [app.getknit.knit.data.blob.BlobEntity]). The content hash both keys the blob and is the key carried
  * in the wire frame, so any holder can serve the bytes and identical images dedupe.
  *
@@ -20,7 +20,8 @@ import java.security.MessageDigest
  * are re-encoded to a smaller **animated WebP** via [app.getknit.knit.data.webp.WebpTranscode] (VP8
  * beats GIF's LZW even at the same size, and Coil plays animated WebP like a GIF) so they transmit
  * faster; a GIF that somehow can't be shrunk falls back to its original bytes. The bytes never touch
- * disk — they go straight into the encrypted database.
+ * disk — they go straight into the encrypted database. That invariant is why the in-app camera hands
+ * its capture over as a [ByteArray] rather than staging a plaintext JPEG in `cacheDir`.
  *
  * Before staging, the image is screened for explicit content via [ImageScreeningService]. Sending an
  * explicit image is *allowed but discouraged*: a flagged image is still ingested, and [ingest] reports the
@@ -31,7 +32,7 @@ class AttachmentStore(
     private val blobs: BlobRepository,
     private val imageScreening: ImageScreeningService,
 ) {
-    /** The result of ingesting a picked/keyboard image: its content [hash] and [mime]. */
+    /** The result of ingesting a picked/keyboard/captured image: its content [hash] and [mime]. */
     data class Ingested(
         val hash: String,
         val mime: String,
@@ -59,59 +60,88 @@ class AttachmentStore(
      */
     suspend fun ingest(uri: Uri): IngestResult =
         withContext(Dispatchers.IO) {
-            val sourceMime = context.contentResolver.getType(uri)
-            val (mime, bytes) =
-                if (sourceMime == "image/gif") {
-                    // Re-encode the GIF as a smaller animated WebP (its per-frame VP8 compression beats GIF's
-                    // 256-colour LZW even at the same dimensions, and Coil's AnimatedImageDecoder plays it like
-                    // a GIF). Keep the raw GIF only if that somehow isn't smaller, so a GIF is never regressed.
-                    val raw =
-                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                            ?: return@withContext IngestResult.Failed
-                    val webp = WebpTranscode.shrink(raw, GIF_MAX_DIMENSION, GIF_MAX_FPS, GIF_WEBP_QUALITY)
-                    if (webp != null) "image/webp" to webp else "image/gif" to raw
-                } else {
-                    val bitmap =
-                        decodeOrientedBounded(context, uri, MAX_DIMENSION)
-                            ?: return@withContext IngestResult.Failed
-                    val scaled = downscale(bitmap, MAX_DIMENSION)
-                    // JPEG has no alpha channel, so a transparent PNG would flatten its transparent regions to
-                    // black. When the source carries transparency, re-encode as lossy WebP instead — it keeps
-                    // the alpha channel and still compresses well; opaque photos stay JPEG (smallest).
-                    if (scaled.hasAlpha()) {
-                        // WEBP (deprecated at API 30) is the API-29 lossy WebP format; WEBP_LOSSY is API 30.
-                        @Suppress("DEPRECATION")
-                        val webpFormat =
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                Bitmap.CompressFormat.WEBP_LOSSY
-                            } else {
-                                Bitmap.CompressFormat.WEBP
-                            }
-                        val webp =
-                            ByteArrayOutputStream().use { out ->
-                                scaled.compress(webpFormat, WEBP_QUALITY, out)
-                                out.toByteArray()
-                            }
-                        "image/webp" to webp
-                    } else {
-                        val jpeg =
-                            ByteArrayOutputStream().use { out ->
-                                scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-                                out.toByteArray()
-                            }
-                        "image/jpeg" to jpeg
-                    }
-                }
-            if (bytes.isEmpty() || bytes.size > MAX_BYTES) return@withContext IngestResult.Failed
-            // Screen the exact bytes we store and transmit (decoded at the receiver's bound), so the
-            // send-side verdict matches what the recipient computes rather than scoring the sharper,
-            // pre-JPEG source. Stored regardless — an explicit image is allowed but the caller confirms
-            // before sending; fail-open when the bytes can't be decoded.
-            val flagged = imageScreening.isImageExplicit(bytes)
-            val hash = sha256(bytes)
-            blobs.insert(hash, mime, bytes)
-            IngestResult.Success(Ingested(hash, mime), flagged)
+            ingest(
+                sourceMime = context.contentResolver.getType(uri),
+                readRaw = { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } },
+                decodeOriented = { decodeOrientedBounded(context, uri, MAX_DIMENSION) },
+            )
         }
+
+    /**
+     * Ingests an image already held in memory — the in-app camera's captured JPEG, which deliberately
+     * never reaches disk. Identical to [ingest] in every other respect, screening included, so a
+     * captured photo is indistinguishable from a picked one once stored.
+     */
+    suspend fun ingest(
+        bytes: ByteArray,
+        sourceMime: String?,
+    ): IngestResult =
+        withContext(Dispatchers.IO) {
+            ingest(
+                sourceMime = sourceMime,
+                readRaw = { bytes },
+                decodeOriented = { decodeOrientedBounded(bytes, MAX_DIMENSION) },
+            )
+        }
+
+    /**
+     * The one ingest pipeline, over whichever source the caller has: [readRaw] yields the untouched
+     * source bytes (the GIF path re-encodes those directly) and [decodeOriented] yields an
+     * EXIF-corrected, sub-sampled bitmap (every other format). Both are called at most once.
+     */
+    private suspend fun ingest(
+        sourceMime: String?,
+        readRaw: () -> ByteArray?,
+        decodeOriented: () -> Bitmap?,
+    ): IngestResult {
+        val (mime, bytes) =
+            if (sourceMime == "image/gif") {
+                // Re-encode the GIF as a smaller animated WebP (its per-frame VP8 compression beats GIF's
+                // 256-colour LZW even at the same dimensions, and Coil's AnimatedImageDecoder plays it like
+                // a GIF). Keep the raw GIF only if that somehow isn't smaller, so a GIF is never regressed.
+                val raw = readRaw() ?: return IngestResult.Failed
+                val webp = WebpTranscode.shrink(raw, GIF_MAX_DIMENSION, GIF_MAX_FPS, GIF_WEBP_QUALITY)
+                if (webp != null) "image/webp" to webp else "image/gif" to raw
+            } else {
+                val bitmap = decodeOriented() ?: return IngestResult.Failed
+                val scaled = downscale(bitmap, MAX_DIMENSION)
+                // JPEG has no alpha channel, so a transparent PNG would flatten its transparent regions to
+                // black. When the source carries transparency, re-encode as lossy WebP instead — it keeps
+                // the alpha channel and still compresses well; opaque photos stay JPEG (smallest).
+                if (scaled.hasAlpha()) {
+                    // WEBP (deprecated at API 30) is the API-29 lossy WebP format; WEBP_LOSSY is API 30.
+                    @Suppress("DEPRECATION")
+                    val webpFormat =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            Bitmap.CompressFormat.WEBP_LOSSY
+                        } else {
+                            Bitmap.CompressFormat.WEBP
+                        }
+                    val webp =
+                        ByteArrayOutputStream().use { out ->
+                            scaled.compress(webpFormat, WEBP_QUALITY, out)
+                            out.toByteArray()
+                        }
+                    "image/webp" to webp
+                } else {
+                    val jpeg =
+                        ByteArrayOutputStream().use { out ->
+                            scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+                            out.toByteArray()
+                        }
+                    "image/jpeg" to jpeg
+                }
+            }
+        if (bytes.isEmpty() || bytes.size > MAX_BYTES) return IngestResult.Failed
+        // Screen the exact bytes we store and transmit (decoded at the receiver's bound), so the
+        // send-side verdict matches what the recipient computes rather than scoring the sharper,
+        // pre-JPEG source. Stored regardless — an explicit image is allowed but the caller confirms
+        // before sending; fail-open when the bytes can't be decoded.
+        val flagged = imageScreening.isImageExplicit(bytes)
+        val hash = sha256(bytes)
+        blobs.insert(hash, mime, bytes)
+        return IngestResult.Success(Ingested(hash, mime), flagged)
+    }
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 

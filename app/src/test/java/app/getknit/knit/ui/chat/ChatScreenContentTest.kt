@@ -3,8 +3,10 @@ package app.getknit.knit.ui.chat
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.mesh.protocol.ReplyRef
@@ -15,7 +17,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.GraphicsMode
 
-/** Drives the stateless `ChatScreenContent` — the send/attach button-mode switch and the reply banner. */
+/**
+ * Drives the stateless `ChatScreenContent` — the send/attach button-mode switch, the long-press that
+ * opens the camera, and the reply banner.
+ */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ChatScreenContentTest {
@@ -24,6 +29,7 @@ class ChatScreenContentTest {
 
     private var sends = 0
     private var attaches = 0
+    private var cameras = 0
     private var cancelledReply = 0
 
     private fun content(
@@ -44,6 +50,7 @@ class ChatScreenContentTest {
                     onOpenGroupDetails = {},
                     onSend = { sends++ },
                     onAttachClick = { attaches++ },
+                    onCameraClick = { cameras++ },
                     onClearAttachment = {},
                     onReceiveImage = {},
                     onTyping = {},
@@ -78,6 +85,33 @@ class ChatScreenContentTest {
 
         assertEquals(0, sends)
         assertEquals(1, attaches)
+    }
+
+    /** Long-press is the camera's only entry point, so it has to reach past the button's own click. */
+    @Test
+    fun longPressingTheAttachButtonOpensTheCamera() {
+        compose.setContent(content(input = ""))
+
+        compose.onNodeWithTag("chat_send").performTouchInput { longClick() }
+
+        assertEquals(1, cameras)
+        assertEquals(0, attaches)
+        assertEquals(0, sends)
+    }
+
+    /**
+     * In Send mode the same button must not open a camera — that would interrupt the send it looks like
+     * it triggers. With no long-press handler the gesture still resolves to an ordinary click on
+     * release, exactly as it did when this was a `FilledIconButton`.
+     */
+    @Test
+    fun longPressingInSendModeSendsAndNeverOpensTheCamera() {
+        compose.setContent(content(input = "hello"))
+
+        compose.onNodeWithTag("chat_send").performTouchInput { longClick() }
+
+        assertEquals(0, cameras)
+        assertEquals(1, sends)
     }
 
     @Test

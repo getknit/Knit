@@ -356,4 +356,60 @@ class ChatViewModelTest {
 
             assertEquals(ingested, vm.pendingAttachment.value)
         }
+
+    @Test
+    fun capturingACleanPhotoStagesItForSending() =
+        runTest {
+            val jpeg = byteArrayOf(1, 2, 3)
+            val ingested = AttachmentStore.Ingested(hash = "h3", mime = "image/jpeg")
+            coEvery {
+                attachments.ingest(jpeg, "image/jpeg")
+            } returns AttachmentStore.IngestResult.Success(ingested, flagged = false)
+            val vm = vm()
+
+            vm.attachCaptured(jpeg)
+            advanceUntilIdle()
+
+            assertEquals(ingested, vm.pendingAttachment.value)
+        }
+
+    @Test
+    fun capturingAFlaggedPhotoInTheRoomBlocksItInsteadOfStaging() =
+        runTest {
+            val jpeg = byteArrayOf(4, 5, 6)
+            val ingested = AttachmentStore.Ingested(hash = "h4", mime = "image/jpeg")
+            coEvery {
+                attachments.ingest(jpeg, "image/jpeg")
+            } returns AttachmentStore.IngestResult.Success(ingested, flagged = true)
+            val vm = vm() // Nearby room
+
+            vm.attachCaptured(jpeg)
+            advanceUntilIdle()
+
+            assertNull("flagged photo is not staged in the public room", vm.pendingAttachment.value)
+            coVerify { blobs.deleteIfUnreferenced("h4") }
+        }
+
+    /** A failed capture has to say so: unlike a pick, the shot exists nowhere else to try again from. */
+    @Test
+    fun aFailedCaptureSurfacesAnErrorWhereAFailedPickStaysSilent() =
+        runTest {
+            val jpeg = byteArrayOf(7, 8, 9)
+            val uri = Uri.parse("content://images/3")
+            coEvery { attachments.ingest(jpeg, "image/jpeg") } returns AttachmentStore.IngestResult.Failed
+            coEvery { attachments.ingest(uri) } returns AttachmentStore.IngestResult.Failed
+            val vm = vm()
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+
+            vm.attach(uri)
+            advanceUntilIdle()
+            assertTrue("a failed pick stays silent", events.isEmpty())
+
+            vm.attachCaptured(jpeg)
+            advanceUntilIdle()
+
+            assertTrue(events.contains(R.string.chat_image_capture_failed))
+            assertNull(vm.pendingAttachment.value)
+        }
 }

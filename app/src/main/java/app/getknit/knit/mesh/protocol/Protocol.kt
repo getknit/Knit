@@ -54,8 +54,18 @@ object Protocol {
      */
     const val CAP_RATCHET = 0x10L
 
+    /**
+     * The compact coordination-plane framing (`mesh/link/FastFrameCodec`): this build accepts the
+     * `0x03` compact / `0x04` fragment fast-path message tags. Gates only the *encoding* a sender
+     * picks toward this peer (compact vs the legacy `0x01` CBOR framing) — a transport-local routing
+     * hint like every advert bit, consumed from the SSI advert copy, never a trust input. Receivers
+     * accept all tags unconditionally, so a stale bit degrades to a lost best-effort message at worst.
+     */
+    const val CAP_FAST_COMPACT = 0x20L
+
     /** This build's advertised capability bitfield. */
-    val LOCAL_CAPABILITIES: Long = CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET
+    val LOCAL_CAPABILITIES: Long =
+        CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT
 
     private const val SEP = '|'
 

@@ -242,7 +242,9 @@ interface MeshTransport {
 
     /**
      * Best-effort **coordination-plane** fan-out of [wire] to every neighbor at once, with **no data path** —
-     * a fast path for a frame small enough to ride the tiny Wi-Fi Aware message channel (~255 B). Because it
+     * a fast path for a frame small enough to ride the tiny Wi-Fi Aware message channel (~255 B/message;
+     * toward capable peers the Wi-Fi Aware transport compacts/deflates the framing and can split one frame
+     * across ≤ 3 messages, so somewhat larger frames ride too — `mesh/link/FastFrameCodec`). Because it
      * needs no NDP it reaches every neighbor simultaneously (the closest thing to a star on hardware capped at
      * one data path at a time), instead of waiting for a cue-driven pairwise sync. The reliable path (the
      * normal [send] flood + store-and-forward custody) always runs regardless; this only makes a small frame
@@ -256,7 +258,9 @@ interface MeshTransport {
      * [fastFanout], for a small point-to-point reply that must reach one node with **no data path** (e.g. a
      * broadcast/group delivery receipt back to the message's author, which works whether the message arrived
      * over an NDP flood or a coordination-plane fast-fanout). No-op if [to] isn't currently reachable over the
-     * coordination plane or [wire] won't fit the ~255 B message channel. Default no-op — only a transport with
+     * coordination plane or no eligible encoding fits (~255 B/message; the Wi-Fi Aware transport compacts and
+     * fragments ≤ 3 messages toward capable peers, which is what lets a sealed receipt ride). Default no-op —
+     * only a transport with
      * a message channel (Wi-Fi Aware) overrides it; the fakes ignore it.
      */
     fun fastSend(

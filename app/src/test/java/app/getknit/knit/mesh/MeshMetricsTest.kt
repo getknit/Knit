@@ -12,6 +12,30 @@ class MeshMetricsTest {
         assertEquals(emptyMap<DropReason, Long>(), snap.dropsByReason)
         assertEquals(emptyMap<ConnectFailReason, Long>(), snap.btConnectFailsByReason)
         assertEquals(0L, snap.nanServesPeak)
+        assertEquals(emptyMap<FastPathDrop, Long>(), snap.fastDropsByReason)
+    }
+
+    @Test
+    fun `fast-path counters surface in the snapshot and omit zero drop buckets`() {
+        val metrics = MeshMetrics()
+        metrics.onFastCompactSent()
+        repeat(2) { metrics.onFastLegacySent() }
+        metrics.onFastFragSent()
+        metrics.onFastReassembled()
+        metrics.onFastTooBig()
+        repeat(2) { metrics.onFastDropped(FastPathDrop.FRAG_TIMEOUT) }
+        metrics.onFastDropped(FastPathDrop.UNKNOWN_TAG)
+
+        val snap = metrics.snapshot()
+        assertEquals(1L, snap.fastCompactSent)
+        assertEquals(2L, snap.fastLegacySent)
+        assertEquals(1L, snap.fastFragSent)
+        assertEquals(1L, snap.fastReassembled)
+        assertEquals(1L, snap.fastTooBig)
+        assertEquals(
+            mapOf(FastPathDrop.FRAG_TIMEOUT to 2L, FastPathDrop.UNKNOWN_TAG to 1L),
+            snap.fastDropsByReason,
+        )
     }
 
     @Test

@@ -46,10 +46,18 @@ and the shipped design runs **two planes** (a concurrent-serve redesign is propo
   together modulo clock skew instead of diverging for up to a sweep period, work item #8) — and
   `DigestTracker` (pure, JVM-tested) flags a peer *sync-wanted* when either side's digest changed since
   the last sync (an identical-digest pair skips the NDP entirely). Small floodable frames (broadcast
-  chat, reactions, receipts, group-meta, profiles ≤255 B) *also* ride this plane as a best-effort **fast
+  chat, reactions, receipts, group-meta, profiles) *also* ride this plane as a best-effort **fast
   fan-out** (`fastFanout`/`fastSend`), deduped by the receiver's `SeenSet`, so they propagate with zero
-  NDP. A cue also bootstraps the reverse handle, so a node whose own *subscribe* is broken (e.g. Pixel 9
-  post-kill) still cues larger peers to pull from it.
+  NDP. The framing is chosen **per peer**: toward a `CAP_FAST_COMPACT` peer the frame rides the compact
+  `0x03` tag (`mesh/link/FastFrameCodec` — outer envelope stripped to 3 B + preset-dict deflate over
+  `signed`, sig/signed byte-exact) and splits into ≤3 `0x04` fragments when one ~255 B message won't
+  hold it (this is what lets AckSync's sealed ticks, sealed reactions, and full profiles ride at all —
+  they measure 374-554 B legacy, see `CoordinationPlaneSizeBudgetTest`); toward legacy/cue-only peers
+  the old `0x01` tagged-CBOR framing is kept, so no wire break. Counters: `fastCompactSent`/
+  `fastLegacySent`/`fastFragSent`/`fastReassembled`/`fastTooBig`/`fastDropsByReason` on `…debug.STATE`;
+  grep `fast-fanout`/`fast-send`/`fast-frame` logcat lines for per-frame routing. A cue also bootstraps
+  the reverse handle, so a node whose own *subscribe* is broken (e.g. Pixel 9 post-kill) still cues
+  larger peers to pull from it.
 - **Data plane** — one ephemeral NDP, brought up **only** when a peer is sync-wanted (the larger id
   initiates, via the unchanged `initiateTo` + accept-any responder). On link-up each side advertises the
   custody ids it holds (a `LinkFraming.Type.DIGEST` record) and pushes back only the frames the peer lacks

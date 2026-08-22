@@ -123,7 +123,10 @@ Implementations:
   (`Protocol.advertise`) ride in the publish `serviceSpecificInfo`, so a subscriber learns a peer's
   identity on discovery with zero round-trips and rejects discovering itself. `SERVICE_NAME` is the
   transport marker: any breaking change to the cue or socket format (or the node-id derivation) bumps the
-  `knitmesh<N>` digit — a **hard cut** (old and new builds simply don't discover each other). *(Pre-1.0
+  `knitmesh<N>` digit — a **hard cut** (old and new builds simply don't discover each other). The
+  coordination-plane compact/fragment message tags (`0x03`/`0x04`, `mesh/link/FastFrameCodec`) are the
+  deliberate counter-example: additive and capability-gated (`CAP_FAST_COMPACT`), so they ride *without*
+  a marker bump. *(Pre-1.0
   alpha churned through the markers `.v2`…`.v8`, recorded in `docs/DIGEST_PULL_REATTACH.md`; that history
   is collapsed into the v1 launch baseline.)*
 - **One data interface → two planes.** Real chipsets (Pixel 7/8/9) report `maxNdiInterfaces == 1`, and

@@ -109,10 +109,12 @@ the purge left zero), bounded by the existing quotas (1000 global / 200 per send
 The sealed tick's two deliberate constraints: **seal-once-resend-verbatim** (sealing consumes a DM
 chain key; per-retry re-sealing at the 15-min heartbeat would burn epochs and starve real DMs out of
 the receiver's ≤200/epoch skipped-key budget — a duplicate is router-deduped inside the SeenSet
-window and a benign `RATCHET_DUPLICATE` beyond), and **no cleartext downgrade when linkless** (a
-sealed tick outgrows the ~255 B coordination plane, so `fastSend` no-ops and it waits for a live
-link — form must not become an on-path observable of link state; the author needed radio proximity
-for fastSend anyway, so this is latency, not reachability).
+window and a benign `RATCHET_DUPLICATE` beyond), and **no cleartext downgrade when it doesn't fit**
+(form must not become an on-path observable of link state). A sealed tick outgrows a *single* ~255 B
+coordination-plane message; toward a `CAP_FAST_COMPACT` author the Wi-Fi Aware transport now carries
+it as ≤ 2 compact fragments (`mesh/link/FastFrameCodec` — still best-effort, the owed-entry retry
+loop stays the reliability mechanism), while toward a legacy author `fastSend` still no-ops and the
+tick waits for a live link.
 
 ## 6. Blocked-sender posture (ADR 010)
 

@@ -34,9 +34,11 @@ import java.util.concurrent.ConcurrentHashMap
  * **once**, at [owe] time, and every retry re-sends those bytes verbatim — a duplicate is router-deduped
  * inside the author's SeenSet window and a benign RATCHET_DUPLICATE beyond it; re-sealing per retry would
  * burn a key per heartbeat and starve real DMs of the receiver's skipped-key budget. One caveat rides with
- * the sealed form: it outgrows the coordination plane's frame cap, so `fastSend` no-ops and it only lands
- * over a live link — the entry just stays owed until one exists (the author needed radio proximity for
- * fastSend anyway). Deliberately NOT downgraded to cleartext in that case: the form would become an
+ * the sealed form: it outgrows a *single* coordination-plane message, so toward a legacy peer `fastSend`
+ * no-ops and the tick only lands over a live link — the entry just stays owed until one exists. Toward a
+ * `CAP_FAST_COMPACT` peer the Wi-Fi Aware transport now carries it as ≤ 2 compact fragments
+ * (`mesh/link/FastFrameCodec`), still best-effort — this retry loop remains the reliability mechanism
+ * either way. Deliberately NOT downgraded to cleartext when it doesn't fit: the form would become an
  * on-path observable of link state.
  *
  * In-memory and bounded (global [cap], per-entry [ttlMs]) like [KeyExchange]/[PendingInbound]: an unsent owed
@@ -131,8 +133,8 @@ class AckSync(
      * cleartext one is rebuilt per attempt (fresh id, so the author's SeenSet never dedups a retry).
      * Returns true if it went over a **live link** (routed to a child holding a data-path link to the
      * author — reliable, so the owed entry can be dropped); false if it could only be best-effort
-     * fast-sent over the coordination plane (kept for a later retry — a no-op for the sealed form,
-     * which outgrows the coordination frame cap; see the class doc).
+     * fast-sent over the coordination plane (kept for a later retry — for the sealed form that means
+     * compact fragments toward a capable peer and a no-op toward a legacy one; see the class doc).
      */
     private suspend fun attempt(
         me: String,

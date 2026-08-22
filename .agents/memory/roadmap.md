@@ -103,7 +103,10 @@ doc). **Don't start a deferred item without explicit direction.**
   advertising** so they bypass an in-flight L2CAP file transfer entirely instead of head-of-line-queuing
   behind it on the one ordered stream. The shipped `TransferPacePolicy` feed-cap (`FramedLink.paceBytesPerSec`)
   *mitigates* the stall by pacing the blob feed below link capacity; this would *structurally* split
-  interactive frames from bulk. DMs stay on L2CAP. See knit/knit-next#13.
+  interactive frames from bulk. DMs stay on L2CAP. See knit/knit-next#13. The frame-codec half now
+  exists (2026-08-21): `mesh/link/FastFrameCodec` (compact `0x03` / fragment `0x04`, ADR 030) is
+  transport-neutral by design — this item still needs the ext-adv carrier plus its cap gate (BLE
+  adverts carry the low 8 capability bits, which covers `CAP_FAST_COMPACT = 0x20`).
 - **True DM routing** — DMs still flood; only the addressed recipient delivers/acks. Store-and-forward now
   *carries* undelivered DMs (`context/store-and-forward.md`), but there is still no routing table.
 - **Group key-gap retransmit (v1-fallback residual only)** — the group ratchet's outbox +

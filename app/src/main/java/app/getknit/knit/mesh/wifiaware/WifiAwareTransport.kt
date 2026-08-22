@@ -33,6 +33,7 @@ import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.annotation.RequiresApi
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.DigestTracker
+import app.getknit.knit.mesh.FastPathDrop
 import app.getknit.knit.mesh.FileMeta
 import app.getknit.knit.mesh.InboundFrame
 import app.getknit.knit.mesh.MeshMetrics
@@ -43,6 +44,8 @@ import app.getknit.knit.mesh.ReceivedFile
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
+import app.getknit.knit.mesh.link.FastFrameCodec
+import app.getknit.knit.mesh.link.FragReassembler
 import app.getknit.knit.mesh.link.FramedLink
 import app.getknit.knit.mesh.link.LinkCallbacks
 import app.getknit.knit.mesh.link.LinkHandshake
@@ -312,6 +315,22 @@ class WifiAwareTransport(
     private val cueTarget = ConcurrentHashMap<String, CueTarget>()
     private val msgSeq = AtomicInteger()
 
+    // Compact fast-path state: one fragId per fragmented frame (shared by every fanout target), and the
+    // bounded reassembly store for inbound fragments — touched only on the Aware callback thread.
+    private val fragSeq = AtomicInteger()
+    private val reassembler =
+        FragReassembler<FragKey>(
+            now = SystemClock::elapsedRealtime,
+            onDrop = { drop ->
+                metrics.onFastDropped(
+                    when (drop) {
+                        FragReassembler.Drop.TIMEOUT -> FastPathDrop.FRAG_TIMEOUT
+                        FragReassembler.Drop.OVERFLOW -> FastPathDrop.FRAG_OVERFLOW
+                    },
+                )
+            },
+        )
+
     // Smoothed reachability: last time each peer was seen over the coordination plane, and the best Peer we
     // know for it, so [_reachable] can linger a peer briefly after its ephemeral link drops.
     private val lastSeenAt = ConcurrentHashMap<String, Long>()
@@ -384,6 +403,16 @@ class WifiAwareTransport(
     private data class CueTarget(
         val handle: PeerHandle,
         val session: DiscoverySession,
+    )
+
+    /**
+     * Reassembly key for inbound fragments: the session disambiguates equal [PeerHandle] ids across the
+     * publish/subscribe sessions, and one frame's parts always arrive on one (they're sent back-to-back
+     * to a single [CueTarget]).
+     */
+    private data class FragKey(
+        val session: DiscoverySession,
+        val handle: PeerHandle,
     )
 
     // SDK-tiered ICM/serveCap capability probes (+ their rationale comments) push this just past LongMethod=60.
@@ -646,6 +675,7 @@ class WifiAwareTransport(
             accepting = 0
         }
         cueTarget.clear()
+        reassembler.clear()
         lastSeenAt.clear()
         reachablePeers.clear()
         digestTracker.clear()
@@ -1387,10 +1417,7 @@ class WifiAwareTransport(
         session: DiscoverySession?,
     ) {
         val sess = session ?: return
-        if (message.isNotEmpty() && message[0] == MSG_FRAME_TAG) {
-            onFastFrame(message)
-            return
-        }
+        if (message.isEmpty() || dispatchFramed(handle, sess, message)) return
         val cue = NanCueCodec.parseCue(message) ?: return
         if (cue.nodeId == localNodeId) return
         val firstContact = cueTarget.put(cue.nodeId, CueTarget(handle, sess)) == null
@@ -1429,64 +1456,198 @@ class WifiAwareTransport(
     /**
      * Fast path (see [MeshTransport.fastFanout]): fan a small broadcast frame out to every neighbor over the
      * coordination plane — one Wi-Fi Aware message each, **no data path** — so it lands near-instantly instead
-     * of waiting for a cue-driven pairwise NDP sync. Skips a frame that won't fit the message channel
-     * ([COORD_MSG_MAX]); those ride the normal data-path flood + store-and-forward instead. Tagged
-     * [MSG_FRAME_TAG] so the receiver ([onFastFrame]) tells it apart from a cue. Best-effort by design (the
-     * message channel can drop, like a cue); the reliable copy still arrives via flood/custody and is deduped.
+     * of waiting for a cue-driven pairwise NDP sync. The encoding is chosen **per peer** ([sendFast]): a peer
+     * advertising [Protocol.CAP_FAST_COMPACT] gets the compact `0x03` framing (`mesh/link/FastFrameCodec` —
+     * deflated, and split across ≤ 3 `0x04` fragments when one message won't hold it), everyone else the
+     * legacy [MSG_FRAME_TAG] framing. A frame no eligible encoding can carry is skipped for that peer
+     * (`fastTooBig`) and rides the normal data-path flood + store-and-forward instead. Best-effort by design
+     * (the message channel can drop, like a cue); the reliable copy still arrives via flood/custody and is
+     * deduped.
      */
     override fun fastFanout(wire: WireEnvelope) {
         if (!hasHardware) return
-        val bytes = WireCodec.encodeWire(wire)
-        if (bytes.size + 1 > coordMsgMax) return
-        val msg =
-            ByteArray(bytes.size + 1).also {
-                it[0] = MSG_FRAME_TAG
-                bytes.copyInto(it, 1)
-            }
+        val enc = FastEncodings(wire)
         val targets = cueTarget.keys.toList()
-        Log.i(TAG, "fast-fanout ${bytes.size}B → ${targets.size} peers") // TEMP diag
-        targets.forEach { nodeId ->
-            val target = cueTarget[nodeId] ?: return@forEach
-            runCatching { target.session.sendMessage(target.handle, msgSeq.getAndIncrement(), msg) }
-                .onFailure { cueTarget.remove(nodeId) } // stale handle/session; refreshed on next discover/receive
-        }
+        Log.i(TAG, "fast-fanout ${enc.diag()} → ${targets.size} peers") // TEMP diag
+        targets.forEach { nodeId -> sendFast(enc, nodeId) }
     }
 
     /**
      * Targeted sibling of [fastFanout] (see [MeshTransport.fastSend]): send a small point-to-point frame to one
      * peer over the coordination plane, **no data path** — e.g. a broadcast/group delivery receipt straight back
      * to the message's author, so the tick works even when the message was delivered by a fast-fanout with no
-     * live NDP. Best-effort: no-op if [to] isn't a current cue target or the frame won't fit ([COORD_MSG_MAX]).
+     * live NDP. Best-effort: no-op if [to] isn't a current cue target or no eligible encoding fits ([sendFast]).
      */
     override fun fastSend(
         wire: WireEnvelope,
         to: Peer,
     ) {
         if (!hasHardware) return
-        val target = cueTarget[to.nodeId] ?: return // not coordination-plane-reachable → best-effort skip
-        val bytes = WireCodec.encodeWire(wire)
-        if (bytes.size + 1 > coordMsgMax) return
-        val msg =
-            ByteArray(bytes.size + 1).also {
-                it[0] = MSG_FRAME_TAG
-                bytes.copyInto(it, 1)
-            }
-        Log.i(TAG, "fast-send ${bytes.size}B → ${to.nodeId}") // TEMP diag
-        runCatching { target.session.sendMessage(target.handle, msgSeq.getAndIncrement(), msg) }
-            .onFailure { cueTarget.remove(to.nodeId) } // stale handle/session; refreshed on next discover/receive
+        if (!cueTarget.containsKey(to.nodeId)) return // not coordination-plane-reachable → best-effort skip
+        val enc = FastEncodings(wire)
+        Log.i(TAG, "fast-send ${enc.diag()} → ${to.nodeId}") // TEMP diag
+        sendFast(enc, to.nodeId)
     }
 
     /**
-     * A broadcast frame arrived over the coordination plane (tagged [MSG_FRAME_TAG] by a peer's [fastFanout]):
-     * decode it and inject it into the normal inbound path exactly like a data-path frame, so the router
-     * dedups, relays, and delivers it with no NDP. A later flood/custody copy is dropped by the receiver's
-     * SeenSet, so a dropped fast frame self-heals — the fast path is a latency win layered over the reliable one.
+     * The candidate on-air encodings of one fast frame, each built at most once per [fastFanout]/[fastSend]
+     * call however many peers it reaches. A fragmented frame takes ONE [fragSeq] id, shared by every
+     * target, so a receiver hearing the same frame twice keys the same reassembly entry.
+     */
+    private inner class FastEncodings(
+        private val wire: WireEnvelope,
+    ) {
+        /** Legacy [MSG_FRAME_TAG] framing — every build reads it — or null past the message cap. */
+        val legacy: List<ByteArray>? by lazy {
+            val bytes = WireCodec.encodeWire(wire)
+            if (bytes.size + 1 > coordMsgMax) return@lazy null
+            listOf(
+                ByteArray(bytes.size + 1).also {
+                    it[0] = MSG_FRAME_TAG
+                    bytes.copyInto(it, 1)
+                },
+            )
+        }
+
+        /** Compact framing: one `0x03` message, `0x04` fragments, or null (unrepresentable / too big). */
+        val compact: List<ByteArray>? by lazy {
+            val one = FastFrameCodec.encodeCompact(wire) ?: return@lazy null
+            if (one.size <= coordMsgMax) {
+                listOf(one)
+            } else {
+                FastFrameCodec.fragment(one, coordMsgMax, fragSeq.getAndIncrement() and FRAG_ID_MASK)
+            }
+        }
+
+        /** One grep-stable diag fragment: both encodings' on-air sizes and the compact part count. */
+        fun diag(): String {
+            val legacyBytes = legacy?.first()?.size ?: -1
+            return "legacy=${legacyBytes}B compact=${compact?.sumOf { it.size } ?: -1}B parts=${compact?.size ?: 0}"
+        }
+    }
+
+    /**
+     * Sends [enc]'s best encoding for what [nodeId] advertised: compact toward a [Protocol.CAP_FAST_COMPACT]
+     * peer (capabilities join via [reachablePeers] — a cue-only peer reads 0 and stays legacy; the caller's
+     * [Peer] argument is address-only and never a capability source), legacy toward the rest. Fragment parts
+     * go out consecutively per peer, so firmware tx-queue pressure loses whole later frames rather than
+     * part 2 of every peer's copy (the ~8-deep aware tx queue is not otherwise handled — this plane is
+     * best-effort).
+     */
+    private fun sendFast(
+        enc: FastEncodings,
+        nodeId: String,
+    ) {
+        val target = cueTarget[nodeId] ?: return
+        val caps = reachablePeers[nodeId]?.capabilities ?: 0L
+        val compactCapable = caps and Protocol.CAP_FAST_COMPACT != 0L
+        val messages = (if (compactCapable) enc.compact ?: enc.legacy else enc.legacy)
+        if (messages == null) {
+            metrics.onFastTooBig()
+            return
+        }
+        messages.forEach { msg ->
+            runCatching { target.session.sendMessage(target.handle, msgSeq.getAndIncrement(), msg) }
+                .onFailure {
+                    cueTarget.remove(nodeId) // stale handle/session; refreshed on next discover/receive
+                    return
+                }
+        }
+        when {
+            !compactCapable || enc.compact == null -> metrics.onFastLegacySent()
+            messages.size > 1 -> metrics.onFastFragSent()
+            else -> metrics.onFastCompactSent()
+        }
+    }
+
+    /**
+     * Routes a coordination-plane message whose first byte is a frame tag; false means it is no framed
+     * message (a printable first byte — a cue) and the caller should parse it as one. An unknown byte in
+     * the reserved non-printable tag space 0x00..0x1F is counted and consumed — the pre-compact builds'
+     * silent drop made "peer speaks something newer" invisible in the field.
+     */
+    private fun dispatchFramed(
+        handle: PeerHandle,
+        sess: DiscoverySession,
+        message: ByteArray,
+    ): Boolean {
+        when (message[0]) {
+            MSG_FRAME_TAG -> {
+                onFastFrame(message)
+            }
+
+            FastFrameCodec.TAG_COMPACT -> {
+                onCompactFrame(message)
+            }
+
+            FastFrameCodec.TAG_FRAG -> {
+                onFragment(handle, sess, message)
+            }
+
+            else -> {
+                if (message[0].toInt() !in 0x00..0x1F) return false
+                metrics.onFastDropped(FastPathDrop.UNKNOWN_TAG)
+            }
+        }
+        return true
+    }
+
+    /**
+     * A broadcast frame arrived over the coordination plane in the legacy [MSG_FRAME_TAG] framing: decode
+     * and [emitFastWire] it. Malformed bytes stay a silent drop, exactly as before the compact tags.
      */
     private fun onFastFrame(message: ByteArray) {
         val wire = WireCodec.decodeWire(message.copyOfRange(1, message.size)) ?: return
+        emitFastWire(wire, via = "legacy")
+    }
+
+    /** A [FastFrameCodec.TAG_COMPACT] frame arrived: decode (inflating if deflated) and [emitFastWire] it. */
+    private fun onCompactFrame(message: ByteArray) {
+        val wire = FastFrameCodec.decodeCompact(message)
+        if (wire == null) {
+            metrics.onFastDropped(FastPathDrop.DECODE_FAILED)
+            return
+        }
+        emitFastWire(wire, via = "compact")
+    }
+
+    /**
+     * A [FastFrameCodec.TAG_FRAG] part arrived: feed the [reassembler]; a completed set must itself be a
+     * tagged compact frame (anti-recursion — a fragment can never carry another fragment) and re-enters
+     * through [onCompactFrame]. Incomplete sets just wait; the store's timeout/capacity drops are counted
+     * via its onDrop hook.
+     */
+    private fun onFragment(
+        handle: PeerHandle,
+        sess: DiscoverySession,
+        message: ByteArray,
+    ) {
+        val frag = FastFrameCodec.parseFragment(message)
+        if (frag == null) {
+            metrics.onFastDropped(FastPathDrop.DECODE_FAILED)
+            return
+        }
+        val assembled = reassembler.accept(FragKey(sess, handle), frag) ?: return
+        if (assembled.isEmpty() || assembled[0] != FastFrameCodec.TAG_COMPACT) {
+            metrics.onFastDropped(FastPathDrop.DECODE_FAILED)
+            return
+        }
+        metrics.onFastReassembled()
+        onCompactFrame(assembled)
+    }
+
+    /**
+     * Injects a fast-path [wire] into the normal inbound path exactly like a data-path frame, so the router
+     * dedups, relays, and delivers it with no NDP. A later flood/custody copy is dropped by the receiver's
+     * SeenSet, so a dropped fast frame self-heals — the fast path is a latency win layered over the reliable one.
+     */
+    private fun emitFastWire(
+        wire: WireEnvelope,
+        via: String,
+    ) {
         val envelope = WireCodec.decodeEnvelope(wire.signed) ?: return
         if (envelope.senderId == localNodeId) return // our own frame echoed back — ignore
-        Log.i(TAG, "fast-frame from ${envelope.senderId} id=${envelope.id}") // TEMP diag
+        Log.i(TAG, "fast-frame from ${envelope.senderId} id=${envelope.id} via=$via") // TEMP diag
         noteReachable(Peer(envelope.senderId))
         _inbound.tryEmit(InboundFrame(wire, envelope, envelope.senderId))
     }
@@ -2210,11 +2371,17 @@ class WifiAwareTransport(
         @SuppressLint("InlinedApi")
         const val INSTANT_BAND = ScanResult.WIFI_BAND_24_GHZ
 
-        // Coordination-plane message multiplexing. A cue is a plain "nodeId|version" text string whose first
-        // byte is a printable base64 nodeId char, so a single non-printable tag byte cleanly distinguishes a
-        // small broadcast frame fanned out over the message channel (fastFanout / onFastFrame, [MSG_FRAME_TAG]).
-        // Cues stay untagged (byte-for-byte unchanged). (Tag 0x02 was a since-removed "please re-attach" nudge.)
+        // Coordination-plane message multiplexing. A cue is a plain "nodeId|version" text string whose
+        // first byte is a printable base64 nodeId char, so the non-printable tag space 0x00..0x1F cleanly
+        // distinguishes framed messages. The registry is append-only, like capability bits: 0x01 = legacy
+        // tagged-CBOR fast frame ([MSG_FRAME_TAG], kept forever — every build reads it), 0x02 = BURNED (a
+        // since-removed "please re-attach" nudge; never recycle), 0x03/0x04 = compact frame / fragment
+        // (mesh/link/FastFrameCodec, emitted only toward Protocol.CAP_FAST_COMPACT peers). Cues stay
+        // untagged (byte-for-byte unchanged); an unknown non-printable tag is counted and dropped.
         const val MSG_FRAME_TAG: Byte = 0x01
+
+        /** Low 16 bits of [fragSeq] — the fragment header's id width (FastFrameCodec's u16). */
+        const val FRAG_ID_MASK = 0xFFFF
 
         // Max coordination-plane message the radio accepts (maxServiceSpecificInfoLen = 255 on Pixel 7/8/9, via
         // dumpsys wifiaware). A frame plus its 1-byte tag must fit; a larger frame skips the fast path and rides

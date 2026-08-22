@@ -107,6 +107,27 @@ enum class ConnectFailReason {
 }
 
 /**
+ * Why an inbound coordination-plane fast-path message (compact `0x03` / fragment `0x04`,
+ * `mesh/link/FastFrameCodec`) was discarded. Surfaced in [MeshMetrics.Snapshot.fastDropsByReason]:
+ * TIMEOUT/OVERFLOW climbing means fragments are being lost mid-frame (range edge, tx-queue pressure);
+ * UNKNOWN_TAG means a newer peer is emitting a tag this build doesn't know; DECODE_FAILED with any
+ * volume means a framing/dictionary mismatch (should be ~0 — the flood copy self-heals either way).
+ */
+enum class FastPathDrop {
+    /** A fragment set never completed inside the reassembly window. */
+    FRAG_TIMEOUT,
+
+    /** The bounded reassembly store evicted the oldest incomplete entry for a newer one. */
+    FRAG_OVERFLOW,
+
+    /** A non-printable first byte that is no known tag (a future peer, or garbage). */
+    UNKNOWN_TAG,
+
+    /** A tagged message that failed to parse/inflate back into a frame. */
+    DECODE_FAILED,
+}
+
+/**
  * Thread-safe counters for mesh transmission, so the effect of flood suppression and the CBOR wire
  * format is measurable in the field. Pure JVM (no Android dependencies) so it can live in [mesh] and
  * be asserted from the same unit tests as [MeshRouter].
@@ -154,6 +175,12 @@ class MeshMetrics {
     private val filesSentNan = AtomicLong()
     private val filesSentBt = AtomicLong()
     private val nanBulkGraceTimeouts = AtomicLong()
+    private val fastCompactSent = AtomicLong()
+    private val fastLegacySent = AtomicLong()
+    private val fastFragSent = AtomicLong()
+    private val fastReassembled = AtomicLong()
+    private val fastTooBig = AtomicLong()
+    private val fastDrops: Map<FastPathDrop, AtomicLong> = FastPathDrop.entries.associateWith { AtomicLong() }
     private val spoolPushed = AtomicLong()
     private val spoolPulled = AtomicLong()
     private val spoolBridged = AtomicLong()
@@ -330,6 +357,36 @@ class MeshMetrics {
         nanMsgSendsFailed.incrementAndGet()
     }
 
+    /** A fast frame left in the compact (`0x03`, single-message) encoding toward one target. */
+    fun onFastCompactSent() {
+        fastCompactSent.incrementAndGet()
+    }
+
+    /** A fast frame left in the legacy (`0x01`) encoding toward one target (peer lacks the cap bit). */
+    fun onFastLegacySent() {
+        fastLegacySent.incrementAndGet()
+    }
+
+    /** A fast frame left fragmented (`0x04`) toward one target — dwarfed by [onFastCompactSent] is healthy. */
+    fun onFastFragSent() {
+        fastFragSent.incrementAndGet()
+    }
+
+    /** A fragmented fast frame reassembled completely on receive. */
+    fun onFastReassembled() {
+        fastReassembled.incrementAndGet()
+    }
+
+    /** A target was skipped because no encoding fit the message cap — the frame rides flood/custody only. */
+    fun onFastTooBig() {
+        fastTooBig.incrementAndGet()
+    }
+
+    /** An inbound fast-path message was discarded — see [FastPathDrop] for how to read each reason. */
+    fun onFastDropped(reason: FastPathDrop) {
+        fastDrops.getValue(reason).incrementAndGet()
+    }
+
     /**
      * A file (avatar/attachment) was accepted onto a live link on [transport]'s plane — the per-radio split
      * that shows whether large blobs are riding the NAN fast path or falling back to BLE.
@@ -433,6 +490,12 @@ class MeshMetrics {
             filesSentNan = filesSentNan.get(),
             filesSentBt = filesSentBt.get(),
             nanBulkGraceTimeouts = nanBulkGraceTimeouts.get(),
+            fastCompactSent = fastCompactSent.get(),
+            fastLegacySent = fastLegacySent.get(),
+            fastFragSent = fastFragSent.get(),
+            fastReassembled = fastReassembled.get(),
+            fastTooBig = fastTooBig.get(),
+            fastDropsByReason = fastDrops.mapValues { it.value.get() }.filterValues { it > 0 },
             spoolPushed = spoolPushed.get(),
             spoolPulled = spoolPulled.get(),
             spoolBridged = spoolBridged.get(),
@@ -482,6 +545,12 @@ class MeshMetrics {
         val filesSentNan: Long = 0,
         val filesSentBt: Long = 0,
         val nanBulkGraceTimeouts: Long = 0,
+        val fastCompactSent: Long = 0,
+        val fastLegacySent: Long = 0,
+        val fastFragSent: Long = 0,
+        val fastReassembled: Long = 0,
+        val fastTooBig: Long = 0,
+        val fastDropsByReason: Map<FastPathDrop, Long> = emptyMap(),
         val spoolPushed: Long = 0,
         val spoolPulled: Long = 0,
         val spoolBridged: Long = 0,

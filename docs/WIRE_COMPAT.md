@@ -81,6 +81,16 @@ derivation, or a discovery marker; or makes `RelayEnvelope.type` polymorphic.
 **Additive** (safe) if it only adds a nullable/defaulted field to a content/envelope type, a new `type`
 string with its own content class, or a new capability bit — and rule 4 holds.
 
+> **Coordination-plane message tags (transport-local, not the wire).** The Wi-Fi Aware fast path frames
+> its `sendMessage` payloads with a leading tag byte; the registry is **append-only** like capability
+> bits: `0x01` legacy tagged-CBOR frame (kept forever), `0x02` burned, `0x03` compact frame / `0x04`
+> fragment (`mesh/link/FastFrameCodec`, emitted only toward peers advertising
+> `Protocol.CAP_FAST_COMPACT = 0x20`). These re-frame only the outer `WireEnvelope` — `signed`/`sig`
+> pass through byte-exact (rule 4 holds by construction) — so adding a tag + gating cap bit is additive
+> and needs **no** `SERVICE_NAME` bump; old builds count-and-drop unknown non-printable tags. The
+> compact form's preset deflate dictionary `DICT_V1` is frozen (golden-hash-pinned); tuning mints
+> `DICT_V2` under a fresh dictId, never edits V1.
+
 > **Pre-1.0 alpha history.** The precedents below (DB v19 / v21 / v22) document the coordinated wire/discovery
 > breaks taken *during pre-release alpha*, when the app had no installed base and every schema bump wiped
 > destructively. They are retained as the historical break record and cross-platform rationale. **v1 is the

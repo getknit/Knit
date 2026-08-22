@@ -1,6 +1,11 @@
 package app.getknit.knit.ui.chat
 
 import androidx.annotation.StringRes
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.ui.graphics.vector.ImageVector
 import app.getknit.knit.R
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
@@ -58,4 +63,17 @@ fun deliveryLabel(
         status == DeliveryStatus.Delivered && plane == DeliveryPlane.Internet -> R.string.chat_status_delivered_internet
         status == DeliveryStatus.Delivered -> R.string.chat_status_delivered
         else -> R.string.chat_status_sent
+    }
+
+/**
+ * The tick glyph for one of *our* messages at [status]: a clock while it can't be sent yet, one check once
+ * it's flooded, two once a receipt is back. The single definition shared by the chat-list row and the
+ * message-details screen, so the two can't drift apart. Pair it with [deliveryLabel] for the words —
+ * the glyph alone never carries the meaning.
+ */
+fun deliveryIcon(status: DeliveryStatus): ImageVector =
+    when (status) {
+        DeliveryStatus.Pending -> Icons.Filled.Schedule
+        DeliveryStatus.Sent -> Icons.Filled.Done
+        DeliveryStatus.Delivered -> Icons.Filled.DoneAll
     }

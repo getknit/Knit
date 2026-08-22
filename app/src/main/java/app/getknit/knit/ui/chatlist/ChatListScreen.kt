@@ -15,6 +15,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -86,8 +87,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.relay.RelayPlane
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.ui.chat.DeliveryStatus
+import app.getknit.knit.ui.chat.deliveryIcon
+import app.getknit.knit.ui.chat.deliveryLabel
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
 import app.getknit.knit.ui.components.RoomAvatar
@@ -471,7 +476,12 @@ internal fun ConversationListItem(
         } else {
             null
         }
-    val rowDescription = listOfNotNull(row.title, preview, spokenTime, spokenUnread).joinToString(", ")
+    // The tick is icon-only, and the row's clearAndSetSemantics below would swallow a description hung on
+    // the Icon itself, so its words ride here instead — the same label the bubble and details screen use.
+    val spokenStatus =
+        row.lastStatus?.let { stringResource(deliveryLabel(it, row.lastDeliveredVia, mine = true)) }
+    val rowDescription =
+        listOfNotNull(row.title, preview, spokenTime, spokenStatus, spokenUnread).joinToString(", ")
     val deleteLabel = stringResource(R.string.chat_list_delete_action)
 
     Box {
@@ -523,12 +533,30 @@ internal fun ConversationListItem(
             }
             Spacer(Modifier.width(12.dp))
             Column(horizontalAlignment = Alignment.End) {
-                row.lastMessageAt?.let { sentAt ->
-                    Text(
-                        text = compactTimeAgo(sentAt, now),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    // Signal-style: when the newest message is one of ours, its tick sits beside the
+                    // timestamp — one check sent, two acked, a clock while it's still waiting for the
+                    // recipient's key. Ahead of the time rather than after it (where the chat bubble puts
+                    // it) so every row's timestamp stays flush right whether or not there's a tick.
+                    row.lastStatus?.let { status ->
+                        Icon(
+                            imageVector = deliveryIcon(status),
+                            // Decorative here: the row folds the spoken label into its own description.
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                    row.lastMessageAt?.let { sentAt ->
+                        Text(
+                            text = compactTimeAgo(sentAt, now),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 if (row.unreadCount > 0) {
                     Spacer(Modifier.height(4.dp))
@@ -670,6 +698,76 @@ fun ConversationListItemDmPreview() =
 
 @Preview(showBackground = true)
 @Composable
+fun ConversationListItemDeliveredPreview() =
+    KnitPreview {
+        ConversationListItem(
+            row =
+                ConversationRow(
+                    id = "dm-2",
+                    title = "Grace Hopper",
+                    avatarHash = null,
+                    isRoom = false,
+                    isGroup = false,
+                    lastPreview = "You: on my way",
+                    lastMessageAt = PREVIEW_NOW - 2 * 60_000L,
+                    unreadCount = 0,
+                    lastStatus = DeliveryStatus.Delivered,
+                    lastDeliveredVia = DeliveryPlane.Nearby,
+                ),
+            now = PREVIEW_NOW,
+            onClick = {},
+        )
+    }
+
+@Preview(showBackground = true)
+@Composable
+fun ConversationListItemSentPreview() =
+    KnitPreview {
+        // One check, forever: a group (or Nearby) send is a broadcast and never gets a delivery receipt.
+        ConversationListItem(
+            row =
+                ConversationRow(
+                    id = "group-2",
+                    title = "Trail Wardens",
+                    avatarHash = null,
+                    isRoom = false,
+                    isGroup = true,
+                    lastPreview = "You: heading up the ridge now",
+                    lastMessageAt = PREVIEW_NOW - 12 * 60_000L,
+                    unreadCount = 0,
+                    lastStatus = DeliveryStatus.Sent,
+                ),
+            now = PREVIEW_NOW,
+            onClick = {},
+        )
+    }
+
+@Preview(showBackground = true)
+@Composable
+fun ConversationListItemPendingPreview() =
+    KnitPreview {
+        // Clock, not a check: written locally but unsendable — we don't hold their key yet. The unread
+        // badge is unrelated to the tick, so both can sit in the same row.
+        ConversationListItem(
+            row =
+                ConversationRow(
+                    id = "dm-3",
+                    title = "Katherine Johnson",
+                    avatarHash = null,
+                    isRoom = false,
+                    isGroup = false,
+                    lastPreview = "You: are you still at the trailhead?",
+                    lastMessageAt = PREVIEW_NOW - 40 * 60_000L,
+                    unreadCount = 1,
+                    lastStatus = DeliveryStatus.Pending,
+                ),
+            now = PREVIEW_NOW,
+            onClick = {},
+        )
+    }
+
+@Preview(showBackground = true)
+@Composable
 fun ConversationListItemGroupPreview() =
     KnitPreview {
         ConversationListItem(
@@ -742,6 +840,18 @@ private fun previewConversations(): List<ConversationRow> =
             lastPreview = "See you at the meetup tonight!",
             lastMessageAt = PREVIEW_NOW - 5 * 60_000L,
             unreadCount = 2,
+        ),
+        ConversationRow(
+            id = "dm-2",
+            title = "Grace Hopper",
+            avatarHash = null,
+            isRoom = false,
+            isGroup = false,
+            lastPreview = "You: on my way",
+            lastMessageAt = PREVIEW_NOW - 9 * 60_000L,
+            unreadCount = 0,
+            lastStatus = DeliveryStatus.Delivered,
+            lastDeliveredVia = DeliveryPlane.Nearby,
         ),
     )
 

@@ -9,12 +9,14 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
+import app.getknit.knit.ui.chat.DeliveryStatus
 import app.getknit.knit.ui.group
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
@@ -31,6 +33,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -242,5 +245,100 @@ class ChatListViewModelTest {
                     .any { it.id == "friend" },
             )
             assertEquals(0, vm.state.value.requestCount)
+        }
+
+    @Test
+    fun lastStatusTracksOurOwnNewestMessageAndItsReceiptPlane() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"),
+                    msg(
+                        senderId = "me",
+                        sentAt = 200,
+                        conversationId = "friend",
+                        recipientId = "friend",
+                        received = true,
+                        receivedVia = DeliveryPlane.Internet.code,
+                    ),
+                )
+            advanceUntilIdle()
+
+            val dm =
+                vm.state.value.conversations
+                    .first { it.id == "friend" }
+            assertEquals(DeliveryStatus.Delivered, dm.lastStatus)
+            assertEquals(DeliveryPlane.Internet, dm.lastDeliveredVia)
+        }
+
+    @Test
+    fun lastStatusIsSentWithNoReceiptAndPendingWhileTheirKeyIsMissing() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "me", sentAt = 100, conversationId = "a", recipientId = "a"),
+                    msg(senderId = "me", sentAt = 100, conversationId = "b", recipientId = "b", pendingKey = true),
+                )
+            acceptedFlow.value = setOf("a", "b")
+            advanceUntilIdle()
+
+            val rows =
+                vm.state.value.conversations
+                    .associateBy { it.id }
+            assertEquals(DeliveryStatus.Sent, rows.getValue("a").lastStatus)
+            assertEquals(DeliveryPlane.Unknown, rows.getValue("a").lastDeliveredVia)
+            assertEquals(DeliveryStatus.Pending, rows.getValue("b").lastStatus)
+        }
+
+    @Test
+    fun noTickWhenTheNewestMessageIsNotOurs() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            // Ours is older; theirs is the newest, so delivery isn't ours to report on this row.
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "me", sentAt = 100, conversationId = "friend", recipientId = "friend"),
+                    msg(senderId = "friend", sentAt = 200, conversationId = "friend", recipientId = "me"),
+                )
+            advanceUntilIdle()
+
+            val rows =
+                vm.state.value.conversations
+                    .associateBy { it.id }
+            assertNull(rows.getValue("friend").lastStatus)
+            // An empty thread has none either.
+            assertNull(rows.getValue(Conversations.NEARBY).lastStatus)
+        }
+
+    @Test
+    fun aStatusNoticeNeverCarriesATick() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x"), createdAt = 50))
+            // A locally-generated "left the chat" notice keyed to us: never sent anywhere, so no tick.
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "me", sentAt = 100, conversationId = "g-1"),
+                    msg(
+                        senderId = "me",
+                        sentAt = 200,
+                        conversationId = "g-1",
+                        body = "",
+                        kind = MessageEntity.KIND_MEMBER_LEFT,
+                    ),
+                )
+            advanceUntilIdle()
+
+            assertNull(
+                vm.state.value.conversations
+                    .first { it.id == "g-1" }
+                    .lastStatus,
+            )
         }
 }

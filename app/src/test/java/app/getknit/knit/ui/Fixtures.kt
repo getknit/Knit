@@ -3,6 +3,7 @@ package app.getknit.knit.ui
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
@@ -25,6 +26,8 @@ fun msg(
     attachmentHash: String? = null,
     moderation: Int = MessageEntity.MODERATION_NONE,
     received: Boolean = false,
+    receivedVia: Int = DeliveryPlane.Unknown.code,
+    pendingKey: Boolean = false,
     id: String = "$conversationId#$senderId#$sentAt",
 ): MessageEntity =
     MessageEntity(
@@ -35,6 +38,8 @@ fun msg(
         body = body,
         sentAt = sentAt,
         received = received,
+        receivedVia = receivedVia,
+        pendingKey = pendingKey,
         attachmentHash = attachmentHash,
         moderation = moderation,
         kind = kind,

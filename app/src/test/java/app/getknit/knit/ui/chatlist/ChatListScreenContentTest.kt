@@ -1,5 +1,7 @@
 package app.getknit.knit.ui.chatlist
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -7,9 +9,13 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.ui.chat.DeliveryStatus
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,6 +40,8 @@ class ChatListScreenContentTest {
         title: String,
         unread: Int = 0,
         isRoom: Boolean = false,
+        status: DeliveryStatus? = null,
+        plane: DeliveryPlane = DeliveryPlane.Unknown,
     ) = ConversationRow(
         id = id,
         title = title,
@@ -43,6 +51,8 @@ class ChatListScreenContentTest {
         lastPreview = "hi",
         lastMessageAt = now - 60_000L,
         unreadCount = unread,
+        lastStatus = status,
+        lastDeliveredVia = plane,
     )
 
     @Test
@@ -172,5 +182,57 @@ class ChatListScreenContentTest {
         }
 
         compose.onNodeWithTag("chatlist_requests").assertDoesNotExist()
+    }
+
+    @Test
+    fun anOutboundRowSpeaksItsDeliveryTickAndOthersDoNot() {
+        compose.setContent {
+            KnitTheme {
+                ChatListScreenContent(
+                    state =
+                        ChatListUiState(
+                            conversations =
+                                listOf(
+                                    row("dm-1", "Ada", status = DeliveryStatus.Sent),
+                                    row(
+                                        "dm-2",
+                                        "Grace",
+                                        status = DeliveryStatus.Delivered,
+                                        plane = DeliveryPlane.Internet,
+                                    ),
+                                    row("dm-3", "Lena"),
+                                ),
+                        ),
+                    now = now,
+                    onOpenConversation = {},
+                    onNewMessage = {},
+                    onOpenProfile = {},
+                    onOpenDiagnostics = {},
+                    onOpenBlockedUsers = {},
+                    onOpenMessageRequests = {},
+                    onOpenDonate = {},
+                    onOpenVerify = {},
+                    onShareApp = {},
+                    onOpenRadioSettings = {},
+                    onDismissRadioWarning = {},
+                    onDeleteConversation = {},
+                )
+            }
+        }
+
+        // The tick is icon-only, so the row's folded contentDescription is what carries it.
+        compose.onNodeWithTag("chat_row_dm-1").assertContentDescriptionContains("Sent", substring = true)
+        compose
+            .onNodeWithTag("chat_row_dm-2")
+            .assertContentDescriptionContains("Delivered over the Internet", substring = true)
+        // An inbound (or empty) row has no tick: delivery isn't ours to report.
+        val lena =
+            compose
+                .onNodeWithTag("chat_row_dm-3")
+                .fetchSemanticsNode()
+                .config[SemanticsProperties.ContentDescription]
+                .joinToString()
+        assertTrue(lena.contains("Lena"))
+        assertFalse(lena.contains("Sent"))
     }
 }

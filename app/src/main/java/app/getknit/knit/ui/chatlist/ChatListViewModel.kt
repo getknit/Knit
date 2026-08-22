@@ -11,8 +11,10 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
+import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.relay.RelayPlane
@@ -22,6 +24,7 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.ui.chat.DeliveryStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -37,6 +40,12 @@ import kotlinx.coroutines.launch
  * group chat ([isGroup] true, keyed by the group id, [title] is the group name, [avatarHash] its photo
  * or null for the glyph), or a 1:1 DM keyed by the peer's node id with the peer's [title]/[avatarHash].
  * [lastPreview]/[lastMessageAt] are null when the conversation has no messages yet.
+ *
+ * [lastStatus] is how far that last message got, and is non-null **only when the last message is one of
+ * ours** — the row's delivery tick. A thread whose newest message arrived from someone else (or which has
+ * none, or whose newest is a status notice) has no tick: delivery isn't ours to report. [lastDeliveredVia]
+ * qualifies a [DeliveryStatus.Delivered] tick with the plane its receipt crossed, exactly as the chat
+ * bubble does.
  */
 data class ConversationRow(
     val id: String,
@@ -47,6 +56,8 @@ data class ConversationRow(
     val lastPreview: String?,
     val lastMessageAt: Long?,
     val unreadCount: Int,
+    val lastStatus: DeliveryStatus? = null,
+    val lastDeliveredVia: DeliveryPlane = DeliveryPlane.Unknown,
 )
 
 data class ChatListUiState(
@@ -209,6 +220,9 @@ class ChatListViewModel(
                             it.sentAt > lastReadAt && it.senderId != me && it.kind == MessageEntity.KIND_NORMAL
                         }
                     }
+                // The tick, and only for our own ordinary sends: a status notice is locally generated (its
+                // senderId is the event's subject, not an author) and was never sent anywhere.
+                val mineLast = last?.takeIf { it.senderId == me && it.kind == MessageEntity.KIND_NORMAL }
                 return ConversationRow(
                     id = conversationId,
                     title = title,
@@ -218,6 +232,8 @@ class ChatListViewModel(
                     lastPreview = last?.let { previewFor(it, peersByNode, me, isDm = !isRoom && !isGroup) },
                     lastMessageAt = last?.sentAt,
                     unreadCount = unread,
+                    lastStatus = mineLast?.let { DeliveryStatus.of(it) },
+                    lastDeliveredVia = mineLast?.receivedPlane ?: DeliveryPlane.Unknown,
                 )
             }
 

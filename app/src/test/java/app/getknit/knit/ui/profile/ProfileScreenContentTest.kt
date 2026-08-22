@@ -14,7 +14,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.GraphicsMode
 
-/** Save mirrors the ViewModel's `isDirty`: disabled with no unsaved edits, enabled (and firing) once dirty. */
+/**
+ * Save mirrors the ViewModel's `isDirty`: disabled with no unsaved edits, enabled (and firing) once
+ * dirty. Plus the Internet-relay row, which is present only in a build that introduces the plane.
+ */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ProfileScreenContentTest {
@@ -40,6 +43,7 @@ class ProfileScreenContentTest {
         onSave: () -> Unit = {},
         relay: RelaySummary = RelaySummary(),
         onOpenRelays: () -> Unit = {},
+        showInternetRelays: Boolean = true,
     ) {
         compose.setContent {
             KnitTheme {
@@ -53,6 +57,7 @@ class ProfileScreenContentTest {
                     onStatusCommit = {},
                     onToggleContentFiltering = {},
                     onOpenRelays = onOpenRelays,
+                    showInternetRelays = showInternetRelays,
                     onPickPhoto = {},
                     onClearPhoto = {},
                     onAllowBattery = {},
@@ -77,5 +82,26 @@ class ProfileScreenContentTest {
         // The save button is the last item in a vertically-scrolled column, so bring it on-screen before clicking.
         compose.onNodeWithTag("profile_save").performScrollTo().performClick()
         assertEquals(1, saves)
+    }
+
+    @Test
+    fun internetRelayRowNavigatesWhenThePlaneIsIntroduced() {
+        var opened = 0
+        render(isDirty = false, onOpenRelays = { opened++ }, showInternetRelays = true)
+
+        compose.onNodeWithTag("profile_relays").performScrollTo().performClick()
+        assertEquals(1, opened)
+    }
+
+    /**
+     * The build-flag half of hiding the Internet plane: with `BuildConfig.INTERNET_PLANE` off there is no
+     * row, so a release user has no way into a screen whose switch would be inert anyway (the other half
+     * is `SettingsStore.spoolEnabled`, which reads false on the same flag).
+     */
+    @Test
+    fun internetRelayRowIsAbsentWhenThePlaneIsDark() {
+        render(isDirty = false, showInternetRelays = false)
+
+        compose.onNodeWithTag("profile_relays").assertDoesNotExist()
     }
 }

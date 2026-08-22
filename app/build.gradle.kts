@@ -63,6 +63,12 @@ fun releaseSigningCred(
 val bundleRequested = gradle.startParameter.taskNames.any { it.contains("bundle", ignoreCase = true) }
 val nativeSymbols = (project.findProperty("knit.nativeSymbols") as? String)?.toBoolean() ?: bundleRequested
 
+// Internet (spool) relay plane — the whole feature's visibility switch, read here because both
+// defaultConfig and buildTypes.release need it. Null means "no opinion", which resolves to ON in debug
+// and OFF in release/staging; `-PinternetPlane=true|false` overrides either way. See the BuildConfig
+// fields below for what the flag actually gates.
+val internetPlane = (project.findProperty("internetPlane") as? String)?.toBoolean()
+
 android {
     namespace = "app.getknit.knit"
     // API 37.0. Bumped off 36.1 to clear the `minCompileSdk=37` gate that androidx started shipping
@@ -134,6 +140,20 @@ android {
         // when seedDemo is on; picks the persona/message/avatar set so we can shoot multiple marketing themes.
         val demoTheme = (project.findProperty("demoTheme") as? String) ?: "hiking"
         buildConfigField("String", "DEMO_THEME", "\"$demoTheme\"")
+        // Internet (spool) relay plane — the whole feature's visibility switch. ON in debug, OFF in
+        // release/staging, overridable either way with `-PinternetPlane=true|false`. The plane is
+        // finished but not yet introduced publicly, so shipped builds hide every way in: the Profile
+        // row and its `relays` route disappear, the shipped default spool is not seeded, and
+        // `SettingsStore.spoolEnabled` reads false no matter what the stored preference says — which
+        // parks `ScopeSync` (no socket), stops group-root minting, and collapses every derived
+        // indicator (header cloud, per-chat relay notice, "nearby only" attachment markers) to their
+        // off states, because all of them are already functions of that one flow. Deliberately NOT a
+        // code strip: the classes stay in the APK (R8 only prunes the `if (INTERNET_PLANE)` branches),
+        // which keeps the plane one flag flip away and the unit suite — which builds debug, so the
+        // flag is true — running the real thing. Both defaults live in source (the `?:` fallbacks below)
+        // rather than in gradle.properties or CI, so F-Droid's rebuild — which passes no `-P` — resolves
+        // the same OFF we shipped and stays byte-identical.
+        buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: true).toString())
     }
 
     signingConfigs {
@@ -203,6 +223,9 @@ android {
             // its classes ship only in src/debug. Overrides the defaultConfig SEED_DEMO/DEMO_DIRECTOR fields.
             buildConfigField("boolean", "SEED_DEMO", "false")
             buildConfigField("boolean", "DEMO_DIRECTOR", "false")
+            // Hide the Internet-relay plane in every shipped artifact (staging inherits this via
+            // initWith). `-PinternetPlane=true` re-lights it for a lab reflash of a release-shaped build.
+            buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: false).toString())
             // Unsigned when no keystore.properties / KNIT_UPLOAD_* creds are present (see signingConfigs).
             signingConfig = signingConfigs.findByName("release")
         }

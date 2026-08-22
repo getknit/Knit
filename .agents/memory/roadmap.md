@@ -33,6 +33,13 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **The spool plane is hidden in shipped builds** (2026-08-22, ADR 031) — `BuildConfig.INTERNET_PLANE`
+  is true in debug, false in release/staging, `-PinternetPlane=true|false` overrides. It gates
+  `SettingsStore.spoolEnabled` (which parks `ScopeSync`, group-root minting and every derived indicator
+  in one place), the Profile row, the `relays` route, and the default-spool seed. The code is **not**
+  stripped — flipping the release default to `true` is the whole of "introducing the feature", once the
+  device trials below are done and the CHANGELOG's relay bullets are ready to be public.
+
 - **The spool plane beyond the spec** — everything that makes the protocol run, in order: ~~the
   `knit-spool` reference daemon + conformance suite~~ (**done 2026-08-16** in the `knit-spool`
   repo — full v1 daemon with SQLite persistence, rate limits, watermark, ops surface, plus the

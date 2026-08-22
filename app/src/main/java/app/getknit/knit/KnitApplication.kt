@@ -61,7 +61,9 @@ class KnitApplication :
         }
 
         // Seed the shipped default spools once (res/values/spools.xml). Opens no socket by itself — the
-        // Internet plane stays off until the user turns it on — and a later removal sticks.
+        // Internet plane stays off until the user turns it on — and a later removal sticks. A no-op while
+        // the plane is dark (`BuildConfig.INTERNET_PLANE`), including the seeded marker, so the defaults
+        // land on the first run of the build that introduces the feature.
         //
         // Its OWN coroutine, deliberately: chained behind warmUp() it inherited a ~16 MB model load, so a
         // fresh install sat with an unconfigured spool list for tens of seconds (observed on a Pixel 8),

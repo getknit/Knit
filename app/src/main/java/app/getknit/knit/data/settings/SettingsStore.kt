@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
+import app.getknit.knit.BuildConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -132,8 +133,17 @@ class SettingsStore(
      * conversation's sealed history to third-party machines is a real threat-model change, so it is a
      * choice the user makes rather than one they inherit (docs/SPOOL_PROTOCOL.md §10). With it off, or
      * with [spoolUrls] empty, `ScopeSync` opens no socket at all.
+     *
+     * Also the plane's single kill switch while the feature is dark: `BuildConfig.INTERNET_PLANE` is
+     * false in release/staging, and every consumer — `ScopeSync`'s url supplier, the group-root mint
+     * pass, and `RelayStatusRepository.facts` (from which the header cloud, the per-chat relay notice
+     * and the attachment markers all derive) — already reads the plane's liveness through this one
+     * flow. Gating **here** rather than at each of them is what makes the flag total: a new consumer
+     * cannot forget it. The stored preference is deliberately read but not cleared, so a device that
+     * opted in under a flag-on build keeps its choice for whenever the feature ships.
      */
-    val spoolEnabled: Flow<Boolean> = dataStore.data.map { it[KEY_SPOOL_ENABLED] ?: false }
+    val spoolEnabled: Flow<Boolean> =
+        dataStore.data.map { BuildConfig.INTERNET_PLANE && (it[KEY_SPOOL_ENABLED] ?: false) }
 
     /**
      * The spools to sync every scope against — full `wss://host/spool/v1[?k=token]` URLs. A set, since a
@@ -258,6 +268,10 @@ class SettingsStore(
      */
     suspend fun seedDefaultSpools(defaults: List<String>) =
         dataStore.edit { prefs ->
+            // Nothing to seed while the plane is dark, and — because the seeded marker is not written
+            // either — the defaults still land on the first run of the build that un-hides it, which is
+            // the first run where the user can actually see and edit the list.
+            if (!BuildConfig.INTERNET_PLANE) return@edit
             if (prefs[KEY_SPOOL_SEEDED] == true) return@edit
             prefs[KEY_SPOOL_SEEDED] = true
             if (defaults.isNotEmpty()) prefs[KEY_SPOOL_URLS] = (prefs[KEY_SPOOL_URLS] ?: emptySet()) + defaults

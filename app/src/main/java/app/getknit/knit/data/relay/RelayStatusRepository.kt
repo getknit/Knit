@@ -1,5 +1,6 @@
 package app.getknit.knit.data.relay
 
+import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.spool.SpoolStatus
@@ -30,9 +31,20 @@ class RelayStatusRepository(
     private val settings: SettingsStore,
     private val mesh: MeshController,
 ) {
-    /** Live per-spool status, re-read on a slow ticker. Empty whenever the plane is parked. */
+    /**
+     * Live per-spool status, re-read on a slow ticker. Empty whenever the plane is parked.
+     *
+     * In a build where the plane is dark (`BuildConfig.INTERNET_PLANE` false) the ticker does not run at
+     * all: `ScopeSync` holds no workers, so every poll would return the same empty list, and this flow is
+     * collected by the chat list, every open chat and Profile — a permanent 5 s wake-up for a feature the
+     * user cannot reach. One emission is enough to keep [facts]' `combine` live.
+     */
     val statuses: Flow<List<SpoolStatus>> =
         flow {
+            if (!BuildConfig.INTERNET_PLANE) {
+                emit(emptyList())
+                return@flow
+            }
             while (true) {
                 emit(mesh.spoolStatus())
                 delay(POLL_MS)

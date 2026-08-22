@@ -67,6 +67,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
@@ -168,6 +169,9 @@ internal fun ProfileScreenContent(
     onStatusCommit: () -> Unit,
     onToggleContentFiltering: (Boolean) -> Unit,
     onOpenRelays: () -> Unit,
+    // Whether the Internet-relay plane is introduced at all in this build. A parameter rather than a
+    // bare BuildConfig read so the hidden case is previewable and testable; see app/build.gradle.kts.
+    showInternetRelays: Boolean = BuildConfig.INTERNET_PLANE,
     onPickPhoto: () -> Unit,
     onClearPhoto: () -> Unit,
     onAllowBattery: () -> Unit,
@@ -250,7 +254,7 @@ internal fun ProfileScreenContent(
                 onToggle = onToggleContentFiltering,
             )
 
-            InternetRelayRow(summary = form.relay, onClick = onOpenRelays)
+            if (showInternetRelays) InternetRelayRow(summary = form.relay, onClick = onOpenRelays)
 
             BatteryOptimizationRow(exempt = batteryExempt, onAllow = onAllowBattery)
 

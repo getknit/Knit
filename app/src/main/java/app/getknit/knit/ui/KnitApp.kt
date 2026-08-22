@@ -290,8 +290,14 @@ fun KnitApp(startRoute: String? = null) {
                 onOpenRelays = { navController.navigate(Routes.INTERNET_RELAYS) },
             )
         }
-        composable(Routes.INTERNET_RELAYS) {
-            InternetRelayScreen(onBack = { navController.popBackStack() })
+        // The Internet-relay plane's editor exists only in builds that introduce the feature — the route
+        // is not registered at all when it is dark, so nothing (a restored back stack, a future deep
+        // link) can reach a screen whose switch would be inert anyway. Profile hides its row on the same
+        // flag, so nothing navigates here. See app/build.gradle.kts for what INTERNET_PLANE gates.
+        if (BuildConfig.INTERNET_PLANE) {
+            composable(Routes.INTERNET_RELAYS) {
+                InternetRelayScreen(onBack = { navController.popBackStack() })
+            }
         }
         composable(Routes.DIAGNOSTICS) {
             DiagnosticsScreen(

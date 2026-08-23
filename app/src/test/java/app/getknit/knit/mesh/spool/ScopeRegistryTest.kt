@@ -18,19 +18,17 @@ class ScopeRegistryTest {
 
     private fun registry(
         roots: List<ScopeRoots> = emptyList(),
-        accepted: Set<String> = setOf(bob, carol),
         groups: List<GroupScopeRoots> = emptyList(),
     ) = ScopeRegistry(
         selfId = { me },
         roots = { roots },
-        isAccepted = { it in accepted },
         groupRoots = { groups },
     )
 
     private fun root(seed: Byte) = ByteArray(32) { seed }
 
     @Test
-    fun `derives one scope per accepted peer, matching the spec's DM derivation`() =
+    fun `derives one scope per session peer, matching the spec's DM derivation`() =
         runTest {
             val scopes = registry(listOf(ScopeRoots(bob, root(1)))).scopes(now = 0L)
             assertEquals(1, scopes.size)
@@ -45,17 +43,35 @@ class ScopeRegistryTest {
         runTest {
             val mine = registry(listOf(ScopeRoots(bob, root(1)))).scopes(0L).single()
             val theirs =
-                ScopeRegistry(selfId = { bob }, roots = { listOf(ScopeRoots(me, root(1))) }, isAccepted = { true })
+                ScopeRegistry(selfId = { bob }, roots = { listOf(ScopeRoots(me, root(1))) })
                     .scopes(0L)
                     .single()
             assertEquals(mine.idHex, theirs.idHex)
         }
 
+    /**
+     * ADR 032. This gated on `Conversations.isAccepted` until 2026-08-22, which broke the plane for any
+     * pair whose thread one side had only ever *received* in: acceptance is largely "I have authored
+     * here", so the sender derived a scope and the receiver derived none. Neither end could tell — both
+     * reported a connected spool, no error and an empty invalid set — and the DMs only ever landed when
+     * the two came back into radio range. The scope table must depend on the session, never on a local
+     * presentation decision (ADR 009).
+     */
     @Test
-    fun `a peer that is still a message request gets no scope`() =
+    fun `a peer that is still a message request gets a scope anyway, symmetric with the sender's`() =
         runTest {
-            val scopes = registry(listOf(ScopeRoots(bob, root(1)), ScopeRoots(carol, root(2))), accepted = setOf(carol)).scopes(0L)
-            assertEquals(listOf(carol), scopes.map { it.peerId })
+            // Bob has never authored in this thread; me has. Both must still derive the same scope.
+            val receiver = registry(listOf(ScopeRoots(bob, root(1)))).scopes(0L)
+            val sender = ScopeRegistry(selfId = { bob }, roots = { listOf(ScopeRoots(me, root(1))) }).scopes(0L)
+            assertEquals(listOf(bob), receiver.map { it.peerId })
+            assertEquals(receiver.single().idHex, sender.single().idHex)
+        }
+
+    @Test
+    fun `every session peer gets a scope`() =
+        runTest {
+            val scopes = registry(listOf(ScopeRoots(bob, root(1)), ScopeRoots(carol, root(2)))).scopes(0L)
+            assertEquals(listOf(bob, carol), scopes.map { it.peerId })
         }
 
     @Test
@@ -140,7 +156,6 @@ class ScopeRegistryTest {
                 ScopeRegistry(
                     selfId = { bob },
                     roots = { emptyList() },
-                    isAccepted = { true },
                     groupRoots = { listOf(GroupScopeRoots(groupId, roster, root(7), 1)) },
                 ).scopes(0L).single()
             assertEquals(mine.idHex, theirs.idHex)

@@ -37,10 +37,19 @@ class GroupScopeRoots(
 )
 
 /**
- * Derives the scope table: one scope per **accepted** DM peer with a live ratchet session and one per
- * group holding a shared root, plus each one's retiring scope while its drain window is open. Pure —
- * identity, ratchet state, group roots, and the acceptance rule are all injected suspend seams, so the
- * derivation is unit-testable with fixtures and carries no Android or Room dependency.
+ * Derives the scope table: one scope per DM peer holding a confirmed ratchet session and one per group
+ * holding a shared root, plus each one's retiring scope while its drain window is open. Pure — identity,
+ * ratchet state and group roots are all injected suspend seams, so the derivation is unit-testable with
+ * fixtures and carries no Android or Room dependency.
+ *
+ * **The Message Requests rule deliberately does not gate this.** Filtering DM peers through
+ * `Conversations.isAccepted` (as this did until ADR 032) folds a local presentation decision into relay
+ * convergence, which ADR 009 forbids — and it does so *asymmetrically*, because acceptance is largely
+ * "I have authored here": a thread one side has only ever received in yields a scope on the sender's
+ * device and none on the receiver's. The two then never share a scope id, so the plane carries nothing
+ * in either direction while both ends report a connected spool and no error. A **confirmed session** is
+ * the bound that matters here — it costs a completed X3DH, which no stranger reaches unsolicited — and
+ * `RatchetSessions.exportedRoots` already applies it.
  *
  * Bounds are constants here rather than per-conversation state because the signed scope-config ctl
  * (`CTL_SCOPE_CONFIG`, spec §5) is not on the wire yet; when it lands, [bounds] becomes a per-scope
@@ -50,7 +59,6 @@ class GroupScopeRoots(
 class ScopeRegistry(
     private val selfId: suspend () -> String,
     private val roots: suspend () -> List<ScopeRoots>,
-    private val isAccepted: suspend (String) -> Boolean,
     private val groupRoots: suspend () -> List<GroupScopeRoots> = { emptyList() },
     private val bounds: ScopeBounds = DEFAULT_BOUNDS,
 ) {
@@ -65,7 +73,6 @@ class ScopeRegistry(
         now: Long,
     ): List<Scope> =
         roots()
-            .filter { isAccepted(it.peerId) }
             .flatMap { entry ->
                 buildList {
                     add(dmScope(me, entry.peerId, entry.pairwiseRoot, retiring = false))

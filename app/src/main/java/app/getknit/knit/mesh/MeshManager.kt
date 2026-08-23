@@ -275,7 +275,6 @@ class MeshManager(
                                 ScopeRoots(it.peerId, it.pairwiseRoot, it.prevPairwiseRoot, it.prevRootExpiresAt)
                             }
                         },
-                        isAccepted = ::isAcceptedConversation,
                         groupRoots = ::groupScopeRoots,
                     ),
                 dialer = dialer,
@@ -1729,20 +1728,6 @@ class MeshManager(
         // its tick. Relayed frames ride the next heal round — they are already in flight on the radios.
         scopeSync?.onCustodyChanged()
     }
-
-    /**
-     * Whether [conversationId] is an accepted conversation rather than a stranger's message request — the
-     * shared [Conversations.isAccepted] rule, read here so the Internet plane never spends a scope (or a
-     * spool's storage) on someone the user hasn't accepted. Group senders are irrelevant: only DM scopes
-     * exist today.
-     */
-    private suspend fun isAcceptedConversation(conversationId: String): Boolean =
-        Conversations.isAccepted(
-            conversationId,
-            settings.acceptedConversations.first(),
-            peers.verifiedNodeIds().toSet(),
-            messages.conversationsIAuthoredIn(identity.nodeId()).toSet(),
-        )
 
     /**
      * Wraps [env] in a signed [WireEnvelope]: the canonical envelope bytes plus our raw Ed25519 signature

@@ -49,7 +49,7 @@ data class Contact(
  */
 class ContactsViewModel(
     peers: PeerRepository,
-    meshManager: MeshController,
+    private val meshManager: MeshController,
     private val identity: Identity,
     settings: SettingsStore,
     private val groups: GroupRepository,
@@ -96,6 +96,11 @@ class ContactsViewModel(
                     left = false,
                 ),
             )
+            // Ask the Internet plane to mint this group's spool root now (spec §3.2: we are the creator,
+            // so we are the preferred minter and mint immediately). Without it the mint waits for the next
+            // heal — a heartbeat, a motion trigger or a foreground resume — and the thread reads
+            // "Not covered by relays yet" for minutes. After the row exists, since the pass reads it.
+            meshManager.mintGroupRoots()
             _created.tryEmit(groupId)
         }
     }

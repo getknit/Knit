@@ -846,11 +846,16 @@ class MeshManager(
         )
     }
 
+    override fun mintGroupRoots() {
+        if (!started) return
+        sessionScope?.launch { mintGroupRootsIfDue() }
+    }
+
     /**
-     * The mint pass, on the 15-min heal heartbeat: for every group we hold, become eligible (plane on,
-     * fully ratchet-capable — spec §3.3), stamp the grace clock once, and mint when
-     * [GroupRootPolicy.mintDue] says it is our turn. One rule covers both mints: version 1 when we hold
-     * no root, `version + 1` when a processed departure left a re-mint owed.
+     * The mint pass, on the 15-min heal heartbeat and on the [mintGroupRoots] nudge: for every group we
+     * hold, become eligible (plane on, fully ratchet-capable — spec §3.3), stamp the grace clock once,
+     * and mint when [GroupRootPolicy.mintDue] says it is our turn. One rule covers both mints: version 1
+     * when we hold no root, `version + 1` when a processed departure left a re-mint owed.
      *
      * The eligibility stamp is written **before** the first decision on purpose — the grace is measured
      * from it, so a device that never stamps never waits and never mints.

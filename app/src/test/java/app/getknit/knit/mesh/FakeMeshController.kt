@@ -26,6 +26,7 @@ class FakeMeshController : MeshController {
     var startCount = 0
     var stopCount = 0
     var healCount = 0
+    var mintGroupRootsCount = 0
     var restartCount = 0
 
     /** One recorded [sendChat] call, in the order it was made. */
@@ -57,6 +58,10 @@ class FakeMeshController : MeshController {
 
     override fun heal() {
         healCount++
+    }
+
+    override fun mintGroupRoots() {
+        mintGroupRootsCount++
     }
 
     override fun restart() {

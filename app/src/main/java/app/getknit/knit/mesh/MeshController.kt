@@ -47,6 +47,19 @@ interface MeshController {
     /** Triggers an immediate rescan/reconnect (heartbeat/motion) and sweeps stale carry. */
     fun heal()
 
+    /**
+     * Runs the spool group-root mint pass now (`docs/SPOOL_PROTOCOL.md` §3.2) instead of waiting for the
+     * next [heal]: C-3.2-2 says the preferred minter mints *immediately*, and the creator of a group is
+     * that minter — but nothing in the creation path used to ask, so a brand-new group sat off the
+     * Internet plane ("Not covered by relays yet") until a heartbeat, a motion trigger or a foreground
+     * resume happened along.
+     *
+     * Deliberately narrower than [heal], which is the whole background-survival basket: a group creation
+     * is a UI action, and forcing a radio rescan/reconnect out of one would disturb the very links about
+     * to carry that group's first message. Idempotent — the pass re-derives what is due.
+     */
+    fun mintGroupRoots()
+
     /** Tears down and re-establishes the transport (e.g. after Bluetooth toggles back on). */
     fun restart()
 

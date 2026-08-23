@@ -24,6 +24,9 @@ class GallerySaver(
     /**
      * Writes [bytes] (a blob's decrypted image, identified by content [hash] and [mime]) into
      * `Pictures/Knit` as `knit-<hash>.<ext>`. Returns true on success.
+     *
+     * Images only: [MediaStore.Images] is the sole collection this writes to, so a non-image [mime] is
+     * refused rather than filed in the user's gallery under a type the gallery can't read.
      */
     suspend fun saveToPictures(
         bytes: ByteArray,
@@ -31,7 +34,7 @@ class GallerySaver(
         mime: String,
     ): Boolean =
         withContext(Dispatchers.IO) {
-            if (bytes.isEmpty()) return@withContext false
+            if (bytes.isEmpty() || !mime.startsWith("image/")) return@withContext false
             val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: "jpg"
             val values =
                 ContentValues().apply {

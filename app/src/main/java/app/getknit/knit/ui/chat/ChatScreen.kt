@@ -434,7 +434,7 @@ internal fun ChatScreenContent(
     onBlock: (nodeId: String) -> Unit,
     onUnblock: (nodeId: String) -> Unit,
     onCopy: (text: String) -> Unit,
-    onSaveAttachment: (hash: String) -> Unit,
+    onSaveAttachment: (hash: String, key: String?, mime: String?) -> Unit,
 ) {
     var fullscreenImage by remember { mutableStateOf<FullscreenImage?>(null) }
     // The message a tapped quote scrolled to, briefly highlighted then cleared (see the LaunchedEffect
@@ -750,7 +750,7 @@ internal fun ChatScreenContent(
             fullscreen = fs,
             now = now,
             onDismiss = { fullscreenImage = null },
-            onSave = { onSaveAttachment(fs.image.hash) },
+            onSave = { onSaveAttachment(fs.image.hash, fs.image.key, fs.image.mime) },
         )
     }
 
@@ -2628,7 +2628,7 @@ fun ChatScreenDmPreview() =
             onBlock = {},
             onUnblock = {},
             onCopy = {},
-            onSaveAttachment = {},
+            onSaveAttachment = { _, _, _ -> },
         )
     }
 
@@ -2669,7 +2669,7 @@ fun ChatScreenGroupTypingPreview() =
             onBlock = {},
             onUnblock = {},
             onCopy = {},
-            onSaveAttachment = {},
+            onSaveAttachment = { _, _, _ -> },
         )
     }
 
@@ -2708,7 +2708,7 @@ fun ChatScreenRoomEmptyPreview() =
             onBlock = {},
             onUnblock = {},
             onCopy = {},
-            onSaveAttachment = {},
+            onSaveAttachment = { _, _, _ -> },
         )
     }
 
@@ -2753,6 +2753,6 @@ fun ChatScreenReplyDraftPreview() =
             onBlock = {},
             onUnblock = {},
             onCopy = {},
-            onSaveAttachment = {},
+            onSaveAttachment = { _, _, _ -> },
         )
     }

@@ -21,6 +21,8 @@ import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
+import app.getknit.knit.mesh.crypto.AttachmentCrypto
+import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.msg
@@ -30,6 +32,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -39,6 +42,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -411,5 +415,89 @@ class ChatViewModelTest {
 
             assertTrue(events.contains(R.string.chat_image_capture_failed))
             assertNull(vm.pendingAttachment.value)
+        }
+
+    /**
+     * The bug in knit/knit-next#31: a DM/group attachment's stored blob is `iv || ciphertext`, so exporting
+     * it verbatim wrote ciphertext into the gallery under an image mime and still toasted success. The saved
+     * bytes must be the same plaintext the bubble renders.
+     */
+    @Test
+    fun savingAnEncryptedAttachmentExportsThePlaintext() =
+        runTest {
+            val plain = byteArrayOf(1, 2, 3, 4, 5)
+            val sealed = AttachmentCrypto.seal(plain)
+            coEvery { blobs.bytes("ct") } returns sealed.blob
+            coEvery { gallerySaver.saveToPictures(any(), any(), any()) } returns true
+            val vm = vm()
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+
+            vm.saveAttachment("ct", b64(sealed.key), "image/webp")
+            advanceUntilIdle()
+
+            val exported = slot<ByteArray>()
+            coVerify { gallerySaver.saveToPictures(capture(exported), "ct", "image/webp") }
+            assertArrayEquals("saved the decrypted image, not the stored ciphertext", plain, exported.captured)
+            assertTrue(events.contains(R.string.chat_image_saved))
+        }
+
+    /** A key-less blob (a Nearby-room attachment) is already plaintext and goes out untouched. */
+    @Test
+    fun savingAPlaintextAttachmentExportsTheStoredBytes() =
+        runTest {
+            val jpeg = byteArrayOf(9, 8, 7)
+            coEvery { blobs.bytes("h") } returns jpeg
+            coEvery { gallerySaver.saveToPictures(any(), any(), any()) } returns true
+            val vm = vm()
+
+            vm.saveAttachment("h", null, "image/jpeg")
+            advanceUntilIdle()
+
+            val exported = slot<ByteArray>()
+            coVerify { gallerySaver.saveToPictures(capture(exported), "h", "image/jpeg") }
+            assertArrayEquals(jpeg, exported.captured)
+        }
+
+    /** A key that doesn't open the blob must fail the save loudly rather than export the ciphertext. */
+    @Test
+    fun savingWithAKeyThatDoesNotOpenTheBlobFailsInsteadOfExportingCiphertext() =
+        runTest {
+            val sealed = AttachmentCrypto.seal(byteArrayOf(1, 2, 3, 4, 5))
+            coEvery { blobs.bytes("ct") } returns sealed.blob
+            val vm = vm()
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+
+            val wrongKey = ByteArray(32) // a valid AES-256 length, but not the key it was sealed under
+            vm.saveAttachment("ct", b64(wrongKey), "image/webp")
+            advanceUntilIdle()
+
+            coVerify(exactly = 0) { gallerySaver.saveToPictures(any(), any(), any()) }
+            assertTrue(events.contains(R.string.chat_image_save_failed))
+        }
+
+    /**
+     * ADR 035: the `blobs` row's mime describes the *ciphertext* bytes and is only whatever named the blob
+     * when it landed (a fetcher default on the spool path). The message row's mime is the plaintext's own
+     * type and wins; the blob row is the fallback for a row that names none.
+     */
+    @Test
+    fun theMessageRowsMimeWinsOverTheBlobRows() =
+        runTest {
+            coEvery { blobs.bytes("h") } returns byteArrayOf(1)
+            coEvery { blobs.mimeFor("h") } returns "image/jpeg"
+            coEvery { gallerySaver.saveToPictures(any(), any(), any()) } returns true
+            val vm = vm()
+
+            vm.saveAttachment("h", null, "image/webp")
+            advanceUntilIdle()
+
+            coVerify { gallerySaver.saveToPictures(any(), "h", "image/webp") }
+
+            vm.saveAttachment("h", null, null) // no row mime: fall back to what the blob calls itself
+            advanceUntilIdle()
+
+            coVerify { gallerySaver.saveToPictures(any(), "h", "image/jpeg") }
         }
 }

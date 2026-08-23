@@ -8,7 +8,7 @@ import org.junit.runner.RunWith
 /**
  * Black-box coverage of the Message Requests inbox reached via the **in-app chat-list badge** — the sibling
  * of [MessageRequestNotificationUiAutomatorTest], which enters through the system notification shade — plus
- * the per-row Block confirm path. The debug `REQNOTIF` seam injects a synthetic unaccepted stranger DM; no
+ * the accept-then-open-the-thread hop and the per-row Block confirm path. The debug `REQNOTIF` seam injects a synthetic unaccepted stranger DM; no
  * `POST_NOTIFICATIONS` grant is needed here because these enter through the UI, not the shade (on API 33 the
  * heads-up simply no-ops without the grant, so nothing overlays the badge).
  */
@@ -24,6 +24,26 @@ class RequestsInboxUiAutomatorTest : SeededUiAutomatorTest() {
         assertText(str(R.string.message_requests_title))
         assertTag("request_row_$STRANGER")
         assertText(STRANGER_NAME)
+    }
+
+    /**
+     * Accepting a request opens the thread it belongs to — the inbox is popped on the way, so Back from
+     * the chat lands on the chat list rather than back in the (now shorter) inbox.
+     */
+    @Test
+    fun request_accept_opensTheAcceptedThread() {
+        launch()
+        injectRequest()
+        requireTag("chatlist_requests").click()
+        requireTag("request_accept_$STRANGER").click()
+
+        // We're in the stranger's thread: the composer is up and the top bar names them.
+        assertTag("chat_input")
+        assertText(STRANGER_NAME)
+
+        // Back leaves the chat for the chat list, not the inbox we accepted from.
+        device.pressBack()
+        assertTag("chatlist_fab")
     }
 
     /** Blocking a request (row overflow → Block → confirm) removes it, leaving the inbox empty. */

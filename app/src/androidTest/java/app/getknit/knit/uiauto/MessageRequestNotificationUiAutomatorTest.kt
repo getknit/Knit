@@ -12,7 +12,7 @@ import org.junit.runner.RunWith
  * The end-to-end message-request notification flow — the one thing an in-process Compose test can't reach,
  * because it lives in the **system notification shade**. Drives the real coalesced heads-up
  * ([app.getknit.knit.notifications.MessageNotifier.notifyMessageRequests]) → open the shade → tap →
- * deep-link into the Requests inbox → Accept.
+ * deep-link into the Requests inbox → Accept → land in the accepted thread.
  *
  * The radio-less demo build never runs `InboundPipeline` (the sole production caller) and seeds no
  * requests, so the debug `REQNOTIF` bridge action injects a synthetic unaccepted inbound DM and posts the
@@ -22,7 +22,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MessageRequestNotificationUiAutomatorTest : SeededUiAutomatorTest() {
     @Test
-    fun messageRequestHeadsUp_opensRequestsInbox_andAccepts() {
+    fun messageRequestHeadsUp_opensRequestsInbox_andAcceptOpensTheThread() {
         // The notification posts correctly on an emulator (verified via `dumpsys notification`), but a headless
         // Gradle-managed / ATD emulator's SystemUI never surfaces its content to the accessibility tree, so the
         // shade can't be driven here. Skip (not fail) on an emulator; the FTL physical-device pass covers it.
@@ -49,9 +49,11 @@ class MessageRequestNotificationUiAutomatorTest : SeededUiAutomatorTest() {
         assertTag("request_row_$STRANGER_NODE_ID")
         assertText(STRANGER_NAME)
 
-        // Accept it → the request leaves the inbox, which is now empty.
+        // Accept it → the accepted thread opens straight away (the inbox drops off the back stack), so the
+        // composer is up and the top bar names the sender.
         requireTag("request_accept_$STRANGER_NODE_ID").click()
-        assertText(str(R.string.message_requests_empty))
+        assertTag("chat_input")
+        assertText(STRANGER_NAME)
     }
 
     /** Grant POST_NOTIFICATIONS on API 33+ (denied by default there); a no-op on 29–32 (install-time granted). */

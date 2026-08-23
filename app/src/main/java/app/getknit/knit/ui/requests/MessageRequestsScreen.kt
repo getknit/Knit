@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,14 +54,15 @@ import org.koin.compose.koinInject
 
 /**
  * The Message Requests inbox — the pending DM/group conversations partitioned out of the main chat list.
- * Each row offers Accept (moves it into the chat list) plus, behind an overflow, Block (DM only) and
- * Delete, each with a confirm dialog. Reached from the chat-list badge and from the quiet coalesced
- * notification's deep-link.
+ * Each row offers Accept (moves it into the chat list, then opens the thread via [onOpenConversation])
+ * plus, behind an overflow, Block (DM only) and Delete, each with a confirm dialog. Reached from the
+ * chat-list badge and from the quiet coalesced notification's deep-link.
  */
 @Composable
 fun MessageRequestsScreen(
     onBack: () -> Unit,
     onOpenProfile: (nodeId: String) -> Unit,
+    onOpenConversation: (conversationId: String) -> Unit,
     viewModel: MessageRequestsViewModel = koinViewModel(),
 ) {
     val requests by viewModel.requests.collectAsStateWithLifecycle()
@@ -71,6 +73,10 @@ fun MessageRequestsScreen(
         notifier.setRequestsVisible(true)
         onDispose { notifier.setRequestsVisible(false) }
     }
+    // Accepting a request opens the now-accepted thread rather than leaving the user in the inbox with
+    // one fewer row. The ViewModel emits only once the accept has persisted, so the write can't be
+    // cancelled by this screen (and its ViewModel) going away with the navigation.
+    LaunchedEffect(Unit) { viewModel.accepted.collect { onOpenConversation(it) } }
     MessageRequestsScreenContent(
         requests = requests,
         onAccept = viewModel::accept,

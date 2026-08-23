@@ -17,9 +17,12 @@ import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -136,9 +139,23 @@ class MessageRequestsViewModel(
             rows.sortedByDescending { it.lastMessageAt ?: 0L }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Accept a request: it moves into the main chat list and the sender's messages notify normally. */
+    /**
+     * Emitted with the conversation id once an accept has persisted, so the screen can open that thread.
+     * Emitting only after the write means navigating away can't cancel it — this ViewModel (and its
+     * scope) dies with the inbox back-stack entry the accept navigation pops.
+     */
+    private val _accepted = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val accepted: SharedFlow<String> = _accepted.asSharedFlow()
+
+    /**
+     * Accept a request: it moves into the main chat list and the sender's messages notify normally, then
+     * [accepted] fires so the thread opens instead of leaving the user staring at the inbox.
+     */
     fun accept(conversationId: String) {
-        viewModelScope.launch { settings.accept(conversationId) }
+        viewModelScope.launch {
+            settings.accept(conversationId)
+            _accepted.tryEmit(conversationId)
+        }
     }
 
     /** Block the DM peer (a DM's conversationId is the peer node id). Not offered for group requests. */

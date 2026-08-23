@@ -317,6 +317,14 @@ fun KnitApp(startRoute: String? = null) {
                 // Tapping a request's avatar opens the sender's profile; its Message action accepts the
                 // request and opens the DM (see ProfileDetailsScreen.onMessage).
                 onOpenProfile = { navController.navigate(Routes.profileDetails(it)) },
+                // Accepting drops the user straight into the thread they just accepted — the row is gone
+                // from the inbox anyway, so the inbox leaves the back stack and Back lands on the chat
+                // list (reachable again via its badge for any remaining requests).
+                onOpenConversation = { id ->
+                    navController.navigate(Routes.chat(id)) {
+                        popUpTo(Routes.MESSAGE_REQUESTS) { inclusive = true }
+                    }
+                },
             )
         }
         composable(Routes.DONATE) {

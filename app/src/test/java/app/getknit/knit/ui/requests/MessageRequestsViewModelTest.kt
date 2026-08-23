@@ -1,6 +1,7 @@
 package app.getknit.knit.ui.requests
 
 import android.content.Context
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.GroupRepository
@@ -18,9 +19,11 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -219,6 +222,31 @@ class MessageRequestsViewModelTest {
             advanceUntilIdle()
 
             coVerify { settings.accept("b") }
+        }
+
+    /**
+     * The screen navigates on this emission, which tears down this ViewModel (and its scope) — so the
+     * accept must be persisted *before* it fires, or the write would be cancelled mid-flight.
+     */
+    @Test
+    fun acceptEmitsTheConversationIdOnlyAfterTheWritePersists() =
+        runTest {
+            val persisted = CompletableDeferred<Unit>()
+            coEvery { settings.accept("b") } coAnswers {
+                persisted.await()
+                emptyPreferences() // SettingsStore.accept returns the edited Preferences
+            }
+            val vm = vm()
+            val opened = mutableListOf<String>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.accepted.toList(opened) }
+
+            vm.accept("b")
+            advanceUntilIdle()
+            assertTrue("accepted fired before the write persisted", opened.isEmpty())
+
+            persisted.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(listOf("b"), opened)
         }
 
     @Test

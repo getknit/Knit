@@ -257,9 +257,10 @@ fun VoiceNotePreview(
  * The left half of the composer while recording: a level-driven dot, the elapsed counter, and the way out —
  * "slide to cancel" while the button is still held, or an explicit ✕ once the recording is locked hands-free.
  *
- * It replaces the *text field* only. The mic button beside it stays composed for the whole press, because it
- * owns the hold gesture and a composable that leaves composition has its `pointerInput` cancelled — which is
- * why stopping is not this row's job either: that control lives in the trailing slot, where the thumb is.
+ * It replaces the *text field* only, inside the field container it shares with the inline mic. The mic stays
+ * composed for the whole press, because it owns the hold gesture and a composable that leaves composition has
+ * its `pointerInput` cancelled — which is why stopping is not this row's job either: that control lives in
+ * the trailing slot beside the field, where the thumb is.
  */
 @Composable
 fun VoiceRecordingBar(
@@ -326,8 +327,8 @@ fun VoiceRecordingBar(
 }
 
 /**
- * Ends a locked, hands-free recording. It takes the trailing slot the mic button was in, so the control the
- * user reaches for is the one already under their thumb.
+ * Ends a locked, hands-free recording. It takes the trailing slot beside the field — the send/attach
+ * button's — so the control the user reaches for is the one already under their thumb.
  */
 @Composable
 fun VoiceStopButton(

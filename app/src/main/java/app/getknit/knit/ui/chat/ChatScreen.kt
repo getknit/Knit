@@ -2161,91 +2161,122 @@ private fun MessageInput(
                 ReplyPreview(replyTo = replyingTo, myNodeId = myNodeId, onCancel = onCancelReply)
                 Spacer(Modifier.height(8.dp))
             }
+            // The mic is offered when the composer is otherwise idle, and *kept* for as long as a recording
+            // it started is running — until it locks, at which point the stop button takes over the trailing
+            // slot and an inline mic beside a running bar would be a second, inert control.
+            val showMic =
+                voiceEnabled &&
+                    if (voiceRecording != null) !voiceRecording.locked else !canSend && !showSending
             Row(verticalAlignment = Alignment.Bottom) {
-                // While recording, the *field* is replaced — not the row. The mic button below owns the
-                // hold gesture, and a composable that leaves composition has its `pointerInput` coroutine
-                // cancelled: taking the whole row away the instant recording began deleted the very node
-                // the finger was resting on, so the release never arrived and every recording ended one
-                // frame after it started. The button has to stay under the finger for the whole press.
-                if (voiceRecording != null) {
-                    VoiceRecordingBar(
-                        elapsedMs = voiceRecording.elapsedMs,
-                        amplitude = voiceRecording.amplitude,
-                        locked = voiceRecording.locked,
-                        onCancel = onCancelVoice,
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
-                    Box(
-                        modifier =
-                            Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(24.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        // The hint is a sibling overlay, so wire it onto the field as its accessibility
-                        // label (the field would otherwise be an unnamed edit box); the visible hint is
-                        // then marked decorative to avoid TalkBack reading it twice.
-                        val messageHint = stringResource(R.string.chat_message_hint)
-                        if (state.text.isEmpty()) {
-                            Text(
-                                messageHint,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.clearAndSetSemantics {},
-                            )
-                        }
-                        BasicTextField(
-                            state = state,
+                // The field container holds the text field *and* the mic, the way Signal does: sharing the
+                // field's background makes the mic read as part of it rather than as a third button
+                // competing with send. It stays a control of its own rather than another gesture on the
+                // trailing button — that one already spends its tap on send-or-attach and its long-press on
+                // the camera (ADR 029), so hold-to-talk would collide head-on.
+                //
+                // While recording, only the *left half* of this container is replaced — never the container.
+                // The mic owns the hold gesture, and a composable that leaves composition has its
+                // `pointerInput` coroutine cancelled: taking the whole thing away the instant recording began
+                // deleted the very node the finger was resting on, so the release never arrived and every
+                // recording ended one frame after it started. The button has to stay under the finger for
+                // the whole press.
+                //
+                // `heightIn` pins the resting height. The hint goes on the first keystroke and the mic on the
+                // first non-blank draft, and both measure taller than the bare line of text left behind, so
+                // without a floor the field would visibly shrink under the caret as it lost them. It is a
+                // floor and not a fixed height: the field still grows as the draft wraps, and with the font
+                // scale.
+                Row(
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    if (voiceRecording != null) {
+                        VoiceRecordingBar(
+                            elapsedMs = voiceRecording.elapsedMs,
+                            amplitude = voiceRecording.amplitude,
+                            locked = voiceRecording.locked,
+                            onCancel = onCancelVoice,
+                            modifier = Modifier.weight(1f),
+                        )
+                    } else {
+                        Box(
                             modifier =
                                 Modifier
-                                    .fillMaxWidth()
-                                    .contentReceiver(receiveContentListener)
-                                    .testTag("chat_input")
-                                    .semantics { contentDescription = messageHint },
-                            inputTransformation = InputTransformation.maxLength(TextLimits.MESSAGE),
-                            textStyle =
-                                MaterialTheme.typography.bodyLarge.copy(
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                ),
-                            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                            onKeyboardAction = { onSend() },
-                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                    .weight(1f)
+                                    .padding(
+                                        start = 16.dp,
+                                        // The mic carries 12dp of its own inset around the icon, so the text
+                                        // only has to clear it rather than keep the full edge margin.
+                                        end = if (showMic) 4.dp else 16.dp,
+                                        top = 12.dp,
+                                        bottom = 12.dp,
+                                    ),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            // The hint is a sibling overlay, so wire it onto the field as its accessibility
+                            // label (the field would otherwise be an unnamed edit box); the visible hint is
+                            // then marked decorative to avoid TalkBack reading it twice.
+                            val messageHint = stringResource(R.string.chat_message_hint)
+                            if (state.text.isEmpty()) {
+                                Text(
+                                    messageHint,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.clearAndSetSemantics {},
+                                )
+                            }
+                            BasicTextField(
+                                state = state,
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .contentReceiver(receiveContentListener)
+                                        .testTag("chat_input")
+                                        .semantics { contentDescription = messageHint },
+                                inputTransformation = InputTransformation.maxLength(TextLimits.MESSAGE),
+                                textStyle =
+                                    MaterialTheme.typography.bodyLarge.copy(
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    ),
+                                lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                onKeyboardAction = { onSend() },
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            )
+                        }
+                    }
+                    if (showMic) {
+                        MicButton(
+                            onStart = onStartVoice,
+                            onLock = onLockVoice,
+                            onStop = onStopVoice,
+                            onCancel = onCancelVoice,
+                            recording = voiceRecording != null,
                         )
                     }
                 }
-                // The mic gets its own button rather than another gesture on the trailing one: that button
-                // already spends its tap on send-or-attach and its long-press on the camera (ADR 029), so
-                // hold-to-talk would collide head-on. It appears when there is nothing to send — exactly as
-                // the trailing button's own icon swaps on `canSend` — and stays put for the whole press,
-                // which is what keeps the gesture's pointer stream alive (see the comment above).
-                //
-                // Once the recording is *locked* the finger has already lifted and the gesture has ended, so
-                // the same slot becomes the stop button: the control is where the thumb already is.
-                // The mic is offered when the composer is otherwise idle, and *kept* for as long as a
-                // recording it started is running.
-                val micIdle = !canSend && !showSending
-                val showMic = voiceEnabled && (voiceRecording != null || micIdle)
-                if (voiceRecording?.locked == true) {
-                    Spacer(Modifier.width(8.dp))
-                    VoiceStopButton(onClick = onStopVoice, modifier = Modifier.align(Alignment.CenterVertically))
-                } else if (showMic) {
-                    Spacer(Modifier.width(8.dp))
-                    MicButton(
-                        onStart = onStartVoice,
-                        onLock = onLockVoice,
-                        onStop = onStopVoice,
-                        onCancel = onCancelVoice,
-                        recording = voiceRecording != null,
-                        modifier = Modifier.align(Alignment.CenterVertically),
-                    )
-                }
-                // No send button mid-recording: there is nothing to send yet, and the note stages for review
-                // when the finger lifts.
-                if (voiceRecording != null) return@Row
                 Spacer(Modifier.width(8.dp))
+                if (voiceRecording != null) {
+                    // No send button mid-recording: there is nothing to send yet, and the note stages for
+                    // review when the finger lifts. Once the recording is *locked* the finger has already
+                    // lifted and the gesture has ended, so this slot becomes the stop button — the control
+                    // lands where the thumb already is. Until then it holds an empty slot of the same width,
+                    // because collapsing it would widen the field and slide the mic out from under the
+                    // finger still holding it.
+                    if (voiceRecording.locked) {
+                        VoiceStopButton(
+                            onClick = onStopVoice,
+                            modifier = Modifier.align(Alignment.CenterVertically),
+                        )
+                    } else {
+                        Spacer(Modifier.size(48.dp))
+                    }
+                    return@Row
+                }
                 // Deliberately a Surface + combinedClickable rather than a FilledIconButton: the
                 // latter wraps Surface(onClick = ...), whose own `clickable` sits inside whatever
                 // modifier we pass and consumes the gesture, so an outer long-press never fires.
@@ -2358,20 +2389,7 @@ private fun MicButton(
 
     val holdLabel = stringResource(R.string.chat_voice_record)
     val tapLabel = stringResource(R.string.chat_voice_record_start)
-    Surface(
-        shape = CircleShape,
-        // The warm coral container, not `secondaryContainer` — that one is Knit's slate, and a grey disc
-        // beside the filled-coral send button reads as a disabled control rather than a sibling of it.
-        // This is the same tint the user's own bubbles use, so the composer stays on the brand palette.
-        // While recording it fills to solid coral, so the held button reads as active rather than idle.
-        color =
-            if (recording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer,
-        contentColor =
-            if (recording) {
-                MaterialTheme.colorScheme.onPrimary
-            } else {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            },
+    Box(
         modifier =
             modifier
                 .size(48.dp)
@@ -2433,13 +2451,33 @@ private fun MicButton(
                         }
                     }
                 },
+        contentAlignment = Alignment.Center,
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                Icons.Filled.Mic,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-            )
+        // The disc is inset inside the touch target rather than filling it: the target stays a full 48dp
+        // (it is a gesture surface as much as a button), but a 48dp disc in a 48dp-tall field would meet
+        // the field's own rounded edge with no gap and read as a button wedged into it.
+        Surface(
+            shape = CircleShape,
+            // Nothing at rest — inline in the field the mic is *part of* it, and a container of its own
+            // would make it a third button competing with send. While recording it fills to solid coral
+            // (the tint the user's own bubbles and the send button already use), so the held button reads
+            // as active rather than idle.
+            color = if (recording) MaterialTheme.colorScheme.primary else Color.Transparent,
+            contentColor =
+                if (recording) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            modifier = Modifier.size(40.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Filled.Mic,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
         }
     }
 }

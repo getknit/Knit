@@ -87,7 +87,7 @@ class ChatRelayIndicatorTest {
                     onBlock = {},
                     onUnblock = {},
                     onCopy = {},
-                    onSaveAttachment = {},
+                    onSaveAttachment = { _, _, _ -> },
                 )
             }
         }

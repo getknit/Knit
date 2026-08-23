@@ -37,6 +37,8 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.crypto.AttachmentCrypto
+import app.getknit.knit.mesh.crypto.b64d
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
@@ -833,12 +835,30 @@ class ChatViewModel(
         viewModelScope.launch { blobs.deleteIfUnreferenced(pending.hash) }
     }
 
-    /** Exports the attachment blob [hash] to the public `Pictures/Knit` folder and toasts the result. */
-    fun saveAttachment(hash: String) {
+    /**
+     * Exports the attachment blob [hash] to the public `Pictures/Knit` folder and toasts the result.
+     *
+     * [key] and [mime] come from the message row the user tapped, which is exactly what
+     * [app.getknit.knit.ui.image.BlobFetcher] takes to render that bubble — so what gets saved is what is
+     * on screen, by construction. Both matter:
+     *
+     * - A DM/group attachment's stored blob is `iv || ciphertext` ([AttachmentCrypto]), content-addressed
+     *   by the *ciphertext* hash, so it has to be opened before it leaves the app. Without [key] this
+     *   wrote 300 KB of ciphertext into the gallery under an image mime and reported success.
+     * - `blobs.mime` describes those stored (ciphertext) bytes and is only ever as good as whatever named
+     *   the blob when it landed — since ADR 035 a fetcher default on the spool path rather than the frame.
+     *   The row's mime is the plaintext's own type; the blob row is just the fallback.
+     */
+    fun saveAttachment(
+        hash: String,
+        key: String?,
+        mime: String?,
+    ) {
         viewModelScope.launch {
-            val bytes = blobs.bytes(hash)
-            val mime = blobs.mimeFor(hash)
-            val ok = bytes != null && mime != null && gallerySaver.saveToPictures(bytes, hash, mime)
+            val raw = blobs.bytes(hash)
+            val bytes = if (key != null && raw != null) AttachmentCrypto.open(raw, b64d(key)) else raw
+            val type = mime ?: blobs.mimeFor(hash)
+            val ok = bytes != null && type != null && gallerySaver.saveToPictures(bytes, hash, type)
             _events.tryEmit(if (ok) R.string.chat_image_saved else R.string.chat_image_save_failed)
         }
     }

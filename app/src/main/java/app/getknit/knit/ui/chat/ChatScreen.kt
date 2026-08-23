@@ -463,7 +463,7 @@ internal fun ChatScreenContent(
     onBlock: (nodeId: String) -> Unit,
     onUnblock: (nodeId: String) -> Unit,
     onCopy: (text: String) -> Unit,
-    onSaveAttachment: (hash: String) -> Unit,
+    onSaveAttachment: (hash: String, key: String?, mime: String?) -> Unit,
     // Voice notes. `voiceRecording` is non-null only while the mic is live, and replaces the whole input row
     // while it is; `voicePlayback` is the app-wide "which note is sounding" state each bubble matches its own
     // hash against. All defaulted so the previews and the content-level tests need not name them.
@@ -816,7 +816,7 @@ internal fun ChatScreenContent(
             fullscreen = fs,
             now = now,
             onDismiss = { fullscreenImage = null },
-            onSave = { onSaveAttachment(fs.image.hash) },
+            onSave = { onSaveAttachment(fs.image.hash, fs.image.key, fs.image.mime) },
         )
     }
 
@@ -2927,7 +2927,7 @@ fun ChatScreenDmPreview() =
             onBlock = {},
             onUnblock = {},
             onCopy = {},
-            onSaveAttachment = {},
+            onSaveAttachment = { _, _, _ -> },
         )
     }
 
@@ -2968,7 +2968,7 @@ fun ChatScreenGroupTypingPreview() =
             onBlock = {},
             onUnblock = {},
             onCopy = {},
-            onSaveAttachment = {},
+            onSaveAttachment = { _, _, _ -> },
         )
     }
 
@@ -3007,7 +3007,7 @@ fun ChatScreenRoomEmptyPreview() =
             onBlock = {},
             onUnblock = {},
             onCopy = {},
-            onSaveAttachment = {},
+            onSaveAttachment = { _, _, _ -> },
         )
     }
 
@@ -3052,6 +3052,6 @@ fun ChatScreenReplyDraftPreview() =
             onBlock = {},
             onUnblock = {},
             onCopy = {},
-            onSaveAttachment = {},
+            onSaveAttachment = { _, _, _ -> },
         )
     }

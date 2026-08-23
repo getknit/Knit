@@ -1531,7 +1531,8 @@ class InboundPipeline(
      * A pulled blob just landed: if any group advertised it as its photo (see [reconcileGroup]), adopt it
      * onto that group now that the bytes are local — but only if it's still the group's current photo (the
      * clock still matches; a newer photo arriving meanwhile supersedes it) and, with content filtering on,
-     * not flagged explicit by the screen in [MeshBlobStore.saveIncoming]. A no-op for blobs no group wants.
+     * not flagged explicit by the screen in [MeshBlobStore.saveIncoming] — which a group photo, naming no
+     * message row, can never skip. A no-op for blobs no group wants.
      */
     private suspend fun adoptAdvertisedGroupPhoto(hash: String) {
         val targets = advertisedGroupPhotos.entries.filter { it.value.hash == hash }.map { it.key }
@@ -2132,8 +2133,10 @@ class InboundPipeline(
     private suspend fun adoptAdvertisedAvatar(hash: String) {
         val owners = advertisedAvatars.entries.filter { it.value == hash }.map { it.key }
         if (owners.isEmpty()) return
-        // A pulled avatar was screened in MeshBlobStore.saveIncoming; with content filtering on, don't
-        // adopt it if flagged explicit (the setting gates receive-side hiding, so off → adopt anyway).
+        // A pulled avatar is screened in MeshBlobStore.saveIncoming — it holds no message row, so nothing
+        // local can claim it is audio and the screen always runs (knit/knit-next#30 closed the header-mime
+        // skip that let a serving peer suppress it). With content filtering on, don't adopt it if flagged
+        // explicit (the setting gates receive-side hiding, so off → adopt anyway).
         if (settings.contentFilteringEnabled.first() && imageScreening.isImageFlagged(hash)) {
             owners.forEach { advertisedAvatars.remove(it) }
             blobs.deleteIfUnreferenced(hash)
@@ -2189,6 +2192,9 @@ class InboundPipeline(
      * screen in [MeshBlobStore.saveIncoming] only ever sees the stored ciphertext for an encrypted
      * attachment — it can't decode it — so this is where receive-side image moderation actually runs for
      * DM/group attachments. A no-op for avatars and for relayed blobs we have no key for.
+     *
+     * The key is also what tells [MeshBlobStore.saveIncoming] a voice note is genuinely sealed and so worth
+     * skipping; a key-less blob is plaintext and is screened there whatever mime claims it is.
      */
     private suspend fun screenObtainedAttachment(hash: String) {
         screenEncryptedAttachment(hash, messages.attachmentKeyForHash(hash))

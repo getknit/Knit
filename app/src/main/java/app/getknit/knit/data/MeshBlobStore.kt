@@ -21,6 +21,7 @@ import java.io.File
  */
 class MeshBlobStore(
     private val blobs: BlobRepository,
+    private val messages: MessageRepository,
     private val imageScreening: ImageScreeningService,
     private val transferDir: File,
 ) : BlobStore {
@@ -68,12 +69,22 @@ class MeshBlobStore(
                 src.delete()
                 return@withContext null
             }
-            blobs.insert(hash, mime, bytes)
+            // [mime] is the serving peer's claim, and [BlobExchange.onRequest] serves a blob to *any*
+            // neighbour that asks — so it decides nothing here. Our own decrypted row is authoritative and a
+            // peer's header is not (the rule ADR 035 already applies on the spool plane at
+            // `MeshManager.scopeBlobs().save`); the header is only the fallback when no row names the hash.
+            val localMime = messages.attachmentMimeForHash(hash)
+            blobs.insert(hash, localMime ?: mime, bytes)
             // Screen the received image on-device and cache the verdict by hash (the UI blurs flagged
-            // attachments). Stored regardless, so a false positive never drops content. Skipped for audio:
-            // no on-device model can classify speech, and handing the NSFW image decoder a voice note only
-            // buys a failed decode and a meaningless cached verdict (docs/CONTENT_MODERATION.md).
-            if (!VoiceAudio.isVoice(mime)) imageScreening.screenImage(hash, bytes)
+            // attachments). Stored regardless, so a false positive never drops content. The one skip is a
+            // voice note we know is E2E: no on-device model can classify speech, and its stored bytes are
+            // ciphertext the image decoder can't read anyway, so handing it over buys a failed decode and
+            // nothing else (docs/CONTENT_MODERATION.md). A **key-less** blob is plaintext — a pulled avatar,
+            // a group photo, or a Nearby-room attachment whose mime rides in the clear and is therefore the
+            // author's own claim — and is always screened, whatever it calls itself. This is the sole screen
+            // those three get: their adoption/blur gates read only the cached verdict.
+            val isSealedVoice = VoiceAudio.isVoice(localMime) && messages.attachmentKeyForHash(hash) != null
+            if (!isSealedVoice) imageScreening.screenImage(hash, bytes)
             src.delete() // drop the plaintext staging copy now that the bytes are encrypted
             fileFor(hash)
         }

@@ -30,6 +30,13 @@ class BlobExchangeTest {
     ) : BlobStore {
         private val mimes = ConcurrentHashMap<String, String>()
 
+        /**
+         * What the real `MeshBlobStore` does on ingest: resolve the type from local state rather than the
+         * serving peer's header. Set it to make the stored mime differ from the wire's, which is the only
+         * way to see which of the two [BlobExchange.onReceived] hands the next hop.
+         */
+        var normalizeTo: String? = null
+
         fun seed(
             hash: String,
             mime: String,
@@ -52,7 +59,7 @@ class BlobExchangeTest {
         ): File {
             val dest = File(dir, hash)
             File(srcPath).copyTo(dest, overwrite = true)
-            mimes[hash] = mime
+            mimes[hash] = normalizeTo ?: mime
             return dest
         }
     }
@@ -167,6 +174,28 @@ class BlobExchangeTest {
             assertTrue("b should have cached the blob in transit", b.store.has("H"))
             assertTrue("c should have obtained the blob", c.store.has("H"))
             assertArrayEquals(bytes, c.store.fileFor("H")!!.readBytes())
+        }
+
+    @Test
+    fun aRelayedBlobIsForwardedUnderTheMimeTheCarrierStoredNotTheOneItWasServed() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The header mime is unauthenticated and any holder writes it, so a carrier must not pass the
+            // claim along: b re-serves what its own store resolved (knit/knit-next#30).
+            val a = Node("a", backgroundScope)
+            val b = Node("b", backgroundScope)
+            val c = Node("c", backgroundScope)
+            a.transport.connect(b.transport)
+            b.transport.connect(c.transport)
+            a.start(backgroundScope)
+            b.start(backgroundScope)
+            c.start(backgroundScope)
+
+            a.store.seed("H", "audio/aac", "an-image-blob".toByteArray()) // a's claim: not what it is
+            b.store.normalizeTo = "image/webp" // what b's own row says once the bytes land
+
+            c.exchange.want("H")
+
+            assertEquals("b must forward its resolved type, not a's header", "image/webp", c.store.mimeFor("H"))
         }
 
     @Test

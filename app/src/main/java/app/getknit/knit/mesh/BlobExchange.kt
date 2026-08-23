@@ -126,6 +126,10 @@ class BlobExchange(
         fromNodeId: String,
     ) {
         val stored = store.saveIncoming(hash, mime, srcPath) ?: return
+        // Forward what we actually stored, not what the server claimed — [mime] is an unauthenticated
+        // header from whoever happened to hold the bytes, and the store resolves it against our own row.
+        // Same read [onRequest] does when serving from cold, so a blob names the same type on every hop.
+        val servedMime = store.mimeFor(hash) ?: mime
         clearFetching(hash)
         onObtained(hash, stored.absolutePath)
         val targets = removeWanters(hash) ?: return // detached set — safe to iterate outside the lock
@@ -134,7 +138,7 @@ class BlobExchange(
             .filter { it.nodeId != fromNodeId }
             .forEach {
                 if (!servedRecently(hash, it.nodeId)) {
-                    transport.sendFile(stored, it, FileMeta(FileKind.ATTACHMENT, hash, mime))
+                    transport.sendFile(stored, it, FileMeta(FileKind.ATTACHMENT, hash, servedMime))
                 }
             }
     }

@@ -103,16 +103,6 @@ doc). **Don't start a deferred item without explicit direction.**
   cleartext `profile` frame keeps first contact permanently — it is self-certifying and cannot be
   encrypted — so ADR 018's "last cleartext flooded metadata" goal is advanced, not finished.
 
-- **The image-screening skip trusts a peer-supplied MIME** (knit/knit-next#30, found 2026-08-23).
-  `MeshBlobStore.saveIncoming` skips `imageScreening.screenImage` when `VoiceAudio.isVoice(mime)`, and that
-  `mime` comes from the sender's `LinkFraming.FileHeaderWire`. A hostile neighbour serving a **plaintext**
-  blob — a pulled avatar, a group photo, a Nearby-room attachment — can declare `audio/aac`, so no verdict
-  is ever cached, `imageScreening.isImageFlagged(hash)` reads false, and `adoptAdvertisedAvatar` /
-  `adoptAdvertisedGroupPhoto` (`InboundPipeline`, both gated on exactly that call) adopt it. The fix is the
-  same one the file-header item above needs: gate on the **local** row's mime, not the wire's. Note the two
-  stale comments that assert the current guarantee ("A pulled avatar was screened in
-  `MeshBlobStore.saveIncoming`") and `docs/CONTENT_MODERATION.md` §7, which states it as a property.
-
 - **Audio moderation** — voice notes (ADR 034) ship **unscreened**: no on-device model classifies speech
   and the app has no cloud option, so `MODERATION_NONE` is the honest verdict and both screening hooks skip
   audio by MIME. Mitigated rather than solved: the mic is not offered in the Nearby room (the one surface
@@ -158,12 +148,12 @@ doc). **Don't start a deferred item without explicit direction.**
   against deployed builds — substitute a constant instead (`image/jpeg` is already the universal fallback
   at `ScopeSync.FALLBACK_MIME`, `MeshBlobStore.fileFor` and `AVATAR_MIME`, so old builds degrade by
   nothing). Do **not** gate it on a capability bit: `Protocol.capabilities` is unauthenticated advert data,
-  so gating a privacy control on the carrier's own claim hands the adversary the off switch. It also has a
-  knock-on — `MeshBlobStore.saveIncoming`'s `!VoiceAudio.isVoice(mime)` screening skip reads that same
-  peer-supplied header, so it wants fixing in the same pass by sourcing the mime from the local row
-  (`messages.attachmentMimeForHash`) instead. That skip is **already spoofable today**, independent of any
-  of this: knit/knit-next#30. Receipts and
-  reactions shipped sealed 2026-08-15 as v2 ctl frames (ADR 018,
+  so gating a privacy control on the carrier's own claim hands the adversary the off switch. The knock-on
+  this used to carry is **already closed**: knit/knit-next#30 (fixed 2026-08-23) moved
+  `MeshBlobStore.saveIncoming`'s screening skip off the header entirely — it reads
+  `messages.attachmentMimeForHash` plus `attachmentKeyForHash`, and `BlobExchange.onReceived` now re-serves
+  the stored mime rather than the wire's — so substituting a constant here can no longer weaken screening.
+  Receipts and reactions shipped sealed 2026-08-15 as v2 ctl frames (ADR 018,
   docs/ENCRYPTED_RECEIPTS_REACTIONS.md — DM vaccine-purge retired for the sealed era; the residual is
   the cleartext fallback toward pre-ratchet peers, counted by `receiptsSealedFallback`/
   `reactionsSealedFallback`). Group delivery ticks escalate into custody since 2026-08-22 (ADR 033 —

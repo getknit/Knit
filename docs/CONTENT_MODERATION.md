@@ -94,18 +94,21 @@ identical bytes are scanned once across send/receive):
 
   A clean image stages immediately; GIFs are screened on their first frame. The send-side checks above
   always run (they are not gated by the toggle).
-- **Inbound (flag-on-receive):** `MeshBlobStore.saveIncoming()` → `BlobRepository.screenImage()` always
-  caches a verdict; the chat UI blurs flagged attachments behind tap-to-view (`AttachmentImage`,
-  `ChatRow.attachmentFlagged`) **only when the content-filtering toggle is on** — `ChatViewModel` gates
-  `ChatRow.attachmentFlagged` on `contentFilteringEnabled` (reactive). Bytes are stored regardless, so a
-  false positive never drops content.
+- **Inbound (flag-on-receive):** `MeshBlobStore.saveIncoming()` → `ImageScreeningService.screenImage()`
+  always caches a verdict for a plaintext blob; the chat UI blurs flagged attachments behind tap-to-view
+  (`AttachmentImage`, `ChatRow.attachmentFlagged`) **only when the content-filtering toggle is on** —
+  `ChatViewModel` gates `ChatRow.attachmentFlagged` on `contentFilteringEnabled` (reactive). Bytes are
+  stored regardless, so a false positive never drops content. **What "always" rests on:** the decision is
+  taken from *our own* state — the message row's mime and key — never from the `LinkFraming.FileHeaderWire`
+  the serving peer wrote, which `BlobExchange.onRequest` lets any neighbour choose (knit/knit-next#30).
 - **Avatars:** received avatars are always screened in `saveIncoming` / `MeshManager.onAvatarReceived`;
   a flagged avatar is **not adopted** (the peer falls back to its monogram) **when the content-filtering
   toggle is on** — `onAvatarReceived` / `adoptAdvertisedAvatar` gate the reject decision on
   `contentFilteringEnabled`, so with the toggle off the avatar is adopted anyway (an at-arrival decision,
-  not reactive). Applies on both the direct-push and multi-hop pull paths. (Own-avatar send-screening is
-  intentionally omitted — every recipient screens what it receives, so an explicit own-avatar is dropped
-  on their side when they have filtering on.)
+  not reactive). Applies on both the direct-push and multi-hop pull paths — a pulled avatar names no
+  message row at all, so nothing local can mark it audio and its screen is unconditional. (Own-avatar
+  send-screening is intentionally omitted — every recipient screens what it receives, so an explicit
+  own-avatar is dropped on their side when they have filtering on.)
 
 ### 3.1 Bundled NSFW model
 
@@ -192,11 +195,23 @@ the packfile keeps clones fast. `.tflite` is also kept uncompressed in the APK
 **Voice notes ship unscreened.** No on-device model classifies speech, and the app has no cloud
 moderation option — the same constraint stated at the top of this document. So a voice note is stored with
 `MessageEntity.moderation = MODERATION_NONE`, and both screening hooks skip it explicitly by MIME
-(`VoiceAudio.isVoice`, checked in `MeshBlobStore.saveIncoming`; `AttachmentStore.ingestVoice` bypasses the
-image pipeline entirely and never reaches `ImageScreeningService`). The gate is deliberate rather than
-incidental: `NsfwImageModerator` would have failed open on undecodable audio bytes anyway, but relying on
-that would have left a wasted decode and a meaningless cached verdict in `blob_verdicts`, and would have
-read as screening that works.
+(`VoiceAudio.isVoice`; `AttachmentStore.ingestVoice` bypasses the image pipeline entirely and never
+reaches `ImageScreeningService`). The gate is deliberate rather than incidental: `NsfwImageModerator`
+would have failed open on undecodable audio bytes anyway, but relying on that would have left a wasted
+decode and a meaningless cached verdict in `blob_verdicts`, and would have read as screening that works.
+
+**The receive-side skip reads local state only, and only for a *sealed* voice note.**
+`MeshBlobStore.saveIncoming` asks `messages.attachmentMimeForHash(hash)` and
+`messages.attachmentKeyForHash(hash)`, never the `LinkFraming.FileHeaderWire.mime` the serving peer wrote
+— that header is unauthenticated and `BlobExchange.onRequest` serves a blob to any neighbour that asks, so
+gating on it let a hostile server switch screening off for its own blob (knit/knit-next#30). Both halves
+matter. The mime alone would not be enough: a Nearby-room attachment is not re-sealed, so *its*
+`attachmentMime` rides in the clear and lands in the row verbatim, which would merely move the spoof from
+any neighbour to the message's author. Requiring a key costs nothing legitimate — the mic is not offered
+in the room (below), so a room attachment is never a voice note — and it states the real reason for the
+skip: a sealed attachment's stored bytes are ciphertext the image decoder cannot read either way. A blob
+with **no** row (a pulled avatar, a group photo, a relayed blob) reads as `null`, `isVoice(null)` is
+false, and it is screened — the safe default, and the only screen those blobs get.
 
 What protects a recipient instead:
 

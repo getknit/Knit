@@ -168,19 +168,24 @@ class MeshManager(
             metrics = metrics,
         )
 
-    // Delay-tolerant "delivered" tick for broadcast/group messages: their receipt is a unicast, non-custodied
-    // best-effort frame, so it's lost if the author isn't reachable at delivery time (the message converges via
-    // custody, but the tick doesn't). AckSync remembers the ticks we owe and re-sends them — still unicast, never
-    // flooded — until the author is reachable or the entry ages out. DM receipts stay on the flood+custody path.
-    // A ratchet-capable author's tick is sealed (once, cached — see AckSync's class doc); the lambda reads this
-    // manager's fields lazily at call time, the same deferred pattern as the pipeline's originate.
+    // Delay-tolerant "delivered" tick for broadcast/group messages. A live-linked author gets today's
+    // unicast, non-custodied tick; an absent-but-sealed-capable author's acks batch per author and, after
+    // a short debounce, escalate as ONE originated (`relay = true`) ctl frame — flooded, custodied, and
+    // spool-eligible, so the tick converges exactly like the message it acks. Legacy (cleartext) ticks and
+    // the broadcast room stay unicast-only: flooding a cleartext receipt would re-leak the delivery event
+    // ADR 018 sealed away. The lambdas read this manager's fields lazily at call time (the pipeline's
+    // originate pattern); flushScope defers to the session scope so debounce wakes die with stop() —
+    // retryPending() on the heal heartbeat is the backstop.
     private val ackSync =
         AckSync(
             transport = transport,
             selfId = { identity.nodeId() },
             signRaw = messageCrypto::signRaw,
             metrics = metrics,
-            sealTick = { authorId, ackId -> sealDeliveryTick(authorId, ackId) },
+            sealTick = { authorId, ackIds -> sealDeliveryTick(authorId, ackIds) },
+            canSeal = { authorId -> canSealTickTo(authorId) },
+            originateTick = { authorId, ackIds -> originateDeliveryTick(authorId, ackIds) },
+            flushScope = { sessionScope },
         )
 
     // Bounded in-memory buffer of frames dropped for a missing sender key: parked alongside the key
@@ -1073,18 +1078,19 @@ class MeshManager(
     }
 
     /**
-     * Seals the broadcast/group delivery tick for [ackId] as a `CTL_RECEIPT` ctl DM to [authorId],
-     * signed `relay = false` (point-to-point like the cleartext tick it replaces — never flooded or
-     * custodied), or null when the author can't read one (no pin / no CAP_RATCHET / seal failed) and
-     * AckSync falls back to the cleartext receipt. Deliberately NO blocked gate: a blocked author's
+     * Builds (does not sign) the sealed broadcast/group delivery tick for [ackIds] as a `CTL_RECEIPT`
+     * ctl DM to [authorId], or null when the author can't read one (no pin / no CAP_RATCHET / seal
+     * failed) and AckSync falls back to the cleartext receipt. A single id rides the original `ack`
+     * field; a batch rides the additive `acks` list (a custody-escalated tick covering every id — one
+     * chain key however many messages it acks). Deliberately NO blocked gate: a blocked author's
      * broadcast/group message is still ticked (ADR 010 — blocking is local presentation and must stay
      * invisible; the seed distribution takes the same posture). Sealing consumes a chain key, so
-     * AckSync calls this once per owed tick and re-sends the bytes verbatim.
+     * AckSync seals each owed tick/batch once and never re-seals it.
      */
-    private suspend fun sealDeliveryTick(
+    private suspend fun sealDeliveryTickEnvelope(
         authorId: String,
-        ackId: String,
-    ): WireEnvelope? {
+        ackIds: List<String>,
+    ): RelayEnvelope? {
         val peer = peers.find(authorId) ?: return null
         if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return null
         val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return null
@@ -1092,7 +1098,11 @@ class MeshManager(
         val id = FrameId.new()
         val now = clock()
         val aad = MessageCrypto.header(id, me, now, authorId)
-        val plaintext = MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = ackId).encode()
+        val plaintext =
+            when (ackIds.size) {
+                1 -> MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = ackIds.single())
+                else -> MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, acks = ackIds)
+            }.encode()
         val sealed =
             ratchet.sealDm(authorId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, now)
                 ?: run {
@@ -1100,17 +1110,49 @@ class MeshManager(
                     return null
                 }
         metrics.onReceiptSealed()
-        return sign(
-            RelayEnvelope(
-                type = FrameType.CHAT,
-                id = id,
-                senderId = me,
-                sentAt = now,
-                recipientId = authorId,
-                payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
-            ),
-            relay = false,
+        return RelayEnvelope(
+            type = FrameType.CHAT,
+            id = id,
+            senderId = me,
+            sentAt = now,
+            recipientId = authorId,
+            payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
         )
+    }
+
+    /**
+     * The live-link form of the tick: signed `relay = false` (point-to-point like the cleartext tick it
+     * replaces — never flooded or custodied), for AckSync to send straight to a linked author.
+     */
+    private suspend fun sealDeliveryTick(
+        authorId: String,
+        ackIds: List<String>,
+    ): WireEnvelope? = sealDeliveryTickEnvelope(authorId, ackIds)?.let { sign(it, relay = false) }
+
+    /**
+     * The custody-escalated form: the same sealed tick ORIGINATED (`relay = true` — flooded, custodied,
+     * spool-eligible via the DM-scope frame-set rule) so it converges to an author who is out of link
+     * range, exactly like the message it acks. Returns false when the seal fails and AckSync should
+     * fall back to its per-id cleartext entries.
+     */
+    private suspend fun originateDeliveryTick(
+        authorId: String,
+        ackIds: List<String>,
+    ): Boolean {
+        val env = sealDeliveryTickEnvelope(authorId, ackIds) ?: return false
+        originateSigned(env)
+        metrics.onReceiptCustodied()
+        return true
+    }
+
+    /**
+     * Whether [authorId] could read a sealed tick right now — AckSync's escalation gate. A stale `true`
+     * only costs a failed seal at flush time (which falls back to cleartext entries), so this stays a
+     * cheap pin + capability check rather than a dry-run seal.
+     */
+    private suspend fun canSealTickTo(authorId: String): Boolean {
+        val peer = peers.find(authorId) ?: return false
+        return (peer.capabilities ?: 0L) and Protocol.CAP_RATCHET != 0L && peer.pubKey != null
     }
 
     /** Resolves the published key bundles for a DM recipient or a group's members (excluding us). */

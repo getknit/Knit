@@ -125,7 +125,9 @@ doc). **Don't start a deferred item without explicit direction.**
   reactions shipped sealed 2026-08-15 as v2 ctl frames (ADR 018,
   docs/ENCRYPTED_RECEIPTS_REACTIONS.md — DM vaccine-purge retired for the sealed era; the residual is
   the cleartext fallback toward pre-ratchet peers, counted by `receiptsSealedFallback`/
-  `reactionsSealedFallback`). (Group forward secrecy shipped as the v2 group form — the sender-key
+  `reactionsSealedFallback`). Group delivery ticks escalate into custody since 2026-08-22 (ADR 033 —
+  batched `MessageContent.acks` toward an absent capable author; the residual is the
+  never-escalating cleartext/broadcast tick, by design). (Group forward secrecy shipped as the v2 group form — the sender-key
   ratchet over the pairwise sessions, ADR 017, docs/GROUP_FORWARD_SECRECY.md; it also supplies the
   per-sender `epochSeal` export reserved for the spool plane's `sealv = 2` extension; the shared
   group root is now specified by `docs/SPOOL_PROTOCOL.md` §3.2, client machinery deferred with the

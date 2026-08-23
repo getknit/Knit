@@ -3,6 +3,7 @@ package app.getknit.knit
 import app.getknit.knit.mesh.AckSync
 import app.getknit.knit.mesh.FakeLoopTransport
 import app.getknit.knit.mesh.InboundFrame
+import app.getknit.knit.mesh.MeshTransport
 import app.getknit.knit.mesh.Peer
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.ReceiptContent
@@ -49,35 +50,55 @@ class AckSyncTest {
     }
 
     private fun ackSyncOn(
-        transport: FakeLoopTransport,
+        transport: MeshTransport,
         id: String,
         clock: () -> Long = { 0L },
-        sealTick: suspend (String, String) -> WireEnvelope? = { _, _ -> null },
+        canSeal: suspend (String) -> Boolean = { false },
+        originateTick: suspend (String, List<String>) -> Boolean = { _, _ -> false },
+        flushScope: () -> CoroutineScope? = { null },
+        sealTick: suspend (String, List<String>) -> WireEnvelope? = { _, _ -> null },
     ) = AckSync(
         transport = transport,
         selfId = { id },
         signRaw = { byteArrayOf(SIG_MARKER) },
         now = clock,
         sealTick = sealTick,
+        canSeal = canSeal,
+        originateTick = originateTick,
+        flushScope = flushScope,
     )
 
-    /** A stand-in sealed tick: a signed CHAT-shaped wire whose bytes identify the (author, ackId) seal. */
+    /** A stand-in sealed tick: a signed CHAT-shaped wire whose bytes identify the (author, first-ackId) seal. */
     private fun sealedWire(
         me: String,
         authorId: String,
-        ackId: String,
+        ackIds: List<String>,
     ): WireEnvelope {
         val env =
             RelayEnvelope(
                 type = FrameType.CHAT,
-                id = "sealed-$ackId",
+                id = "sealed-${ackIds.first()}",
                 senderId = me,
                 sentAt = 1L,
                 recipientId = authorId,
-                payload = WireCodec.encodePayload(ReceiptContent(ackId)),
+                payload = WireCodec.encodePayload(ReceiptContent(ackIds.joinToString("+"))),
             )
         val signed = WireCodec.encodeEnvelope(env)
         return WireEnvelope(relay = false, sig = byteArrayOf(SIG_MARKER), signed = signed)
+    }
+
+    /** Records coordination-plane [MeshTransport.fastSend] attempts, delegating everything else. */
+    private class FastSendRecorder(
+        inner: FakeLoopTransport,
+    ) : MeshTransport by inner {
+        val fastSent = CopyOnWriteArrayList<WireEnvelope>()
+
+        override fun fastSend(
+            wire: WireEnvelope,
+            to: Peer,
+        ) {
+            fastSent.add(wire)
+        }
     }
 
     @Test
@@ -185,14 +206,16 @@ class AckSyncTest {
         runTest(UnconfinedTestDispatcher()) {
             // Sealing consumes a ratchet chain key, so the tick is sealed at owe() time and every retry
             // re-sends the cached bytes verbatim — never one key per heartbeat toward an offline author.
+            // canSeal defaults false here, so this is the non-escalated form (the raced/legacy path: the
+            // author was judged not escalation-eligible even though the seal itself succeeds).
             var seals = 0
             val author = Author("author")
             val recip = FakeLoopTransport("recip")
             author.start(backgroundScope)
             val ack =
-                ackSyncOn(recip, "recip") { authorId, ackId ->
+                ackSyncOn(recip, "recip") { authorId, ackIds ->
                     seals++
-                    sealedWire("recip", authorId, ackId)
+                    sealedWire("recip", authorId, ackIds)
                 }
 
             ack.owe("m1", "author") // unreachable: sealed once, held
@@ -209,7 +232,7 @@ class AckSyncTest {
             assertFalse("the sealed tick stays point-to-point", chats.single().wire.relay)
             assertArrayEquals(
                 "retries re-send the sealed bytes verbatim",
-                sealedWire("recip", "author", "m1").signed,
+                sealedWire("recip", "author", listOf("m1")).signed,
                 chats.single().wire.signed,
             )
             assertTrue("no cleartext receipt when the tick sealed", author.receipts().isEmpty())
@@ -246,6 +269,233 @@ class AckSyncTest {
             ack.retryPending()
 
             assertEquals("the entry closest to its TTL retries first", listOf("m-old", "m-new"), author.ackIds())
+        }
+
+    @Test
+    fun anAbsentCapableAuthorsTicksBatchAndOriginateOnce() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The custody escalation: acks toward an absent capable author accumulate, then one batched
+            // tick is originated (relay = true → custodied). A later re-owe of an escalated id (the
+            // exists-gate re-fires on every custody re-serve) must no-op, not re-seal.
+            var clock = 0L
+            val originated = CopyOnWriteArrayList<List<String>>()
+            val author = Author("author")
+            val recip = FakeLoopTransport("recip")
+            author.start(backgroundScope)
+            val ack =
+                ackSyncOn(
+                    recip,
+                    "recip",
+                    clock = { clock },
+                    canSeal = { true },
+                    originateTick = { _, ids ->
+                        originated.add(ids)
+                        true
+                    },
+                )
+
+            ack.owe("m1", "author", escalatable = true)
+            ack.owe("m2", "author", escalatable = true)
+            ack.owe("m3", "author", escalatable = true)
+            assertTrue("nothing sent while the batch debounces", author.received().isEmpty())
+            assertTrue("nothing originated before the debounce", originated.isEmpty())
+
+            clock += AckSync.TICK_BATCH_DEBOUNCE_MS + 1
+            ack.retryPending() // the heal backstop flushes the due batch
+
+            assertEquals(listOf(listOf("m1", "m2", "m3")), originated)
+
+            ack.owe("m1", "author", escalatable = true) // custody re-serve re-acks an escalated id
+            clock += AckSync.TICK_BATCH_DEBOUNCE_MS + 1
+            ack.retryPending()
+            assertEquals("an escalated id never re-seals or re-originates", 1, originated.size)
+        }
+
+    @Test
+    fun theDebounceWakeFlushesWithoutAHeal() =
+        runTest {
+            // The flushScope wake is the primary trigger; retryPending/heal is only the backstop. Virtual
+            // time drives the delay while the injected clock advances in lockstep.
+            var clock = 0L
+            val originated = CopyOnWriteArrayList<List<String>>()
+            val recip = FakeLoopTransport("recip")
+            val ack =
+                ackSyncOn(
+                    recip,
+                    "recip",
+                    clock = { clock },
+                    canSeal = { true },
+                    originateTick = { _, ids ->
+                        originated.add(ids)
+                        true
+                    },
+                    flushScope = { backgroundScope },
+                )
+
+            ack.owe("m1", "author", escalatable = true)
+            assertTrue(originated.isEmpty())
+
+            clock += AckSync.TICK_BATCH_DEBOUNCE_MS + 1
+            testScheduler.advanceTimeBy(AckSync.TICK_BATCH_DEBOUNCE_MS + 1)
+            testScheduler.runCurrent()
+
+            assertEquals(listOf(listOf("m1")), originated)
+        }
+
+    @Test
+    fun anEarlyNeighborJoinFlushesTheBatchOverTheLinkNotCustody() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The author linked while its batch was debouncing: the whole batch goes over the live link
+            // as one relay = false tick — reliable, and zero custody rows.
+            val originated = CopyOnWriteArrayList<List<String>>()
+            val author = Author("author")
+            val recip = FakeLoopTransport("recip")
+            author.start(backgroundScope)
+            val ack =
+                ackSyncOn(
+                    recip,
+                    "recip",
+                    canSeal = { true },
+                    originateTick = { _, ids ->
+                        originated.add(ids)
+                        true
+                    },
+                ) { authorId, ackIds -> sealedWire("recip", authorId, ackIds) }
+
+            ack.owe("m1", "author", escalatable = true)
+            ack.owe("m2", "author", escalatable = true)
+            recip.connect(author.transport)
+            ack.onNeighborAdded(Peer("author"))
+
+            val chats = author.received().filter { it.envelope.type == FrameType.CHAT }
+            assertEquals("one batched tick over the link", 1, chats.size)
+            assertFalse("the live-link batch stays point-to-point", chats.single().wire.relay)
+            assertArrayEquals(sealedWire("recip", "author", listOf("m1", "m2")).signed, chats.single().wire.signed)
+            assertTrue("nothing escalated into custody", originated.isEmpty())
+        }
+
+    @Test
+    fun aFailedEscalationFallsBackToPerIdCleartextTicks() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The author was judged capable at owe() time but the seal fails at flush (unpinned meanwhile):
+            // the ids re-materialize as today's per-id cleartext entries and land once a link exists.
+            var clock = 0L
+            val author = Author("author")
+            val recip = FakeLoopTransport("recip")
+            author.start(backgroundScope)
+            val ack =
+                ackSyncOn(
+                    recip,
+                    "recip",
+                    clock = { clock },
+                    canSeal = { true },
+                    originateTick = { _, _ -> false },
+                )
+
+            ack.owe("m1", "author", escalatable = true)
+            ack.owe("m2", "author", escalatable = true)
+            clock += AckSync.TICK_BATCH_DEBOUNCE_MS + 1
+            ack.retryPending() // flush fails → cleartext entries, still unreachable
+            recip.connect(author.transport)
+            ack.retryPending()
+
+            assertEquals(listOf("m1", "m2"), author.ackIds().sorted())
+        }
+
+    @Test
+    fun aFullBatchFlushesImmediately() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Overflow: the 64th pending ack escalates the batch without waiting out the debounce; the
+            // next ack opens a fresh batch.
+            val originated = CopyOnWriteArrayList<List<String>>()
+            val recip = FakeLoopTransport("recip")
+            val ack =
+                ackSyncOn(
+                    recip,
+                    "recip",
+                    canSeal = { true },
+                    originateTick = { _, ids ->
+                        originated.add(ids)
+                        true
+                    },
+                )
+
+            repeat(AckSync.MAX_BATCH_ACKS) { ack.owe("m$it", "author", escalatable = true) }
+            assertEquals("a full batch flushes without any clock advance", 1, originated.size)
+            assertEquals(AckSync.MAX_BATCH_ACKS, originated.single().size)
+
+            ack.owe("m-next", "author", escalatable = true)
+            assertEquals("the overflow ack opens a fresh (not-yet-due) batch", 1, originated.size)
+        }
+
+    @Test
+    fun batchedTicksNeverTakeTheCoordinationPlane() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Structural pin: a pending batch is never fastSent (a batched tick outgrows even the compact
+            // fragment budget — see CoordinationPlaneSizeBudgetTest); it waits for the debounce (custody)
+            // or a live link. Only legacy cleartext/single-sealed owed entries ride fastSend.
+            val recorder = FastSendRecorder(FakeLoopTransport("recip"))
+            val ack = ackSyncOn(recorder, "recip", canSeal = { true }, originateTick = { _, _ -> true })
+
+            ack.owe("m1", "author", escalatable = true)
+            ack.owe("m2", "author", escalatable = true)
+            ack.retryPending() // before the debounce: the batch is not due and must not fast-send
+
+            assertTrue("a pending batch never rides the coordination plane", recorder.fastSent.isEmpty())
+        }
+
+    @Test
+    fun aLiveCapableAuthorKeepsTheImmediateSealedSingleTick() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Escalation is only for absent authors: a live-linked capable author still gets the
+            // immediate single-ack sealed tick over the link, and nothing batches.
+            val originated = CopyOnWriteArrayList<List<String>>()
+            val author = Author("author")
+            val recip = FakeLoopTransport("recip")
+            recip.connect(author.transport)
+            author.start(backgroundScope)
+            val ack =
+                ackSyncOn(
+                    recip,
+                    "recip",
+                    canSeal = { true },
+                    originateTick = { _, ids ->
+                        originated.add(ids)
+                        true
+                    },
+                ) { authorId, ackIds -> sealedWire("recip", authorId, ackIds) }
+
+            ack.owe("m1", "author", escalatable = true)
+
+            val chats = author.received().filter { it.envelope.type == FrameType.CHAT }
+            assertEquals(1, chats.size)
+            assertArrayEquals(sealedWire("recip", "author", listOf("m1")).signed, chats.single().wire.signed)
+            assertTrue("no escalation for a live author", originated.isEmpty())
+        }
+
+    @Test
+    fun batchedIdsAgeOutWithTheOwedTtl() =
+        runTest(UnconfinedTestDispatcher()) {
+            var clock = 0L
+            val originated = CopyOnWriteArrayList<List<String>>()
+            val recip = FakeLoopTransport("recip")
+            val ack =
+                ackSyncOn(
+                    recip,
+                    "recip",
+                    clock = { clock },
+                    canSeal = { true },
+                    originateTick = { _, ids ->
+                        originated.add(ids)
+                        true
+                    },
+                )
+
+            ack.owe("m1", "author", escalatable = true)
+            clock += 25L * 60 * 60_000 // past the 24h owed TTL
+            ack.retryPending() // sweep drops the aged batch before the due check can flush it
+
+            assertTrue("an aged-out batch is swept, not escalated", originated.isEmpty())
         }
 
     private companion object {

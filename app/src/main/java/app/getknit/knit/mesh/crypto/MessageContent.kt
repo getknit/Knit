@@ -53,6 +53,9 @@ data class MessageContent(
     val rp: ReactionPayload? = null,
     // Profile payload for [CTL_PROFILE] (additive; docs/SEALED_PROFILE_UPDATES.md).
     val pr: ProfilePayload? = null,
+    // Batched acked frame ids for [CTL_RECEIPT] (additive; docs/ENCRYPTED_RECEIPTS_REACTIONS.md §2).
+    // Single-ack ticks keep [ack]; a batch is one custody-escalated group tick covering every id.
+    val acks: List<String>? = null,
 ) {
     @OptIn(ExperimentalSerializationApi::class)
     fun encode(): ByteArray = cryptoCbor.encodeToByteArray(this)

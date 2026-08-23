@@ -214,9 +214,9 @@ class MessageContentTest {
 
     @Test
     fun aPlainMessageEncodingIsByteIdenticalWithTheNewFieldsDefaulted() {
-        // WIRE_COMPAT rule 1 proof for the ack/rp additions: an ordinary message's bytes are unchanged
-        // by the new nullable fields (encodeDefaults = false), so pre-change golden vectors — and every
-        // deployed build's expectations — still hold. Pinned against the hand-computed CBOR of
+        // WIRE_COMPAT rule 1 proof for the ack/rp/acks additions: an ordinary message's bytes are
+        // unchanged by the new nullable fields (encodeDefaults = false), so pre-change golden vectors —
+        // and every deployed build's expectations — still hold. Pinned against the hand-computed CBOR of
         // {"body": "hi"}: definite-length map, one text key, one text value.
         val plain = MessageContent(body = "hi").encode()
         assertTrue(
@@ -232,5 +232,21 @@ class MessageContentTest {
                 'i'.code.toByte(),
             ).contentEquals(plain),
         )
+    }
+
+    @Test
+    fun theReceiptCtlRoundTripsWithBatchedAcks() {
+        // The custody-escalated group tick: one sealed frame acking many ids (docs/
+        // ENCRYPTED_RECEIPTS_REACTIONS.md §2). Order is preserved, the single-ack field stays null on
+        // a batch, and an ordinary message decodes acks null (additive under the same schema version).
+        val batch =
+            MessageContent.decode(
+                MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, acks = listOf("m1", "m2", "m3")).encode(),
+            )!!
+        assertEquals(MessageContent.CTL_RECEIPT, batch.ctl)
+        assertEquals(listOf("m1", "m2", "m3"), batch.acks)
+        assertNull(batch.ack)
+        assertTrue(batch.isSupported())
+        assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.acks)
     }
 }

@@ -315,6 +315,7 @@
     <string name="diagnostics_metric_group_seeds_adopted">Group epoch seeds adopted</string>
     <string name="diagnostics_metric_receipts_sealed">Receipts sent sealed</string>
     <string name="diagnostics_metric_receipts_sealed_fallback">Receipts sent cleartext (fallback)</string>
+    <string name="diagnostics_metric_receipts_custodied">Group ticks escalated to custody</string>
     <string name="diagnostics_metric_reactions_sealed">Reactions sent sealed</string>
     <string name="diagnostics_metric_reactions_sealed_fallback">Reactions sent cleartext (fallback)</string>
     <string name="diagnostics_metric_bt_connect_fails">BT connect failures</string>

@@ -1,6 +1,7 @@
 package app.getknit.knit.mesh.protocol
 
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.mesh.crypto.cryptoCbor
@@ -210,6 +211,14 @@ class GoldenVectorTest {
                 WireCodec.encodePayload(
                     GroupKeyPayload(groupId = "g-1", gr = GroupRootPayload(root = bytes(32, 13), version = 2, minter = "aa")),
                 ),
+            // The sealed receipt ctl plaintext, both forms (docs/ENCRYPTED_RECEIPTS_REACTIONS.md §2):
+            // the single-ack tick (previously unpinned) and the additive batched form a custody-escalated
+            // group tick carries — `acks` present, `ack` absent. Encoded via the production
+            // MessageContent.encode() path (cryptoCbor — config-identical to WireCodec's).
+            "messageContentReceipt" to
+                MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = "m1").encode(),
+            "messageContentReceiptBatch" to
+                MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, acks = listOf("m1", "m2")).encode(),
         )
 
     @Test
@@ -335,6 +344,8 @@ class GoldenVectorTest {
                 "groupKeyPayloadRoot" to
                     "a26767726f7570496463672d31626772a364726f6f7458200d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3ca" +
                     "d1d8dfe66776657273696f6e02666d696e746572626161",
+                "messageContentReceipt" to "a364626f6479606363746c056361636b626d31",
+                "messageContentReceiptBatch" to "a364626f6479606363746c056461636b7382626d31626d32",
             )
 
         const val BUNDLE_ENCODED =

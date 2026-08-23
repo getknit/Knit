@@ -480,7 +480,7 @@ class InboundPipeline(
             // Group message: tick only when we're actually a member locally (not merely relaying it, and not
             // a group we've left) — the recipient gate reconcileGroup applies on the deliver path, minus the mutation.
             val local = groups.find(group.id)
-            if (local != null && !local.left) ackSync.owe(env.id, env.senderId)
+            if (local != null && !local.left) ackSync.owe(env.id, env.senderId, escalatable = true)
         } else if (env.recipientId == null) {
             // Broadcast room: no addressee, so everyone is a recipient — always tick.
             ackSync.owe(env.id, env.senderId)
@@ -729,7 +729,13 @@ class InboundPipeline(
             }
 
             MessageContent.CTL_RECEIPT -> {
-                applySealedReceipt(env, plain.ack, plane)
+                // Single-ack tick and/or the custody-escalated batch (`acks`): the forged-ack guard runs
+                // per id inside applySealedReceipt. Bounded against a hostile frame — 2× the send-side
+                // batch cap (AckSync.MAX_BATCH_ACKS), and dedup'd so a malformed sender can't loop us.
+                (listOfNotNull(plain.ack) + plain.acks.orEmpty())
+                    .distinct()
+                    .take(MAX_RECEIPT_ACKS)
+                    .forEach { applySealedReceipt(env, it, plane) }
             }
 
             MessageContent.CTL_REACTION -> {
@@ -1748,12 +1754,12 @@ class InboundPipeline(
             // (our row's recipientId is us) and tombstones the id against re-plants.
             forwardSync.onAck(env.id, me)
         } else {
-            // Broadcast/group: a unicast, point-to-point (relay = false) tick straight to the author — no NDP
-            // required (a fast-fanned message gets its receipt too) and never flooded/custodied. Best-effort, so
-            // AckSync remembers it and re-sends until it lands (or ages out): the message itself converges via
-            // custody, but this tick otherwise had no delay-tolerance and was lost whenever the author was out of
-            // range at delivery time.
-            ackSync.owe(env.id, env.senderId)
+            // Broadcast/group: a unicast, point-to-point (relay = false) tick straight to the author when
+            // it has a path — no NDP required (a fast-fanned message gets its receipt too). A GROUP tick
+            // toward an absent sealed-capable author additionally escalates (escalatable): AckSync batches
+            // the acks and originates ONE sealed ctl frame into custody/flood/spool, so the tick converges
+            // exactly like the message it acks. Broadcast-room ticks stay best-effort-only by design.
+            ackSync.owe(env.id, env.senderId, escalatable = env.group != null)
         }
     }
 
@@ -2195,6 +2201,9 @@ class InboundPipeline(
         // Same tag as MeshManager on purpose: these inbound verify/drop log lines are grepped in field
         // diagnostics, so the extraction must not change them.
         const val TAG = "MeshManager"
+
+        /** Most acked ids applied from one sealed CTL_RECEIPT — 2× AckSync's send-side batch cap. */
+        const val MAX_RECEIPT_ACKS = 2 * AckSync.MAX_BATCH_ACKS
 
         /**
          * The v2 DM failures that feed the session-reset heuristic (ADR 023) — the ratchet outcomes that

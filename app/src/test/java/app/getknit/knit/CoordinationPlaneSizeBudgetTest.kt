@@ -103,9 +103,10 @@ class CoordinationPlaneSizeBudgetTest {
             ctl: Int? = null,
             ack: String? = null,
             rp: ReactionPayload? = null,
+            acks: List<String>? = null,
         ): RelayEnvelope {
             val aad = MessageCrypto.header(id, party.nodeId, SENT_AT, to.nodeId)
-            val plain = MessageContent(body = body, ctl = ctl, ack = ack, rp = rp).encode()
+            val plain = MessageContent(body = body, ctl = ctl, ack = ack, rp = rp, acks = acks).encode()
             val sealed = checkNotNull(engine.seal(session, plain, aad, toSpk.pub, now = SESSION_AT))
             session = sealed.session
             val h = sealed.header
@@ -317,6 +318,32 @@ class CoordinationPlaneSizeBudgetTest {
         assertTrue("sealed receipts outgrow one legacy message (why Tier 0 exists)", steadySizes.legacy > WifiAwareTransport.COORD_MSG_MAX)
         assertTrue("the init form is the larger of the two", initSizes.legacy > steadySizes.legacy)
         assertTrue("compact + fragmentation carries both in <= 2", initSizes.parts <= 2 && steadySizes.parts <= 2)
+    }
+
+    @Test
+    fun batchedSealedReceiptNeverRidesTheFastPlane() {
+        // The executable reason AckSync structurally keeps pending batches off fastSend: a batched tick
+        // (the custody escalation) outgrows even the compact fragment budget well before its 64-ack cap,
+        // so the coordination plane could never carry it — escalated batches ride custody (NDP) only.
+        // (Not routed through report(): that helper checkNotNull's fragmentation, and failing to fit IS
+        // this test's point.)
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        sealer.confirm()
+        val batch =
+            alice.sign(
+                sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, acks = List(16) { FrameId.new() }),
+                relay = false,
+            )
+        val legacy = legacySize(batch)
+        assertTrue("a 16-ack batch outgrows one legacy message", legacy > WifiAwareTransport.COORD_MSG_MAX)
+        val compact = checkNotNull(FastFrameCodec.encodeCompact(batch)) { "batched tick must still compact-encode" }
+        val frags = FastFrameCodec.fragment(compact, WifiAwareTransport.COORD_MSG_MAX, fragId = 1)
+        assertTrue(
+            "a 16-ack batch cannot ride the fast plane the way a single tick does (single ticks fit <= 2 fragments)",
+            frags == null || frags.size > 2,
+        )
     }
 
     @Test

@@ -30,7 +30,9 @@ or reaction is indistinguishable from conversation.
 ## 2. Wire form (additive; see docs/WIRE_COMPAT.md)
 
 ```
-CTL_RECEIPT  = 5   MessageContent.ack: String?          // the acked frame id
+CTL_RECEIPT  = 5   MessageContent.ack: String?          // the acked frame id (single form)
+                   MessageContent.acks: List<String>?   // batched form: a custody-escalated group
+                                                        // tick acking every listed id (ADR 033)
 CTL_REACTION = 6   MessageContent.rp: ReactionPayload?  // { messageId, emoji? }
 ReactionPayload { messageId: String, emoji: String? }   // emoji null = retraction
 ```
@@ -55,8 +57,9 @@ sealed receipt can't draw a receipt-for-a-receipt, and the exists-gate can't re-
 Row effects commit **inside the ctl transaction** (the ratchet/chain advance and the tick/reaction
 land atomically; a crash re-processes cleanly on re-serve):
 
-- `CTL_RECEIPT` → `markReceived(ack)` under the cleartext path's forged-ack guard —
-  `recipientOf(ack) == null || == sender`. The null arm is load-bearing: a group/broadcast message
+- `CTL_RECEIPT` → `markReceived` for `ack` and/or every `acks` id — `distinct`, bounded at
+  2 × the send-side batch cap (128), the forged-ack guard run **per id**:
+  `recipientOf(id) == null || == sender`. The null arm is load-bearing: a group/broadcast message
   has no `recipientId`, and that IS the sealed group tick.
 - `CTL_REACTION` → `ReactionRepository.apply(messageId, sender, emoji, frame.sentAt)` — the same
   table and the same LWW clock as the cleartext path, so mixed-form retract/replace races converge
@@ -100,7 +103,8 @@ the purge left zero), bounded by the existing quotas (1000 global / 200 per send
 |---|---|---|---|
 | DM, author/peer capable | pinned bundle + `CAP_RATCHET` (+ prekey/session for the seal) | sealed ctl DM, `relay = true`, flooded + custodied, `sentAt` stamped (custody derives expiry from it) | sealed ctl DM, `relay = true` |
 | DM, incapable / seal failed | — | cleartext receipt (still purges everywhere, incl. self-vaccinate) | cleartext reaction |
-| Group message delivered | author capable | sealed ctl DM via AckSync: `relay = false`, sealed **once** at `owe()`, retries re-send verbatim, **live-link delivery only** | — |
+| Group message delivered | author capable, live-linked | sealed single-ack ctl DM over the link: `relay = false`, sealed **once**, never custodied | — |
+| Group message delivered | author capable, absent | acks batch per author (≤64, 45 s debounce), then ONE sealed ctl DM (`acks`) **originated `relay = true`** — flooded + custodied + spool-eligible (ADR 033) | — |
 | Group message delivered | author incapable | cleartext tick (fresh id per retry, coordination-plane capable) | — |
 | Group reaction | every member ratchet-eligible | — | sealed group form via `sealGroup` (all-or-nothing; may mint + distribute a seed, like any group send) |
 | Group reaction | any member ineligible | — | cleartext reaction |
@@ -115,6 +119,19 @@ coordination-plane message; toward a `CAP_FAST_COMPACT` author the Wi-Fi Aware t
 it as ≤ 2 compact fragments (`mesh/link/FastFrameCodec` — still best-effort, the owed-entry retry
 loop stays the reliability mechanism), while toward a legacy author `fastSend` still no-ops and the
 tick waits for a live link.
+
+The escalated batch (ADR 033) adds three rules of its own: **batches never ride the coordination
+plane** (a 16-ack batch already outgrows the ≤2-fragment compact budget — pinned by
+`CoordinationPlaneSizeBudgetTest` — so escalation goes through `originateSigned`, structurally never
+`fastSend`); **escalated ids are remembered** (a done-but-remembered ledger absorbs the exists-gate's
+re-ack on every custody re-serve, so nothing re-seals; a process restart forgets it, and the one
+duplicate custodied tick a re-serve can then mint is absorbed idempotently — the DM-receipt
+precedent); and **a failed flush falls back** (author unpinned between owe and flush → the ids
+re-materialize as per-id cleartext owed entries with their original timestamps). An author who links
+during the debounce gets the whole batch over the live link instead (`relay = false`, no custody
+rows). Cleartext ticks and the broadcast room never escalate: a cleartext receipt in custody would
+re-leak the delivery event this scheme sealed away, and the room is the ambient, shorter-lived class
+(`owe(escalatable = false)`).
 
 ## 6. Blocked-sender posture (ADR 010)
 
@@ -144,5 +161,8 @@ the gate) — exactly as their undecryptable group chats already do since the gr
 |---|---|---|
 | `CTL_RECEIPT` / `CTL_REACTION` | 5 / 6 | `MessageContent.ctl` registry (append-only) |
 | sealed receipt custody TTL | 24 h via stamped `sentAt` | frame-global custody expiry (ADR 006; the e11aa89 lesson) |
-| tick seal budget | 1 chain key per owed tick | AckSync seal-once cache; ≤500 owed entries / 24 h |
+| tick seal budget | 1 chain key per owed tick / per escalated batch | AckSync seal-once cache; ≤500 owed entries / 24 h |
+| `TICK_BATCH_DEBOUNCE_MS` | 45 s | how long an absent author's acks accumulate before escalating (heal is the backstop) |
+| `MAX_BATCH_ACKS` | 64 | ids per escalated tick (overflow flushes early); receiver applies ≤ 2× (128) |
+| pending / escalated ledgers | ≤500 ids / ≤1000 ids, 24 h | in-memory, evict-oldest; loss = one benign duplicate |
 | ack tombstone (cleartext era) | 24 h | unchanged `ForwardSync` |

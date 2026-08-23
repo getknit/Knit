@@ -217,7 +217,23 @@ class InboundPipelineTest {
         val forwardSync = ForwardSync(transport, forwardStore, clock = { 0L })
         val blobExchange = BlobExchange(transport, blobStore, selfId = { self.nodeId }, onObtained = { _, _ -> })
         val keyExchange = KeyExchange(transport, selfId = { self.nodeId }, signRaw = self.crypto::signRaw, metrics = metrics)
-        val ackSync = AckSync(transport, selfId = { self.nodeId }, signRaw = self.crypto::signRaw, metrics = metrics)
+
+        // AckSync's custody-escalation hooks, read lazily so a test can arm them (defaults keep escalation
+        // off — every pre-existing test behaves exactly as before). ackNowMs is the tick clock a test
+        // advances past the batch debounce.
+        var ackNowMs = 0L
+        var canSealTick: suspend (String) -> Boolean = { false }
+        var originateTickHook: suspend (String, List<String>) -> Boolean = { _, _ -> false }
+        val ackSync =
+            AckSync(
+                transport,
+                selfId = { self.nodeId },
+                signRaw = self.crypto::signRaw,
+                metrics = metrics,
+                now = { ackNowMs },
+                canSeal = { canSealTick(it) },
+                originateTick = { authorId, ids -> originateTickHook(authorId, ids) },
+            )
         val pendingInbound = PendingInbound(metrics = metrics)
         val typingTracker = TypingTracker(scope)
 
@@ -1901,12 +1917,13 @@ class InboundPipelineTest {
             ack: String? = null,
             rp: ReactionPayload? = null,
             pr: ProfilePayload? = null,
+            acks: List<String>? = null,
             sentAt: Long = 5L,
             mutateHeader: (RatchetHeader) -> RatchetHeader = { it },
         ): RelayEnvelope {
             val to = rig.self.nodeId
             val aad = MessageCrypto.header(id, party.nodeId, sentAt, to)
-            val plain = MessageContent(body = body, ctl = ctl, gk = gk, ack = ack, rp = rp, pr = pr).encode()
+            val plain = MessageContent(body = body, ctl = ctl, gk = gk, ack = ack, rp = rp, pr = pr, acks = acks).encode()
             val sealed = checkNotNull(engine.seal(session, plain, aad, rig.selfSpk.pub, now = 5L))
             session = sealed.session
             val h = sealed.header
@@ -2786,6 +2803,67 @@ class InboundPipelineTest {
             // Sealed-era custody contract: the delivered DM stays in our own custody (nobody purges;
             // it ages out on the TTL with every carrier's copy — that convergence IS the retirement).
             assertTrue(rig.forwardStore.has("v2-cap1"))
+        }
+
+    @Test
+    fun aBatchedSealedTickFlipsEveryListedId() =
+        runTest {
+            // The custody-escalated group tick: one sealed CTL_RECEIPT whose `acks` list covers several
+            // messages. The forged-ack guard runs PER id — group sends (null recipient) flip, a DM
+            // addressed to someone else does not — and the machinery contract holds (no row, no ack).
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+            rig.msgMap["gm-a"] = MessageEntity(id = "gm-a", senderId = rig.self.nodeId, body = "", sentAt = 1L)
+            rig.msgMap["gm-b"] = MessageEntity(id = "gm-b", senderId = rig.self.nodeId, body = "", sentAt = 1L)
+            rig.msgMap["dm-x"] = MessageEntity(id = "dm-x", senderId = rig.self.nodeId, recipientId = "bob", body = "", sentAt = 1L)
+
+            rig.deliver(alice, author.dm("tick-b1", "", ctl = MessageContent.CTL_RECEIPT, acks = listOf("gm-a", "gm-b", "dm-x")))
+
+            coVerify { rig.messages.markReceived("gm-a", any()) }
+            coVerify { rig.messages.markReceived("gm-b", any()) }
+            coVerify(exactly = 0) { rig.messages.markReceived("dm-x", any()) }
+            assertFalse(rig.msgMap.containsKey("tick-b1"))
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+        }
+
+    @Test
+    fun aDeliveredGroupMessageBatchesItsTickIntoCustodyWhenTheAuthorIsAbsent() =
+        runTest {
+            // End-to-end: a real group-ratchet delivery owes its tick; with the author absent and
+            // sealed-capable, the tick batches and — once past the debounce — escalates through the
+            // originate hook (production: sealed relay = true → custody/flood/spool) instead of any
+            // unicast receipt.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-t1", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+            val escalated = mutableListOf<Pair<String, List<String>>>()
+            rig.canSealTick = { true }
+            rig.originateTickHook = { authorId, ids ->
+                escalated += authorId to ids
+                true
+            }
+
+            rig.deliver(alice, author.groupFrame(group, "g-m1", "hello group"))
+
+            assertEquals("hello group", rig.msgMap["g-m1"]?.body)
+            assertTrue("no unicast tick while the batch debounces", rig.originated.none { it.type == FrameType.RECEIPT })
+            assertTrue(escalated.isEmpty())
+
+            rig.ackNowMs += AckSync.TICK_BATCH_DEBOUNCE_MS + 1
+            rig.ackSync.retryPending()
+
+            assertEquals(listOf(alice.nodeId to listOf("g-m1")), escalated)
         }
 
     @Test

@@ -342,6 +342,9 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
             if (metrics.receiptsSealedFallback > 0) {
                 MetricRow(stringResource(R.string.diagnostics_metric_receipts_sealed_fallback), metrics.receiptsSealedFallback.toString())
             }
+            if (metrics.receiptsCustodied > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_receipts_custodied), metrics.receiptsCustodied.toString())
+            }
         }
         if (metrics.reactionsSealed > 0 || metrics.reactionsSealedFallback > 0) {
             MetricRow(stringResource(R.string.diagnostics_metric_reactions_sealed), metrics.reactionsSealed.toString())

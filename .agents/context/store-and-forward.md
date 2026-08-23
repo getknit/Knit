@@ -38,22 +38,29 @@ custodied like any flood frame — delay-tolerant for free. Its form splits cust
   check gates `markReceived` (fixing a prior tick-spoof), and its null arm keeps the group/broadcast
   best-effort tick working for the sealed form.
 
-**Delivery ticks for broadcast/group** have no single recipient, so their receipt is *not* flooded/custodied
-(an ack storm + custody bloat): it's a **unicast, point-to-point (`relay = false`) tick** the deliverer sends
-straight to the author. That one-shot best-effort send was lost whenever the author was out of range at
-delivery time — the *message* converged via custody but the tick did not, leaving the author's ✓✓ missing
-"even after convergence". `AckSync` makes it delay-tolerant **without** flooding: the deliverer remembers the
-ticks it owes and re-sends them (over a live link when the author is a neighbor → reliable + dropped;
-best-effort over the coordination plane otherwise → kept) on every `onNeighborAdded`/`heal` until one lands
-or the entry ages out (24 h TTL, bounded, in-memory, self-repopulating on message re-serve like
+**Delivery ticks for broadcast/group** have no single recipient; `AckSync` owns their delay tolerance with
+a three-way rule keyed at the deliverer (ADR 033 — a local emission choice, never a carry rule). Toward a
+**live-linked** author it stays a **unicast, point-to-point (`relay = false`) tick** over that link — a
+ratchet-capable author's tick sealed as a `CTL_RECEIPT` ctl DM, sealed **once** at `owe()` time and re-sent
+verbatim (sealing consumes a DM chain key; per-retry re-sealing would starve real DMs of the skipped-key
+budget) — zero custody load for the co-present case. Toward an **absent sealed-capable author of a group
+message**, the acks batch per author (≤64 ids, 45 s debounce, heal as the backstop) and escalate as **one**
+sealed ctl frame carrying every pending id (`MessageContent.acks`) originated `relay = true` — flooded,
+**custodied**, and spool-eligible via the DM-scope frame-set rule — so the tick now converges exactly like
+the message it acks; escalated ids are remembered so the exists-gate's re-ack on custody re-serves no-ops,
+an author who links mid-debounce gets the batch over the link instead, and a failed flush falls back to
+per-id cleartext entries. Toward a **legacy (cleartext) author** — and for every broadcast-room tick, which
+deliberately never escalates (the ambient class; and a cleartext receipt in custody would re-leak the
+delivery event ADR 018 sealed away) — the pre-033 loop is unchanged: remember the owed tick and re-send
+(live link → reliable + dropped; best-effort coordination plane → kept) on every `onNeighborAdded`/`heal`
+until it lands or ages out (24 h TTL, bounded, in-memory, self-repopulating on message re-serve like
 `KeyExchange`). One surviving receipt flips the ✓✓ ("**≥1 person received it**" — the intended broadcast
-semantic); `markReceived` and `ForwardSync.onAck` are idempotent/no-op for these, so duplicate retries are
-harmless and never evict custody. A ratchet-capable author's tick is **sealed** (a `CTL_RECEIPT` ctl DM,
-still `relay = false`) — sealed **once** at `owe()` time and re-sent verbatim (sealing consumes a DM chain
-key; per-retry re-sealing would starve real DMs of the skipped-key budget), and too big for the ~255 B
-coordination plane, so it lands only over a live link (latency, not reachability — and deliberately never
-downgraded to cleartext, which would make the form an on-path link-state observable). Surfaced in
-Diagnostics/`…debug.STATE` as `receiptsResent` + `receiptsSealed`; JVM-tested (`AckSyncTest`).
+semantic); `markReceived` and `ForwardSync.onAck` are idempotent/no-op for these, so duplicate retries and
+custody re-serves are harmless and never evict custody. A sealed tick is too big for the ~255 B coordination
+plane (a *batch* outgrows even the ≤2-fragment compact form — pinned by `CoordinationPlaneSizeBudgetTest` —
+so batches structurally never `fastSend`), and is deliberately never downgraded to cleartext, which would
+make the form an on-path link-state observable. Surfaced in Diagnostics/`…debug.STATE` as `receiptsResent` +
+`receiptsSealed` + `receiptsCustodied`; JVM-tested (`AckSyncTest`).
 
 **Group messages** carry a cleartext member roster (`RelayEnvelope.group.members`) on every frame, so custody
 exploits it: a node carries a group message whether or not it is itself a member (for other members who

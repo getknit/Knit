@@ -286,11 +286,12 @@ per-type content:
   carried DM copy mesh-wide (`ForwardSync.onAck`). This is the **legacy cleartext form** — between
   ratchet-capable builds a receipt is a sealed `CTL_RECEIPT` ctl chat frame instead, which flips the tick
   without purging anywhere (ADR 018, §14): delivered DMs then age out of custody on the TTL uniformly.
-  A DM's receipt floods and is custodied either way; a **broadcast/group** receipt is a unicast,
-  non-flooded, non-custodied tick the deliverer owes the author and re-sends until it lands (`AckSync`,
-  sealed once + resent verbatim for capable authors) — delay-tolerant, so the ✓✓ isn't lost when the
-  author was out of range at delivery time. One surviving receipt flips it ("≥1 received"); `onAck`
-  no-ops for it (no single recipient), so retries never evict custody.
+  A DM's receipt floods and is custodied either way; a **broadcast/group** receipt starts as a unicast,
+  non-flooded tick the deliverer owes the author (`AckSync`, sealed once + resent verbatim for capable
+  authors), and a **group** tick toward an absent capable author escalates: the acks batch and one sealed
+  ctl frame (`MessageContent.acks`) is originated `relay = true` — flooded, custodied, spool-eligible —
+  so the ✓✓ converges like the message it acks (ADR 033). One surviving receipt flips it ("≥1 received");
+  `onAck` no-ops for it (no single recipient), so retries never evict custody.
 - **`reaction`** → `ReactionRepository.apply(...)` (last-writer-wins, §6). Also the legacy cleartext form:
   DM/group-target reactions between capable builds ride sealed (`CTL_REACTION`, DM or group form) into
   the same table under the same LWW clock, so mixed-form races converge (ADR 018).

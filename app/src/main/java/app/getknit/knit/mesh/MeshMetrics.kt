@@ -153,6 +153,7 @@ class MeshMetrics {
     private val dmSealedV1Fallback = AtomicLong()
     private val receiptsSealed = AtomicLong()
     private val receiptsSealedFallback = AtomicLong()
+    private val receiptsCustodied = AtomicLong()
     private val reactionsSealed = AtomicLong()
     private val reactionsSealedFallback = AtomicLong()
     private val groupSealedRatchet = AtomicLong()
@@ -275,6 +276,11 @@ class MeshMetrics {
     /** A seal-eligible receipt whose sealDm failed (no session + no usable prekey) — sent cleartext instead. */
     fun onReceiptSealedFallback() {
         receiptsSealedFallback.incrementAndGet()
+    }
+
+    /** A batched group tick originated into custody (one frame, however many acks it carries). */
+    fun onReceiptCustodied() {
+        receiptsCustodied.incrementAndGet()
     }
 
     /** A reaction sealed as a v2 ctl frame (DM or group form). */
@@ -471,6 +477,7 @@ class MeshMetrics {
             dmSealedV1Fallback = dmSealedV1Fallback.get(),
             receiptsSealed = receiptsSealed.get(),
             receiptsSealedFallback = receiptsSealedFallback.get(),
+            receiptsCustodied = receiptsCustodied.get(),
             reactionsSealed = reactionsSealed.get(),
             reactionsSealedFallback = reactionsSealedFallback.get(),
             groupSealedRatchet = groupSealedRatchet.get(),
@@ -526,6 +533,7 @@ class MeshMetrics {
         val dmSealedV1Fallback: Long = 0,
         val receiptsSealed: Long = 0,
         val receiptsSealedFallback: Long = 0,
+        val receiptsCustodied: Long = 0,
         val reactionsSealed: Long = 0,
         val reactionsSealedFallback: Long = 0,
         val groupSealedRatchet: Long = 0,

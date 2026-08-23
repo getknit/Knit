@@ -76,7 +76,11 @@ cleartext frames (never v1: a pre-ratchet build would strip the unknown ctl and 
 bubble) toward incapable peers/groups, and staying cleartext in the broadcast room by design.
 Sealed receipts retire the carrier vaccine-purge: nobody can parse them, so delivered DMs age out of
 custody on the 24 h TTL uniformly (the recipient custodies its own inbound DMs and a cleartext ack
-self-vaccinates — both required for digest convergence, ADR 006).
+self-vaccinates — both required for digest convergence, ADR 006). The group tick escalates since
+ADR 033: toward an absent sealed-capable author, `AckSync` batches the acks (`MessageContent.acks`)
+and originates ONE sealed ctl DM `relay = true` — flooded, custodied, spool-eligible — so the ✓✓
+converges like the message it acks; a live-linked author keeps the unicast `relay = false` tick, and
+cleartext/broadcast ticks never escalate.
 
 The ratchet export APIs now have a live consumer: `docs/SPOOL_PROTOCOL.md` (ADR 019) derives
 internet-relay scope ids and seal keys from `RatchetCrypto.exportRoot` (DM) and a spec-minted shared

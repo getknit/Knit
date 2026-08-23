@@ -25,6 +25,9 @@ document:
 
 ### Added
 
+- Group delivered-ticks (the ✓✓ on your own group messages) now survive you being away: members'
+  receipts are batched, encrypted, and carried by the mesh — and the Internet relays, where enabled —
+  until they reach you, just like the messages themselves.
 - Direct messages between updated phones are now forward-secret. Each conversation derives its own key
   material from a prekey published in your profile, then re-keys as the conversation goes back and
   forth, and drops the old keys. Someone who records traffic today and gets hold of a phone later

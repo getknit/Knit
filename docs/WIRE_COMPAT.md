@@ -256,6 +256,19 @@ the version, so its watermark jumps ahead and it then rejects sealed `CTL_PROFIL
 `payload.version` is the real (smaller) number. Additive on the wire, then, but not symmetric in behaviour;
 it was taken while the plane is still testers-only.
 
+**Precedent — the sixth additive content change, batched sealed receipts (`MessageContent.acks`,
+ADR 033).** Rule 1: nullable, absent from every frame that does not set it, so no existing golden vector
+moved — `messageContentReceipt` (the single form, previously unpinned) and `messageContentReceiptBatch`
+were added, and `aPlainMessageEncodingIsByteIdenticalWithTheNewFieldsDefaulted` is the executable rule-1
+proof extended to cover it. No new ctl value (the batch rides `CTL_RECEIPT = 5`), no version bump, no
+capability bit, no DB change. Why it exists: the sealed group tick escalates into custody when its author
+is absent (ADR 033), and per-message custodied ticks would cost roster × messages custody frames — the
+batch makes it one frame (and one chain key) per (member, author). The asymmetry, recorded: a ratchet-era
+build without the field decodes the batched frame, reads `ack == null`, and applies nothing — the pinned
+chain-advancing no-op, acceptable only because the whole sealed-ctl era is on the unreleased v2 train
+("released version numbers are append-only; unreleased ones are still yours to edit"). The receiver
+applies `ack` plus `acks` per id under the forged-ack guard, `distinct`, bounded at 2× the send cap.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

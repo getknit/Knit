@@ -201,6 +201,10 @@ class ContactsViewModelTest {
             coVerify { groups.upsert(any()) }
             // The id is derived from the member set (self added), so the same people always resolve identically.
             assertEquals(listOf(Conversations.groupIdFor(listOf("a", "b", "me"))), created)
+            // …and the Internet plane is nudged to mint the group's spool root now: we are the creator, so
+            // spec §3.2 makes us the preferred minter, and without this the thread reads "Not covered by
+            // relays yet" until the next heal (heartbeat / motion / foreground resume).
+            assertEquals(1, mesh.mintGroupRootsCount)
         }
 
     @Test
@@ -216,5 +220,7 @@ class ContactsViewModelTest {
 
             coVerify(exactly = 0) { groups.upsert(any()) }
             assertEquals(1, created.size)
+            // Nothing was created, so there is no new root to mint — reopening must not nudge the plane.
+            assertEquals(0, mesh.mintGroupRootsCount)
         }
 }

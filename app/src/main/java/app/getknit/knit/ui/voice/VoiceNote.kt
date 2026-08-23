@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -276,7 +277,13 @@ fun VoiceRecordingBar(
         modifier = modifier.testTag("chat_voice_recording"),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            // A full field's worth of height, not whatever the content happens to measure: the bar shares the
+            // field container with the mic and has to hold that container at the same height the text field
+            // leaves it at, both while the button is held and after it locks. Sizing to content instead let
+            // the bar sit low in the container while held (the container floors at 48dp; a 32dp bar
+            // bottom-aligned inside it puts the dot and the counter 8dp below centre) and then jump taller
+            // on lock, when the ✕ replaced the slide-to-cancel label.
+            modifier = Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -302,7 +309,7 @@ fun VoiceRecordingBar(
                 Box(
                     modifier =
                         Modifier
-                            .size(40.dp)
+                            .size(48.dp)
                             .clip(CircleShape)
                             .clickable(onClick = onCancel, role = Role.Button)
                             .testTag("chat_voice_cancel"),

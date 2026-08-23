@@ -103,7 +103,7 @@ doc). **Don't start a deferred item without explicit direction.**
   cleartext `profile` frame keeps first contact permanently — it is self-certifying and cannot be
   encrypted — so ADR 018's "last cleartext flooded metadata" goal is advanced, not finished.
 
-- **The image-screening skip trusts a peer-supplied MIME (found 2026-08-23, unfixed).**
+- **The image-screening skip trusts a peer-supplied MIME** (knit/knit-next#30, found 2026-08-23).
   `MeshBlobStore.saveIncoming` skips `imageScreening.screenImage` when `VoiceAudio.isVoice(mime)`, and that
   `mime` comes from the sender's `LinkFraming.FileHeaderWire`. A hostile neighbour serving a **plaintext**
   blob — a pulled avatar, a group photo, a Nearby-room attachment — can declare `audio/aac`, so no verdict
@@ -162,7 +162,7 @@ doc). **Don't start a deferred item without explicit direction.**
   knock-on — `MeshBlobStore.saveIncoming`'s `!VoiceAudio.isVoice(mime)` screening skip reads that same
   peer-supplied header, so it wants fixing in the same pass by sourcing the mime from the local row
   (`messages.attachmentMimeForHash`) instead. That skip is **already spoofable today**, independent of any
-  of this: see the audio-moderation bullet. Receipts and
+  of this: knit/knit-next#30. Receipts and
   reactions shipped sealed 2026-08-15 as v2 ctl frames (ADR 018,
   docs/ENCRYPTED_RECEIPTS_REACTIONS.md — DM vaccine-purge retired for the sealed era; the residual is
   the cleartext fallback toward pre-ratchet peers, counted by `receiptsSealedFallback`/

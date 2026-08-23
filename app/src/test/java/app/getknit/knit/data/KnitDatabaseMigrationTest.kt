@@ -43,8 +43,8 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v4) creates and opens from the exported JSON`() {
-        val version = 4 // KnitDatabase @Database(version = 4) — bump alongside the DB (its retention is CLASS,
+    fun `the current schema (v5) creates and opens from the exported JSON`() {
+        val version = 5 // KnitDatabase @Database(version = 5) — bump alongside the DB (its retention is CLASS,
         // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
         helper.createDatabase(version).close()
     }
@@ -150,6 +150,30 @@ class KnitDatabaseMigrationTest {
                 assertEquals("hello", s.getText(0))
                 assertEquals(1L, s.getLong(1))
                 assertEquals(0L, s.getLong(2))
+            }
+        }
+    }
+
+    @Test
+    fun `migrate 4 to 5 keeps messages and leaves their voice columns null`() {
+        // Voice-note duration and waveform are derived locally from the audio, never carried on the wire, so
+        // there is nothing to backfill: an existing row has no voice attachment and both columns read null.
+        // The row seeded here carries an image attachment precisely to pin that — an attachment alone does
+        // not make a message a voice note, and the migration must not invent metadata for one.
+        helper.createDatabase(4).use { c ->
+            c.execSQL(
+                "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, receivedVia, " +
+                    "mentions, attachmentHash, attachmentMime, replyToHasAttachment, moderation, pendingKey, kind) " +
+                    "VALUES ('m1','me','bob','hello',1,1,0,'[]','abcd','image/jpeg',0,0,0,0)",
+            )
+        }
+        helper.runMigrationsAndValidate(5, listOf(KnitMigrations.MIGRATION_4_5)).use { c ->
+            c.prepare("SELECT body, attachmentMime, voiceDurationMs, voicePeaks FROM messages WHERE id = 'm1'").use { s ->
+                assertTrue(s.step())
+                assertEquals("hello", s.getText(0))
+                assertEquals("image/jpeg", s.getText(1))
+                assertTrue(s.isNull(2))
+                assertTrue(s.isNull(3))
             }
         }
     }

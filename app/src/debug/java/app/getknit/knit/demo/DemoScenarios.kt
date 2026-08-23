@@ -46,6 +46,10 @@ data class DemoMsg(
     // MIME of [image]: "image/jpeg" for the bundled scene photos, "image/webp" for the animated GIF beat
     // (an animated WebP under demo/images/<theme>/<image>.webp, played by Coil's AnimatedImageDecoder).
     val imageMime: String = "image/jpeg",
+    // Seconds of voice note. Set it and the row renders as a voice-note bubble with a synthetic waveform,
+    // so the seeded UI and accessibility suites cover that bubble the way they cover a photo one. The blob
+    // is a valid but silent ADTS stream — the bubble is what is being audited, not the audio.
+    val voiceSeconds: Int? = null,
 )
 
 /** A peer contact. [verified] pins a (fake) key + out-of-band confirmation so the DM header shows the
@@ -157,6 +161,12 @@ private val HIKING_SCENARIO =
                             DemoMsg("demo-dm-sam-1", Slot.ME, "Great hiking with you today!", 30),
                             DemoMsg("demo-dm-sam-2", Slot.SAM, "Likewise! Same crew next time?", 9),
                             DemoMsg("demo-dm-sam-3", Slot.SAM, "Oh and I found your water bottle 💧", 7),
+                            // The one seeded voice note. It lives in this DM because `chat/samr1v00` is the
+                            // route the accessibility audit and the seeded UI runs already open, so the
+                            // voice bubble gets the same scrutiny the photo bubble does — and a received
+                            // one, since the receive side is where the waveform is derived rather than
+                            // carried.
+                            DemoMsg("demo-dm-sam-4", Slot.SAM, "", 5, voiceSeconds = 9),
                         ),
                 ),
             ),

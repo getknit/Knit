@@ -21,8 +21,10 @@ import androidx.compose.foundation.content.TransferableContent
 import androidx.compose.foundation.content.consume
 import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.content.hasMediaType
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,6 +75,7 @@ import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
@@ -115,6 +118,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboard
@@ -128,6 +132,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -156,6 +162,7 @@ import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AttachmentStore
+import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
@@ -178,6 +185,12 @@ import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.util.rememberCurrentTimeMillis
+import app.getknit.knit.ui.voice.VoiceNoteBubble
+import app.getknit.knit.ui.voice.VoiceNotePreview
+import app.getknit.knit.ui.voice.VoicePlayer
+import app.getknit.knit.ui.voice.VoiceRecordingBar
+import app.getknit.knit.ui.voice.VoiceStopButton
+import app.getknit.knit.ui.voice.rememberMicGate
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -190,6 +203,12 @@ import org.koin.core.parameter.parametersOf
 // Grace period before the send button shows a spinner, so a fast send never flashes one; it surfaces
 // only for a genuinely slow send (chiefly the first after a cold start — the one-time model load).
 private const val SEND_SPINNER_DELAY_MS = 300L
+
+// Hold-to-talk gesture slop, in pixels. Generous on purpose: these are one-handed thumb gestures, and an
+// accidental cancel loses a recording the user can't get back, so the thresholds sit well past ordinary
+// finger jitter. Up locks hands-free; left cancels.
+private const val LOCK_SLOP_PX = 120f
+private const val CANCEL_SLOP_PX = 160f
 
 @Composable
 fun ChatScreen(
@@ -205,6 +224,8 @@ fun ChatScreen(
     val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
     val confirmAttachment by viewModel.confirmAttachment.collectAsStateWithLifecycle()
     val stagedAttachmentRelay by viewModel.stagedAttachmentRelay.collectAsStateWithLifecycle()
+    val voiceRecording by viewModel.voiceRecording.collectAsStateWithLifecycle()
+    val voicePlayback by viewModel.voicePlayback.collectAsStateWithLifecycle()
     val inputState = rememberTextFieldState()
     val shareInbox = koinInject<ShareInbox>()
     // Mentions the user inserted via autocomplete, draft-local alongside inputState (per the AGENTS.md
@@ -376,6 +397,14 @@ fun ChatScreen(
             }
         },
         onSaveAttachment = viewModel::saveAttachment,
+        voiceRecording = voiceRecording,
+        voicePlayback = voicePlayback,
+        onStartVoice = { locked -> viewModel.startVoiceRecording(locked) },
+        onLockVoice = viewModel::lockVoiceRecording,
+        onStopVoice = viewModel::stopVoiceRecordingAndStage,
+        onCancelVoice = viewModel::cancelVoiceRecording,
+        onVoicePlay = viewModel::playVoice,
+        onVoiceSeek = viewModel::seekVoice,
     )
 
     // Sending an explicit image is allowed but discouraged: confirm before staging a flagged one.
@@ -435,6 +464,17 @@ internal fun ChatScreenContent(
     onUnblock: (nodeId: String) -> Unit,
     onCopy: (text: String) -> Unit,
     onSaveAttachment: (hash: String) -> Unit,
+    // Voice notes. `voiceRecording` is non-null only while the mic is live, and replaces the whole input row
+    // while it is; `voicePlayback` is the app-wide "which note is sounding" state each bubble matches its own
+    // hash against. All defaulted so the previews and the content-level tests need not name them.
+    voiceRecording: ChatViewModel.VoiceRecording? = null,
+    voicePlayback: VoicePlayer.Playback? = null,
+    onStartVoice: (locked: Boolean) -> Unit = {},
+    onLockVoice: () -> Unit = {},
+    onStopVoice: () -> Unit = {},
+    onCancelVoice: () -> Unit = {},
+    onVoicePlay: (hash: String, key: String?) -> Unit = { _, _ -> },
+    onVoiceSeek: (hash: String, positionMs: Int) -> Unit = { _, _ -> },
 ) {
     var fullscreenImage by remember { mutableStateOf<FullscreenImage?>(null) }
     // The message a tapped quote scrolled to, briefly highlighted then cleared (see the LaunchedEffect
@@ -454,6 +494,9 @@ internal fun ChatScreenContent(
     // GIFs. Caching the ratio lets a re-entering bubble reserve the right height before it decodes.
     val imageRatios = remember { HashMap<String, Float>() }
     val scrollScope = rememberCoroutineScope()
+    // Hoisted because the reply snippet is built inside a plain (non-composable) lambda; see
+    // buildReplySnippet for why a voice note's quote label rides the snippet rather than the wire.
+    val voiceQuoteLabel = stringResource(R.string.chat_reply_voice)
 
     // The thread is rendered bottom-anchored (the LazyColumn below uses reverseLayout), so it opens
     // already resting on the newest message — no initial scroll, no visible glide through history — and
@@ -666,6 +709,18 @@ internal fun ChatScreenContent(
                 onReceiveImage = onReceiveImage,
                 onSend = onSend,
                 onTyping = onTyping,
+                // Voice notes are DM/group only: the Nearby room floods unencrypted to everyone in range and
+                // no on-device model can screen speech, so it is the one place unscreenable audio is not
+                // offered. See docs/CONTENT_MODERATION.md.
+                voiceEnabled = !state.isRoom,
+                voiceRecording = voiceRecording,
+                voicePlayback = voicePlayback,
+                onStartVoice = onStartVoice,
+                onLockVoice = onLockVoice,
+                onStopVoice = onStopVoice,
+                onCancelVoice = onCancelVoice,
+                onVoicePlay = onVoicePlay,
+                onVoiceSeek = onVoiceSeek,
             )
         },
     ) { padding ->
@@ -720,7 +775,15 @@ internal fun ChatScreenContent(
                                             messageId = msg.id,
                                             authorId = msg.senderNodeId,
                                             author = msg.senderName,
-                                            snippet = buildReplySnippet(msg.body, msg.moderationFlagged),
+                                            snippet =
+                                                buildReplySnippet(
+                                                    msg.body,
+                                                    msg.moderationFlagged,
+                                                    voiceLabel =
+                                                        voiceQuoteLabel.takeIf {
+                                                            VoiceAudio.isVoice(msg.attachmentMime)
+                                                        },
+                                                ),
                                             hasAttachment = msg.attachmentHash != null,
                                         ),
                                     )
@@ -737,6 +800,9 @@ internal fun ChatScreenContent(
                                 onCopy = onCopy,
                                 onOpenMessageDetails = onOpenMessageDetails,
                                 onExplainRelay = { relayMarkerExplained = it },
+                                voicePlayback = voicePlayback,
+                                onVoicePlay = onVoicePlay,
+                                onVoiceSeek = onVoiceSeek,
                             )
                         }
                     }
@@ -954,6 +1020,12 @@ private fun MessageBubble(
     onOpenMessageDetails: (messageId: String) -> Unit = {},
     // Tapping the "nearby only" marker; defaulted no-op for previews and for bubbles that never show it.
     onExplainRelay: (AttachmentRelay) -> Unit = {},
+    // App-wide voice playback state, and this bubble's play/seek actions. The state is app-wide because only
+    // one voice note may sound at a time; a bubble compares its own hash against it to know whether the
+    // controls it draws are the live ones. Defaulted for the @Preview call sites.
+    voicePlayback: VoicePlayer.Playback? = null,
+    onVoicePlay: (hash: String, key: String?) -> Unit = { _, _ -> },
+    onVoiceSeek: (hash: String, positionMs: Int) -> Unit = { _, _ -> },
 ) {
     val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.8f).dp
     val bubbleShape =
@@ -1040,20 +1112,45 @@ private fun MessageBubble(
                             Spacer(Modifier.height(4.dp))
                         }
                         if (row.attachmentHash != null) {
-                            AttachmentImage(
-                                row.attachmentHash,
-                                row.attachmentMime,
-                                row.attachmentKey,
-                                row.attachmentReady,
-                                row.attachmentFlagged,
-                                imageRatios = imageRatios,
-                                onImageClick = {
-                                    onImageClick(
-                                        FullscreenImage(it, row.mine, row.senderName, row.sentAt),
-                                    )
-                                },
-                                onLongClick = { showPicker = true },
-                            )
+                            if (VoiceAudio.isVoice(row.attachmentMime)) {
+                                // Decoded here, under remember, rather than in ChatRow: the row is a data
+                                // class, so holding the bars as an array would give it identity equality and
+                                // recompose every voice bubble on every emission of the message list.
+                                val bars = remember(row.voicePeaks) { VoiceAudio.decodePeaks(row.voicePeaks) }
+                                val live = voicePlayback?.takeIf { it.hash == row.attachmentHash }
+                                VoiceNoteBubble(
+                                    ready = row.attachmentReady,
+                                    durationMs = row.voiceDurationMs,
+                                    peaks = bars,
+                                    positionMs = live?.positionMs,
+                                    playing = live?.playing == true,
+                                    // Coral on both sides: both bubble fills are warm (primaryContainer /
+                                    // surfaceVariant), and `secondary` is Knit's slate, which reads as a
+                                    // foreign accent inside one.
+                                    accent = MaterialTheme.colorScheme.primary,
+                                    onToggle = { onVoicePlay(row.attachmentHash, row.attachmentKey) },
+                                    onSeek = { fraction ->
+                                        val total = row.voiceDurationMs ?: 0
+                                        if (total > 0) onVoiceSeek(row.attachmentHash, (fraction * total).toInt())
+                                    },
+                                    onLongClick = { showPicker = true },
+                                )
+                            } else {
+                                AttachmentImage(
+                                    row.attachmentHash,
+                                    row.attachmentMime,
+                                    row.attachmentKey,
+                                    row.attachmentReady,
+                                    row.attachmentFlagged,
+                                    imageRatios = imageRatios,
+                                    onImageClick = {
+                                        onImageClick(
+                                            FullscreenImage(it, row.mine, row.senderName, row.sentAt),
+                                        )
+                                    },
+                                    onLongClick = { showPicker = true },
+                                )
+                            }
                             if (row.body.isNotBlank()) Spacer(Modifier.height(4.dp))
                         }
                         if (row.body.isNotBlank()) {
@@ -1905,6 +2002,18 @@ private fun MessageInput(
     onReceiveImage: (Uri) -> Unit,
     onSend: () -> Unit,
     onTyping: () -> Unit = {},
+    // Voice notes. Off in the broadcast room (see the call site). While `voiceRecording` is non-null the
+    // whole input row is replaced by the recording bar — there is nothing useful to type mid-recording, and
+    // leaving the field live would put the keyboard over the cancel affordance.
+    voiceEnabled: Boolean = false,
+    voiceRecording: ChatViewModel.VoiceRecording? = null,
+    voicePlayback: VoicePlayer.Playback? = null,
+    onStartVoice: (locked: Boolean) -> Unit = {},
+    onLockVoice: () -> Unit = {},
+    onStopVoice: () -> Unit = {},
+    onCancelVoice: () -> Unit = {},
+    onVoicePlay: (hash: String, key: String?) -> Unit = { _, _ -> },
+    onVoiceSeek: (hash: String, positionMs: Int) -> Unit = { _, _ -> },
 ) {
     // Capture images committed by the keyboard (Gboard GIFs), drag-and-drop, or paste. The state-based
     // BasicTextField is required here: it advertises the accepted content MIME types to the IME, so the
@@ -2017,11 +2126,35 @@ private fun MessageInput(
                 }
             }
             if (pendingAttachment != null) {
-                AttachmentPreview(
-                    image = BlobImage(pendingAttachment.hash, pendingAttachment.mime),
-                    relay = stagedAttachmentRelay,
-                    onClear = onClearAttachment,
-                )
+                if (VoiceAudio.isVoice(pendingAttachment.mime)) {
+                    // Audition before sending: the same play/waveform/duration row the bubble will draw, so
+                    // what the user hears here is visibly the thing that goes out.
+                    val live = voicePlayback?.takeIf { it.hash == pendingAttachment.hash }
+                    // The description travels on the staged attachment itself, so there is no second
+                    // piece of state to keep in step with it.
+                    val staged = pendingAttachment.voice
+                    val stagedBars = remember(staged) { VoiceAudio.decodePeaks(staged?.peaks) }
+                    val stagedTotal = staged?.durationMs ?: 0
+                    VoiceNotePreview(
+                        durationMs = staged?.durationMs,
+                        peaks = stagedBars,
+                        positionMs = live?.positionMs,
+                        playing = live?.playing == true,
+                        // Staged bytes are still plaintext in the blob table — sealing happens on send — so
+                        // there is no per-attachment key to hand the player yet.
+                        onToggle = { onVoicePlay(pendingAttachment.hash, null) },
+                        onSeek = { fraction ->
+                            if (stagedTotal > 0) onVoiceSeek(pendingAttachment.hash, (fraction * stagedTotal).toInt())
+                        },
+                        onClear = onClearAttachment,
+                    )
+                } else {
+                    AttachmentPreview(
+                        image = BlobImage(pendingAttachment.hash, pendingAttachment.mime),
+                        relay = stagedAttachmentRelay,
+                        onClear = onClearAttachment,
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
             }
             if (replyingTo != null) {
@@ -2029,45 +2162,89 @@ private fun MessageInput(
                 Spacer(Modifier.height(8.dp))
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                Box(
-                    modifier =
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    // The hint is a sibling overlay, so wire it onto the field as its accessibility
-                    // label (the field would otherwise be an unnamed edit box); the visible hint is
-                    // then marked decorative to avoid TalkBack reading it twice.
-                    val messageHint = stringResource(R.string.chat_message_hint)
-                    if (state.text.isEmpty()) {
-                        Text(
-                            messageHint,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.clearAndSetSemantics {},
-                        )
-                    }
-                    BasicTextField(
-                        state = state,
+                // While recording, the *field* is replaced — not the row. The mic button below owns the
+                // hold gesture, and a composable that leaves composition has its `pointerInput` coroutine
+                // cancelled: taking the whole row away the instant recording began deleted the very node
+                // the finger was resting on, so the release never arrived and every recording ended one
+                // frame after it started. The button has to stay under the finger for the whole press.
+                if (voiceRecording != null) {
+                    VoiceRecordingBar(
+                        elapsedMs = voiceRecording.elapsedMs,
+                        amplitude = voiceRecording.amplitude,
+                        locked = voiceRecording.locked,
+                        onCancel = onCancelVoice,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Box(
                         modifier =
                             Modifier
-                                .fillMaxWidth()
-                                .contentReceiver(receiveContentListener)
-                                .testTag("chat_input")
-                                .semantics { contentDescription = messageHint },
-                        inputTransformation = InputTransformation.maxLength(TextLimits.MESSAGE),
-                        textStyle =
-                            MaterialTheme.typography.bodyLarge.copy(
-                                color = MaterialTheme.colorScheme.onSurface,
-                            ),
-                        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        onKeyboardAction = { onSend() },
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                .weight(1f)
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        // The hint is a sibling overlay, so wire it onto the field as its accessibility
+                        // label (the field would otherwise be an unnamed edit box); the visible hint is
+                        // then marked decorative to avoid TalkBack reading it twice.
+                        val messageHint = stringResource(R.string.chat_message_hint)
+                        if (state.text.isEmpty()) {
+                            Text(
+                                messageHint,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.clearAndSetSemantics {},
+                            )
+                        }
+                        BasicTextField(
+                            state = state,
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .contentReceiver(receiveContentListener)
+                                    .testTag("chat_input")
+                                    .semantics { contentDescription = messageHint },
+                            inputTransformation = InputTransformation.maxLength(TextLimits.MESSAGE),
+                            textStyle =
+                                MaterialTheme.typography.bodyLarge.copy(
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                ),
+                            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            onKeyboardAction = { onSend() },
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        )
+                    }
+                }
+                // The mic gets its own button rather than another gesture on the trailing one: that button
+                // already spends its tap on send-or-attach and its long-press on the camera (ADR 029), so
+                // hold-to-talk would collide head-on. It appears when there is nothing to send — exactly as
+                // the trailing button's own icon swaps on `canSend` — and stays put for the whole press,
+                // which is what keeps the gesture's pointer stream alive (see the comment above).
+                //
+                // Once the recording is *locked* the finger has already lifted and the gesture has ended, so
+                // the same slot becomes the stop button: the control is where the thumb already is.
+                // The mic is offered when the composer is otherwise idle, and *kept* for as long as a
+                // recording it started is running.
+                val micIdle = !canSend && !showSending
+                val showMic = voiceEnabled && (voiceRecording != null || micIdle)
+                if (voiceRecording?.locked == true) {
+                    Spacer(Modifier.width(8.dp))
+                    VoiceStopButton(onClick = onStopVoice, modifier = Modifier.align(Alignment.CenterVertically))
+                } else if (showMic) {
+                    Spacer(Modifier.width(8.dp))
+                    MicButton(
+                        onStart = onStartVoice,
+                        onLock = onLockVoice,
+                        onStop = onStopVoice,
+                        onCancel = onCancelVoice,
+                        recording = voiceRecording != null,
+                        modifier = Modifier.align(Alignment.CenterVertically),
                     )
                 }
+                // No send button mid-recording: there is nothing to send yet, and the note stages for review
+                // when the finger lifts.
+                if (voiceRecording != null) return@Row
                 Spacer(Modifier.width(8.dp))
                 // Deliberately a Surface + combinedClickable rather than a FilledIconButton: the
                 // latter wraps Surface(onClick = ...), whose own `clickable` sits inside whatever
@@ -2141,6 +2318,128 @@ private fun MessageInput(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The record-a-voice-note button: hold to talk, slide up to lock hands-free, slide away to cancel.
+ *
+ * A press-and-hold gesture is unreachable under TalkBack — an accessibility service consumes the raw touch
+ * stream, so the pointer events this relies on never arrive. The button therefore carries a **tap** path as
+ * well (`onClick` starts a locked recording, and the recording bar's own stop button ends it), which is what
+ * the ATF/a11y suite exercises. That is not a lesser fallback: tap-to-toggle is the better interaction for
+ * anyone who can't hold a button steady, and it costs one extra state.
+ *
+ * Recording only begins once `RECORD_AUDIO` is granted. The permission request is fired on the press that
+ * finds it missing, and deliberately does **not** auto-start when the grant lands: the user's finger left
+ * the button seconds ago, and recording then would capture the wrong moment. They press again.
+ *
+ * (The gesture loop is suppressed for multiple jumps deliberately: press, lock, cancel and release are four
+ * distinct outcomes of one gesture, and collapsing them into a single exit would make which one actually
+ * happened impossible to read.)
+ */
+@Composable
+@Suppress("LoopWithTooManyJumpStatements")
+private fun MicButton(
+    onStart: (locked: Boolean) -> Unit,
+    onLock: () -> Unit,
+    onStop: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+    // True while a recording this button started is live. It stays composed throughout (that is what keeps
+    // the gesture's pointer stream alive), so it fills in to show the press is being held.
+    recording: Boolean = false,
+) {
+    val context = LocalContext.current
+    val micDeniedMessage = stringResource(R.string.chat_voice_mic_denied)
+    val gate = rememberMicGate(onDenied = { Toast.makeText(context, micDeniedMessage, Toast.LENGTH_LONG).show() })
+    if (!gate.hasMicrophone) return
+
+    val holdLabel = stringResource(R.string.chat_voice_record)
+    val tapLabel = stringResource(R.string.chat_voice_record_start)
+    Surface(
+        shape = CircleShape,
+        // The warm coral container, not `secondaryContainer` — that one is Knit's slate, and a grey disc
+        // beside the filled-coral send button reads as a disabled control rather than a sibling of it.
+        // This is the same tint the user's own bubbles use, so the composer stays on the brand palette.
+        // While recording it fills to solid coral, so the held button reads as active rather than idle.
+        color =
+            if (recording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer,
+        contentColor =
+            if (recording) {
+                MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            },
+        modifier =
+            modifier
+                .size(48.dp)
+                .testTag("chat_voice_record")
+                // The accessible path is a semantics *action*, not a `clickable`. A `clickable` would install
+                // a second pointer handler on the same node, and both would fire on one press: the gesture
+                // below starts an unlocked recording on DOWN, the click starts a locked one on UP, and the
+                // second would run with nothing left to stop it. TalkBack's double-tap invokes this action
+                // directly rather than replaying pointer events, so the two paths stay disjoint by
+                // construction. It starts a *locked* recording — nobody is holding anything — which the
+                // recording bar's own stop button ends.
+                .semantics(mergeDescendants = true) {
+                    contentDescription = holdLabel
+                    role = Role.Button
+                    onClick(label = tapLabel) {
+                        gate.runOrRequest { onStart(true) }
+                        true
+                    }
+                }.pointerInput(gate) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            // Ask (or refuse) before any recording state exists, so a denied press simply
+                            // does nothing rather than leaving a half-armed recorder behind.
+                            if (!gate.runOrRequest { onStart(false) }) {
+                                waitForUpOrCancellation()
+                                continue
+                            }
+                            var locked = false
+                            var cancelled = false
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                val dx = change.position.x - down.position.x
+                                val dy = change.position.y - down.position.y
+                                if (!locked && dy < -LOCK_SLOP_PX) {
+                                    locked = true
+                                    onLock()
+                                }
+                                if (!locked && dx < -CANCEL_SLOP_PX) {
+                                    cancelled = true
+                                    onCancel()
+                                    break
+                                }
+                                if (!change.pressed) break
+                            }
+                            // Three ways out, and only one of them still has a finger on the glass:
+                            //  - cancelled: the slide crossed the threshold while still pressed, so the
+                            //    release has to be swallowed or it would open the next cycle immediately;
+                            //  - unlocked release: the loop broke *because* the finger lifted, so waiting
+                            //    for an up here would swallow the NEXT press instead;
+                            //  - locked: the finger has lifted too, and the recording deliberately outlives
+                            //    it — the recording bar's stop button ends it.
+                            if (cancelled) {
+                                waitForUpOrCancellation()
+                            } else if (!locked) {
+                                onStop()
+                            }
+                        }
+                    }
+                },
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                Icons.Filled.Mic,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+            )
         }
     }
 }

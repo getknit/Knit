@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.crypto.SignedPrekey
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
@@ -477,6 +478,67 @@ class MeshManagerTest {
             val opened = rig.bob.crypto.open(content.enc!!, header, rig.bob.nodeId)!!
             assertEquals("the sealed content references the same ciphertext blob", ctHash, opened.attachmentHash)
             assertNotNull("and carries the AES key the recipient needs", opened.attachmentKey)
+        }
+
+    @Test
+    fun aVoiceNotesDescriptionIsStoredAgainstTheCiphertextHashTheRowActuallyHolds() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The trap this pins: a voice note's duration/waveform are derived at ingest, when only the
+            // *plaintext* hash exists — but a DM re-seals the attachment and the stored row records the
+            // *ciphertext* hash. Writing the description anywhere that keys off the staged plaintext hash
+            // silently updates no rows, and the sender's own bubble renders a length-less flat waveform
+            // forever. Nothing on the wire changes either way, so only the stored row can catch it.
+            val rig = Rig(backgroundScope)
+            rig.pin(rig.bob)
+            val plainHash = "plain-voice-hash"
+            coEvery { rig.blobs.bytes(plainHash) } returns "raw-adts-bytes".toByteArray()
+
+            val ok =
+                rig.manager.sendChat(
+                    "",
+                    attachment =
+                        AttachmentStore.Ingested(
+                            hash = plainHash,
+                            mime = VoiceAudio.MIME,
+                            voice = VoiceAudio.Description(durationMs = 9_300, peaks = "AAECAw=="),
+                        ),
+                    recipientId = rig.bob.nodeId,
+                )
+            advanceUntilIdle()
+
+            assertTrue(ok)
+            val row = rig.saved.single()
+            val content = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!
+
+            assertEquals("the row is addressed by the ciphertext hash", content.attachmentHash, row.attachmentHash)
+            assertNotEquals("which is not the hash the description was derived under", plainHash, row.attachmentHash)
+            assertEquals("and the description landed on that row anyway", 9_300, row.voiceDurationMs)
+            assertEquals("AAECAw==", row.voicePeaks)
+            assertEquals(
+                "the mime rides in the clear, which is the whole wire cost of a voice note",
+                VoiceAudio.MIME,
+                content.attachmentMime,
+            )
+        }
+
+    @Test
+    fun anOrdinaryImageLeavesTheVoiceColumnsNull() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The other half of the rule: an attachment is not a voice note just by being an attachment.
+            val rig = Rig(backgroundScope)
+            rig.pin(rig.bob)
+            coEvery { rig.blobs.bytes("plain-hash") } returns "raw-image-bytes".toByteArray()
+
+            rig.manager.sendChat(
+                "look",
+                attachment = AttachmentStore.Ingested(hash = "plain-hash", mime = "image/jpeg"),
+                recipientId = rig.bob.nodeId,
+            )
+            advanceUntilIdle()
+
+            val row = rig.saved.single()
+            assertNull(row.voiceDurationMs)
+            assertNull(row.voicePeaks)
         }
 
     // --- reply + mentions ride the frame and are persisted ---

@@ -13,6 +13,7 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
@@ -41,6 +42,10 @@ import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
+import app.getknit.knit.ui.voice.VoicePlayer
+import app.getknit.knit.ui.voice.VoiceRecorder
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -89,6 +94,15 @@ data class ChatRow(
     // about delivery, which the ✓/✓✓ tick keeps to itself. Set only for our own sends; see the mapping
     // in [ChatViewModel].
     val attachmentRelay: AttachmentRelay = AttachmentRelay.Silent,
+    // A voice note's playing time and waveform bars, both derived locally from the audio (never carried on
+    // the wire — see [app.getknit.knit.data.VoiceAudio]). Null until the blob has arrived and been
+    // described, which is why the bubble can render a length-less placeholder in the meantime.
+    //
+    // The bars stay in their stored Base64 form here rather than a decoded FloatArray: this is a data class,
+    // and an array field would give it reference-identity equality, so every re-emission of the message list
+    // would recompose every voice bubble on screen. The bubble decodes once, under `remember`.
+    val voiceDurationMs: Int? = null,
+    val voicePeaks: String? = null,
     val mentions: List<Mention> = emptyList(),
     val reactions: List<ReactionSummary> = emptyList(),
     // The message this row quotes (Signal-style reply), or null when it isn't a reply. Denormalized so the
@@ -167,6 +181,9 @@ class ChatViewModel(
     private val blobs: BlobRepository,
     private val imageScreening: ImageScreeningService,
     private val gallerySaver: GallerySaver,
+    // App-scoped on purpose: any number of voice-note bubbles can be on screen and only one may sound, so
+    // arbitration can't live in a per-screen ViewModel.
+    private val voicePlayer: VoicePlayer,
     // The facts flow, not the repository that produces it. Narrow on purpose: this ViewModel needs a
     // Flow<RelayFacts> and nothing else, and the production flow is an infinite poller — under a test's
     // virtual clock its `delay` is instant, so a test that drives this VM with `advanceUntilIdle()` could
@@ -192,6 +209,30 @@ class ChatViewModel(
      */
     private val _confirmAttachment = MutableStateFlow<AttachmentStore.Ingested?>(null)
     val confirmAttachment: StateFlow<AttachmentStore.Ingested?> = _confirmAttachment.asStateFlow()
+
+    /**
+     * Live state of an in-progress recording, or null when the mic is idle. [elapsedMs] drives the counter,
+     * [amplitude] the level meter, and [locked] distinguishes hands-free recording (the user slid up) from
+     * hold-to-talk, where letting go ends it.
+     */
+    data class VoiceRecording(
+        val elapsedMs: Long,
+        val amplitude: Float,
+        val locked: Boolean,
+    )
+
+    private val _voiceRecording = MutableStateFlow<VoiceRecording?>(null)
+    val voiceRecording: StateFlow<VoiceRecording?> = _voiceRecording.asStateFlow()
+
+    /** Playback state of whichever voice note is loaded app-wide; a bubble matches it against its own hash. */
+    val voicePlayback: StateFlow<VoicePlayer.Playback?> = voicePlayer.nowPlaying
+
+    // Built lazily so a chat that never records never opens a recorder, and torn down in onCleared: the
+    // microphone is exclusive, and leaking it would block every other app until this process died.
+    private val recorder by lazy { VoiceRecorder(context, viewModelScope) }
+
+    // Ticks the recording UI. Cancelled by every path that ends a recording.
+    private var recordingTicker: Job? = null
 
     /** One-shot UI messages (a string res id), surfaced as toasts — e.g. the result of saving an image. */
     private val _events = MutableSharedFlow<Int>(extraBufferCapacity = 1)
@@ -347,6 +388,8 @@ class ChatViewModel(
                         attachmentHash = m.attachmentHash,
                         attachmentMime = m.attachmentMime,
                         attachmentKey = m.attachmentKey,
+                        voiceDurationMs = m.voiceDurationMs,
+                        voicePeaks = m.voicePeaks,
                         attachmentReady = heldBytes != null,
                         attachmentFlagged = hideSensitive && m.attachmentHash != null && m.attachmentHash in flaggedHashes,
                         // Outbound reach only: a received attachment has already arrived, so telling its
@@ -507,6 +550,11 @@ class ChatViewModel(
                 // accepted; a blocked message keeps the draft and surfaces a toast so the user can edit.
                 if (sent) {
                     accepted = true
+                    // The voice description is deliberately NOT written here. It rides on the staged
+                    // [AttachmentStore.Ingested] and is written by `MeshManager.sendChat` against the hash
+                    // the row actually holds — for a DM or group that is the attachment's *ciphertext*
+                    // hash, so writing it here against the plaintext hash staged above would silently
+                    // update no rows at all.
                     _pendingAttachment.value = null
                     // Guard stays held until the screen reports the field cleared (onInputCleared), so no
                     // duplicate can slip through the tryEmit -> collect -> clearText hop.
@@ -651,6 +699,116 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Starts recording a voice note. Returns false when the microphone couldn't be opened — held by a call
+     * or another app — so the composer can say so rather than showing a recorder that captures silence. The
+     * caller has already cleared the `RECORD_AUDIO` gate.
+     *
+     * [locked] starts a hands-free recording directly (the accessibility tap path); hold-to-talk starts
+     * unlocked and flips via [lockVoiceRecording] when the user slides up.
+     */
+    fun startVoiceRecording(locked: Boolean = false): Boolean {
+        if (_voiceRecording.value != null) return false
+        if (!recorder.start()) {
+            _events.tryEmit(R.string.chat_voice_record_failed)
+            return false
+        }
+        _voiceRecording.value = VoiceRecording(elapsedMs = 0L, amplitude = 0f, locked = locked)
+        recordingTicker?.cancel()
+        recordingTicker =
+            viewModelScope.launch {
+                while (true) {
+                    delay(VOICE_TICK_MS)
+                    val elapsed = recorder.elapsedMs()
+                    // Stop cleanly at the cap rather than letting the recorder run on: the note is still
+                    // staged, so a user who talks past five minutes keeps what they said instead of losing it.
+                    if (elapsed >= VoiceRecorder.MAX_DURATION_MS) {
+                        stopVoiceRecordingAndStage()
+                        return@launch
+                    }
+                    _voiceRecording.value =
+                        _voiceRecording.value?.copy(elapsedMs = elapsed, amplitude = recorder.amplitude())
+                }
+            }
+        return true
+    }
+
+    /** Switches an in-progress hold-to-talk recording to hands-free; the user slid up off the button. */
+    fun lockVoiceRecording() {
+        _voiceRecording.value = _voiceRecording.value?.copy(locked = true)
+    }
+
+    /**
+     * Ends the recording and stages it for review, exactly as a picked photo is staged — so the user hears
+     * it back before sending, and can still add text or a reply quote to it.
+     *
+     * A recording too short to have said anything is discarded rather than staged: releasing the button by
+     * accident is common, and an unsendable 0.2 s blip in the composer is worse than nothing happening.
+     */
+    fun stopVoiceRecordingAndStage() {
+        if (_voiceRecording.value == null) return
+        recordingTicker?.cancel()
+        recordingTicker = null
+        _voiceRecording.value = null
+        // Decide on the *elapsed time* before touching the recorder. A press too short to have encoded a
+        // frame is the common fumble, and taking it through stop() is what made it look like a hardware
+        // failure: MediaRecorder.stop() throws a bare RuntimeException when the encoder produced nothing,
+        // so a tap logged a scary warning and toasted "couldn't record". Cancelling instead resets the
+        // recorder cleanly and says the one useful thing — hold the button.
+        val tooShort = recorder.elapsedMs() < MIN_VOICE_MS
+        if (tooShort) {
+            recorder.cancel()
+            _events.tryEmit(R.string.chat_voice_too_short)
+            return
+        }
+        viewModelScope.launch {
+            val bytes = recorder.stop()
+            if (bytes == null) {
+                _events.tryEmit(R.string.chat_voice_record_failed)
+                return@launch
+            }
+            // Second gate, on the bytes rather than the clock: the encoder can lag the button, so a press
+            // held just past the threshold may still have produced less audio than it looked like.
+            // durationMs is pure header arithmetic, so this costs nothing.
+            if ((VoiceAudio.durationMs(bytes) ?: 0) < MIN_VOICE_MS) {
+                _events.tryEmit(R.string.chat_voice_too_short)
+                return@launch
+            }
+            when (val result = attachments.ingestVoice(bytes)) {
+                is AttachmentStore.IngestResult.Success -> {
+                    // The description rides on the staged attachment itself: the review row reads it from
+                    // there, and MeshManager writes it onto the row it creates, against the (possibly
+                    // ciphertext) hash that row will actually hold.
+                    _pendingAttachment.value = result.ingested
+                }
+
+                AttachmentStore.IngestResult.Failed -> {
+                    _events.tryEmit(R.string.chat_voice_record_failed)
+                }
+            }
+        }
+    }
+
+    /** Abandons an in-progress recording — the user slid to cancel. Nothing is ingested, so there's no GC. */
+    fun cancelVoiceRecording() {
+        recordingTicker?.cancel()
+        recordingTicker = null
+        _voiceRecording.value = null
+        recorder.cancel()
+    }
+
+    /** Plays (or pauses, when it's already the loaded note) the voice note stored under [hash]. */
+    fun playVoice(
+        hash: String,
+        key: String?,
+    ) = voicePlayer.play(hash, key)
+
+    /** Scrubs the loaded voice note to [positionMs]; ignored unless [hash] is the note that is loaded. */
+    fun seekVoice(
+        hash: String,
+        positionMs: Int,
+    ) = voicePlayer.seek(hash, positionMs)
+
     /** The user confirmed the explicit-image warning: stage the (already-ingested) image for sending. */
     fun confirmFlaggedAttachment() {
         _pendingAttachment.value = _confirmAttachment.value ?: return
@@ -664,7 +822,11 @@ class ChatViewModel(
         viewModelScope.launch { blobs.deleteIfUnreferenced(pending.hash) }
     }
 
-    /** Discards the staged image; its blob (ingested on pick) is GC'd unless a sent message references it. */
+    /**
+     * Discards the staged attachment; its blob (ingested on pick or on finishing a recording) is GC'd unless
+     * a sent message references it. A staged voice note's description rides on the attachment itself, so it
+     * goes with it — nothing separate to clear.
+     */
     fun clearAttachment() {
         val pending = _pendingAttachment.value ?: return
         _pendingAttachment.value = null
@@ -715,9 +877,31 @@ class ChatViewModel(
         viewModelScope.launch { meshManager.sendTyping(conversationId) }
     }
 
+    /**
+     * Releases the microphone and silences playback when the chat goes away. The recorder holds an exclusive
+     * system resource that no other app can take back, so an abandoned recording must not outlive the screen
+     * that started it; playback stops because a voice note continuing to sound from a thread the user has
+     * navigated away from reads as a bug, not a feature.
+     */
+    override fun onCleared() {
+        recordingTicker?.cancel()
+        recorder.cancel()
+        voicePlayer.stop()
+        super.onCleared()
+    }
+
     private companion object {
         /** Send a typing cue at most this often while actively editing (< the receiver's ~12 s hold, so a peer
          *  who keeps typing re-cues before their indicator would expire). */
         const val TYPING_SEND_INTERVAL_MS = 8_000L
+
+        /** Recording UI refresh — fast enough for a level meter to look live, slow enough to stay cheap. */
+        const val VOICE_TICK_MS = 60L
+
+        /**
+         * Shortest voice note worth staging. Below this it is a fumbled press rather than speech, and
+         * discarding it silently beats leaving an unsendable blip in the composer.
+         */
+        const val MIN_VOICE_MS = 700
     }
 }

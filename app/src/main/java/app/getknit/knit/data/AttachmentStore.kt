@@ -26,16 +26,31 @@ import java.security.MessageDigest
  * Before staging, the image is screened for explicit content via [ImageScreeningService]. Sending an
  * explicit image is *allowed but discouraged*: a flagged image is still ingested, and [ingest] reports the
  * flag so the caller can ask the user to confirm before staging/sending it (the receive side blurs it).
+ *
+ * Voice notes ([ingestVoice]) share the tail of this pipeline and none of its head. They arrive already in
+ * their final encoding from `VoiceRecorder`, so there is nothing to decode, downscale or re-compress; and
+ * no on-device model can screen speech, so they are never flagged. What they do share is the part that
+ * matters — the same content-addressed insert into the same encrypted table, which is why every layer below
+ * this one (custody, `BlobExchange`, the spool plane) carries a voice note with no changes at all.
  */
 class AttachmentStore(
     private val context: Context,
     private val blobs: BlobRepository,
     private val imageScreening: ImageScreeningService,
 ) {
-    /** The result of ingesting a picked/keyboard/captured image: its content [hash] and [mime]. */
+    /**
+     * The result of ingesting a picked/keyboard/captured image or a recorded voice note: its content [hash]
+     * and [mime], plus — for a voice note — the [voice] description derived from the audio at ingest.
+     *
+     * [voice] travels with the staged attachment rather than being written to a row here because at ingest
+     * there is no row yet, and by the time there is, the hash has changed: a DM/group attachment is sealed
+     * on send and the row records its *ciphertext* hash. So the description rides along and is written
+     * where the row is actually created (`MeshManager.sendChat`), against the hash that row will hold.
+     */
     data class Ingested(
         val hash: String,
         val mime: String,
+        val voice: VoiceAudio.Description? = null,
     )
 
     /**
@@ -81,6 +96,30 @@ class AttachmentStore(
                 sourceMime = sourceMime,
                 readRaw = { bytes },
                 decodeOriented = { decodeOrientedBounded(bytes, MAX_DIMENSION) },
+            )
+        }
+
+    /**
+     * Ingests a recorded voice note — the AAC/ADTS bytes `VoiceRecorder` captured in memory — into the same
+     * content-addressed blob store an image goes to, under [VoiceAudio.MIME].
+     *
+     * Deliberately not routed through the image pipeline above: that one decodes a [Bitmap], downscales and
+     * re-encodes, all meaningless here, and it calls the NSFW screener, which cannot classify speech. So a
+     * voice note is **never** flagged, and [IngestResult.Success.flagged] is always false — which is exactly
+     * what lets `ChatViewModel.stage` handle it with no branch of its own. See `docs/CONTENT_MODERATION.md`
+     * for why audio ships unscreened and what protects a recipient instead.
+     *
+     * Fails on empty bytes or anything past [MAX_BYTES]; the recorder caps duration long before that, so
+     * this is a backstop rather than a path a user reaches.
+     */
+    suspend fun ingestVoice(bytes: ByteArray): IngestResult =
+        withContext(Dispatchers.IO) {
+            if (bytes.isEmpty() || bytes.size > MAX_BYTES) return@withContext IngestResult.Failed
+            val hash = sha256(bytes)
+            blobs.insert(hash, VoiceAudio.MIME, bytes)
+            IngestResult.Success(
+                Ingested(hash, VoiceAudio.MIME, voice = VoiceAudio.describe(bytes)),
+                flagged = false,
             )
         }
 

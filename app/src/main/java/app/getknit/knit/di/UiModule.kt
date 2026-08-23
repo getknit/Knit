@@ -37,6 +37,7 @@ val uiModule =
                 get(),
                 get(),
                 get(),
+                get(),
                 get<RelayStatusRepository>().facts,
                 androidContext(),
             )

@@ -186,3 +186,32 @@ the packfile keeps clones fast. `.tflite` is also kept uncompressed in the APK
   tap-to-view, and a flagged avatar shows the peer's monogram; with the toggle **off** received text and
   images are shown and a flagged avatar is adopted. Flipping the toggle while a chat is open reveals/hides
   already-received text and images reactively.
+
+## 7. Audio is not screened
+
+**Voice notes ship unscreened.** No on-device model classifies speech, and the app has no cloud
+moderation option — the same constraint stated at the top of this document. So a voice note is stored with
+`MessageEntity.moderation = MODERATION_NONE`, and both screening hooks skip it explicitly by MIME
+(`VoiceAudio.isVoice`, checked in `MeshBlobStore.saveIncoming`; `AttachmentStore.ingestVoice` bypasses the
+image pipeline entirely and never reaches `ImageScreeningService`). The gate is deliberate rather than
+incidental: `NsfwImageModerator` would have failed open on undecodable audio bytes anyway, but relying on
+that would have left a wasted decode and a meaningless cached verdict in `blob_verdicts`, and would have
+read as screening that works.
+
+What protects a recipient instead:
+
+- **Voice notes are not offered in the Nearby room.** The composer's mic button appears only in DMs and
+  groups (`MessageInput`'s `voiceEnabled`, off when `ChatUiState.isRoom`). The room is the one surface that
+  floods unencrypted to strangers in range, and it is where this document's own threat model is weakest —
+  it is also where the image classifier *hard-blocks* rather than merely confirming. Unscreenable audio
+  broadcast to everyone nearby is the combination worth refusing, so it is refused.
+- **Block-sender.** The existing long-press → block flow is unchanged and is the real remedy, consistent
+  with the "receiver-side control is the actual protection" framing above.
+- **The Message Requests gate.** A stranger's first DM — voice note or not — is held behind the request
+  gate and raises no notification (ADR 009), so an unsolicited voice note from an unknown node cannot
+  interrupt.
+
+This is a gap, recorded as one. If a small on-device speech classifier ever becomes practical, the hook
+point already exists: `InboundPipeline.onObtained` decrypts a landed attachment and is where the waveform
+derivation runs today, so a verdict could be cached under the same content hash the image path uses, and
+the bubble's tap-to-reveal collapse would need no new UI. Tracked in `.agents/memory/roadmap.md`.

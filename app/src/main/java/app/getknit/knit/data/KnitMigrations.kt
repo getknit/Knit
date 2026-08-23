@@ -135,6 +135,23 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v5 — voice notes: two `messages` columns describing a voice-note attachment, `voiceDurationMs` and the
+     * Base64 `voicePeaks` waveform. Purely local presentation state — both are derived from the audio bytes
+     * themselves by [app.getknit.knit.data.VoiceAudio], on the sender at ingest and on the recipient once the
+     * blob lands, so nothing about a voice note travels on the wire that an image didn't already. Existing
+     * rows get null, which is correct rather than merely tolerable: a message that predates this column has
+     * no voice attachment, and the derivation re-runs for any that somehow does. Additive only; the SQL must
+     * stay byte-equivalent to what Room generates for `app/schemas/**/5.json`.
+     */
+    val MIGRATION_4_5 =
+        object : Migration(4, 5) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE `messages` ADD COLUMN `voiceDurationMs` INTEGER DEFAULT NULL")
+                connection.execSQL("ALTER TABLE `messages` ADD COLUMN `voicePeaks` TEXT DEFAULT NULL")
+            }
+        }
+
     /** All migrations, applied by Room in order. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 }

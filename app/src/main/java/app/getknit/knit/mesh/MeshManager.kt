@@ -526,6 +526,10 @@ class MeshManager(
                     mentions = MentionStore.encode(mentions),
                     attachmentHash = attachment?.hash,
                     attachmentMime = attachment?.mime,
+                    // Set for symmetry with the sealed path below. The composer does not offer voice notes
+                    // in the room (ADR 034), so in practice this is always null here.
+                    voiceDurationMs = attachment?.voice?.durationMs,
+                    voicePeaks = attachment?.voice?.peaks,
                 ).withReply(replyTo),
             )
             val content =
@@ -569,6 +573,12 @@ class MeshManager(
                 attachmentHash = sealedAttachment?.hash,
                 attachmentMime = attachment?.mime,
                 attachmentKey = sealedAttachment?.key,
+                // A voice note's duration/waveform, derived at ingest and written here rather than by the
+                // composer: the row records the *ciphertext* hash, so a caller keying off the plaintext one
+                // it staged would update nothing. The recipient derives the identical pair from the same
+                // bytes when the blob lands (InboundPipeline.onObtained) — neither value is on the wire.
+                voiceDurationMs = attachment?.voice?.durationMs,
+                voicePeaks = attachment?.voice?.peaks,
                 pendingKey = envelope == null && group == null,
             ).withReply(replyTo),
         )

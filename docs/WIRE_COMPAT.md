@@ -269,6 +269,28 @@ chain-advancing no-op, acceptable only because the whole sealed-ctl era is on th
 ("released version numbers are append-only; unreleased ones are still yours to edit"). The receiver
 applies `ack` plus `acks` per id under the forged-ack guard, `distinct`, bounded at 2× the send cap.
 
+**Precedent — a second whole feature that touches no wire at all (voice notes, ADR 034).** After the M5
+attachments milestone above, this is the second time the expected wire change turned out to be unnecessary,
+and for the same underlying reason — so it is worth stating as a rule rather than a coincidence. A voice
+note is an ordinary attachment carrying an audio MIME: `ChatContent.attachmentMime` /
+`MessageContent.attachmentMime` already exist and already ride, and *populating an existing field in a new
+case is additive, not a rule-2 repurpose* (the DB v19 precedent, applied a fourth time — the field's
+meaning, "the content address and type to pull for this message", is unchanged). No field, no `type`, no
+ctl value, no capability bit, no `EncEnvelope.v`, no `MessageContent.v`. `GoldenVectorTest`,
+`ScopeVectorTest` and `SpoolRecordsTest` are all untouched, which is the executable proof.
+
+What *could* have been spent and deliberately was not: a nullable duration and waveform on
+`MessageContent`, which rule 1 would have permitted. Both are instead derived from the audio bytes on
+**each** side (`VoiceAudio`, run by the sender at ingest and by the recipient in
+`InboundPipeline.onObtained`) and stored in local-only columns at DB v5. The argument generalizes: when a
+value is a pure function of bytes both ends already hold, deriving beats carrying — the two ends then agree
+by construction instead of one trusting a number the other sent, and nothing new leaks to a blind carrier.
+The same reasoning kept a quoted voice note's label out of `ReplyRef`: it rides the existing free-text
+`snippet` instead, at the honest cost of appearing in the sender's locale. *Metadata cost:* unchanged in
+kind, new in content — an `audio/aac` MIME tells a carrier and a spool that a message is a voice note, and
+its size implies rough duration. The DB bumps (v4 → v5) are local only, with a tested `KnitMigrations`
+entry.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

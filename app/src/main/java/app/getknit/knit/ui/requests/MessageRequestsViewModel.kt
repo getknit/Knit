@@ -7,6 +7,7 @@ import app.getknit.knit.R
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
@@ -171,9 +172,23 @@ class MessageRequestsViewModel(
         }
         val body =
             when {
-                message.body.isNotBlank() -> message.body
-                message.attachmentHash != null -> context.getString(R.string.chat_list_preview_photo)
-                else -> ""
+                message.body.isNotBlank() -> {
+                    message.body
+                }
+
+                message.attachmentHash != null -> {
+                    context.getString(
+                        if (VoiceAudio.isVoice(message.attachmentMime)) {
+                            R.string.chat_list_preview_voice
+                        } else {
+                            R.string.chat_list_preview_photo
+                        },
+                    )
+                }
+
+                else -> {
+                    ""
+                }
             }
         if (!isGroup) return body
         val sender = displayNameFor(peersByNode[message.senderId]?.name, message.senderId)

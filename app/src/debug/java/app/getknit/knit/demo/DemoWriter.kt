@@ -8,6 +8,7 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
@@ -125,7 +126,8 @@ class DemoWriter(
         now: Long,
     ) {
         val fromMe = m.from == Slot.ME
-        val imageHash = m.image?.let { imageBlob(it, m.imageMime) }
+        val voice = m.voiceSeconds?.let { voiceBlob(it) }
+        val imageHash = if (voice == null) m.image?.let { imageBlob(it, m.imageMime) } else null
         messages.save(
             MessageEntity(
                 id = m.id,
@@ -139,9 +141,18 @@ class DemoWriter(
                     MentionStore.encode(
                         if (m.mentionsMe) listOf(Mention(me, scenario.meName)) else emptyList(),
                     ),
-                attachmentHash = imageHash,
+                attachmentHash = voice?.hash ?: imageHash,
                 // Plaintext blob (attachmentKey stays null) → BlobFetcher decodes the bytes directly.
-                attachmentMime = if (imageHash != null) m.imageMime else null,
+                attachmentMime =
+                    when {
+                        voice != null -> VoiceAudio.MIME
+                        imageHash != null -> m.imageMime
+                        else -> null
+                    },
+                // Seeded rather than derived: the derivation runs when a blob *arrives*, and a seeded row
+                // never arrives. Writing them here is what the real inbound path would have written.
+                voiceDurationMs = voice?.durationMs,
+                voicePeaks = voice?.peaks,
             ).withReply(replyRefFor(m)),
         )
         m.reactions.forEach { r ->
@@ -221,4 +232,58 @@ class DemoWriter(
             blobs.insert(hash, mime, bytes)
             hash
         }.getOrNull()
+
+    /** A seeded voice note's blob hash plus the description a real arrival would have derived from it. */
+    private class SeededVoice(
+        val hash: String,
+        val durationMs: Int,
+        val peaks: String,
+    )
+
+    /**
+     * Synthesizes a [seconds]-long **silent** ADTS stream, stores it as a plaintext blob, and returns it
+     * with a plausible speech waveform. Silent because the point is to audit the bubble — its layout, its
+     * contrast, its TalkBack description — not to play audio; bundling a real recording would add a binary
+     * asset to the repo for a control the suites never press.
+     *
+     * The stream is genuinely well-formed, so `VoiceAudio.durationMs` reads exactly [seconds] back off it
+     * and the seeded row is consistent with what the real pipeline would have produced.
+     */
+    private suspend fun voiceBlob(seconds: Int): SeededVoice? =
+        runCatching {
+            val frames = seconds * SEEDED_VOICE_SAMPLE_RATE / SEEDED_VOICE_SAMPLES_PER_FRAME
+            val bytes = ByteArray(frames * SEEDED_VOICE_FRAME_BYTES)
+            for (f in 0 until frames) {
+                val o = f * SEEDED_VOICE_FRAME_BYTES
+                bytes[o] = 0xFF.toByte()
+                bytes[o + 1] = 0xF1.toByte()
+                // profile AAC-LC, sampling_frequency_index 7 (22.05 kHz), 1 channel.
+                bytes[o + 2] = 0x5C.toByte()
+                bytes[o + 3] = (0x40 or ((SEEDED_VOICE_FRAME_BYTES shr 11) and 0x03)).toByte()
+                bytes[o + 4] = ((SEEDED_VOICE_FRAME_BYTES shr 3) and 0xFF).toByte()
+                bytes[o + 5] = (((SEEDED_VOICE_FRAME_BYTES and 0x07) shl 5) or 0x1F).toByte()
+                bytes[o + 6] = 0xFC.toByte()
+            }
+            val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+            blobs.insert(hash, VoiceAudio.MIME, bytes)
+            val bars =
+                ByteArray(VoiceAudio.PEAK_COUNT) { i ->
+                    // A repeating syllable-ish envelope; deterministic so captures are reproducible.
+                    val phase = kotlin.math.abs(kotlin.math.sin(i / 4.0))
+                    (60 + phase * 180).toInt().toByte()
+                }
+            SeededVoice(
+                hash = hash,
+                durationMs = VoiceAudio.durationMs(bytes) ?: (seconds * 1000),
+                peaks = VoiceAudio.encodePeaks(bars),
+            )
+        }.getOrNull()
+
+    private companion object {
+        // A seeded voice note's synthetic ADTS stream: mono 22.05 kHz AAC-LC, the recorder's own format, so
+        // VoiceAudio reads the same duration off it that it would off a real recording.
+        const val SEEDED_VOICE_SAMPLE_RATE = 22_050
+        const val SEEDED_VOICE_SAMPLES_PER_FRAME = 1024
+        const val SEEDED_VOICE_FRAME_BYTES = 64
+    }
 }

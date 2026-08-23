@@ -150,10 +150,12 @@ class ChatRelayIndicatorTest {
         render(rows = listOf(row(attachmentRelay = AttachmentRelay.TooLarge)))
         compose.onNodeWithTag("chat_relay_marker").performClick()
         compose.onNodeWithText("Too large for your relays").assertIsDisplayed()
-        // The point of the explanation is that the photo still arrives, so the fallback must be in it.
+        // The point of the explanation is that the attachment still arrives, so the fallback must be in it.
+        // Worded "attachment", not "photo": the reach rule is a size comparison and is blind to format, so
+        // the same marker fronts an oversize voice note.
         compose
             .onNodeWithText(
-                "This photo is bigger than any of your relays will hold, so it is not being uploaded. " +
+                "This attachment is bigger than any of your relays will hold, so it is not being uploaded. " +
                     "It still arrives when you and Ana are in Wi-Fi or Bluetooth range of each other.",
             ).assertIsDisplayed()
     }

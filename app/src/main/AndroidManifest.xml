@@ -47,6 +47,13 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
+    <!-- Voice notes: record audio in the chat composer (ui/voice/). The bytes go from MediaRecorder straight
+         into the encrypted blob store over a pipe, never a file, per ADR 029. required=false because a
+         device with no microphone can still receive and play voice notes; the composer probes
+         FEATURE_MICROPHONE at runtime and simply omits the mic button. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
     <!-- Always-on mesh foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />

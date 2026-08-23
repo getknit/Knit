@@ -451,11 +451,14 @@ class FramedLink(
         }
     }
 
+    // Names the incoming staging file only, so it is cosmetic — but MeshBlobStore keeps an identical copy
+    // for the send side, and the two must be extended together or a blob round-trips under two names.
     private fun extForMime(mime: String): String =
         when (mime.lowercase()) {
             "image/gif" -> "gif"
             "image/png" -> "png"
             "image/webp" -> "webp"
+            "audio/aac" -> "aac"
             else -> "jpg"
         }
 

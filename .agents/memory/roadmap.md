@@ -102,9 +102,25 @@ doc). **Don't start a deferred item without explicit direction.**
   cleartext `profile` frame keeps first contact permanently — it is self-certifying and cannot be
   encrypted — so ADR 018's "last cleartext flooded metadata" goal is advanced, not finished.
 
+- **Audio moderation** — voice notes (ADR 034) ship **unscreened**: no on-device model classifies speech
+  and the app has no cloud option, so `MODERATION_NONE` is the honest verdict and both screening hooks skip
+  audio by MIME. Mitigated rather than solved: the mic is not offered in the Nearby room (the one surface
+  that floods unencrypted to strangers), and block-sender plus the ADR 009 request gate are the remedies.
+  If a small on-device speech classifier ever becomes practical, the hook point already exists —
+  `InboundPipeline.onObtained` decrypts a landed attachment and is where the waveform derivation runs, so a
+  verdict would cache under the same content hash the image path uses and the bubble's tap-to-reveal
+  collapse would need no new UI. Gap recorded in `docs/CONTENT_MODERATION.md` §7.
+
+- **Voice notes in the Nearby room** — deliberately not built, for the reason above. Reversing it is one
+  flag (`MessageInput`'s `voiceEnabled`), and should not be reversed without an answer to "what screens it".
+
 - **BLE promotion gate on A2DP audio** — the adaptive scan throttle now drops the **scan** to its floor
   while streaming (`ScanDemandPolicy` / the demand-gated `scanLoop`), but **connects** are still not gated
-  on `contended` (it remains diagnostic-only for the connect path).
+  on `contended` (it remains diagnostic-only for the connect path). **Note before building it:** since
+  ADR 034, *playing a voice note* also trips `AudioManager.isMusicActive`, so `contended` now goes true for
+  a few seconds of local speaker playback that contends for nothing. Harmless while the flag is
+  instrumentation-only; gating connects on it as-is would stall the mesh every time someone listens to a
+  message. The gate needs to distinguish a real A2DP route from any active stream.
 - **Connectionless BLE side-channel for small frames** — the BLE analogue of the NAN coordination/fast-fanout
   plane: carry small floodable frames (broadcast chat, receipts, reactions, typing) over BLE **extended
   advertising** so they bypass an in-flight L2CAP file transfer entirely instead of head-of-line-queuing

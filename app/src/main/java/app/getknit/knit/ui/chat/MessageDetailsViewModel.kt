@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.receivedPlane
@@ -59,6 +60,8 @@ data class MessageDetailsUiState(
     val vanished: Boolean = false,
     val body: String = "",
     val hasAttachment: Boolean = false,
+    // True when that attachment is a voice note, so the body line names it as one rather than as a photo.
+    val isVoiceNote: Boolean = false,
     val moderationFlagged: Boolean = false,
     val mine: Boolean = false,
     val senderName: String = "",
@@ -138,6 +141,7 @@ class MessageDetailsViewModel(
                     messageId = messageId,
                     body = message.body,
                     hasAttachment = message.attachmentHash != null,
+                    isVoiceNote = VoiceAudio.isVoice(message.attachmentMime),
                     moderationFlagged = hideSensitive && message.moderation == MessageEntity.MODERATION_TEXT_FLAGGED,
                     mine = message.senderId == me,
                     senderName = displayNameFor(peersByNode[message.senderId]?.name, message.senderId),

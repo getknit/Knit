@@ -102,6 +102,22 @@
     <string name="chat_image_capture_failed">Couldn\'t attach that photo</string>
     <string name="chat_attachment_preview_desc">Attachment preview</string>
     <string name="chat_remove_attachment">Remove attachment</string>
+
+    <!-- Voice notes -->
+    <string name="chat_voice_record">Hold to record a voice message</string>
+    <string name="chat_voice_record_start">Record a voice message</string>
+    <string name="chat_voice_record_stop">Stop recording</string>
+    <string name="chat_voice_recording">Recording</string>
+    <string name="chat_voice_slide_to_cancel">Slide to cancel</string>
+    <string name="chat_voice_cancel">Cancel recording</string>
+    <string name="chat_voice_record_failed">Couldn\'t record that voice message</string>
+    <string name="chat_voice_too_short">Hold the button to record</string>
+    <string name="chat_voice_mic_denied">Knit needs microphone access to record a voice message.</string>
+    <string name="chat_voice_play">Play voice message</string>
+    <string name="chat_voice_pause">Pause voice message</string>
+    <string name="chat_voice_loading">Voice message appears once a device that has it is reachable</string>
+    <string name="chat_voice_desc">Voice message, %1$s</string>
+    <string name="chat_voice_remove">Remove voice message</string>
     <string name="chat_self_name">You</string>
     <string name="chat_status_sent">Sent</string>
     <string name="chat_status_delivered">Delivered</string>
@@ -113,6 +129,7 @@
     <string name="chat_action_copy">Copy text</string>
     <string name="chat_action_reply">Reply</string>
     <string name="chat_reply_photo">📷 Photo</string>
+    <string name="chat_reply_voice">🎤 Voice message</string>
     <string name="chat_reply_cancel">Cancel reply</string>
     <string name="chat_message_copied">Copied to clipboard</string>
     <string name="chat_action_details">Message info</string>
@@ -217,6 +234,7 @@
     <string name="nearby_title">Nearby</string>
     <string name="chat_list_empty_preview">No messages yet</string>
     <string name="chat_list_preview_photo">📷 Photo</string>
+    <string name="chat_list_preview_voice">🎤 Voice message</string>
     <string name="chat_list_preview_with_sender">%1$s: %2$s</string>
     <plurals name="chat_list_unread_count">
         <item quantity="one">%d unread message</item>
@@ -451,11 +469,11 @@
     <string name="chat_relay_pending_title">Not covered yet</string>
     <string name="chat_relay_pending_body">This conversation does not have a relay channel yet. It usually appears on its own once both sides have exchanged encryption keys. Until then, messages travel by Wi-Fi and Bluetooth.</string>
     <string name="chat_relay_nearby_only">Nearby only</string>
-    <string name="chat_relay_nearby_only_desc">Photo will not be sent over the Internet</string>
+    <string name="chat_relay_nearby_only_desc">Attachment will not be sent over the Internet</string>
     <string name="chat_relay_too_large_title">Too large for your relays</string>
-    <string name="chat_relay_too_large_body">This photo is bigger than any of your relays will hold, so it is not being uploaded. It still arrives when you and %1$s are in Wi-Fi or Bluetooth range of each other.</string>
+    <string name="chat_relay_too_large_body">This attachment is bigger than any of your relays will hold, so it is not being uploaded. It still arrives when you and %1$s are in Wi-Fi or Bluetooth range of each other.</string>
     <string name="chat_relay_unsupported_title">Your relays carry messages only</string>
-    <string name="chat_relay_unsupported_body">None of your relays accepts photos, so this one is not being uploaded. It still arrives when you and %1$s are in Wi-Fi or Bluetooth range of each other.</string>
+    <string name="chat_relay_unsupported_body">None of your relays accepts attachments, so this one is not being uploaded. It still arrives when you and %1$s are in Wi-Fi or Bluetooth range of each other.</string>
     <string name="chat_relay_staged_too_large">Nearby only — too large for your relays</string>
     <string name="chat_relay_staged_unsupported">Nearby only — your relays carry messages only</string>
 
@@ -463,6 +481,7 @@
     <string name="message_details_title">Message info</string>
     <string name="message_details_sent_by">Sent by %1$s</string>
     <string name="message_details_attachment">📷 Photo</string>
+    <string name="message_details_voice">🎤 Voice message</string>
     <string name="message_details_hidden_body">Message hidden by content filtering</string>
     <string name="message_details_no_reactions">No one has reacted to this message yet</string>
     <string name="message_details_filter_all">All %1$d</string>

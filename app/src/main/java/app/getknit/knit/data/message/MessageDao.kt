@@ -113,6 +113,30 @@ interface MessageDao {
     )
     suspend fun attachmentKeyForHash(hash: String): String?
 
+    /**
+     * The MIME of any stored message referencing the ciphertext [hash] — how the inbound derivation decides
+     * whether a just-pulled blob is a voice note without decrypting it first. Null when no message row names
+     * the hash (a relayed blob, or an avatar, which writes no message row at all).
+     */
+    @Query(
+        "SELECT attachmentMime FROM messages " +
+            "WHERE attachmentHash = :hash AND attachmentMime IS NOT NULL LIMIT 1",
+    )
+    suspend fun attachmentMimeForHash(hash: String): String?
+
+    /**
+     * Records the locally-derived voice-note description for every message naming the ciphertext [hash].
+     * Keyed by hash rather than message id because the same voice note can be quoted into more than one row
+     * (a re-send, or a forward), and each of those bubbles needs the same waveform — deriving once and
+     * writing across them all is why this is content-addressed like the blob itself.
+     */
+    @Query("UPDATE messages SET voiceDurationMs = :durationMs, voicePeaks = :peaks WHERE attachmentHash = :hash")
+    suspend fun setVoiceMeta(
+        hash: String,
+        durationMs: Int?,
+        peaks: String?,
+    )
+
     /** Attachment hashes referenced by stored messages whose bytes aren't in the `blobs` table yet. */
     @Query(
         "SELECT DISTINCT attachmentHash FROM messages " +

@@ -70,8 +70,10 @@ class MeshBlobStore(
             }
             blobs.insert(hash, mime, bytes)
             // Screen the received image on-device and cache the verdict by hash (the UI blurs flagged
-            // attachments). Stored regardless, so a false positive never drops content.
-            imageScreening.screenImage(hash, bytes)
+            // attachments). Stored regardless, so a false positive never drops content. Skipped for audio:
+            // no on-device model can classify speech, and handing the NSFW image decoder a voice note only
+            // buys a failed decode and a meaningless cached verdict (docs/CONTENT_MODERATION.md).
+            if (!VoiceAudio.isVoice(mime)) imageScreening.screenImage(hash, bytes)
             src.delete() // drop the plaintext staging copy now that the bytes are encrypted
             fileFor(hash)
         }
@@ -83,11 +85,15 @@ class MeshBlobStore(
 
     private fun ensureDir(): File = transferDir.apply { if (!exists()) mkdirs() }
 
+    // Only names the short-lived transfer temp file, so it is cosmetic — but FramedLink keeps an identical
+    // copy for the receive side, and the two must be extended together or a blob round-trips under two
+    // different names.
     private fun extForMime(mime: String): String =
         when (mime.lowercase()) {
             "image/gif" -> "gif"
             "image/png" -> "png"
             "image/webp" -> "webp"
+            "audio/aac" -> "aac"
             else -> "jpg"
         }
 

@@ -165,13 +165,27 @@ private fun MessageSummary(state: MessageDetailsUiState) {
             text =
                 when {
                     // Match the bubble: a message the content filter collapsed there isn't re-revealed here.
-                    state.moderationFlagged -> stringResource(R.string.message_details_hidden_body)
+                    state.moderationFlagged -> {
+                        stringResource(R.string.message_details_hidden_body)
+                    }
 
-                    state.body.isNotBlank() -> state.body
+                    state.body.isNotBlank() -> {
+                        state.body
+                    }
 
-                    state.hasAttachment -> stringResource(R.string.message_details_attachment)
+                    state.hasAttachment -> {
+                        stringResource(
+                            if (state.isVoiceNote) {
+                                R.string.message_details_voice
+                            } else {
+                                R.string.message_details_attachment
+                            },
+                        )
+                    }
 
-                    else -> ""
+                    else -> {
+                        ""
+                    }
                 },
             style = MaterialTheme.typography.bodyLarge,
             maxLines = MAX_BODY_LINES,

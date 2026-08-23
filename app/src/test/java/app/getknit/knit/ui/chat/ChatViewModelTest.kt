@@ -26,6 +26,7 @@ import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
 import app.getknit.knit.ui.reaction
+import app.getknit.knit.ui.voice.VoicePlayer
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -67,6 +68,7 @@ class ChatViewModelTest {
     private val blobs = mockk<BlobRepository>(relaxed = true)
     private val imageScreening = mockk<ImageScreeningService>(relaxed = true)
     private val gallerySaver = mockk<GallerySaver>(relaxed = true)
+    private val voicePlayer = mockk<VoicePlayer>(relaxed = true)
 
     private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
     private val reactionsFlow = MutableStateFlow(emptyList<ReactionEntity>())
@@ -120,6 +122,7 @@ class ChatViewModelTest {
             blobs,
             imageScreening,
             gallerySaver,
+            voicePlayer,
             // A finite flow, not the production poller: RelayStatusRepository emits on an infinite
             // `while(true) { emit; delay }`, and under runTest's virtual clock that delay is instant, so
             // `advanceUntilIdle()` below would never reach idle.

@@ -71,6 +71,16 @@ class MessageRepository(
     /** Base64 per-attachment key for an encrypted attachment by its ciphertext [hash], if stored. */
     suspend fun attachmentKeyForHash(hash: String): String? = dao.attachmentKeyForHash(hash)
 
+    /** MIME a stored message gives attachment [hash] — how a landed blob is recognised as a voice note. */
+    suspend fun attachmentMimeForHash(hash: String): String? = dao.attachmentMimeForHash(hash)
+
+    /** Records the locally-derived voice-note duration/waveform on every row naming attachment [hash]. */
+    suspend fun setVoiceMeta(
+        hash: String,
+        durationMs: Int?,
+        peaks: String?,
+    ) = dao.setVoiceMeta(hash, durationMs, peaks)
+
     suspend fun hashesNeedingFetch(): List<String> = dao.hashesNeedingFetch()
 
     /** Whether [me] authored a message naming attachment [hash] and it has been acked (spec §9.5's defer gate). */

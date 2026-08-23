@@ -55,7 +55,12 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     //     migrated by KnitMigrations.MIGRATION_2_3.
     // v4: one `messages.receivedVia` column — the DeliveryPlane code of the receipt that flipped the tick, so
     //     the ✓✓ can say the message got there over the Internet; migrated by KnitMigrations.MIGRATION_3_4.
-    version = 4,
+    // v5: two `messages` columns describing a voice-note attachment — `voiceDurationMs` and the Base64
+    //     `voicePeaks` waveform. Purely local presentation state derived from the audio by VoiceAudio on both
+    //     the sending and receiving side, so voice notes need no wire field at all; null on every existing
+    //     row, which is honest (a pre-upgrade voice note simply re-derives them when next played);
+    //     migrated by KnitMigrations.MIGRATION_4_5.
+    version = 5,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without

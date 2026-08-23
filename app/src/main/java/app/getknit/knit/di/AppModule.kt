@@ -37,6 +37,7 @@ import app.getknit.knit.review.ReviewPrompter
 import app.getknit.knit.ui.RouteInbox
 import app.getknit.knit.ui.review.ReviewPromptInbox
 import app.getknit.knit.ui.share.ShareInbox
+import app.getknit.knit.ui.voice.VoicePlayer
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -57,6 +58,9 @@ val appModule =
         single { AvatarStore(androidContext(), get()) }
         single { AttachmentStore(androidContext(), get(), get()) }
         single { GallerySaver(androidContext()) }
+        // One voice player for the whole app: any number of voice-note bubbles can be on screen, and
+        // starting one note has to stop whichever was playing. Owns its own scope (see VoicePlayer).
+        single { VoicePlayer(androidContext(), get()) }
         single<Notifier> { MessageNotifier(androidContext()) }
         // Single-shot handoff for content arriving via the system share sheet (ACTION_SEND).
         single { ShareInbox() }

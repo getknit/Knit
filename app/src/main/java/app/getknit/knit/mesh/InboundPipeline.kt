@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
@@ -154,14 +155,16 @@ class InboundPipeline(
 
     /**
      * A pulled blob just landed (the [BlobExchange] `onObtained` hook): attribute it to whoever advertised
-     * it — a peer's avatar, a group's photo — and, for an E2E attachment we now hold the key for, screen its
-     * decrypted bytes. The three are order-independent and each is a no-op when the hash isn't theirs. This
-     * is the wrapper [MeshManager] wires as `blobExchange`'s onObtained callback.
+     * it — a peer's avatar, a group's photo — screen its decrypted bytes if it's an E2E attachment we now
+     * hold the key for, and describe it if it's a voice note. The four are order-independent and each is a
+     * no-op when the hash isn't theirs. This is the wrapper [MeshManager] wires as `blobExchange`'s
+     * onObtained callback.
      */
     suspend fun onObtained(hash: String) {
         adoptAdvertisedAvatar(hash)
         adoptAdvertisedGroupPhoto(hash)
         screenObtainedAttachment(hash)
+        deriveObtainedVoiceMeta(hash)
     }
 
     suspend fun onDeliver(
@@ -1818,8 +1821,8 @@ class InboundPipeline(
         val me = identity.nodeId()
         val peer = peers.find(env.senderId)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
-        // Image-only messages have a blank body; show a placeholder so they still notify.
-        val body = content.body.ifBlank { if (content.attachmentHash != null) "📷 Photo" else content.body }
+        // Attachment-only messages have a blank body; show a placeholder so they still notify.
+        val body = content.body.ifBlank { attachmentPreview(content) }
         val incoming =
             incomingNotification(
                 senderId = env.senderId,
@@ -1835,6 +1838,19 @@ class InboundPipeline(
         notifier.notify(incoming, conversation, me, settings.displayName.first(), selfAvatar)
     }
 
+    /**
+     * Notification stand-in for a message whose only content is an attachment, so it still says something
+     * useful on the lock screen. Literal strings rather than resources because this layer holds no
+     * `Context` (it is deliberately Android-light, `rules/mesh.md`); they mirror `chat_list_preview_photo`
+     * and `chat_list_preview_voice` and should be changed together with them.
+     */
+    private fun attachmentPreview(content: ChatContent): String =
+        when {
+            content.attachmentHash == null -> content.body
+            VoiceAudio.isVoice(content.attachmentMime) -> "🎤 Voice message"
+            else -> "📷 Photo"
+        }
+
     /** Fires a "you were mentioned" notification on the Mentions channel for an inbound chat in [conversationId]. */
     private suspend fun notifyMention(
         env: RelayEnvelope,
@@ -1844,7 +1860,7 @@ class InboundPipeline(
         val me = identity.nodeId()
         val peer = peers.find(env.senderId)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
-        val body = content.body.ifBlank { if (content.attachmentHash != null) "📷 Photo" else content.body }
+        val body = content.body.ifBlank { attachmentPreview(content) }
         val incoming =
             mentionNotification(
                 senderId = env.senderId,
@@ -2195,6 +2211,30 @@ class InboundPipeline(
         val cipher = blobs.bytes(hash) ?: return
         val plain = AttachmentCrypto.open(cipher, b64d(key)) ?: return
         imageScreening.screenImage(hash, plain)
+    }
+
+    /**
+     * A blob just landed: if a stored message names it as a **voice note**, derive its playing time and
+     * waveform from the audio and record them on every row that references it. This is the receiving half of
+     * a deliberate symmetry — the sender derives the same two values from the same bytes at ingest, using the
+     * same [VoiceAudio] implementation, so the two ends agree by construction and neither value ever has to
+     * ride the wire (see `docs/WIRE_COMPAT.md`).
+     *
+     * Decrypts exactly as [screenEncryptedAttachment] does when the attachment is E2E; a plaintext blob is
+     * described as-is. A no-op for anything that isn't audio, and for a blob no message row claims (a relayed
+     * attachment, or an avatar). Never throws — a waveform we couldn't compute is a flat bubble, not a
+     * dropped delivery, and `rules/mesh.md` requires inbound handlers to stay silent on failure.
+     */
+    private suspend fun deriveObtainedVoiceMeta(hash: String) {
+        runCatching {
+            if (!VoiceAudio.isVoice(messages.attachmentMimeForHash(hash))) return
+            val stored = blobs.bytes(hash) ?: return
+            val key = messages.attachmentKeyForHash(hash)
+            val audio = if (key == null) stored else AttachmentCrypto.open(stored, b64d(key)) ?: return
+            val described = VoiceAudio.describe(audio)
+            if (described.isEmpty) return
+            messages.setVoiceMeta(hash, described.durationMs, described.peaks)
+        }.onFailure { Log.w(TAG, "voice metadata derivation failed: ${it.javaClass.simpleName}") }
     }
 
     private companion object {

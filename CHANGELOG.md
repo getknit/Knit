@@ -20,11 +20,18 @@ document:
 
 ## Unreleased
 
-> Forward secrecy for direct messages and group chats, encrypted delivery receipts and reactions, and
-> optional Internet relays for when nobody is in radio range.
+> Voice notes, forward secrecy for direct messages and group chats, encrypted delivery receipts and
+> reactions, and optional Internet relays for when nobody is in radio range.
 
 ### Added
 
+- Voice notes. Hold the microphone in a chat to record, slide up to keep recording hands-free, and slide
+  away to cancel. You hear the recording back before deciding to send it, and can add text to it like any
+  other attachment. Voice notes travel exactly the way photos do — encrypted end to end, carried by nearby
+  phones when you are out of range of each other, and by your Internet relays if you have turned them on.
+  They are available in direct messages and group chats. They are not offered in the Nearby room, because
+  Knit checks images for explicit content before they reach you and there is no equivalent check it can run
+  on speech, so it does not put unchecked audio in front of strangers.
 - Group delivered-ticks (the ✓✓ on your own group messages) now survive you being away: members'
   receipts are batched, encrypted, and carried by the mesh — and the Internet relays, where enabled —
   until they reach you, just like the messages themselves.

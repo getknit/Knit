@@ -110,6 +110,12 @@ blob and custody it (store-and-forward for images). No `SERVICE_NAME` bump; the 
 *Metadata cost:* a carrier learns a message carries an image (~size); a fresh per-send attachment key
 means the ciphertext hash never correlates identical images across sends.
 
+> **Partially reverted by ADR 035 (see the un-populating precedent below).** The *hash* half stands and
+> always will — it is what makes custody of attachments possible. The *mime* half was withdrawn: custody
+> addresses bytes by hash and never needed the type, so the cleartext mime bought nothing and told a
+> carrier whether the message was a photo or a voice note. A sealed frame now sets `attachmentHash`
+> alone.
+
 **Precedent — a coordinated break (DB v21): the 128-bit nodeId.** The nodeId was widened from an 8-char
 `[a-z0-9]` (~41-bit) hash to **128 bits** of SHA-256, RFC4648-base32-encoded to a 26-char `[a-z2-7]`
 string (`NodeId.kt`, salt bumped to `knit-node-id-v2:`). Since the `NodeId` derivation is a breaking
@@ -211,7 +217,8 @@ spool plane's second feature milestone shipped image bytes across the Internet a
 default expectation is the opposite: every earlier plane milestone bought its capability with a wire
 change. What made it unnecessary is the DB v19 precedent above — `ChatContent.attachmentHash` /
 `attachmentMime` already ride in cleartext on E2E frames so a blind carrier can custody the image, and
-that is exactly the reference an Internet fetcher needs too. The attachment's *size* never had to join
+that is exactly the reference an Internet fetcher needs too. (Since ADR 035 the mime half is gone and the
+fetcher resolves the type from its own decrypted row; the *hash* is still the whole reference it needs.) The attachment's *size* never had to join
 them, because the spool reports its chunk count. Everything new lives in the client↔spool record layer
 (`docs/SPOOL_PROTOCOL.md` §7.3), which has its own additive rules and its own vectors, so `GoldenVectorTest`
 is untouched and only `ScopeVectorTest`/`SpoolRecordsTest` gained rows — regenerated together, and
@@ -273,7 +280,8 @@ applies `ack` plus `acks` per id under the forged-ack guard, `distinct`, bounded
 attachments milestone above, this is the second time the expected wire change turned out to be unnecessary,
 and for the same underlying reason — so it is worth stating as a rule rather than a coincidence. A voice
 note is an ordinary attachment carrying an audio MIME: `ChatContent.attachmentMime` /
-`MessageContent.attachmentMime` already exist and already ride, and *populating an existing field in a new
+`MessageContent.attachmentMime` already exist and already ride (the cleartext half only until ADR 035
+withdrew it — see the un-populating precedent below), and *populating an existing field in a new
 case is additive, not a rule-2 repurpose* (the DB v19 precedent, applied a fourth time — the field's
 meaning, "the content address and type to pull for this message", is unchanged). No field, no `type`, no
 ctl value, no capability bit, no `EncEnvelope.v`, no `MessageContent.v`. `GoldenVectorTest`,
@@ -287,9 +295,47 @@ value is a pure function of bytes both ends already hold, deriving beats carryin
 by construction instead of one trusting a number the other sent, and nothing new leaks to a blind carrier.
 The same reasoning kept a quoted voice note's label out of `ReplyRef`: it rides the existing free-text
 `snippet` instead, at the honest cost of appearing in the sender's locale. *Metadata cost:* unchanged in
-kind, new in content — an `audio/aac` MIME tells a carrier and a spool that a message is a voice note, and
-its size implies rough duration. The DB bumps (v4 → v5) are local only, with a tested `KnitMigrations`
+kind, new in content — an `audio/aac` MIME tells a carrier that a message is a voice note, and
+its size implies rough duration. (ADR 035 has since withdrawn the MIME half of that, and corrected the
+"and a spool" claim — a spool never saw the field. The size half stands.) The DB bumps (v4 → v5) are local only, with a tested `KnitMigrations`
 entry.
+
+**Precedent — the first *un*-populating change (the attachment MIME leaves the frame, ADR 035).** Every
+precedent above adds a field, a type, a ctl value, or starts filling an existing field in a new case. This
+is the first that *stops* filling one: `MeshManager` no longer sets `ChatContent.attachmentMime` on a
+sealed frame (`sendChat`, the `CTL_PROFILE` avatar hint, and the `resealAndFlood` retransmit), so a
+DM/group frame names the ciphertext hash and nothing else. **The rule this precedent adds: un-populating a
+nullable field is additive on exactly the same terms as populating it — the DB v19 precedent run backwards
+— provided every deployed reader already tolerates its absence.**
+
+That proviso is the whole of the argument, and here it is discharged rather than assumed. The field keeps
+its name, type and meaning, so rule 2 holds and nothing mis-decodes; `encodeDefaults = false` simply omits
+the key, so the frame gets *smaller*. On the receive side the sealed copy always won already —
+`InboundPipeline.plaintextContent` substitutes `MessageContent.attachmentMime` over the cleartext shell
+before the row is written — so an old build types its row, its bubble, its chat-list preview and its
+notification stand-in exactly as before. Custody denormalizes `attachmentHash` only; the content digest
+folds ids, not payloads; `onCarriedFrame`'s eager blob pull reads the hash. The one non-recipient reader,
+`ScopeAttachments.refFor`, already yields a null mime for a `groupupdate` group photo and `ScopeSync`
+already reads `ref.mime ?: FALLBACK_MIME` — so the sealed `chat` shape converges on a path that has been
+live and tested since M5, and adds no branch anywhere.
+
+Deliberately **not** spent: a generic constant in place of the mime. That would change the field's meaning
+from "the type of the referenced blob" to "a placeholder", which *is* a rule-2 repurpose and would need a
+new field — besides costing bytes on every attachment frame to say nothing. The `CTL_PROFILE` avatar hint
+was nulled with the rest even though `AVATAR_MIME` is a constant that leaked nothing, because leaving it
+as the only sealed frame still carrying a mime would have made mime-*presence* a new distinguisher between
+a profile update and a user message.
+
+No `EncEnvelope.v`, no `MessageContent.v`, no ctl value, no capability bit, no discovery marker, no DB
+change. `GoldenVectorTest` does not move — its `chatContent` fixture is a *plaintext-room* shape (`body`
+filled directly), and the room still fills the mime by design — and `ScopeVectorTest`/`SpoolRecordsTest`
+carry no mime at all, so `knit-spool` needs no regeneration either. *Metadata cost:* strictly reduced on
+the mesh, and **unchanged at a spool**, which never saw the field: `ScopeFrames.seal` seals the whole
+`signed` blob, so the Internet plane's leak stays the §10 chunk-count/timing signal. What remains on the
+radio is the size (an ~8 s voice note is a distinctive byte range), the fact that the frame carries an
+attachment at all, the `FileHeaderWire.mime` on the blob transfer itself (out of scope, ADR 035), and — new
+and unavoidable in a staged rollout — the fingerprint that `attachmentHash` without `attachmentMime` is a
+patched build.
 
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in

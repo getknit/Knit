@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-13T02:38:41Z
+  updated: 2026-08-23T00:00:00Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -73,6 +73,10 @@ document:
 
 ### Changed
 
+- Nearby phones relaying your messages no longer learn what kind of attachment one carries. A photo and a
+  voice note used to be told apart by a label sent alongside them in the clear; that label now travels
+  encrypted with the message, where only the person you sent it to can read it. Relays still see roughly
+  how large an attachment is, which they need in order to carry it for you.
 - Chats with a phone on an older version keep working, on the previous encryption scheme. A group
   falls back the same way while any one member has not updated, and moves over on its own once
   everyone has.

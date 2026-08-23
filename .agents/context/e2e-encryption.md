@@ -52,7 +52,12 @@ with the ratchet prekeys), advertised via `ProfileContent.pubKey`, pinned self-c
 `PeerEntity.pubKey` (immutable per nodeId), and confirmed out of band via the safety-number/QR screen
 (`PeerEntity.verified`) — identity keys are unchanged by the ratchet, so safety numbers are stable.
 Image attachments are encrypted to a per-attachment key and content-addressed by ciphertext hash, so
-`BlobExchange`/`BlobStore` are unchanged. **Decrypt/verify failures must never throw out of the
+`BlobExchange`/`BlobStore` are unchanged. Since ADR 035 the attachment's **type** stays inside the seal
+too: a sealed frame sets `ChatContent.attachmentHash` and nothing else, so a relay or carrier no longer
+learns whether it is carrying a photo or a voice note (size still implies plenty). `MessageContent`
+carries the real mime, `InboundPipeline.plaintextContent` substitutes it on delivery, and the spool
+fetcher resolves it from its own row (`MeshManager.scopeBlobs`) rather than the frame. The residual is
+the blob transfer itself — `LinkFraming.FileHeaderWire` still names a mime to whoever pulls the bytes. **Decrypt/verify failures must never throw out of the
 inbound handler** — `onDeliver` runs before the router schedules the relay, so a throw would stop
 forwarding; the v2 path's typed failures (`RATCHET_*` drop reasons) are delivery-local for the same
 reason, and `canCarry` never inspects the scheme version.

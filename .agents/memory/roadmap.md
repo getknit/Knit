@@ -77,8 +77,9 @@ doc). **Don't start a deferred item without explicit direction.**
   `ScopeCrypto` chunk seal + keyed `aid`, `mesh/spool/ScopeAttachments`, five records, and the
   attachment pass in `ScopeSync`; `knit-spool` gained both stores, the server handlers and four
   conformance checks. **No mesh wire change, no capability bit, no DB migration** — the cleartext
-  `ChatContent.attachmentHash`/`attachmentMime` of the DB v19 precedent is the whole reference a
-  fetcher needs. ADR 019's M5 amendment records the five shape decisions). Still owed on the
+  `ChatContent.attachmentHash` of the DB v19 precedent is the whole reference a
+  fetcher needs — the mime rode alongside it until ADR 035 withdrew it, and the fetcher now resolves the
+  type from its own decrypted row. ADR 019's M5 amendment records the five shape decisions). Still owed on the
   attachment half: **persisted partial downloads** (they are in memory today, so a process death
   mid-transfer refetches — the upload half already resumes off the spool's bitmap), and the same
   two-island device trial the group half is waiting on.
@@ -101,6 +102,16 @@ doc). **Don't start a deferred item without explicit direction.**
   precedent), and group photos needed no wire change since `groupupdate` was already scope-carried. The
   cleartext `profile` frame keeps first contact permanently — it is self-certifying and cannot be
   encrypted — so ADR 018's "last cleartext flooded metadata" goal is advanced, not finished.
+
+- **The image-screening skip trusts a peer-supplied MIME (found 2026-08-23, unfixed).**
+  `MeshBlobStore.saveIncoming` skips `imageScreening.screenImage` when `VoiceAudio.isVoice(mime)`, and that
+  `mime` comes from the sender's `LinkFraming.FileHeaderWire`. A hostile neighbour serving a **plaintext**
+  blob — a pulled avatar, a group photo, a Nearby-room attachment — can declare `audio/aac`, so no verdict
+  is ever cached, `imageScreening.isImageFlagged(hash)` reads false, and `adoptAdvertisedAvatar` /
+  `adoptAdvertisedGroupPhoto` (`InboundPipeline`, both gated on exactly that call) adopt it. The fix is the
+  same one the file-header item above needs: gate on the **local** row's mime, not the wire's. Note the two
+  stale comments that assert the current guarantee ("A pulled avatar was screened in
+  `MeshBlobStore.saveIncoming`") and `docs/CONTENT_MODERATION.md` §7, which states it as a property.
 
 - **Audio moderation** — voice notes (ADR 034) ship **unscreened**: no on-device model classifies speech
   and the app has no cloud option, so `MODERATION_NONE` is the honest verdict and both screening hooks skip
@@ -137,7 +148,21 @@ doc). **Don't start a deferred item without explicit direction.**
   original gap — a member whose key arrives later never gets a re-seal — persists only for groups
   still pinned at v1 by a pre-ratchet member, and shrinks as capability floods.
 - **E2E hardening (what remains)** — encrypting the broadcast room (its fate is a deliberate
-  separate decision — an Internet-wide plaintext room is a different product question). Receipts and
+  separate decision — an Internet-wide plaintext room is a different product question), and the
+  **attachment MIME on the blob transfer**. The flooded-frame half shipped 2026-08-23 (ADR 035: a sealed
+  frame names the ciphertext hash and nothing else, so a relay or carrier no longer learns photo-vs-voice
+  from the frame). The residual is `LinkFraming.FileHeaderWire.mime`: `BlobExchange.onRequest` serves a
+  blob to **any** neighbour that asks, so a carrier that actually pulls the bytes still learns the type.
+  **Before building it:** `mime` is a required non-null `String` under `encodeDefaults = true` and
+  `decodeFileHeader` returning null sets `rxAborted = true`, so *omitting* it hard-breaks blob transfer
+  against deployed builds — substitute a constant instead (`image/jpeg` is already the universal fallback
+  at `ScopeSync.FALLBACK_MIME`, `MeshBlobStore.fileFor` and `AVATAR_MIME`, so old builds degrade by
+  nothing). Do **not** gate it on a capability bit: `Protocol.capabilities` is unauthenticated advert data,
+  so gating a privacy control on the carrier's own claim hands the adversary the off switch. It also has a
+  knock-on — `MeshBlobStore.saveIncoming`'s `!VoiceAudio.isVoice(mime)` screening skip reads that same
+  peer-supplied header, so it wants fixing in the same pass by sourcing the mime from the local row
+  (`messages.attachmentMimeForHash`) instead. That skip is **already spoofable today**, independent of any
+  of this: see the audio-moderation bullet. Receipts and
   reactions shipped sealed 2026-08-15 as v2 ctl frames (ADR 018,
   docs/ENCRYPTED_RECEIPTS_REACTIONS.md — DM vaccine-purge retired for the sealed era; the residual is
   the cleartext fallback toward pre-ratchet peers, counted by `receiptsSealedFallback`/

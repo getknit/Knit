@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
@@ -613,6 +614,48 @@ class InboundPipelineTest {
             assertEquals("the receipt must be stamped with the wall clock", 42L, ack.single().sentAt)
             // A DM for us is delivered, not custodied.
             assertFalse(rig.forwardStore.has("dm1"))
+        }
+
+    @Test
+    fun aSealedAttachmentsTypeIsReadFromInsideTheSealNotTheCleartextFrame() =
+        runTest {
+            // The receiving half of ADR 035. The frame names the ciphertext hash and NOTHING else about the
+            // attachment; the type lives in the sealed MessageContent, and plaintextContent is what carries
+            // it out to the row. Get this wrong and every inbound voice note renders as a broken photo —
+            // the bubble forks on the row's mime (VoiceAudio.isVoice), not on the bytes.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val id = "dm-voice"
+            val header = MessageCrypto.header(id, alice.nodeId, 5L, rig.self.nodeId)
+            val sealed =
+                MessageContent(
+                    body = "",
+                    attachmentHash = "ct-hash",
+                    attachmentMime = VoiceAudio.MIME,
+                    attachmentKey = "a2V5",
+                )
+            val enc = alice.crypto.seal(sealed.encode(), header, mapOf(rig.self.nodeId to rig.self.bundle))!!
+            val env =
+                RelayEnvelope(
+                    type = FrameType.CHAT,
+                    id = id,
+                    senderId = alice.nodeId,
+                    sentAt = 5L,
+                    recipientId = rig.self.nodeId,
+                    // The cleartext hint a carrier sees: the hash alone, no mime.
+                    payload = WireCodec.encodePayload(ChatContent(enc = enc, attachmentHash = "ct-hash")),
+                )
+
+            rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
+
+            val row = rig.msgMap.getValue(id)
+            assertEquals("the row is addressed by the cleartext hash", "ct-hash", row.attachmentHash)
+            assertEquals("and typed from inside the seal, the only place the mime rides", VoiceAudio.MIME, row.attachmentMime)
+            assertNull(
+                "nothing on the frame said so — a carrier relaying this never learned it was audio",
+                WireCodec.decodePayload<ChatContent>(env.payload)!!.attachmentMime,
+            )
         }
 
     @Test

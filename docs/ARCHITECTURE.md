@@ -322,6 +322,7 @@ class RelayEnvelope(type: String, id, senderId, sentAt, recipientId?, group?, @B
 
 // L3 — per-type content inside `payload` (only endpoints parse it):
 data class ChatContent(body="", mentions, attachmentHash?, attachmentMime?, enc?)     // enc = EncEnvelope for a DM/group
+                                                                                     // (a sealed frame sets attachmentHash only — ADR 035)
 data class ProfileContent(name, status, avatarHash?, pubKey?, deviceTag?, protoVersion?, capabilities?)
 data class ReactionContent(messageId, emoji?)  ·  ReceiptContent(ackId)  ·  GroupLeaveContent(groupId)
 data class BlobReqContent(hash)  ·  KeyReqContent(nodeIds)               // a groupupdate carries its GroupInfo in `group`
@@ -349,8 +350,10 @@ class WrappedKey(to, @ByteString wk)                               // content ke
   recipient) and `RelayEnvelope.group` (non-null = a group message; carries the self-describing `GroupInfo`
   roster) stay **cleartext** so relays and store-and-forward carriers can route/reconcile. For DMs and
   groups the body, mentions, and attachment refs are encrypted into `ChatContent.enc` (the `EncEnvelope`);
-  the cleartext `body`/`mentions` are blank, while `attachmentHash`/`attachmentMime` carry the *ciphertext*
-  hash so a blind carrier can still custody the image (§7, §14). `ProfileContent.pubKey` carries the
+  the cleartext `body`/`mentions` are blank, while `attachmentHash` carries the *ciphertext*
+  hash so a blind carrier can still custody the image (§7, §14). `attachmentMime` stays null on a sealed
+  frame (ADR 035) — custody addresses bytes by hash, so the type rides only inside the seal and a carrier
+  never learns a photo from a voice note. `ProfileContent.pubKey` carries the
   sender's public-key bundle. See §14.
 - Avatars and attachments travel as **file payloads** (`incomingFiles`), not inside frames (too large for
   the flood); `ProfileContent.avatarHash` / `ChatContent.attachmentHash` let a peer detect changes and pull
@@ -711,7 +714,10 @@ message is dropped while relaying continues (`MeshManager.decryptAndDeliver`).
 **Attachments.** Image bytes are encrypted to a per-attachment key and **content-addressed by their
 ciphertext hash**, so the content-addressed pull/dedup (`BlobExchange`/`BlobStore`, §7) is unchanged —
 relays serve opaque ciphertext. The key rides inside the encrypted `MessageContent` and is persisted
-in `MessageEntity.attachmentKey` so the UI's Coil `BlobFetcher` can decrypt on display.
+in `MessageEntity.attachmentKey` so the UI's Coil `BlobFetcher` can decrypt on display. So does the
+**MIME type** since ADR 035 — the cleartext frame names the hash alone, and `MessageEntity.attachmentMime`
+is written from the decrypted content. The residual is the blob transfer itself: `FileHeaderWire` still
+names a mime to whichever neighbour pulls the bytes.
 
 **Trust & verification.** Peer keys are pinned **trust-on-first-use** into `PeerEntity.pubKey`; if a
 peer's advertised key later changes, it's adopted (so comms continue) but `PeerEntity.verified` is

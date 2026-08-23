@@ -90,6 +90,7 @@ import java.io.File
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@Suppress("LargeClass") // cohesive single-SUT suite over one shared Rig; splitting would scatter it, as InboundPipelineTest
 class MeshManagerTest {
     /** A device identity: its cipher (private keys) + its published bundle; nodeId derives from the bundle. */
     private class Party(
@@ -469,14 +470,18 @@ class MeshManagerTest {
             val ctHash = content.attachmentHash!!
 
             assertNotEquals("the frame is re-addressed by the ciphertext hash, not the plaintext one", plainHash, ctHash)
-            assertEquals("the mime is exposed in the clear so a blind carrier can custody the blob", "image/jpeg", content.attachmentMime)
+            assertNull(
+                "the mime does NOT ride in the clear (ADR 035) — custody addresses bytes by hash and never needed the type",
+                content.attachmentMime,
+            )
             coVerify { rig.blobs.insert(ctHash, "image/jpeg", any()) } // ciphertext stored under its hash
             coVerify { rig.blobs.deleteIfUnreferenced(plainHash) } // now-unreferenced plaintext dropped
 
-            // The decryption key is sealed inside the encrypted content (never in the cleartext frame).
+            // The decryption key AND the mime are sealed inside the encrypted content (never in the cleartext frame).
             val header = MessageCrypto.header(frame.id, rig.me.nodeId, frame.sentAt, rig.bob.nodeId)
             val opened = rig.bob.crypto.open(content.enc!!, header, rig.bob.nodeId)!!
             assertEquals("the sealed content references the same ciphertext blob", ctHash, opened.attachmentHash)
+            assertEquals("and is the only carrier of the type", "image/jpeg", opened.attachmentMime)
             assertNotNull("and carries the AES key the recipient needs", opened.attachmentKey)
         }
 
@@ -508,16 +513,24 @@ class MeshManagerTest {
 
             assertTrue(ok)
             val row = rig.saved.single()
-            val content = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!
+            val frame = rig.sentChatFrames().single()
+            val content = WireCodec.decodePayload<ChatContent>(frame.payload)!!
 
             assertEquals("the row is addressed by the ciphertext hash", content.attachmentHash, row.attachmentHash)
             assertNotEquals("which is not the hash the description was derived under", plainHash, row.attachmentHash)
             assertEquals("and the description landed on that row anyway", 9_300, row.voiceDurationMs)
             assertEquals("AAECAw==", row.voicePeaks)
-            assertEquals(
-                "the mime rides in the clear, which is the whole wire cost of a voice note",
-                VoiceAudio.MIME,
+            assertNull(
+                "no audio/aac in the clear: since ADR 035 the wire cost of a voice note is its size alone",
                 content.attachmentMime,
+            )
+            val header = MessageCrypto.header(frame.id, rig.me.nodeId, frame.sentAt, rig.bob.nodeId)
+            assertEquals(
+                "the type is sealed, where only the recipient reads it",
+                VoiceAudio.MIME,
+                rig.bob.crypto
+                    .open(content.enc!!, header, rig.bob.nodeId)
+                    ?.attachmentMime,
             )
         }
 
@@ -539,6 +552,49 @@ class MeshManagerTest {
             val row = rig.saved.single()
             assertNull(row.voiceDurationMs)
             assertNull(row.voicePeaks)
+        }
+
+    @Test
+    fun theBroadcastRoomStillFillsTheCleartextMimeBecauseTheRoomIsPlaintext() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The deliberate exception to ADR 035. In the Nearby room ChatContent *is* the content — there is
+            // no seal to move the mime into — so withholding it there would break rendering and buy nothing:
+            // the body, the mentions and the attachment bytes are already flooded in the clear.
+            val rig = Rig(backgroundScope)
+            coEvery { rig.blobs.bytes("plain-hash") } returns "raw-image-bytes".toByteArray()
+
+            val ok =
+                rig.manager.sendChat(
+                    "look",
+                    attachment = AttachmentStore.Ingested(hash = "plain-hash", mime = "image/webp"),
+                )
+            advanceUntilIdle()
+
+            assertTrue(ok)
+            val content = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!
+            assertNull("a room attachment is not re-sealed, so the plaintext hash rides as-is", content.enc)
+            assertEquals("plain-hash", content.attachmentHash)
+            assertEquals("and its mime stays in the clear with the rest of the room's content", "image/webp", content.attachmentMime)
+        }
+
+    @Test
+    fun theSpoolFetcherStoresAnAttachmentUnderTheMimeOurOwnDecryptedRowNames() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Since ADR 035 a sealed frame names no mime, so ScopeSync hands this seam only its §9.5 default.
+            // The row — written from the *sealed* MessageContent — is what actually knows the type, and a
+            // voice note stored as image/jpeg would render as a broken photo instead of a waveform.
+            val rig = Rig(backgroundScope)
+            val store = rig.manager.scopeBlobs()
+            val bytes = "sealed-attachment-bytes".toByteArray()
+            coEvery { rig.messages.attachmentMimeForHash("voice-ct-hash") } returns VoiceAudio.MIME
+            coEvery { rig.messages.attachmentMimeForHash("group-photo-hash") } returns null
+
+            store.save("voice-ct-hash", "image/jpeg", bytes)
+            store.save("group-photo-hash", "image/jpeg", bytes)
+
+            coVerify { rig.blobs.insert("voice-ct-hash", VoiceAudio.MIME, bytes) }
+            // No row names a group photo or an avatar, so the fetcher's default still stands — unchanged.
+            coVerify { rig.blobs.insert("group-photo-hash", "image/jpeg", bytes) }
         }
 
     // --- reply + mentions ride the frame and are persisted ---

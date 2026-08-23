@@ -502,7 +502,9 @@ fun dmFrame(
     sentAt: Long = 1_000L,
     body: ByteArray = byteArrayOf(1, 2, 3),
     attachmentHash: String? = null,
-    attachmentMime: String? = if (attachmentHash == null) null else "image/jpeg",
+    // Null by default, which is what this build emits since ADR 035: a sealed frame names the hash and
+    // nothing else. Pass a value explicitly to model a frame from an OLDER peer that still sends one.
+    attachmentMime: String? = null,
 ): CarriedFrame {
     val enc =
         EncEnvelope(
@@ -534,7 +536,9 @@ fun groupChatFrame(
     sentAt: Long = 1_000L,
     body: ByteArray = byteArrayOf(4, 5, 6),
     attachmentHash: String? = null,
-    attachmentMime: String? = if (attachmentHash == null) null else "image/jpeg",
+    // Null by default, which is what this build emits since ADR 035: a sealed frame names the hash and
+    // nothing else. Pass a value explicitly to model a frame from an OLDER peer that still sends one.
+    attachmentMime: String? = null,
 ): CarriedFrame =
     carried(
         id,

@@ -131,7 +131,15 @@ fun RelayEnvelope.isStorable(): Boolean = FrameType.isCustodial(type)
  * Content of a [FrameType.CHAT] frame. For the plaintext broadcast room [body]/[mentions]/[attachment*]
  * are filled in directly; for an encrypted DM/group message they are blank/null and the real content
  * lives encrypted in [enc] (which the frame [sig] authenticates). A reference to an out-of-band image
- * blob (fetched by content hash) travels in [attachmentHash]/[attachmentMime].
+ * blob (fetched by content hash) travels in [attachmentHash], with [attachmentMime] beside it in the
+ * room.
+ *
+ * **The asymmetry, ADR 035:** an encrypted frame sets [attachmentHash] but leaves [attachmentMime]
+ * null. Custody and the Internet plane's attachment pass address bytes by hash and never needed the type,
+ * so the cleartext copy told a blind carrier only whether the message was a photo or a voice note; the
+ * real value rides sealed in [app.getknit.knit.mesh.crypto.MessageContent.attachmentMime] and is what
+ * `InboundPipeline.plaintextContent` substitutes in on delivery. The field itself stays (the broadcast
+ * room fills it, and an older peer still sends it) — this is an un-populating, not a removal.
  */
 @Serializable
 data class ChatContent(
@@ -472,8 +480,9 @@ data class ReactionPayload(
  * bootstrap ones.
  *
  * [avatarHash] names the same content-addressed blob the cleartext form does. The carrying chat frame
- * repeats it in [ChatContent.attachmentHash] so a blind carrier — and the Internet plane's attachment
- * pass — can fetch the bytes; see docs/WIRE_COMPAT.md's DB v19 precedent.
+ * repeats it in [ChatContent.attachmentHash] — the hash alone, never a mime (ADR 035) — so a blind
+ * carrier, and the Internet plane's attachment pass, can fetch the bytes; see docs/WIRE_COMPAT.md's
+ * DB v19 precedent.
  */
 @Serializable
 data class ProfilePayload(

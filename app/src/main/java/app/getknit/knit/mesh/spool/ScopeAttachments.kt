@@ -37,8 +37,13 @@ object ScopeAttachments {
 
     /**
      * An attachment a scope carries: the frame's cleartext content address (the *ciphertext* hash, the
-     * DB v19 precedent), the mime needed to store the bytes locally, and the newest referencing frame's
+     * DB v19 precedent), a mime *hint* for storing the bytes locally, and the newest referencing frame's
      * `sentAt` — which is what the §9.2 dead-on-arrival guard is applied to on the push side.
+     *
+     * [mime] is a hint and is usually null: since ADR 035 a sealed frame carries only the hash, so this is
+     * populated only by an older peer's frame (and never by a `groupupdate`). The fetcher resolves the real
+     * type from its own decrypted message row when it stores the bytes — see `MeshManager.scopeBlobs` — and
+     * falls back to `ScopeSync.FALLBACK_MIME`. Nothing on this plane needs the type to *route* bytes.
      */
     class Ref(
         val aHash: String,
@@ -105,7 +110,8 @@ object ScopeAttachments {
      *
      * - **`chat`** — `ChatContent.attachmentHash`. That covers message attachments and, since it is also
      *   set on a sealed `CTL_PROFILE` frame, peer **avatars**: the cleartext hint of the DB v19
-     *   precedent means this path needs no special case for them.
+     *   precedent means this path needs no special case for them. Its `attachmentMime` is read only as a
+     *   hint for an older peer's frame — since ADR 035 a sealed frame sets the hash and nothing else.
      * - **`groupupdate`** — `GroupInfo.photoHash`, the group's own picture. A groupupdate is already
      *   scope-eligible (§4.4), so its photo is legitimately scope content; only the bytes were missing.
      *
@@ -122,8 +128,9 @@ object ScopeAttachments {
             when (env.type) {
                 FrameType.CHAT -> WireCodec.decodePayload<ChatContent>(env.payload)?.let { it.attachmentHash to it.attachmentMime }
 
-                // GroupInfo carries no mime; a group photo is JPEG like an avatar, and the fetcher's
-                // fallback covers it either way.
+                // GroupInfo carries no mime — and since ADR 035 neither does a sealed chat frame. A group
+                // photo is JPEG like an avatar, and the fetcher's local lookup plus fallback cover it either
+                // way.
                 FrameType.GROUP_UPDATE -> env.group?.photoHash to null
 
                 else -> null

@@ -953,15 +953,16 @@ rule's group id does:
 
 | Frame type    | Field                                             | Covers                                                                                                |
 |---------------|---------------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| `chat`        | `ChatContent.attachmentHash` (+ `attachmentMime`) | message images, and peer **avatars**, since a sealed `CTL_PROFILE` frame sets the same cleartext hint |
+| `chat`        | `ChatContent.attachmentHash`                       | message images, and peer **avatars**, since a sealed `CTL_PROFILE` frame sets the same cleartext hint |
 | `groupupdate` | `GroupInfo.photoHash`                             | the group's own picture; a groupupdate is already scope-eligible, so only the bytes were missing      |
 
 `groupleave` names no image, and everything else fails the frame-set rule first.
 
 | ID          | Requirement                                                                                                                                                 |
 |-------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **C-9.5-1** | References MUST be deduped by hash, keeping the newest `sentAt` and the first mime seen. A `groupupdate` carries no mime, so the fetcher's default applies. |
+| **C-9.5-1** | References MUST be deduped by hash, keeping the newest `sentAt` and the first mime seen. A frame need not name a mime at all — a `groupupdate` never does, and a `chat` frame does so only on an older sender — so a fetcher MUST tolerate its absence.                                                       |
 | **C-9.5-2** | Per heal round, per (spool, scope), a client works a small bounded number of attachments at a time.                                                         |
+| **C-9.5-10** | When no reference names a mime, a fetcher SHOULD take the type from its own record of the message that names the attachment, and MUST fall back to a default when it has none. The type is never needed to *fetch* — only to store and render.                                                             |
 
 The round, per attachment:
 
@@ -982,6 +983,14 @@ The round, per attachment:
 | **C-9.5-3** | A retiring scope (§3.1, §3.3) is pulled but never refilled, mirroring frames.                                                                              |
 | **C-9.5-4** | Any failure — AEAD, a header that does not match the request, a final hash mismatch — MUST quarantine the `aid` per (spool, scope), extending §9.3's rule. |
 
+> **Why a reference may carry no mime.** The mesh frame used to repeat the attachment's MIME beside its
+> hash so a blind radio carrier could label what it custodied. That told a carrier whether a message was a
+> photo or a voice note while buying nothing — custody addresses bytes by hash — so the client withdrew it
+> (ADR 035) and a sealed `chat` frame now names the hash alone, converging on the shape `groupupdate` has
+> always had. **Nothing at a spool changes:** §4.3 seals the whole frame, so a spool never read the field
+> in the first place. A member holds the decrypted message and can simply look the type up locally, which
+> is also more trustworthy than a sender's cleartext claim.
+>
 > **Why C-9.5-4.** The argument is identical to §9.3's: a spool is untrusted storage, and without an
 > accounted invalid set a single bad chunk is re-fetched every round forever.
 >
@@ -1340,10 +1349,9 @@ spool configured, the client opens no socket at all.
 
 Non-normative. Wire compatibility is stated per entry: no entry has changed a spool record, a
 derivation,
-or a §13 vector. One entry (2026-08-19) adds a field to a *mesh* frame payload, additively and
-without
-moving an existing golden vector; the plane itself was unaffected, since a spool never decodes a
-frame.
+or a §13 vector. Two entries touch a *mesh* frame payload rather than this plane — 2026-08-19 adds a
+field, 2026-08-23 stops populating one — both additively and without moving an existing golden vector;
+the plane itself was unaffected either time, since a spool never decodes a frame.
 
 | Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Asks of implementers                                                                                                                                                                               |
 |------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -1354,3 +1362,4 @@ frame.
 | 2026-08-17 | **Deferred attachment uploads (ADR 021).** §9.5's push half became a bounded MAY (C-9.5-5…9), priced in §10.1                                                                                                                                                                                                                                                                                                                                                                                                   | None. Invisible at a spool beyond a later `aput`                                                                                                                                                   |
 | 2026-08-17 | **Formalisation and accuracy pass.** Requirement identifiers throughout, rationale separated from normative text, Appendices A and B added. Corrected against the implementations: the DM frame rule's unset-group and ratchet-header conditions and the group rule's exclusion of v1-wrapped chat (§4.4); `groupupdate` group photos as a second attachment reference shape (§9.5); the deferral rule's per-recipient evidence requirement, which is what confines it to DM scopes (§9.5); §5's shipped status | None. No wire field, derivation or vector changed                                                                                                                                                  |
 | 2026-08-19 | **Profiles cross the plane (ADR 022).** §4.4 admits `type = profile` into both scope forms — matched on sender alone in the DM half (C-4.4-5…7), on the founding roster in the group half (C-4.4-13). It is the only carrier of `ProfileContent.prekey`, so without it an Internet-only peer could never learn a rotated prekey, re-establish a broken DM session, or receive the group sender-key seeds that ride as ctl DMs                                                                                   | None for spools. Clients: profile blobs now fold into the scope digest, so a member on an older build quarantines them (C-9.3-1) and reports itself unconverged for that scope until it is updated |
+| 2026-08-23 | **The attachment MIME leaves the mesh frame (ADR 035).** §9.5's reference table drops `attachmentMime` from the `chat` row; C-9.5-1 generalises to "a frame need not name a mime"; new C-9.5-10 says where a fetcher gets one instead. Client-side only — §4.3 seals the whole frame, so a spool never observed the field                                                                                                                                                                        | None for spools, and no record, derivation or §13 vector changed. Clients: tolerate a reference with no mime (already required for `groupupdate`) and resolve the type locally                     |

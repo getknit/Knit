@@ -166,8 +166,28 @@ class ScopeAttachmentsTest {
         val refs = ScopeAttachments.references(frames, dmScope(), alice)
 
         assertEquals(listOf(aHash), refs.map { it.aHash })
-        assertEquals("image/jpeg", refs.single().mime)
+        // ADR 035: a sealed frame names the hash and nothing else, so the fetcher gets no mime hint here and
+        // resolves the type from its own decrypted row when it stores the bytes.
+        assertNull(refs.single().mime)
         // Deduped across re-serves, keeping the newest frame — that is the sentAt the DOA guard reads.
+        assertEquals(5_000L, refs.single().sentAt)
+    }
+
+    @Test
+    fun `an older peer's cleartext mime is still read as a hint, first one seen winning`() {
+        // The ADR 035 compatibility half: a build predating it still fills ChatContent.attachmentMime, and a
+        // ref built from that frame should carry it — the dedup rule (spec C-9.5-1, "the first mime seen")
+        // has to keep working across a mixed-version pair, including when the mime-less frame is newer.
+        val (_, aHash) = attachment(100)
+        val frames =
+            listOf(
+                dmFrame("m1", from = bob, to = alice, sentAt = 1_000L, attachmentHash = aHash, attachmentMime = "audio/aac"),
+                dmFrame("m2", from = bob, to = alice, sentAt = 5_000L, attachmentHash = aHash),
+            )
+
+        val refs = ScopeAttachments.references(frames, dmScope(), alice)
+
+        assertEquals("audio/aac", refs.single().mime)
         assertEquals(5_000L, refs.single().sentAt)
     }
 
@@ -220,6 +240,9 @@ class ScopeAttachmentsTest {
 
         assertEquals(listOf(avatarHash), refs.map { it.aHash })
         assertEquals(9_000L, refs.single().sentAt)
+        // The hash is the whole hint — ADR 035 dropped the avatar's mime too, so an avatar and a photo are
+        // indistinguishable to a carrier, and the fetcher's fallback covers the type.
+        assertNull(refs.single().mime)
     }
 
     @Test

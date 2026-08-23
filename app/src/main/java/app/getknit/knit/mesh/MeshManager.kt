@@ -588,10 +588,12 @@ class MeshManager(
             Log.w(TAG, "no known keys for recipient(s) of chat $id; not flooded yet")
             return true
         }
-        // Expose the (ciphertext) attachment hash + mime in the cleartext frame alongside the sealed content, so
-        // a relaying carrier — blind to the encrypted refs — can custody the blob. The decryption key stays
-        // sealed in MessageContent; a fresh per-send key means the ciphertext hash never correlates identical
-        // images across sends, so this leaks only "this message carries an image (~size)".
+        // Expose the (ciphertext) attachment hash — and ONLY the hash — in the cleartext frame alongside the
+        // sealed content, so a relaying carrier, blind to the encrypted refs, can still custody the blob.
+        // The mime stays sealed in MessageContent (ADR 035): custody addresses bytes by hash and never needed
+        // the type, so publishing it only told a carrier whether this was a photo or a voice note. The
+        // decryption key is sealed there too, and a fresh per-send key means the ciphertext hash never
+        // correlates identical images across sends — so this leaks only "this message carries ~N opaque bytes".
         originateSigned(
             chatEnvelope(
                 id,
@@ -602,7 +604,6 @@ class MeshManager(
                 ChatContent(
                     enc = envelope,
                     attachmentHash = sealedAttachment?.hash,
-                    attachmentMime = attachment?.mime,
                 ),
             ),
         )
@@ -984,18 +985,24 @@ class MeshManager(
      * The Internet plane's view of the local blob store (spec §9.5). Content-addressed and
      * write-once, so `save` is the same insert the radio path performs — a re-arrival is a no-op at
      * the DAO's `OnConflictStrategy.IGNORE`, and GC still bounds it through the ordinary references.
+     *
+     * `internal` rather than private only so `MeshManagerTest` can pin the mime-resolution rule in
+     * `save` directly; nothing outside this file constructs one.
      */
-    private fun scopeBlobs(): ScopeBlobs =
+    internal fun scopeBlobs(): ScopeBlobs =
         object : ScopeBlobs {
             override suspend fun has(aHash: String): Boolean = blobs.exists(aHash)
 
             override suspend fun bytes(aHash: String): ByteArray? = blobs.bytes(aHash)
 
+            // [mime] is only the fetcher's hint, and since ADR 035 a sealed frame no longer carries one — so
+            // prefer what our own decrypted row says this hash is, and fall back to the hint (an old peer's
+            // cleartext mime, or ScopeSync's image/jpeg default) only when no row names it.
             override suspend fun save(
                 aHash: String,
                 mime: String,
                 bytes: ByteArray,
-            ) = blobs.insert(aHash, mime, bytes)
+            ) = blobs.insert(aHash, messages.attachmentMimeForHash(aHash) ?: mime, bytes)
         }
 
     /**
@@ -1709,6 +1716,11 @@ class MeshManager(
      * [ChatContent.attachmentHash] — the DB v19 precedent (`docs/WIRE_COMPAT.md`) reapplied: it is what
      * lets a blind carrier custody the avatar bytes, and what the Internet plane's attachment pass reads
      * to fetch them (`docs/SPOOL_PROTOCOL.md` §9.5). The authoritative copy stays inside the seal.
+     *
+     * The hash and *only* the hash (ADR 035). `AVATAR_MIME` is a constant and so leaked nothing about the
+     * avatar itself — but if this stayed the one sealed frame still carrying a cleartext mime, then
+     * mime-presence would itself become a fresh distinguisher, sorting sealed frames into "profile update"
+     * and "user message" for any carrier. Nulling it here is what stops the fix creating a new signal.
      */
     private suspend fun sendProfileDm(
         peerId: String,
@@ -1731,10 +1743,12 @@ class MeshManager(
                 recipientId = peerId,
                 payload =
                     WireCodec.encodePayload(
+                        // Hash only, no mime — the ADR 035 rule applied to the avatar hint: a fetcher
+                        // addresses the blob by hash, and the mime only told a carrier what class of image
+                        // this control frame carries.
                         ChatContent(
                             enc = sealed,
                             attachmentHash = avatarHash,
-                            attachmentMime = avatarHash?.let { AVATAR_MIME },
                         ),
                     ),
             ),
@@ -1911,11 +1925,11 @@ class MeshManager(
                 row.sentAt,
                 recipientId,
                 group = null,
-                // Same cleartext-hash exposure as sendChat, so a re-sealed DM's image is custodied too.
+                // Same cleartext-hash exposure as sendChat — hash only, mime sealed — so a re-sealed DM's
+                // image is custodied too.
                 ChatContent(
                     enc = envelope,
                     attachmentHash = row.attachmentHash,
-                    attachmentMime = row.attachmentMime,
                 ),
             ),
         )

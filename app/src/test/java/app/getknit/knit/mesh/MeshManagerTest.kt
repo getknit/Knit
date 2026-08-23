@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.crypto.SignedPrekey
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.MentionStore
@@ -34,6 +35,7 @@ import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.ProfileContent
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
@@ -50,7 +52,9 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -59,6 +63,8 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -160,6 +166,9 @@ class MeshManagerTest {
         }
 
         override suspend fun sweepExpired(now: Long): Int = 0
+
+        /** Insertion-ordered view of everything custodied, for asserting what a re-serve would hand over. */
+        fun frames(): List<CarriedFrame> = frames.values.toList()
     }
 
     /** The manager under test, wired with real crypto + a recording transport + real custody + mocked repos. */
@@ -193,6 +202,12 @@ class MeshManagerTest {
         val saved = mutableListOf<MessageEntity>()
         val now = 1_700_000_000_000L
         val metrics = MeshMetrics()
+
+        /**
+         * The manager's clock. A `var` so a test that needs two *distinguishable* instants can advance it;
+         * it starts at [now], so every test that never touches it sees the original fixed clock.
+         */
+        var clockNow = now
 
         // Hoisted so a test can pre-shape group-ratchet state (e.g. a stale outbox ack) around the
         // manager's own send/flush paths — same instance the manager is wired with below.
@@ -232,13 +247,70 @@ class MeshManagerTest {
                     scope = scope,
                     metrics = metrics,
                     db = db,
-                    clock = { now },
+                    clock = { clockNow },
                 )
         }
 
         /** Pins [p]'s real key under its nodeId, as the profile handler would once its profile arrives. */
         fun pin(p: Party) {
             coEvery { peers.find(p.nodeId) } returns PeerEntity(nodeId = p.nodeId, pubKey = p.bundle.encoded, updatedAt = 1L)
+        }
+
+        /**
+         * Wires the settings/identity reads [MeshManager.currentProfileEnvelope] and
+         * [MeshManager.watchProfileChanges] make, with [displayName] and [publishedAt] as *live* state
+         * rather than fixed stubs: the manager writes the publish stamp itself, and the frame id it then
+         * builds is derived from it, so a relaxed mock (which swallows the write) could not show the id
+         * moving. Returns the display-name flow the test edits.
+         */
+        fun stubProfileState(publishedAt: MutableStateFlow<Long>): MutableStateFlow<String> {
+            val displayName = MutableStateFlow("")
+            coEvery { settings.displayName } returns displayName
+            coEvery { settings.status } returns MutableStateFlow("")
+            coEvery { settings.avatarUpdatedAt } returns MutableStateFlow(0L)
+            coEvery { settings.ownAvatarHash } returns MutableStateFlow(null)
+            // 0 keeps broadcastSealedProfile's early return in play: the sealed CTL_PROFILE half is a
+            // separate carrier with its own test surface, and this case is about the cleartext frame id.
+            coEvery { settings.profileVersion } returns MutableStateFlow(0L)
+            coEvery { settings.profilePublishedAt } returns publishedAt
+            // start() also runs the group-root mint and the local-storage sweep before it seeds the
+            // profile; both read a settings flow with .first(), which throws on a relaxed mock's empty flow
+            // and would abort the seeding coroutine before it ever reached the profile.
+            coEvery { settings.spoolEnabled } returns MutableStateFlow(false)
+            coEvery { settings.acceptedConversations } returns MutableStateFlow(emptySet())
+            // setProfilePublishedAt returns DataStore's Preferences; the test only cares about the write.
+            coEvery { settings.setProfilePublishedAt(any()) } answers {
+                publishedAt.value = firstArg()
+                mockk(relaxed = true)
+            }
+            coEvery { identity.publicKeyBundle() } returns me.bundle.encoded
+            coEvery { identity.deviceTag() } returns "tag"
+            coEvery { identity.currentPrekey(any()) } returns SignedPrekey(1, ByteArray(32), ByteArray(64), now)
+            return displayName
+        }
+
+        /** Every PROFILE frame that reached custody, oldest first — what a late joiner would be re-served. */
+        fun custodiedProfiles(): List<RelayEnvelope> = forwardStore.frames().map { it.envelope }.filter { it.type == FrameType.PROFILE }
+
+        /** The PROFILE frames the manager actually put on the wire (flood copies collapsed by id). */
+        fun floodedProfiles(): List<RelayEnvelope> =
+            transport.sent
+                .mapNotNull { WireCodec.decodeEnvelope(it.first.signed) }
+                .filter { it.type == FrameType.PROFILE }
+                .distinctBy { it.id }
+
+        /**
+         * Polls [have] until it reaches [count]. [MeshManager.start] builds its session scope on
+         * [Dispatchers.Default] rather than the injected [scope]'s dispatcher, so the profile watcher runs
+         * on a real thread and `advanceUntilIdle()` cannot see it — poll on that same real dispatcher
+         * instead of virtual time. Waits on work that happens either way (a seed, a flood), never on the
+         * behaviour under test, so a regression fails its assertion instead of stalling to the timeout.
+         */
+        suspend fun await(
+            count: Int,
+            have: () -> Int,
+        ) = withContext(Dispatchers.Default) {
+            withTimeout(AWAIT_MS) { while (have() < count) delay(POLL_MS) }
         }
 
         /** The distinct CHAT routing envelopes the manager originated (collapsing the flood + fast-fanout copies). */
@@ -862,5 +934,51 @@ class MeshManagerTest {
 
     private companion object {
         const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"
+
+        /** Real-time budget for work the manager's session runs off the test dispatcher (see awaitCustodiedProfiles). */
+        const val AWAIT_MS = 10_000L
+        const val POLL_MS = 5L
     }
+
+    // --- profile propagation ---
+
+    @Test
+    fun profileEditPublishesUnderAFreshFrameIdSoNothingDedupesItAwayAsAlreadySeen() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            val publishedAt = MutableStateFlow(0L)
+            val displayName = rig.stubProfileState(publishedAt)
+
+            rig.manager.start()
+            rig.await(1) { rig.custodiedProfiles().size } // the startup custody seed, still nameless
+            val seeded = rig.custodiedProfiles().single()
+
+            // A real edit lands at a later instant than the seed — as the lab capture showed, a display name
+            // is typically saved seconds after onboarding published the (still nameless) profile.
+            rig.clockNow = rig.now + 26_000
+            displayName.value = "Alex"
+            rig.await(1) { rig.floodedProfiles().size } // the edit re-floods either way; the id is the question
+
+            val flooded = rig.floodedProfiles().single()
+            assertEquals("the edit floods the new name", "Alex", WireCodec.decodePayload<ProfileContent>(flooded.payload)?.name)
+            assertNotEquals(
+                "the edit must carry a FRESH frame id — under the seeded id a receiver drops it at the " +
+                    "SeenSet before handleProfile ever parses it, and the new name is never applied",
+                seeded.id,
+                flooded.id,
+            )
+
+            val custodied = rig.custodiedProfiles()
+            assertEquals(
+                "and it must reach custody as its own row: on a repeated id ForwardSync.onSeen " +
+                    "short-circuits on store.has(id), leaving the pre-edit bytes to be re-served",
+                2,
+                custodied.size,
+            )
+            assertEquals(
+                "the row a late joiner is re-served carries the edited name",
+                "Alex",
+                WireCodec.decodePayload<ProfileContent>(custodied.last().payload)?.name,
+            )
+        }
 }

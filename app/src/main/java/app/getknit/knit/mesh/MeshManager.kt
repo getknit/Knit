@@ -451,6 +451,7 @@ class MeshManager(
             replayUndeliveredGroupCustody() // re-try own-custody group frames whose seed arrived late
             rotatePrekeyIfDue()
             republishProfileIfStale() // refresh the publish stamp before custody would refuse the frame
+            broadcastSealedProfile() // catch sessions that only confirmed after the edit fired
             mintGroupRootsIfDue() // mint a group's spool root when it is our turn (spec §3.2)
         }
     }
@@ -1557,7 +1558,30 @@ class MeshManager(
         sendAvatarIfNeeded(peer)
     }
 
+    /**
+     * Publishes a **changed** profile: stamps a fresh publish time, floods the frame, and re-ships the
+     * avatar to any neighbor that lacks it.
+     *
+     * The stamp is what makes the change propagate at all. [currentProfileEnvelope] keys the frame id
+     * (and its `sentAt`) on [SettingsStore.profilePublishedAt], so re-flooding under the previous stamp
+     * re-sends an id the mesh has already seen: the receiver drops it at [MeshRouter]'s `SeenSet` before
+     * [InboundPipeline] ever parses it, and [ForwardSync.onSeen] short-circuits on `store.has(id)` — so
+     * our own custody keeps the *pre-change* bytes and re-serves them to every late joiner and across the
+     * Internet plane. The change then stays invisible until [republishProfileIfStale] mints a new id up
+     * to 12 h later. That is exactly how a display name set moments after first contact stayed blank on
+     * the peer while the avatar — pushed as a file, not a frame, so no id dedupes it — arrived normally.
+     *
+     * Bumping [SettingsStore.profileVersion] is not enough on its own: the version is the receiver's LWW
+     * key, and a frame that never reaches [InboundPipeline.handleProfile] never gets to present it.
+     *
+     * Callers that re-send **unchanged** content deliberately do NOT come through here — [watchReachable]'s
+     * per-epoch reflood and [pushProfileTo]'s first-contact push both build the envelope directly, because
+     * reusing the id is precisely what lets a receiver dedupe a copy it already holds. Only a content
+     * change earns a new stamp.
+     */
     private suspend fun broadcastProfile() {
+        // Ahead of building the envelope: the stamp IS the frame id (and the custody `sentAt`) it reads.
+        settings.setProfilePublishedAt(clock())
         originateSigned(currentProfileEnvelope())
         transport.neighbors.value.forEach { sendAvatarIfNeeded(it) }
     }
@@ -1595,6 +1619,15 @@ class MeshManager(
      * user-visible, so a time floor would suppress a real second edit — worse than the storm it
      * prevents — and one send per version suffices because custody and the Internet plane both carry the
      * frame to a peer that is offline right now.
+     *
+     * Re-run from [heal] as well as from [watchProfileChanges], because the target set is *confirmed*
+     * sessions and an edit does not wait for one. A session that confirms just after the edit would
+     * otherwise never be told: the fan-out already ran, found that peer unconfirmed (or found nothing at
+     * all), and nothing re-tried. First contact is where this bites — a name is typically set within
+     * seconds of meeting a peer, while an initiator's session stays unconfirmed until the peer answers
+     * under it. [sentProfileVersions] makes the repeat free once every session has the current version;
+     * being in-memory, the first heartbeat after a restart re-sends it once, which the receiver applies
+     * idempotently.
      */
     private suspend fun broadcastSealedProfile() {
         val version = settings.profileVersion.first()

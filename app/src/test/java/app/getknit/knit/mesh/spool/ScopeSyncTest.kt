@@ -86,7 +86,6 @@ class ScopeSyncTest {
                     ScopeRegistry(
                         selfId = { self },
                         roots = { listOf(ScopeRoots(peer, pairwiseRoot)) },
-                        isAccepted = { true },
                         groupRoots = { groups },
                     ),
                 dialer = spool,
@@ -352,7 +351,7 @@ class ScopeSyncTest {
             val member =
                 member(FakeSpool(), alice, bob).let { base ->
                     ScopeSync(
-                        registry = ScopeRegistry({ alice }, { listOf(ScopeRoots(bob, pairwiseRoot)) }, { true }),
+                        registry = ScopeRegistry({ alice }, { listOf(ScopeRoots(bob, pairwiseRoot)) }),
                         dialer = rejecting,
                         store = base.custody,
                         selfId = { alice },
@@ -382,7 +381,7 @@ class ScopeSyncTest {
                 }
             val member =
                 ScopeSync(
-                    registry = ScopeRegistry({ alice }, { listOf(ScopeRoots(bob, pairwiseRoot)) }, { true }),
+                    registry = ScopeRegistry({ alice }, { listOf(ScopeRoots(bob, pairwiseRoot)) }),
                     dialer = dead,
                     store = FakeCustody(),
                     selfId = { alice },

@@ -22,27 +22,66 @@ class DeliveryStatusTest {
     @Test
     fun `our own message reports sent, delivered, or delivered over the Internet`() {
         assertEquals(
-            R.string.chat_status_pending_key,
+            DeliveryText(R.string.chat_status_pending_key),
             deliveryLabel(DeliveryStatus.Pending, DeliveryPlane.Unknown, mine = true),
         )
         assertEquals(
-            R.string.chat_status_sent,
+            DeliveryText(R.string.chat_status_sent),
             deliveryLabel(DeliveryStatus.Sent, DeliveryPlane.Unknown, mine = true),
         )
         assertEquals(
-            R.string.chat_status_delivered,
+            DeliveryText(R.string.chat_status_delivered),
             deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Nearby, mine = true),
         )
         assertEquals(
-            R.string.chat_status_delivered_internet,
+            DeliveryText(R.string.chat_status_delivered_internet),
             deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Internet, mine = true),
+        )
+    }
+
+    @Test
+    fun `a group send reports the ratio the tick cannot — but only once a receipt is recorded`() {
+        // ✓✓ flips on the FIRST member's ack, so on a group the glyph means "at least one". The count is
+        // what makes the description say which many.
+        assertEquals(
+            DeliveryText(R.string.chat_status_delivered_count, listOf(2, 3)),
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Nearby, mine = true, delivered = 2, total = 3),
+        )
+        // The count outranks the plane: a group's stored plane is whichever member acked first.
+        assertEquals(
+            DeliveryText(R.string.chat_status_delivered_count, listOf(3, 3)),
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Internet, mine = true, delivered = 3, total = 3),
+        )
+        // Ticked with nothing recorded = acked before this device kept receipts. "Delivered to 0 of 3"
+        // would contradict its own tick, so it falls back to the plain wording.
+        assertEquals(
+            DeliveryText(R.string.chat_status_delivered),
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Nearby, mine = true, delivered = 0, total = 3),
+        )
+        // Not yet delivered at all: still "Sent", never "Delivered to 0 of 3".
+        assertEquals(
+            DeliveryText(R.string.chat_status_sent),
+            deliveryLabel(DeliveryStatus.Sent, DeliveryPlane.Unknown, mine = true, delivered = 0, total = 3),
+        )
+    }
+
+    @Test
+    fun `callers with no roster to hand get exactly the old wording`() {
+        // The chat list, every DM, every broadcast message — omitting the counts must change nothing.
+        assertEquals(
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Nearby, mine = true),
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Nearby, mine = true, delivered = null, total = null),
+        )
+        assertEquals(
+            DeliveryText(R.string.chat_status_delivered_internet),
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Internet, mine = true, delivered = 2, total = 0),
         )
     }
 
     @Test
     fun `an un-acked send names no plane even when one is recorded`() {
         assertEquals(
-            R.string.chat_status_sent,
+            DeliveryText(R.string.chat_status_sent),
             deliveryLabel(DeliveryStatus.Sent, DeliveryPlane.Internet, mine = true),
         )
     }
@@ -50,13 +89,13 @@ class DeliveryStatusTest {
     @Test
     fun `a received message describes its own arrival, not our delivery`() {
         assertEquals(
-            R.string.chat_status_arrived_internet,
+            DeliveryText(R.string.chat_status_arrived_internet),
             deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.Internet, mine = false),
         )
         // All three radio values read as "nearby" — see DeliveryPlane.
         for (plane in listOf(DeliveryPlane.Nearby, DeliveryPlane.Bluetooth, DeliveryPlane.WifiAware, DeliveryPlane.Unknown)) {
             assertEquals(
-                R.string.chat_status_arrived_nearby,
+                DeliveryText(R.string.chat_status_arrived_nearby),
                 deliveryLabel(DeliveryStatus.Delivered, plane, mine = false),
             )
         }

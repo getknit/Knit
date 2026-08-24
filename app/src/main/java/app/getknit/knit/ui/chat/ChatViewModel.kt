@@ -47,6 +47,7 @@ import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.voice.VoicePlayer
 import app.getknit.knit.ui.voice.VoiceRecorder
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -60,6 +61,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -78,6 +82,11 @@ data class ChatRow(
     // The plane the receipt that flipped [received] arrived on; [DeliveryPlane.Internet] paints a globe
     // beside the tick. Only meaningful on our own delivered messages — see [MessageEntity].
     val deliveredVia: DeliveryPlane = DeliveryPlane.Unknown,
+    // How many of the group's other members have acked this message, out of how many there are. Both 0
+    // outside a group send of ours — and [deliveredCount] is 0 for a message acked before this device
+    // recorded ackers, which is what makes the tick fall back to a bare "Delivered" (see [deliveryLabel]).
+    val deliveredCount: Int = 0,
+    val recipientTotal: Int = 0,
     // True when the on-device text moderator flagged this message's body; the bubble collapses it
     // behind a tap-to-reveal instead of showing the text outright.
     val moderationFlagged: Boolean = false,
@@ -280,6 +289,8 @@ class ChatViewModel(
         val flaggedHashes: Set<String>,
         val hideSensitiveContent: Boolean,
         val group: GroupEntity?,
+        // messageId -> how many current roster members have acked it. Empty outside a group.
+        val deliveredCounts: Map<String, Int>,
     )
 
     // Held blob sizes + moderation-flagged hashes plus the content-filtering setting, combined upstream
@@ -295,14 +306,31 @@ class ChatViewModel(
             Triple(sizes, flagged.toSet(), hideSensitive)
         }
 
+    // The group row paired with "how many members have acked each message", re-subscribed whenever the
+    // roster changes (a departure changes the denominator AND which receipts count). Not a group ⇒ no
+    // roster ⇒ no counts, and the tick keeps its plain wording.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val groupDelivery: Flow<Pair<GroupEntity?, Map<String, Int>>> =
+        groups
+            .observeGroup(conversationId)
+            .distinctUntilChanged()
+            .flatMapLatest { group ->
+                val roster = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+                if (roster.isEmpty()) {
+                    flowOf(group to emptyMap())
+                } else {
+                    receipts.observeDeliveredCounts(conversationId, roster).map { group to it }
+                }
+            }
+
     private val messagesWithReactions =
         combine(
             messages.observeMessages(conversationId),
             reactions.observeReactions(),
             settings.blockedNodeIds,
             blobState,
-            groups.observeGroup(conversationId),
-        ) { msgs, reacts, blocked, (sizes, flagged, hideSensitive), group ->
+            groupDelivery,
+        ) { msgs, reacts, blocked, (sizes, flagged, hideSensitive), (group, delivered) ->
             MessagesBundle(
                 msgs.filter { it.senderId !in blocked },
                 reacts,
@@ -311,6 +339,7 @@ class ChatViewModel(
                 flagged,
                 hideSensitive,
                 group,
+                delivered,
             )
         }
 
@@ -350,6 +379,7 @@ class ChatViewModel(
             val flaggedHashes = bundle.flaggedHashes
             val hideSensitive = bundle.hideSensitiveContent
             val group = bundle.group
+            val deliveredCounts = bundle.deliveredCounts
             val isGroup = group != null
             val members = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
             val peersByNode = peerList.associateBy { it.nodeId }
@@ -388,6 +418,10 @@ class ChatViewModel(
                         sentAt = m.sentAt,
                         received = m.received,
                         deliveredVia = m.receivedPlane,
+                        // Only our own group sends have a "who has it" answer; the roster excludes us,
+                        // since we never ack ourselves (the details screen's rule, kept identical here).
+                        deliveredCount = if (mine && isGroup) deliveredCounts[m.id] ?: 0 else 0,
+                        recipientTotal = if (mine && isGroup) members.count { it != me } else 0,
                         moderationFlagged = hideSensitive && m.moderation == MessageEntity.MODERATION_TEXT_FLAGGED,
                         attachmentHash = m.attachmentHash,
                         attachmentMime = m.attachmentMime,

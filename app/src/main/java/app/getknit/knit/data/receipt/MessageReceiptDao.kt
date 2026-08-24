@@ -6,6 +6,12 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 
+/** One message's delivered-to tally, as returned by [MessageReceiptDao.observeDeliveredCounts]. */
+data class MessageDeliveryCount(
+    val messageId: String,
+    val delivered: Int,
+)
+
 @Dao
 interface MessageReceiptDao {
     /**
@@ -23,6 +29,26 @@ interface MessageReceiptDao {
      */
     @Query("SELECT * FROM message_receipts WHERE messageId = :messageId ORDER BY notedAt ASC")
     fun observeForMessage(messageId: String): Flow<List<MessageReceiptEntity>>
+
+    /**
+     * How many of [roster] have acked each of [conversationId]'s messages, one row per message that has at
+     * least one — the chat bubble's "delivered to N of M" without loading every receipt row in the thread
+     * (a busy group thread can hold thousands: the retention cap times the roster).
+     *
+     * The roster filter is not an optimization: it is what keeps this count identical to the one the
+     * message-details screen derives, which lists only *current* members. Without it a departed member's
+     * surviving row would push the bubble to "3 of 2".
+     */
+    @Query(
+        "SELECT messageId, COUNT(*) AS delivered FROM message_receipts " +
+            "WHERE ackerNodeId IN (:roster) " +
+            "AND messageId IN (SELECT id FROM messages WHERE conversationId = :conversationId) " +
+            "GROUP BY messageId",
+    )
+    fun observeDeliveredCounts(
+        conversationId: String,
+        roster: List<String>,
+    ): Flow<List<MessageDeliveryCount>>
 
     /** Drops every receipt for a message (there is no FK cascade) when the message is deleted. */
     @Query("DELETE FROM message_receipts WHERE messageId = :messageId")

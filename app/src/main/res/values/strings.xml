@@ -121,6 +121,8 @@
     <string name="chat_self_name">You</string>
     <string name="chat_status_sent">Sent</string>
     <string name="chat_status_delivered">Delivered</string>
+    <!-- Group form: the ✓✓ flips on the FIRST member's ack, so the ratio is what the tick can't say -->
+    <string name="chat_status_delivered_count">Delivered to %1$d of %2$d</string>
     <string name="chat_status_delivered_internet">Delivered over the Internet</string>
     <string name="chat_status_arrived_internet">Arrived over the Internet</string>
     <string name="chat_status_arrived_nearby">Arrived nearby</string>
@@ -487,7 +489,7 @@
     <string name="message_details_filter_all">All %1$d</string>
     <string name="message_details_filter_emoji">%1$s %2$d</string>
     <!-- Per-recipient delivery, on a group message you sent -->
-    <string name="message_details_delivered_to">Delivered to %1$d of %2$d</string>
+    <string name="message_details_delivered_to">Delivered to</string>
     <string name="message_details_waiting_on">Waiting on</string>
     <!-- The broadcast room has no roster, so its list has no total to count against -->
     <string name="message_details_received_by">Received by %1$d</string>

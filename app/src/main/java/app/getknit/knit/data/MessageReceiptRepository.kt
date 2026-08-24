@@ -5,6 +5,7 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.receipt.MessageReceiptDao
 import app.getknit.knit.data.receipt.MessageReceiptEntity
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
  * Single source of truth for *who* has received a message — the per-acker rows behind the message-details
@@ -45,6 +46,18 @@ class MessageReceiptRepository(
         messages.markReceived(messageId, via)
         if (acker != null) dao.insertIfAbsent(MessageReceiptEntity(messageId, acker, at, via.code))
     }
+
+    /**
+     * How many of [roster] have acked each message in [conversationId], keyed by message id — the chat
+     * bubble's group tick count. Messages nobody has acked are simply absent (treat as 0).
+     */
+    fun observeDeliveredCounts(
+        conversationId: String,
+        roster: List<String>,
+    ): Flow<Map<String, Int>> =
+        dao
+            .observeDeliveredCounts(conversationId, roster)
+            .map { rows -> rows.associate { it.messageId to it.delivered } }
 
     /** Removes all receipts for a deleted message, since the table has no FK cascade. */
     suspend fun deleteForMessage(messageId: String) = dao.deleteForMessage(messageId)

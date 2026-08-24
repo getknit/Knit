@@ -1232,18 +1232,20 @@ private fun MessageBubble(
                                 Icon(
                                     imageVector = if (row.received) Icons.Filled.DoneAll else Icons.Filled.Done,
                                     contentDescription =
-                                        stringResource(
-                                            deliveryLabel(
-                                                status =
-                                                    if (row.received) {
-                                                        DeliveryStatus.Delivered
-                                                    } else {
-                                                        DeliveryStatus.Sent
-                                                    },
-                                                plane = row.deliveredVia,
-                                                mine = true,
-                                            ),
-                                        ),
+                                        deliveryLabel(
+                                            status =
+                                                if (row.received) {
+                                                    DeliveryStatus.Delivered
+                                                } else {
+                                                    DeliveryStatus.Sent
+                                                },
+                                            plane = row.deliveredVia,
+                                            mine = true,
+                                            // On a group send the glyph alone says only "at least one
+                                            // member has it"; these make the description say which many.
+                                            delivered = row.deliveredCount,
+                                            total = row.recipientTotal,
+                                        ).resolve(),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(14.dp),
                                 )
@@ -1256,9 +1258,7 @@ private fun MessageBubble(
                                 Icon(
                                     imageVector = Icons.Filled.Public,
                                     contentDescription =
-                                        stringResource(
-                                            deliveryLabel(DeliveryStatus.Delivered, row.deliveredVia, mine = false),
-                                        ),
+                                        deliveryLabel(DeliveryStatus.Delivered, row.deliveredVia, mine = false).resolve(),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(12.dp).testTag("chat_arrived_relay"),
                                 )

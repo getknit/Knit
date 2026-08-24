@@ -14,6 +14,7 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.group.GroupEntity
+import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
@@ -88,6 +89,7 @@ class ChatViewModelTest {
     private val spoolEnabledFlow = MutableStateFlow(false)
     private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
     private val relayFactsFlow = MutableStateFlow(RelayFacts())
+    private val deliveredCountsFlow = MutableStateFlow(emptyMap<String, Int>())
 
     @Before
     fun setUp() {
@@ -100,18 +102,32 @@ class ChatViewModelTest {
         every { imageScreening.observeFlaggedHashes() } returns flaggedFlow
         every { settings.contentFilteringEnabled } returns filteringFlow
         every { groups.observeGroup(Conversations.NEARBY) } returns groupFlow
+        every { messages.observeMessages(GROUP) } returns messagesFlow
+        every { groups.observeGroup(GROUP) } returns groupFlow
         every { peers.observePeers() } returns peersFlow
         every { settings.displayName } returns nameFlow
         // A relaxed mock would hand back a Flow that never emits, and RelayStatusRepository
         // combines these — one silent flow would stall every state assertion in this class.
         every { settings.spoolEnabled } returns spoolEnabledFlow
         every { settings.spoolUrls } returns spoolUrlsFlow
+        every { receipts.observeDeliveredCounts(any(), any()) } returns deliveredCountsFlow
     }
 
     @After
     fun tearDown() {
         Dispatchers.resetMain()
     }
+
+    private fun group(
+        groupId: String,
+        members: List<String>,
+    ) = GroupEntity(
+        groupId = groupId,
+        name = "Trailhead Crew",
+        members = GroupMembersStore.encode(members),
+        createdBy = "me",
+        createdAt = 0L,
+    )
 
     private fun vm(conversationId: String = Conversations.NEARBY) =
         ChatViewModel(
@@ -136,6 +152,54 @@ class ChatViewModelTest {
             relayFactsFlow,
             context,
         )
+
+    @Test
+    fun groupRowsCarryDeliveredCountsExcludingSelf() =
+        runTest {
+            // The bubble's ✓✓ flips on the first member's ack, so the row carries the ratio the glyph
+            // can't. The denominator excludes us — we never ack our own message (the details screen's
+            // rule, kept identical so the two screens can't disagree).
+            val vm = vm(GROUP)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            groupFlow.value = group(GROUP, members = listOf("me", "sam", "priya", "theo"))
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "me", body = "mine", id = "g0", sentAt = 100, conversationId = GROUP),
+                    msg(senderId = "sam", body = "theirs", id = "g1", sentAt = 200, conversationId = GROUP),
+                )
+            deliveredCountsFlow.value = mapOf("g0" to 2)
+            advanceUntilIdle()
+
+            val mine =
+                vm.state.value.rows
+                    .first { it.id == "g0" }
+            assertEquals(2, mine.deliveredCount)
+            assertEquals(3, mine.recipientTotal)
+            // Someone else's message has no "who has it" answer to give.
+            val theirs =
+                vm.state.value.rows
+                    .first { it.id == "g1" }
+            assertEquals(0, theirs.deliveredCount)
+            assertEquals(0, theirs.recipientTotal)
+        }
+
+    @Test
+    fun roomRowsCarryNoDeliveredCounts() =
+        runTest {
+            // The broadcast room has no roster, so there is no denominator and the tick keeps its plain
+            // wording — deliveryLabel falls back whenever total is absent.
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            messagesFlow.value =
+                listOf(msg(senderId = "me", body = "hi", id = "m0", sentAt = 100, conversationId = Conversations.NEARBY))
+            advanceUntilIdle()
+
+            val row =
+                vm.state.value.rows
+                    .single()
+            assertEquals(0, row.deliveredCount)
+            assertEquals(0, row.recipientTotal)
+        }
 
     @Test
     fun rowsProjectMessagesAndResolveSenderNames() =
@@ -506,4 +570,8 @@ class ChatViewModelTest {
 
             coVerify { gallerySaver.saveToPictures(any(), "h", "image/jpeg") }
         }
+
+    private companion object {
+        const val GROUP = "g-trailhead"
+    }
 }

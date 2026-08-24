@@ -93,6 +93,7 @@ import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.ui.chat.DeliveryStatus
 import app.getknit.knit.ui.chat.deliveryIcon
 import app.getknit.knit.ui.chat.deliveryLabel
+import app.getknit.knit.ui.chat.resolve
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
 import app.getknit.knit.ui.components.RoomAvatar
@@ -479,7 +480,9 @@ internal fun ConversationListItem(
     // The tick is icon-only, and the row's clearAndSetSemantics below would swallow a description hung on
     // the Icon itself, so its words ride here instead — the same label the bubble and details screen use.
     val spokenStatus =
-        row.lastStatus?.let { stringResource(deliveryLabel(it, row.lastDeliveredVia, mine = true)) }
+        // No counts here on purpose: the list would have to load every thread's roster and receipt tallies
+        // to describe one glyph. Omitting them yields exactly today's wording (see deliveryLabel).
+        row.lastStatus?.let { deliveryLabel(it, row.lastDeliveredVia, mine = true).resolve() }
     val rowDescription =
         listOfNotNull(row.title, preview, spokenTime, spokenStatus, spokenUnread).joinToString(", ")
     val deleteLabel = stringResource(R.string.chat_list_delete_action)

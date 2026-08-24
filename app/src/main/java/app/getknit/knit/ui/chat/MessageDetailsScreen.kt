@@ -235,7 +235,16 @@ private fun MessageSummary(state: MessageDetailsUiState) {
                 modifier = Modifier.size(16.dp),
             )
             Text(
-                text = stringResource(deliveryLabel(state.delivery, state.plane, state.mine)),
+                text =
+                    deliveryLabel(
+                        state.delivery,
+                        state.plane,
+                        state.mine,
+                        // The ratio lives here, on the tick line, rather than being repeated in the
+                        // section header below — which is why that header is a plain label.
+                        delivered = state.deliveredTo.size,
+                        total = state.recipientTotal,
+                    ).resolve(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -256,8 +265,10 @@ private fun LazyListScope.recipientSections(
         SectionHeader(
             text =
                 if (state.recipientTotal > 0) {
-                    stringResource(R.string.message_details_delivered_to, state.deliveredTo.size, state.recipientTotal)
+                    // Plain label: the ratio is already on the delivery line in the summary above.
+                    stringResource(R.string.message_details_delivered_to)
                 } else {
+                    // The broadcast room has no denominator, so its header is the only place a count fits.
                     stringResource(R.string.message_details_received_by, state.deliveredTo.size)
                 },
             testTag = "message_details_delivered_header",

@@ -2,6 +2,7 @@ package app.getknit.knit.ui.chat
 
 import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -103,11 +104,31 @@ class MessageDetailsScreenContentTest {
     fun `a group send lists who has it and who does not, under labelled headers`() {
         render(withRecipients())
 
-        compose.onNodeWithText("Delivered to 2 of 3").assertIsDisplayed()
         compose.onNodeWithText("Waiting on").assertIsDisplayed()
         compose.onNodeWithTag("recipient_row_sam").assertIsDisplayed()
         compose.onNodeWithTag("recipient_row_priya").assertIsDisplayed()
         compose.onNodeWithTag("recipient_row_theo").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the ratio lives on the delivery line, and the section header does not repeat it`() {
+        // The tick alone says "at least one member has it" — the summary line is where the count belongs,
+        // and saying it twice on one screen is what the plain header avoids.
+        render(withRecipients())
+
+        // onNodeWithText fails on an ambiguous match, so finding exactly one is itself the proof the
+        // ratio is not also in the header — and assertTextEquals pins what the header says instead.
+        compose.onNodeWithText("Delivered to 2 of 3").assertIsDisplayed()
+        compose.onNodeWithTag("message_details_delivered_header").assertTextEquals("Delivered to")
+    }
+
+    @Test
+    fun `a group send acked before the receipts table existed keeps the plain delivered line`() {
+        // Ticked with no rows: "Delivered to 0 of 3" would contradict the tick, so both the split and the
+        // ratio stand down together.
+        render(populated())
+
+        compose.onNodeWithText("Delivered over the Internet").assertIsDisplayed()
     }
 
     @Test

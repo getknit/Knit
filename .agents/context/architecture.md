@@ -39,7 +39,9 @@ mesh/bluetooth/ BluetoothMeshTransport (BLE advertise/scan + persistent L2CAP li
                that imports android.bluetooth.* · ScanDemandPolicy/PromotionPolicy/ConnectBackoffPolicy
 moderation/    on-device TextModerator (LexicalTextFilter + MlTextModerator) + ImageModerator
                (NsfwImageModerator) + ImageScreeningService (screens image blobs, caches NSFW
-               verdicts — pulled out of BlobRepository) — see docs/CONTENT_MODERATION.md
+               verdicts — pulled out of BlobRepository) · ModelLoadGuard/ModelLoadPolicy (poison-pill:
+               a model whose load crashes the process natively is latched off, ADR 037)
+               — see docs/CONTENT_MODERATION.md
 data/          Room (messages, peers, reactions, blobs, groups, blob_verdicts, forward_store) + repositories
                · settings/SettingsStore (DataStore) · AvatarStore + AttachmentStore + BlobRepository
                (content-addressed image bytes + cross-table GC; NSFW screening now in
@@ -48,6 +50,8 @@ data/          Room (messages, peers, reactions, blobs, groups, blob_verdicts, f
 identity/      Identity (stable nodeId + E2E keypair) · NodeId (derive) · DeviceIdSource · DeviceTag · Alias
 crash/         CrashHandler (uncaught-exception capture, installed pre-Koin) · CrashStore (noBackupFilesDir,
                5 reports) · CrashRedactor (two-phase) · CrashReports (reader) · CrashIssueUrl (GitHub prefill)
+               · ProcessExitReasons (the native crashes CrashHandler can't see, from the platform's own
+               exit records — API 30+)
 notifications/ Notifier + MessageNotifier (per-context channels: nearby, groups, DMs, mentions)
 di/            Koin modules: appModule, meshModule, moderationModule, uiModule
 ```

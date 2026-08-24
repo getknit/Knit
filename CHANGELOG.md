@@ -69,6 +69,12 @@ document:
 
 ### Fixed
 
+- Knit no longer gets stuck restarting on a phone where the on-device checking model won't run. The model
+  that screens messages and photos runs in native code, and on unusual hardware it could close the app a
+  few seconds after opening, every time, with nothing to show for it. Knit now notices that pattern, turns
+  that model off, and carries on — Diagnostics says so, and offers to try it again. While it is off,
+  messages in the Nearby room are still checked against the word list; direct messages, group chats and
+  photos are not checked.
 - A relay you have configured can no longer flood the app's memory. Knit now holds only what it
   actually asked a relay for, ignores anything else the relay volunteers, and treats the relay's
   stated size limits as a claim to be capped rather than a fact. Relays were always untrusted with

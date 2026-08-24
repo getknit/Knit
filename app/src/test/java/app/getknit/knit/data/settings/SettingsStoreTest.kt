@@ -192,4 +192,18 @@ class SettingsStoreTest {
             bare.seedDefaultSpools(emptyList())
             assertEquals(emptySet<String>(), bare.spoolUrls.first())
         }
+
+    @Test
+    fun `model load state defaults to nothing attempted, and round-trips per model`() =
+        runTest {
+            val store = newStore()
+            assertEquals(ModelLoadState.NONE, store.modelLoadState("toxicity"))
+
+            store.setModelLoadState("toxicity", ModelLoadState("16|rom", pendingSince = 1_700L, fails = 1))
+
+            assertEquals(ModelLoadState("16|rom", 1_700L, 1), store.modelLoadState("toxicity"))
+            // Keyed per model: latching the text classifier must not touch the image one.
+            assertEquals(ModelLoadState.NONE, store.modelLoadState("nsfw"))
+            assertEquals(ModelLoadState("16|rom", 1_700L, 1), store.observeModelLoad("toxicity").first())
+        }
 }

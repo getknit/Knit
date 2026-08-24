@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import app.getknit.knit.crash.CrashReports
+import app.getknit.knit.crash.ProcessExitReasons
 import app.getknit.knit.crash.crashStore
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.AvatarStore
@@ -98,6 +99,9 @@ val appModule =
         // Applies the known-contact-name redaction pass the dying handler couldn't run (the names live in
         // the encrypted DB and DataStore) and stages the share copy under cacheDir/crash.
         single { CrashReports(androidContext(), get(), get(), get(), get()) }
+        // The one thing CrashHandler structurally cannot see — a native crash — read back from the
+        // platform's own exit records. ADR 028 named this as the follow-on; ModelLoadGuard consumes it.
+        single { ProcessExitReasons(androidContext()) }
         single { ReactionRepository(get(), get()) }
         // Who has acked each message — the message-details screen's per-recipient delivery split. Owns the
         // delivery write (tick + acker row in one transaction), so it wraps MessageRepository.

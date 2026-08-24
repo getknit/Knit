@@ -4,11 +4,13 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.getknit.knit.BuildConfig
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 /**
@@ -18,7 +20,8 @@ import kotlinx.coroutines.flow.map
  */
 class SettingsStore(
     private val dataStore: DataStore<Preferences>,
-) : InboundSettings {
+) : InboundSettings,
+    ModelLoadJournal {
     override val displayName: Flow<String> = dataStore.data.map { it[KEY_NAME] ?: "" }
     val status: Flow<String> = dataStore.data.map { it[KEY_STATUS] ?: "" }
 
@@ -282,11 +285,46 @@ class SettingsStore(
 
     suspend fun removeSpoolUrl(url: String) = dataStore.edit { it[KEY_SPOOL_URLS] = (it[KEY_SPOOL_URLS] ?: emptySet()) - url }
 
+    override fun observeModelLoad(model: String): Flow<ModelLoadState> = dataStore.data.map { it.modelLoadState(model) }
+
+    override suspend fun modelLoadState(model: String): ModelLoadState = dataStore.data.map { it.modelLoadState(model) }.first()
+
+    /**
+     * All three fields in **one** write, so they can never disagree — the `acceptSpoolConsent` argument.
+     * It is also the durability barrier `moderation/ModelLoadGuard` relies on: `edit {}` fsyncs the new
+     * file and renames it before it resumes, so a native crash immediately afterwards still finds this.
+     */
+    override suspend fun setModelLoadState(
+        model: String,
+        state: ModelLoadState,
+    ) {
+        dataStore.edit {
+            it[modelStampKey(model)] = state.stamp
+            it[modelPendingKey(model)] = state.pendingSince
+            it[modelFailsKey(model)] = state.fails
+        }
+    }
+
+    private fun Preferences.modelLoadState(model: String) =
+        ModelLoadState(
+            stamp = this[modelStampKey(model)].orEmpty(),
+            pendingSince = this[modelPendingKey(model)] ?: 0L,
+            fails = this[modelFailsKey(model)] ?: 0,
+        )
+
     /** Dynamic per-conversation read-watermark key, e.g. "last_read_nearby" / "last_read_<nodeId>". */
     private fun lastReadKey(conversationId: String) = longPreferencesKey(LAST_READ_PREFIX + conversationId)
 
+    /** Dynamic per-model poison-pill keys, e.g. "model_load_stamp_toxicity" (see [ModelLoadJournal]). */
+    private fun modelStampKey(model: String) = stringPreferencesKey(MODEL_LOAD_PREFIX + "stamp_" + model)
+
+    private fun modelPendingKey(model: String) = longPreferencesKey(MODEL_LOAD_PREFIX + "pending_" + model)
+
+    private fun modelFailsKey(model: String) = intPreferencesKey(MODEL_LOAD_PREFIX + "fails_" + model)
+
     private companion object {
         const val LAST_READ_PREFIX = "last_read_"
+        const val MODEL_LOAD_PREFIX = "model_load_"
 
         val KEY_NAME = stringPreferencesKey("display_name")
         val KEY_STATUS = stringPreferencesKey("status")

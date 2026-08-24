@@ -1,13 +1,19 @@
 package app.getknit.knit.di
 
+import android.os.Build
+import app.getknit.knit.BuildConfig
+import app.getknit.knit.crash.ProcessExitReasons
+import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.moderation.HybridTextModerator
 import app.getknit.knit.moderation.ImageModerator
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.moderation.LexicalTextFilter
 import app.getknit.knit.moderation.MlTextModerator
+import app.getknit.knit.moderation.ModelLoadGuard
 import app.getknit.knit.moderation.NsfwImageModerator
 import app.getknit.knit.moderation.ScopedTextModerator
 import app.getknit.knit.moderation.WordList
+import app.getknit.knit.moderation.modelGuardStamp
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -21,8 +27,17 @@ import org.koin.dsl.module
  */
 val moderationModule =
     module {
+        // The poison-pill both bundled models load behind (ADR 037): a native crash inside TFLite is
+        // invisible to CrashHandler and, on the launch-path toxicity model, unrecoverable without it.
+        single {
+            ModelLoadGuard(
+                journal = get<SettingsStore>(),
+                exits = get<ProcessExitReasons>()::lastExit,
+                stamp = modelGuardStamp(BuildConfig.VERSION_CODE, Build.FINGERPRINT.orEmpty()),
+            )
+        }
         // Shared so the heavy toxicity model is loaded at most once across both moderation scopes.
-        single { MlTextModerator(androidContext()) }
+        single { MlTextModerator(androidContext(), guard = get()) }
         single {
             ScopedTextModerator(
                 // Nearby broadcast room: profanity word-list, then ML toxicity on what it clears.
@@ -35,7 +50,7 @@ val moderationModule =
                 direct = get<MlTextModerator>(),
             )
         }
-        single<ImageModerator> { NsfwImageModerator(androidContext()) }
+        single<ImageModerator> { NsfwImageModerator(androidContext(), guard = get()) }
         // Screens image blobs against the classifier and caches the NSFW verdict by content hash
         // (blobVerdictDao). Extracted from BlobRepository so the data layer no longer invokes the classifier.
         single { ImageScreeningService(get(), get()) }

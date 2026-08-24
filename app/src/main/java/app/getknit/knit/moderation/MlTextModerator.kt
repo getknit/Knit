@@ -36,6 +36,7 @@ class MlTextModerator(
     private val labelsAsset: String = DEFAULT_LABELS_ASSET,
     private val blockThresholds: Map<String, Float> = DEFAULT_BLOCK_THRESHOLDS,
     private val maxLen: Int = DEFAULT_MAX_LEN,
+    private val guard: ModelLoadGuard? = null,
 ) : TextModerator {
     private class BlockRule(
         val index: Int,
@@ -58,15 +59,38 @@ class MlTextModerator(
             mutex.withLock {
                 if (!loaded) {
                     loaded = true
-                    // runCatching, not just loadEngine's own catch: it also absorbs Errors (TFLite's JNI
-                    // load can throw UnsatisfiedLinkError; the ~30 MB direct buffer can OOM). classify
-                    // sits on the no-throw inbound path (MeshManager.onDeliver) and must never throw.
-                    engine = runCatching { loadEngine() }.getOrNull()
+                    engine = buildEngine()
                 }
                 val e = engine ?: return@withContext TextVerdict.ALLOWED
                 runCatching { infer(e, text) }.getOrDefault(TextVerdict.ALLOWED)
             }
         }
+
+    /**
+     * The first — and only — touch of the model, run under [ModelLoadGuard] so a **native** crash in
+     * there cannot become an unrecoverable launch loop (ADR 037). A latched model yields `null` and
+     * [classify] degrades to [TextVerdict.ALLOWED], exactly as it already does when the assets are
+     * missing; nothing else in this class knows the difference.
+     *
+     * Stays inside [mutex]: two racing first callers must not both mark an attempt, and the load must
+     * still happen at most once. The guard's two DataStore round-trips are paid once per process.
+     *
+     * The probe inference belongs **inside** the guarded region. `Interpreter(model)` is mostly a
+     * flatbuffer parse; tensor allocation and kernel selection land on the first `run`, so closing the
+     * journal entry after the load alone would call success before the risky half had run.
+     */
+    private suspend fun buildEngine(): Engine? = if (guard == null) loadAndProbe() else guard.guard(ModelLoadGuard.TOXICITY, ::loadAndProbe)
+
+    /**
+     * runCatching, not just [loadEngine]'s own catch: it also absorbs Errors (TFLite's JNI load can throw
+     * UnsatisfiedLinkError; the ~30 MB direct buffer can OOM). [classify] sits on the no-throw inbound
+     * path (`MeshManager.onDeliver`) and must never throw — and the guard counts process deaths, not
+     * exceptions, so a Java-level failure has to be swallowed here rather than reach it.
+     */
+    private fun loadAndProbe(): Engine? =
+        runCatching {
+            loadEngine()?.also { runCatching { infer(it, WARMUP_PROBE) } }
+        }.getOrNull()
 
     /**
      * Load the model and run one throwaway inference *off* the send path — call this at startup so the

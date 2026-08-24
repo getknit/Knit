@@ -393,6 +393,16 @@
     <string name="crash_delete_confirm">Delete all</string>
     <string name="crash_deleted">Crash details deleted</string>
 
+    <!-- Diagnostics: the on-device model poison-pill (ADR 037). Plain language on purpose — "toxicity
+         classifier" means nothing to the person reading it, and the honest part is which chats lost what. -->
+    <string name="diagnostics_moderation_latched_label">Message checking is running reduced</string>
+    <string name="diagnostics_moderation_latched_body">Knit stopped using the on-device model that checks messages and photos, because loading it kept closing the app on this phone. Messages you send in the Nearby room are still checked against the word list; direct messages and group chats are not checked at all, and photos are not checked for explicit content.</string>
+    <string name="diagnostics_moderation_reset_action">Try the model again</string>
+    <string name="diagnostics_moderation_reset_title">Try the model again?</string>
+    <string name="diagnostics_moderation_reset_body">Knit will try to load it once more the next time it starts. If it closes the app again, Knit will turn it back off.</string>
+    <string name="diagnostics_moderation_reset_confirm">Try again</string>
+    <string name="diagnostics_moderation_reset_done">Knit will try the model again next time it starts</string>
+
     <!-- Generic actions / content descriptions -->
     <string name="action_send">Send</string>
     <string name="action_attach_photo">Attach photo</string>

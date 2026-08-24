@@ -176,6 +176,16 @@ android {
         // rather than in gradle.properties or CI, so F-Droid's rebuild — which passes no `-P` — resolves
         // the same OFF we shipped and stays byte-identical.
         buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: true).toString())
+        // Fault injection for the model poison-pill's acceptance test (ADR 037):
+        // `-PmodelFaultOnLoad=segv` raises SIGSEGV, `=kill` sends SIGKILL, inside ModelLoadGuard right
+        // after the in-flight marker is durably written. They test opposite things: only `segv` produces
+        // the native-crash evidence that latches, while `kill` is the negative control — SIGKILL is
+        // recorded exactly as a force-stop is, so it must never latch. Empty (off) by default,
+        // read only behind `if (BuildConfig.DEBUG)` so R8 folds it out, and forced off in release below.
+        // The default lives here in source, not in gradle.properties, so F-Droid's rebuild — which
+        // passes no `-P` — resolves the same OFF and stays byte-identical.
+        val modelFaultOnLoad = (project.findProperty("modelFaultOnLoad") as? String).orEmpty()
+        buildConfigField("String", "MODEL_FAULT_ON_LOAD", "\"$modelFaultOnLoad\"")
     }
 
     signingConfigs {
@@ -248,6 +258,8 @@ android {
             // Hide the Internet-relay plane in every shipped artifact (staging inherits this via
             // initWith). `-PinternetPlane=true` re-lights it for a lab reflash of a release-shaped build.
             buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: false).toString())
+            // Never ship a fault injector, whatever `-PmodelFaultOnLoad` said.
+            buildConfigField("String", "MODEL_FAULT_ON_LOAD", "\"\"")
             // Unsigned when no keystore.properties / KNIT_UPLOAD_* creds are present (see signingConfigs).
             signingConfig = signingConfigs.findByName("release")
         }

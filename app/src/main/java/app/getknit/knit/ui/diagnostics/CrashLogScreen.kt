@@ -301,8 +301,12 @@ private fun CrashActionsSection(
     }
 }
 
+/**
+ * Shared by this screen's delete-all and Diagnostics' moderation-latch reset — `internal` rather than
+ * `private` for the second caller, the same widening [SectionHeader]/[EmptyLine] took.
+ */
 @Composable
-private fun ConfirmDialog(
+internal fun ConfirmDialog(
     title: Int,
     body: Int,
     confirm: Int,

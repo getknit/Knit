@@ -48,6 +48,8 @@ class DiagnosticsScreenContentTest {
                     onRestartMesh = {},
                     onScan = {},
                     onOpenCrashLog = {},
+                    moderationLatched = false,
+                    onResetModeration = {},
                 )
             }
         }
@@ -70,6 +72,8 @@ class DiagnosticsScreenContentTest {
                     onRestartMesh = { restarts++ },
                     onScan = {},
                     onOpenCrashLog = {},
+                    moderationLatched = false,
+                    onResetModeration = {},
                 )
             }
         }
@@ -92,6 +96,8 @@ class DiagnosticsScreenContentTest {
                     onRestartMesh = {},
                     onScan = {},
                     onOpenCrashLog = {},
+                    moderationLatched = false,
+                    onResetModeration = {},
                 )
             }
         }
@@ -114,12 +120,90 @@ class DiagnosticsScreenContentTest {
                     onRestartMesh = {},
                     onScan = {},
                     onOpenCrashLog = { opened++ },
+                    moderationLatched = false,
+                    onResetModeration = {},
                 )
             }
         }
 
         compose.onNodeWithText(context.getString(R.string.crash_last_label)).performClick()
         assertEquals(1, opened)
+    }
+
+    /**
+     * The pairing that matters: a native crash captures **no** report, so a latched phone usually has
+     * `lastCrash == null`. Hanging the "Problem reports" header off `lastCrash` would hide this row.
+     */
+    @Test
+    fun latchedModelShowsItsRowEvenWithNoCrashReport() {
+        compose.setContent {
+            KnitTheme {
+                DiagnosticsScreenContent(
+                    state = state(),
+                    health = TransportHealth.Healthy,
+                    lastCrash = null,
+                    now = 0L,
+                    snackbarHostState = SnackbarHostState(),
+                    onBack = {},
+                    onRestartMesh = {},
+                    onScan = {},
+                    onOpenCrashLog = {},
+                    moderationLatched = true,
+                    onResetModeration = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText(context.getString(R.string.crash_section)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.diagnostics_moderation_latched_label)).assertIsDisplayed()
+    }
+
+    @Test
+    fun tappingTheModerationResetInvokesTheCallback() {
+        var resets = 0
+        compose.setContent {
+            KnitTheme {
+                DiagnosticsScreenContent(
+                    state = state(),
+                    health = TransportHealth.Healthy,
+                    lastCrash = null,
+                    now = 0L,
+                    snackbarHostState = SnackbarHostState(),
+                    onBack = {},
+                    onRestartMesh = {},
+                    onScan = {},
+                    onOpenCrashLog = {},
+                    moderationLatched = true,
+                    onResetModeration = { resets++ },
+                )
+            }
+        }
+
+        compose.onNodeWithText(context.getString(R.string.diagnostics_moderation_reset_action)).performClick()
+        assertEquals(1, resets)
+    }
+
+    @Test
+    fun anUnlatchedModelShowsNoModerationRow() {
+        compose.setContent {
+            KnitTheme {
+                DiagnosticsScreenContent(
+                    state = state(),
+                    health = TransportHealth.Healthy,
+                    lastCrash = null,
+                    now = 0L,
+                    snackbarHostState = SnackbarHostState(),
+                    onBack = {},
+                    onRestartMesh = {},
+                    onScan = {},
+                    onOpenCrashLog = {},
+                    moderationLatched = false,
+                    onResetModeration = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText(context.getString(R.string.diagnostics_moderation_latched_label)).assertDoesNotExist()
     }
 
     private fun crashRef() =

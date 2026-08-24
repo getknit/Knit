@@ -39,7 +39,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,6 +83,8 @@ fun DiagnosticsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val health by viewModel.health.collectAsStateWithLifecycle()
     val lastCrash by viewModel.lastCrash.collectAsStateWithLifecycle()
+    val moderationLatched by viewModel.moderationLatched.collectAsStateWithLifecycle()
+    var confirmingModerationReset by remember { mutableStateOf(false) }
     // Inside a NavHost composable the lifecycle owner is this back-stack entry, so this fires again when
     // the crash screen pops — which is how deleting the report over there clears this row over here.
     LifecycleResumeEffect(Unit) {
@@ -96,10 +100,15 @@ fun DiagnosticsScreen(
     // then map the emitted resource id to the matching message.
     val restartedMsg = stringResource(R.string.diagnostics_mesh_restarted)
     val scanningMsg = stringResource(R.string.diagnostics_scanning)
-    LaunchedEffect(restartedMsg, scanningMsg) {
+    val moderationResetMsg = stringResource(R.string.diagnostics_moderation_reset_done)
+    LaunchedEffect(restartedMsg, scanningMsg, moderationResetMsg) {
         viewModel.events.collect { resId ->
             snackbarHostState.showSnackbar(
-                if (resId == R.string.diagnostics_mesh_restarted) restartedMsg else scanningMsg,
+                when (resId) {
+                    R.string.diagnostics_mesh_restarted -> restartedMsg
+                    R.string.diagnostics_moderation_reset_done -> moderationResetMsg
+                    else -> scanningMsg
+                },
             )
         }
     }
@@ -108,13 +117,28 @@ fun DiagnosticsScreen(
         state = state,
         health = health,
         lastCrash = lastCrash,
+        moderationLatched = moderationLatched,
         now = now,
         snackbarHostState = snackbarHostState,
         onBack = onBack,
         onRestartMesh = viewModel::restartMesh,
         onScan = viewModel::rescan,
         onOpenCrashLog = onOpenCrashLog,
+        onResetModeration = { confirmingModerationReset = true },
     )
+
+    if (confirmingModerationReset) {
+        ConfirmDialog(
+            title = R.string.diagnostics_moderation_reset_title,
+            body = R.string.diagnostics_moderation_reset_body,
+            confirm = R.string.diagnostics_moderation_reset_confirm,
+            onConfirm = {
+                confirmingModerationReset = false
+                viewModel.resetModerationLatch()
+            },
+            onDismiss = { confirmingModerationReset = false },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,12 +147,14 @@ internal fun DiagnosticsScreenContent(
     state: DiagnosticsUiState,
     health: TransportHealth,
     lastCrash: CrashReportRef?,
+    moderationLatched: Boolean,
     now: Long,
     snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
     onRestartMesh: () -> Unit,
     onScan: () -> Unit,
     onOpenCrashLog: () -> Unit,
+    onResetModeration: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.testTag("screen_diagnostics"),
@@ -157,9 +183,18 @@ internal fun DiagnosticsScreenContent(
             // uses, so a phone that has never crashed sees this screen exactly as it was. It sits above
             // the controls because a user told "open Diagnostics and send me the crash" should not have
             // to scroll past forty metric rows to find it.
-            if (lastCrash != null) {
+            //
+            // The header is keyed on *either* row, not on lastCrash: a native crash captures no report —
+            // that is the whole premise of the poison-pill it latched — so a latched phone very often has
+            // no crash to show, and hanging the header off lastCrash would hide the latch row with it.
+            if (lastCrash != null || moderationLatched) {
                 item { SectionHeader(stringResource(R.string.crash_section)) }
-                item { CrashRow(crash = lastCrash, now = now, onClick = onOpenCrashLog) }
+                if (lastCrash != null) {
+                    item { CrashRow(crash = lastCrash, now = now, onClick = onOpenCrashLog) }
+                }
+                if (moderationLatched) {
+                    item { ModerationLatchSection(onReset = onResetModeration) }
+                }
             }
 
             item { SectionHeader(stringResource(R.string.diagnostics_controls)) }
@@ -565,6 +600,39 @@ private fun SpoolSection(spool: SpoolStatus) {
 }
 
 /**
+ * Shown only when the poison-pill has turned an on-device model off (ADR 037). It sits in the same
+ * "Problem reports" section as the crash row because it is the same kind of thing — something went wrong
+ * on this phone and the user may want to act — and because a native crash leaves no report, so this is
+ * often the *only* thing in that section.
+ *
+ * Non-interactive text plus one button, so it needs no `clickable`/`Role.Button` handling; the button
+ * carries its own label and its leading icon is decorative (a described icon beside a labelled button is
+ * what the accessibility checks flag as a duplicate).
+ */
+@Composable
+private fun ModerationLatchSection(onReset: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Text(
+            text = stringResource(R.string.diagnostics_moderation_latched_label),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
+        Text(
+            text = stringResource(R.string.diagnostics_moderation_latched_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.RestartAlt, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.diagnostics_moderation_reset_action))
+        }
+    }
+}
+
+/**
  * The one-line "Last crash" entry. Interactive, so it takes the 48 dp minimum touch target — `clickable`
  * goes **before** `padding` so the target covers the whole row, unlike the non-interactive [MetricRow]
  * next door, which is ~32 dp tall.
@@ -825,12 +893,14 @@ fun DiagnosticsScreenPopulatedPreview() =
                 ),
             health = TransportHealth.Healthy,
             lastCrash = PREVIEW_CRASH,
+            moderationLatched = false,
             now = PREVIEW_NOW,
             snackbarHostState = remember { SnackbarHostState() },
             onBack = {},
             onRestartMesh = {},
             onScan = {},
             onOpenCrashLog = {},
+            onResetModeration = {},
         )
     }
 
@@ -846,11 +916,15 @@ fun DiagnosticsScreenEmptyDegradedPreview() =
                 ),
             health = TransportHealth.Degraded,
             lastCrash = null,
+            // No crash report *and* a latched model is the realistic pairing, not a contrived one: the
+            // native crash the latch reacts to is precisely the kind CrashHandler cannot capture.
+            moderationLatched = true,
             now = PREVIEW_NOW,
             snackbarHostState = remember { SnackbarHostState() },
             onBack = {},
             onRestartMesh = {},
             onScan = {},
             onOpenCrashLog = {},
+            onResetModeration = {},
         )
     }

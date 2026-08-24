@@ -71,6 +71,13 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   not be able to produce countable failures at all (a re-served frame repeats one id and never advances the
   distinct counter). Bypasses the floor, not the X3DH inputs: with no pinned prekey it still declines, and
   says so in `declined`.
+- `…debug.MODEL` — dumps the on-device model **poison-pill** (ADR 037): the current build stamp, and per
+  model its stored stamp, `pendingSince` marker, unexplained-death count and whether it is latched — plus
+  what the platform recorded about the **previous process exit**, which is what decides a 1-strike latch.
+  `--ez reset true` clears every model. The fault itself is a build flag, not a bridge op
+  (`-PmodelFaultOnLoad=segv|kill`), so `src/main` carries no arming seam. `segv` is the positive test
+  (a real fault → latched on the next launch); `kill` is the **negative control** — SIGKILL is recorded
+  exactly as a force-stop is, so it must never latch no matter how often it fires.
 - `…debug.REACT` — `--es id <messageId> --es emoji <emoji>`. `…debug.HEAL` — nudge rescan/re-advertise.
 - `…debug.FLAGMSG` — injects one inbound message **the text moderator flagged** (the UI collapses it behind a
   tap-to-reveal) as the newest row of `--es conv <id>` (default `nearby`), from `--es from <peerNodeId>`

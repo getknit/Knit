@@ -47,7 +47,7 @@ val uiModule =
             ChatListViewModel(get(), get(), get(), get(), get(), get(), get<RelayStatusRepository>().facts, androidContext())
         }
         viewModel { ContactsViewModel(get(), get(), get(), get(), get(), get()) }
-        viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get(), get(), get()) }
+        viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
         viewModel { CrashLogViewModel(get()) }
         viewModel { ProfileViewModel(get(), get(), get(), get(), get<RelayStatusRepository>().facts) }
         // ProfileDetailsViewModel takes the tapped peer's node id as a runtime param.

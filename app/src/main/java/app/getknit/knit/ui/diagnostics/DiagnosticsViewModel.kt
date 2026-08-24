@@ -16,6 +16,7 @@ import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.TransportStatus
 import app.getknit.knit.mesh.spool.SpoolStatus
+import app.getknit.knit.moderation.ModelLoadGuard
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -75,6 +76,7 @@ class DiagnosticsViewModel(
     private val metrics: MeshMetrics,
     relayStatus: RelayStatusRepository,
     private val crashes: CrashReports,
+    private val modelGuard: ModelLoadGuard,
 ) : ViewModel() {
     private val myNodeId = MutableStateFlow<String?>(null)
 
@@ -94,6 +96,25 @@ class DiagnosticsViewModel(
     /** Re-reads the store. Called on resume, so deleting the report on the crash screen clears this row. */
     fun refreshLastCrash() {
         viewModelScope.launch { _lastCrash.value = crashes.latest() }
+    }
+
+    /**
+     * Whether the poison-pill has turned an on-device model off (ADR 037). Unlike [lastCrash] this is a
+     * live flow, not a snapshot: the reset button is on this very screen, so the value *can* change while
+     * the ViewModel is alive and a refresh-on-resume would leave the row stale until the user left.
+     */
+    val moderationLatched: StateFlow<Boolean> =
+        combine(ModelLoadGuard.ALL.map(modelGuard::observeLatched)) { latched -> latched.any { it } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /**
+     * Gives every latched model another chance. Takes effect on the next process start — the moderator
+     * latches `loaded` in memory on its first attempt, so nothing reloads inside a running app. The
+     * confirm dialog says so rather than implying an instant fix.
+     */
+    fun resetModerationLatch() {
+        viewModelScope.launch { ModelLoadGuard.ALL.forEach { modelGuard.clear(it) } }
+        _events.tryEmit(R.string.diagnostics_moderation_reset_done)
     }
 
     /** Live radio health, shown as a status line above the mesh controls. */

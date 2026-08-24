@@ -33,6 +33,7 @@ class NsfwImageModerator(
     private val modelAsset: String = DEFAULT_MODEL_ASSET,
     private val unsafeClasses: Set<Int> = DEFAULT_UNSAFE_CLASSES,
     private val threshold: Float = DEFAULT_THRESHOLD,
+    private val guard: ModelLoadGuard? = null,
 ) : ImageModerator {
     private val mutex = Mutex()
     private var loaded = false
@@ -43,15 +44,40 @@ class NsfwImageModerator(
             mutex.withLock {
                 if (!loaded) {
                     loaded = true
-                    // runCatching, not just loadInterpreter's own catch: it also absorbs Errors (TFLite's
-                    // JNI load can throw UnsatisfiedLinkError; the direct buffer can OOM). classify sits
-                    // on the inbound blob path and must never throw.
-                    interpreter = runCatching { loadInterpreter() }.getOrNull()
+                    interpreter = buildInterpreter()
                 }
                 val tflite = interpreter ?: return@withContext ImageVerdict.ALLOWED
                 runCatching { infer(tflite, bitmap) }.getOrDefault(ImageVerdict.ALLOWED)
             }
         }
+
+    /**
+     * The first — and only — touch of the model, run under [ModelLoadGuard] (ADR 037). "Not on the launch
+     * path" undersells the risk here: [classify] is reached from the **inbound** blob pipeline with no
+     * user action at all, so a native fault would mean "Knit dies whenever someone sends you a photo" — a
+     * loop in all but name, and one the user cannot escape by avoiding a button.
+     *
+     * There is deliberately **no** `warmUp()` twin of `MlTextModerator`'s: moving a 17 MB load onto the
+     * launch path is precisely what `5da5601` moved off it.
+     */
+    private suspend fun buildInterpreter(): Interpreter? =
+        if (guard == null) loadAndProbe() else guard.guard(ModelLoadGuard.NSFW, ::loadAndProbe)
+
+    /**
+     * runCatching, not just [loadInterpreter]'s own catch: it also absorbs Errors (TFLite's JNI load can
+     * throw UnsatisfiedLinkError; the direct buffer can OOM). [classify] sits on the inbound blob path and
+     * must never throw — and the guard counts process deaths, not exceptions.
+     *
+     * The 1×1 probe is not decoration: tensor allocation and kernel selection happen on the first `run`,
+     * not in the [Interpreter] constructor, so the guarded region has to include one inference. [infer]
+     * scales whatever it is given to the model's own input size, so one pixel is enough.
+     */
+    private fun loadAndProbe(): Interpreter? =
+        runCatching {
+            loadInterpreter()?.also {
+                runCatching { infer(it, Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)) }
+            }
+        }.getOrNull()
 
     private fun loadInterpreter(): Interpreter? =
         try {

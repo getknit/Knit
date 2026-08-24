@@ -99,6 +99,8 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun profile() = audit(route = "profile") { awaitTag("profile_name") }
 
+    // The seeded build latches the toxicity model (DemoSeeder.seedLatchedModel), so this audits the
+    // poison-pill row and its error-tinted copy too, not just the metrics list.
     @Test fun diagnostics() = audit(route = "diagnostics") { awaitText("Maya Okonkwo") }
 
     @Test fun internetRelays() = audit(route = "relays") { awaitTag("relays_switch") }

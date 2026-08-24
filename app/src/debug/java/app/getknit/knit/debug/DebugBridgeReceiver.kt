@@ -12,6 +12,8 @@ import android.graphics.drawable.AnimatedImageDrawable
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import app.getknit.knit.BuildConfig
+import app.getknit.knit.crash.ProcessExitReasons
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
@@ -36,6 +38,9 @@ import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.moderation.ModelLoadGuard
+import app.getknit.knit.moderation.ModelLoadPolicy
+import app.getknit.knit.moderation.modelGuardStamp
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.review.ReviewPromptPolicy
 import app.getknit.knit.review.ReviewPrompter
@@ -96,6 +101,11 @@ import java.nio.ByteBuffer
  *   reads the real prompt uses. `--ez reset true` clears the persisted review state; `--ez arm true`
  *   additionally backdates the engagement watermark past the age gate and forgets prior attempts, so the
  *   next chat-list visit prompts as soon as the (real) message-count gates hold.
+ * - [ACTION_MODEL] — dumps the on-device model poison-pill (ADR 037): the current build stamp, and per
+ *   model the stored stamp, `pendingSince` marker, unexplained-death count and whether it is latched —
+ *   plus what the platform says about the **previous process exit**, which is what decides a 1-strike
+ *   latch. `--ez reset true` clears every model's record. The fault itself is a build flag, not a bridge
+ *   op (`-PmodelFaultOnLoad=segv|kill`), so nothing in `src/main` carries an arming seam.
  * - [ACTION_REQNOTIF] — posts the coalesced "message request received" heads-up: writes `--ei count N`
  *   (default 1) synthetic unaccepted inbound DMs from unknown peers and calls [Notifier.notifyMessageRequests],
  *   so the UIAutomator suite can drive the real system notification + Requests inbox. Needs POST_NOTIFICATIONS.
@@ -134,6 +144,8 @@ class DebugBridgeReceiver :
     private val forwardDao: ForwardDao by inject()
     private val digest: StoreDigest by inject()
     private val reviewPrompter: ReviewPrompter by inject()
+    private val modelGuard: ModelLoadGuard by inject()
+    private val exits: ProcessExitReasons by inject()
     private val notifier: Notifier by inject()
     private val scope: CoroutineScope by inject()
 
@@ -203,6 +215,10 @@ class DebugBridgeReceiver :
 
                         ACTION_REVIEW -> {
                             handleReview(context, intent)
+                        }
+
+                        ACTION_MODEL -> {
+                            handleModel(intent)
                         }
 
                         ACTION_SPOOL -> {
@@ -669,6 +685,46 @@ class DebugBridgeReceiver :
     }
 
     /**
+     * Reads (and optionally clears) the model poison-pill's persisted state — the seam that makes the
+     * acceptance test observable without `adb shell dumpsys activity exit-info`, and the only way to see
+     * *why* a latch did or did not fire, since the decision turns on a platform exit record the app
+     * otherwise never shows.
+     */
+    private suspend fun handleModel(intent: Intent): JSONObject {
+        if (intent.getBooleanExtra(EXTRA_RESET, false)) ModelLoadGuard.ALL.forEach { modelGuard.clear(it) }
+        val stamp = modelGuardStamp(BuildConfig.VERSION_CODE, Build.FINGERPRINT.orEmpty())
+        val models = JSONArray()
+        for (model in ModelLoadGuard.ALL) {
+            val state = settings.modelLoadState(model)
+            models.put(
+                JSONObject()
+                    .put("model", model)
+                    .put("stamp", state.stamp)
+                    .put("stale", state.stamp != stamp)
+                    .put("pendingSince", state.pendingSince)
+                    .put("fails", state.fails)
+                    .put("latched", modelGuard.observeLatched(model).first()),
+            )
+        }
+        val exit = exits.lastExit()
+        return JSONObject()
+            .put("status", "ok")
+            .put("stamp", stamp)
+            .put("maxFails", ModelLoadPolicy.MAX_FAILS)
+            .put("faultOnLoad", BuildConfig.MODEL_FAULT_ON_LOAD)
+            .put("models", models)
+            .put(
+                "lastExit",
+                exit?.let {
+                    JSONObject()
+                        .put("at", it.at)
+                        .put("nativeFault", it.nativeFault)
+                        .put("explained", it.explained)
+                } ?: JSONObject.NULL,
+            )
+    }
+
+    /**
      * Posts the coalesced "message request received" heads-up on demand — the seam the UIAutomator
      * notification test drives ([app.getknit.knit] `uiauto`). The radio-less demo build never runs
      * [app.getknit.knit.mesh.InboundPipeline] (the sole production caller of
@@ -968,6 +1024,7 @@ class DebugBridgeReceiver :
         const val ACTION_FLAGMSG = "app.getknit.knit.debug.FLAGMSG"
         const val ACTION_MKGROUP = "app.getknit.knit.debug.MKGROUP"
         const val ACTION_REVIEW = "app.getknit.knit.debug.REVIEW"
+        const val ACTION_MODEL = "app.getknit.knit.debug.MODEL"
         const val ACTION_SPOOL = "app.getknit.knit.debug.SPOOL"
         const val ACTION_RATCHET = "app.getknit.knit.debug.RATCHET"
 

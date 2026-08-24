@@ -17,6 +17,7 @@ SafeSearch, ML Kit cloud) is usable.
 
 ```
 moderation/            TextModerator / ImageModerator interfaces + Verdict types
+  ModelLoadGuard         poison-pill around each model's first load (§8) + ModelLoadPolicy
   LexicalTextFilter      pure-Kotlin profanity filter (deterministic first pass)
   HybridTextModerator    lexical first, ML classifier second (ml = MlTextModerator — Phase 4, wired)
   NsfwImageModerator     TFLite NSFW image classifier (graceful degradation if no model)
@@ -230,3 +231,65 @@ This is a gap, recorded as one. If a small on-device speech classifier ever beco
 point already exists: `InboundPipeline.onObtained` decrypts a landed attachment and is where the waveform
 derivation runs today, so a verdict could be cached under the same content hash the image path uses, and
 the bubble's tap-to-reveal collapse would need no new UI. Tracked in `.agents/memory/roadmap.md`.
+
+## 8. When a model crashes the process: the poison-pill
+
+Both classifiers degrade to allow-all on any **Java** failure — a missing asset, a corrupt flatbuffer,
+`UnsatisfiedLinkError`, OOM. A **native** crash inside TFLite (SIGSEGV/SIGILL on an unfamiliar SoC, an
+XNNPACK path on the first inference) is different in kind: it takes the process, and nothing in the app can
+catch it. Because the toxicity warm-up runs from `KnitApplication.onCreate` on every launch, a device where
+that reproduces is in a launch loop with no way out and no crash report.
+
+`moderation/ModelLoadGuard` (ADR 037) closes that. Before the first touch of a model it durably records a
+marker in `SettingsStore`, and clears it in a `finally` once the load *and* one inference have both come
+back alive. A launch that finds the marker still set therefore knows one thing only: **the process died in
+there.** It then asks the platform how (`crash/ProcessExitReasons` →
+`ActivityManager.getHistoricalProcessExitReasons`, API 30+):
+
+| what the platform says | what happens |
+| --- | --- |
+| a native fault (`REASON_CRASH_NATIVE`, or `REASON_SIGNALED` with SIGILL/SIGABRT/SIGBUS/SIGSEGV) | latched immediately |
+| an explained exit — Java crash, ANR, low memory, force-stop, package update, SIGKILL | discarded, **not** counted |
+| nothing usable (API 29, no record) | counted; two consecutive unexplained deaths latch |
+
+A record written under a different app version or OS build is discarded outright: a new version may ship a
+new model or a new LiteRT, and a ROM update may fix the driver that faulted.
+
+### What a latched device still screens
+
+This is the part worth being precise about, because it is **not** symmetrical:
+
+- **Nearby room text** — still screened. `LexicalTextFilter` runs first there and is pure Kotlin.
+- **DM and group text** — **not screened at all.** `ScopedTextModerator.direct` is the ML classifier alone
+  (§2: profanity is deliberately room-only), so latching it off leaves nothing behind it.
+- **Images, everywhere** — **not screened.** `NsfwImageModerator` has no lexical twin.
+
+None of that is new — a build whose model assets fail to load has always behaved this way — but it becomes
+a *sticky* state rather than a transient one, so the app says so rather than implying coverage it does not
+have. Diagnostics grows a row under "Problem reports" naming which screening stopped, with a reset that
+takes effect on the next start (each moderator latches `loaded` in memory on its first attempt, so nothing
+reloads inside a running process). The row is keyed on the latch, **not** on there being a crash report:
+a native crash captures none, which is the whole premise.
+
+Deliberately **not** done: routing `direct` through the word list when latched. Profanity screening that
+appears in private chats only sometimes, driven by an invisible flag, is a worse product state than the one
+being fixed.
+
+### Verifying it
+
+`-PmodelFaultOnLoad=segv|kill` raises the fault inside the guard, right after the marker is written. It is
+off by default in build-script source (so F-Droid's `-P`-less rebuild stays byte-identical) and forced off
+in release. The two arms test opposite things: `segv` produces the native-crash evidence that latches on
+the first strike, while `kill` sends SIGKILL — which the platform records exactly as a force-stop or a
+low-memory kill does — and is therefore the **negative control**: it must *never* latch, however many
+times it fires. (Measured on a Pixel 9 Pro XL / Android 17: `segv` → `reason=5 (APP CRASH(NATIVE))
+status=11`, latched on the next launch; `kill` → `reason=2 (SIGNALED) status=9` three times running,
+`fails` still 0.) The counting path is only reachable where the platform returns no usable record — API
+29, or a reason it does not explain.
+
+```
+./gradlew installDebug -PmodelFaultOnLoad=segv
+adb shell am broadcast -a app.getknit.knit.debug.MODEL -p app.getknit.knit   # journal + last exit record
+adb shell am broadcast -a app.getknit.knit.debug.MODEL -p app.getknit.knit --ez reset true
+adb shell dumpsys activity exit-info app.getknit.knit                        # what the ROM actually reports
+```

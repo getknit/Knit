@@ -1,12 +1,18 @@
 package app.getknit.knit.demo
 
+import android.os.Build
 import android.util.Log
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.crash.CrashStore
 import app.getknit.knit.crash.currentCrashEnvironment
+import app.getknit.knit.data.settings.ModelLoadState
+import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.MeshManager
+import app.getknit.knit.moderation.ModelLoadGuard
+import app.getknit.knit.moderation.ModelLoadPolicy
+import app.getknit.knit.moderation.modelGuardStamp
 import org.koin.core.Koin
 
 /**
@@ -49,6 +55,7 @@ class DemoSeeder(
         koin.get<MeshManager>().seedDemoTyping(conversationId = SAM, senderId = SAM)
 
         seedCrashReport()
+        seedLatchedModel()
     }
 
     /**
@@ -66,6 +73,27 @@ class DemoSeeder(
             threadName = "DefaultDispatcher-worker-3",
             throwable =
                 IllegalStateException("hello reply ${NodeId.derive(SAM)} != expected ${NodeId.derive(DANI)}"),
+        )
+    }
+
+    /**
+     * Latches the toxicity model off, so the Diagnostics "Problem reports" section renders its
+     * poison-pill row (ADR 037) and the accessibility audit covers it instead of only its absence. Goes
+     * through the real journal, so what is audited is the real state a latched phone reaches.
+     *
+     * Side effect, accepted knowingly: the seeded build then runs lexical-only, which makes a text send
+     * *faster* (no cold tflite load — see `.agents/context/testing.md`). Nothing asserts on an ML verdict;
+     * `ModerationRevealUiAutomatorTest` drives the synthetic `FLAGMSG` seam instead.
+     */
+    private suspend fun seedLatchedModel() {
+        koin.get<SettingsStore>().setModelLoadState(
+            model = ModelLoadGuard.TOXICITY,
+            state =
+                ModelLoadState(
+                    stamp = modelGuardStamp(BuildConfig.VERSION_CODE, Build.FINGERPRINT.orEmpty()),
+                    pendingSince = 0L,
+                    fails = ModelLoadPolicy.MAX_FAILS,
+                ),
         )
     }
 

@@ -31,6 +31,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.DigestTracker
 import app.getknit.knit.mesh.FastPathDrop
@@ -2299,13 +2300,26 @@ class WifiAwareTransport(
             }
         }
 
+    /**
+     * Subscribe to Wi-Fi Aware availability. Two deliberate details, both about surviving a non-stock ROM:
+     * the export flag is passed explicitly instead of leaning on Android 14+'s "registered exclusively for
+     * system broadcasts" exemption, and the call is guarded. `ACTION_WIFI_AWARE_STATE_CHANGED` is a
+     * `<protected-broadcast>` on stock Android — but a ROM whose framework overlay drops it loses the
+     * exemption, and the bare call then throws `SecurityException` out of [start] and kills the process at
+     * mesh start on that device. Losing the availability signal only degrades the plane (the discovery loop
+     * still polls `isAvailable`); it must never be fatal.
+     */
     private fun registerAvailability() {
         if (availabilityRegistered) return
-        appContext.registerReceiver(
-            availabilityReceiver,
-            IntentFilter(WifiAwareManager.ACTION_WIFI_AWARE_STATE_CHANGED),
-        )
-        availabilityRegistered = true
+        availabilityRegistered =
+            runCatching {
+                ContextCompat.registerReceiver(
+                    appContext,
+                    availabilityReceiver,
+                    IntentFilter(WifiAwareManager.ACTION_WIFI_AWARE_STATE_CHANGED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+            }.onFailure { Log.w(TAG, "Aware availability receiver registration failed", it) }.isSuccess
     }
 
     private fun unregisterAvailability() {

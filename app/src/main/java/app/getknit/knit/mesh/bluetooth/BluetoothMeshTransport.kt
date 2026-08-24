@@ -15,6 +15,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.content.ContextCompat
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.ConnectFailReason
 import app.getknit.knit.mesh.FileMeta
@@ -743,10 +744,28 @@ class BluetoothMeshTransport(
             }
         }
 
+    /**
+     * Subscribe to adapter on/off. Same hardening as the Wi-Fi Aware twin: the export flag is explicit rather
+     * than relying on Android 14+'s system-broadcast exemption, and the registration is guarded so a ROM that
+     * doesn't mark `ACTION_STATE_CHANGED` a `<protected-broadcast>` degrades this plane instead of throwing
+     * `SecurityException` out of [start] and taking the process with it.
+     *
+     * The degradation bites harder here than on the Aware side, which is why it is logged: [bringUp] runs
+     * only from [start] and from this receiver's `STATE_ON`, so with no receiver a Bluetooth adapter that is
+     * off at [start] — or toggled off and back on — leaves the plane down for the rest of the process. The
+     * Wi-Fi Aware twin re-checks `isAvailable` on every attach retry and recovers on its own.
+     */
     private fun registerAvailability() {
         if (availabilityRegistered) return
-        appContext.registerReceiver(availabilityReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
-        availabilityRegistered = true
+        availabilityRegistered =
+            runCatching {
+                ContextCompat.registerReceiver(
+                    appContext,
+                    availabilityReceiver,
+                    IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+            }.onFailure { Log.w(TAG, "adapter-state receiver registration failed", it) }.isSuccess
     }
 
     private fun unregisterAvailability() {

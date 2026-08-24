@@ -59,6 +59,9 @@ class MeshService : LifecycleService() {
         // Channels are normally created at app startup (KnitApplication); ensure defensively in case
         // the process is started straight into the service.
         NotificationChannels.ensure(this)
+        // Claim the foreground state before anything resolves the Koin graph — see [startForeground]. Every
+        // line below it (observeStatus, powerMonitor, meshManager, settings) opens the database and the
+        // keystore identity, and doing that first is what used to blow the 10 s startForegroundService grace.
         startForeground()
         observeStatus()
         powerMonitor.start() // seed power state before the discovery loop first reads it
@@ -126,14 +129,20 @@ class MeshService : LifecycleService() {
         getSystemService(AlarmManager::class.java).cancel(heartbeatIntent())
     }
 
-    /** Post the initial ongoing notification synchronously, seeded from the current mesh state. */
+    /**
+     * Post the initial ongoing notification synchronously, from a fixed "searching" seed.
+     *
+     * **Deliberately reads nothing from [meshManager].** Touching it here would resolve the mesh half of
+     * the Koin graph — opening the SQLCipher-backed Room database and minting/unwrapping the keystore
+     * identity — before we ever reach [ServiceCompat.startForeground], and `onCreate` runs on the main
+     * thread. AOSP gives `startForegroundService` a 10 s grace (`SERVICE_START_FOREGROUND_TIMEOUT`) and
+     * kills the process with `ForegroundServiceDidNotStartInTimeException` when it lapses, so on slow
+     * hardware that graph build was a launch-time crash. Now the foreground state is claimed first and the
+     * graph is built after, where it can take as long as it needs; [observeStatus] replaces this text with
+     * the live count/health as soon as the first value arrives.
+     */
     private fun startForeground() {
-        postForeground(
-            buildNotification(
-                meshManager.neighborCount.value,
-                meshManager.transportHealth.value,
-            ),
-        )
+        postForeground(buildNotification(count = 0, health = null))
     }
 
     /**
@@ -153,7 +162,7 @@ class MeshService : LifecycleService() {
 
     private fun buildNotification(
         count: Int,
-        health: TransportHealth,
+        health: TransportHealth?,
     ): Notification {
         val openApp =
             PendingIntent.getActivity(
@@ -186,9 +195,15 @@ class MeshService : LifecycleService() {
      */
     private fun contentText(
         count: Int,
-        health: TransportHealth,
+        health: TransportHealth?,
     ): CharSequence =
         when (health) {
+            // Pre-graph seed from [startForeground] — the transport hasn't reported yet, so "searching" is the
+            // only honest line (and it needs no Settings.Global read, unlike the Unavailable branch).
+            null -> {
+                getString(R.string.mesh_notification_searching)
+            }
+
             TransportHealth.Unavailable -> {
                 if (isAirplaneModeOn()) {
                     getString(R.string.chat_connection_airplane)

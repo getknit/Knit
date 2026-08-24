@@ -21,6 +21,7 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.gif.AnimatedImageDecoder
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import org.koin.android.ext.koin.androidContext
@@ -56,7 +57,16 @@ class KnitApplication :
         // send it freezes the UI on a cold start (worst on low-end devices). Fire-and-forget on the
         // app-lifetime scope (Dispatchers.Default) so it never blocks startup; MlTextModerator degrades
         // gracefully if the assets fail to load, and warmUp() dedupes against a racing first send.
+        //
+        // Held back past the cold-start window on purpose: the load is CPU- and allocation-heavy, and
+        // starting it here put it in contention with the main thread building the Koin graph and with
+        // MeshService racing AOSP's 10 s startForegroundService grace — the tightest moment in the app's
+        // life, and the one where a low-end device has the least headroom. Nothing needs a warm engine
+        // until the user can actually send, which is many seconds out on any device slow enough for the
+        // contention to matter, so the wait costs nothing; a first send that beats it still dedupes
+        // through warmUp()'s own mutex and just pays the load itself, exactly as it did before.
         koinApp.koin.get<CoroutineScope>().launch {
+            delay(WARMUP_DELAY_MS)
             koinApp.koin.get<MlTextModerator>().warmUp()
         }
 
@@ -96,4 +106,9 @@ class KnitApplication :
                 add(BlobFetcher.Factory(blobDao))
                 add(AnimatedImageDecoder.Factory())
             }.build()
+
+    private companion object {
+        /** How long the toxicity warm-up waits out the cold-start window before it starts loading. */
+        const val WARMUP_DELAY_MS = 5_000L
+    }
 }

@@ -118,3 +118,29 @@ types (no product flavors) it writes to the flat `app/schemas/<db-class>/<versio
 the KSP arg produced — so the debug-asset wiring and `KnitDatabaseMigrationTest` are unchanged. **Gotcha:**
 KSP incremental caching can skip re-export when the committed schema is unchanged (`copyRoomSchemas` shows
 `NO-SOURCE`); to force a fresh export after a `@Database` bump, clear `app/schemas/` and rebuild.
+
+## The debug APK packages two ABIs, not four
+
+`buildTypes.debug` sets `ndk { abiFilters }` to **`arm64-v8a` + `x86_64`** (`val debugAbis` above the
+`android` block). Debug is unminified and carries both tflite models, so it starts around 150 MB; the
+default four-ABI packaging adds ~28 MB of `lib/`, and the two 32-bit slices are dead weight — every lab
+Pixel is `arm64-v8a` and every Gradle-managed emulator image is `x86_64`, so nothing we build for runs
+`x86` or `armeabi-v7a`. Measured: 150 MB → 138 MB, and `-Pknit.debugAbis=arm64-v8a` → 130 MB for a
+device-only reflash. `-Pknit.debugAbis=` (empty) restores unfiltered four-ABI packaging.
+
+Two things not to get wrong:
+
+- **Never drop `x86_64`.** `pixel7api33`/`pixel8api34` are x86_64 system images and SQLCipher loads through
+  `System.loadLibrary` at DB open, so an x86_64-less debug APK fails every instrumented test at the first
+  Room access — not at build time. (Keeping `arm64-v8a` matters too: AGP warns that the managed-device
+  image ABI default flips from `x86_64` to `arm64-v8a` in **AGP 10.0**, and this APK already carries both.)
+- **Never lift it to `defaultConfig`.** `abiFilters` is a packaging filter and needs no NDK installed
+  (unlike `ndk { debugSymbolLevel }`, see `context/distribution.md`), but release-APK bytes are
+  byte-compared by F-Droid — release and staging keep all four ABIs. Verified after the change: a plain
+  `assembleRelease` still packages `x86`, `x86_64`, `arm64-v8a` and `armeabi-v7a`.
+
+Why it is worth caring about at all: the lab devices are on network adb, and throughput varies ~80× with
+the band a phone happens to be associated to (~0.5 MB/s on 2.4 GHz vs ~40 MB/s on 5 GHz). Trimming the APK
+helps at the margin; **a slow `installDebug` is usually the phone sitting on 2.4 GHz**, which is the thing
+to check first — `adb -s <dev> shell cmd wifi status` reports the frequency. Never toggle Wi-Fi over adb
+on a network-adb device (`rules/devices.md`).

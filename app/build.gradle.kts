@@ -69,6 +69,28 @@ val nativeSymbols = (project.findProperty("knit.nativeSymbols") as? String)?.toB
 // fields below for what the flag actually gates.
 val internetPlane = (project.findProperty("internetPlane") as? String)?.toBoolean()
 
+// ABIs packaged into the **debug** APK. Debug is unminified and carries both tflite models, so it is
+// ~150 MB before native libs; the four-ABI default adds ~28 MB more, of which the two 32-bit slices are
+// dead weight — every lab Pixel is arm64-v8a and every Gradle-managed emulator image is x86_64, so
+// nothing we build for runs x86 or armeabi-v7a. Dropping them saves ~12 MB per install, which is real
+// time on a lab device whose adb link is slow (a phone associated to 2.4 GHz pushes ~0.5 MB/s, vs
+// ~40 MB/s on 5 GHz — that ratio is what makes debug APK size worth caring about at all).
+//
+// **x86_64 must stay**: `pixel7api33`/`pixel8api34` are x86_64 system images, and SQLCipher is loaded via
+// System.loadLibrary at DB open, so stripping it fails every instrumented test at the first Room access.
+// `-Pknit.debugAbis=arm64-v8a` narrows further for a device-only reflash (another ~8 MB); pass an empty
+// value to package every ABI, as an unfiltered build would.
+//
+// Scoped to the debug build type on purpose. This is a *packaging filter*, not the NDK toolchain
+// (`abiFilters` needs no NDK installed, unlike `ndk { debugSymbolLevel }`), but release-APK bytes are
+// byte-compared by F-Droid — so release and staging keep every ABI and are untouched by this.
+// See `.agents/context/distribution.md`.
+val debugAbis =
+    ((project.findProperty("knit.debugAbis") as? String) ?: "arm64-v8a,x86_64")
+        .split(",")
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
 android {
     namespace = "app.getknit.knit"
     // API 37.0. Bumped off 36.1 to clear the `minCompileSdk=37` gate that androidx started shipping
@@ -228,6 +250,15 @@ android {
             buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: false).toString())
             // Unsigned when no keystore.properties / KNIT_UPLOAD_* creds are present (see signingConfigs).
             signingConfig = signingConfigs.findByName("release")
+        }
+        debug {
+            // See the debugAbis comment above the android block for why this is debug-only and why
+            // x86_64 is not optional. Empty (`-Pknit.debugAbis=`) leaves the default four-ABI packaging.
+            if (debugAbis.isNotEmpty()) {
+                ndk {
+                    abiFilters += debugAbis
+                }
+            }
         }
         create("staging") {
             // Inherit release's R8 shrink/optimize + resource shrinking + the SEED_DEMO=false override.

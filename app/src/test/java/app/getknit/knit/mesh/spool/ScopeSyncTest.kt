@@ -131,11 +131,56 @@ class ScopeSyncTest {
     ) = hex(ScopeCrypto.dmScopeId(pairwiseRoot, self, peer))
 
     /** Steps virtual time in small slices so the infinite loops make progress without being drained. */
+
     private fun TestScope.pump(rounds: Int = 8) {
         repeat(rounds) {
             advanceTimeBy(1_000)
             runCurrent()
         }
+    }
+
+    /** A socket that is dead the moment it is handed over, as a refused WebSocket upgrade is. */
+    private class DialLog(
+        val retryAfterMs: Long?,
+    ) {
+        val at = mutableListOf<Long>()
+    }
+
+    private fun TestScope.busyRelay(log: DialLog): ScopeSync {
+        val scheduler = testScheduler
+        val dialer =
+            object : SpoolDialer {
+                override suspend fun dial(url: String): SpoolSocket {
+                    log.at += scheduler.currentTime
+                    return object : SpoolSocket {
+                        private val ch = Channel<ByteArray>(Channel.UNLIMITED).also { it.close() }
+
+                        override val incoming get() = ch
+                        override val closeReason = "http 503"
+                        override val retryAfterMs = log.retryAfterMs
+
+                        override fun send(bytes: ByteArray) = false
+
+                        override fun close(
+                            code: Int,
+                            reason: String,
+                        ) = Unit
+                    }
+                }
+            }
+        return ScopeSync(
+            registry = ScopeRegistry({ alice }, { listOf(ScopeRoots(bob, pairwiseRoot)) }),
+            dialer = dialer,
+            store = FakeCustody(),
+            selfId = { alice },
+            urls = { listOf(url) },
+            canCarry = { _, _ -> true },
+            deliver = { _, _, _ -> },
+            clock = { now },
+            // Fixed rather than zero: the floor must not be allowed to swallow the jitter that
+            // de-synchronises a population of clients one full spool refused in the same instant.
+            jitter = { 250L },
+        )
     }
 
     @Test
@@ -370,6 +415,33 @@ class ScopeSyncTest {
             assertFalse(status.connected)
             assertEquals("close 4001 auth", status.lastError)
             member.stop()
+        }
+
+    @Test
+    fun `a spool that answers Retry-After is not dialled again before it asked`() =
+        runTest {
+            // A spool at its connection cap refuses the upgrade (503) and says how long to stay away.
+            // The default backoff would dial ~7 times in the first two minutes, and each of those costs
+            // its reverse proxy a full TLS handshake for a refusal the daemon makes for free.
+            val refused = DialLog(retryAfterMs = 30_000L)
+            val plain = DialLog(retryAfterMs = null)
+            for (log in listOf(refused, plain)) {
+                val sync = busyRelay(log)
+                sync.start(backgroundScope)
+                pump(rounds = 200)
+                sync.stop()
+            }
+
+            val gaps = refused.at.zipWithNext { a, b -> b - a }
+            // A floor, not a replacement, and the jitter survives it: the first wait is the spool's 30 s
+            // winning over the backoff, plus the fixed jitter this test injects.
+            assertEquals("honoured the spool's ask over the initial backoff", 30_250L, gaps.first())
+            assertTrue("never dialled sooner than asked", gaps.all { it >= 30_000L })
+            // Once the exponential backoff overtakes the floor it keeps growing — a floor that pinned
+            // every wait at 30 s would make a long outage *more* expensive than doing nothing.
+            assertTrue("the backoff still grows underneath", gaps.any { it > 30_250L })
+            assertEquals("the control run keeps its own first retry", 2_250L, plain.at.zipWithNext { a, b -> b - a }.first())
+            assertTrue("and dials more often for it", plain.at.size > refused.at.size)
         }
 
     @Test

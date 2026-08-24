@@ -54,6 +54,10 @@ class OkHttpSpoolDialer(
         override var closeReason: String? = null
             private set
 
+        @Volatile
+        override var retryAfterMs: Long? = null
+            private set
+
         override val incoming: ReceiveChannel<ByteArray> get() = channel
 
         val listener =
@@ -99,7 +103,13 @@ class OkHttpSpoolDialer(
                     response: Response?,
                 ) {
                     Log.i(TAG, "spool socket failed: ${t.javaClass.simpleName} ${response?.code ?: ""}")
-                    closeReason = t.javaClass.simpleName
+                    // A refused upgrade arrives as an HTTP status, never a close code: §7.1 defines only
+                    // four and none of them means "come back later" (4003 would accuse a client that did
+                    // nothing wrong). OkHttp reports the refusal as a bare ProtocolException, so without
+                    // the status a spool at capacity and a spool that is simply broken reach the UI as
+                    // the same word, and they want opposite reactions from the user.
+                    closeReason = failureReason(t.javaClass.simpleName, response?.code)
+                    retryAfterMs = retryAfterMillis(response?.header(RETRY_AFTER))
                     channel.close()
                 }
             }
@@ -123,6 +133,7 @@ class OkHttpSpoolDialer(
     private companion object {
         const val TAG = "ScopeSync"
         const val INBOX_CAPACITY = 256
+        const val RETRY_AFTER = "Retry-After"
 
         fun defaultClient(): OkHttpClient =
             OkHttpClient
@@ -138,3 +149,32 @@ class OkHttpSpoolDialer(
         const val PING_INTERVAL_S = 25L
     }
 }
+
+/**
+ * What a dead socket is called in [SpoolSocket.closeReason]. A refused upgrade carries an HTTP status
+ * and nothing else useful — `ProtocolException` names the layer that noticed, not what happened — so the
+ * status becomes the reason. `101` is filtered out because it means the upgrade *succeeded* and the
+ * socket died later; there the exception really is the whole story.
+ */
+internal fun failureReason(
+    throwableName: String,
+    httpCode: Int?,
+): String = httpCode?.takeIf { it != HTTP_SWITCHING_PROTOCOLS }?.let { "http $it" } ?: throwableName
+
+/**
+ * `Retry-After` as milliseconds, or null when absent or unusable. Delta-seconds only: the HTTP-date form
+ * is legal but would make our backoff a function of the spool's clock against ours, and the value is a
+ * hint we are free to ignore. Clamped because this feeds a `delay` — a hostile or fat-fingered header
+ * must not park a worker for a week.
+ */
+internal fun retryAfterMillis(header: String?): Long? =
+    header
+        ?.trim()
+        ?.toLongOrNull()
+        ?.takeIf { it > 0 }
+        ?.coerceAtMost(MAX_RETRY_AFTER_S)
+        ?.let(TimeUnit.SECONDS::toMillis)
+
+/** Ceiling on an honoured `Retry-After`, matching the reconnect loop's own longest wait. */
+private const val MAX_RETRY_AFTER_S = 60L
+private const val HTTP_SWITCHING_PROTOCOLS = 101

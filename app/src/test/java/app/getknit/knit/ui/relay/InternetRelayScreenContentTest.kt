@@ -122,6 +122,31 @@ class InternetRelayScreenContentTest {
     }
 
     @Test
+    fun aBusyRelayIsNotConfusedWithABrokenOne() {
+        // A spool at its connection cap refuses the upgrade with 503 rather than a close code (spec §7.1
+        // has no "come back later"), and it comes back on its own. That asks nothing of the user, while
+        // "cannot be reached" asks them to go check the URL — so the two must not read alike.
+        render(
+            InternetRelayUiState(
+                enabled = true,
+                relays = listOf(relay(connected = false, scopeCount = null, carriesPhotos = null, lastError = "http 503")),
+            ),
+        )
+        compose.onNodeWithText("Busy — it is not taking new connections right now").assertIsDisplayed()
+    }
+
+    @Test
+    fun anUnknownTransportFailureStillQuotesWhatHappened() {
+        render(
+            InternetRelayUiState(
+                enabled = true,
+                relays = listOf(relay(connected = false, scopeCount = null, carriesPhotos = null, lastError = "http 404")),
+            ),
+        )
+        compose.onNodeWithText("Refused a request (http 404)").assertIsDisplayed()
+    }
+
+    @Test
     fun aRelayIsNotAddedUntilItsSchemeIsAcceptable() {
         // The dialer refuses a non-wss URL at dial time in a release build, so storing one would leave a
         // row that can never connect. The editor refuses it at entry instead.

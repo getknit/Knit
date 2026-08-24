@@ -52,6 +52,15 @@ interface SpoolSocket : SpoolLink {
      * like "not connected yet".
      */
     val closeReason: String? get() = null
+
+    /**
+     * How long the spool asked us to wait before dialling again (its `Retry-After`), or null when it
+     * asked for nothing — which is every case but a transport-layer refusal. A hint, not a contract:
+     * the reconnect loop takes it as a floor and keeps its own backoff and jitter on top.
+     *
+     * Defaulted so the hand-rolled fakes above the seam stay one-method objects.
+     */
+    val retryAfterMs: Long? get() = null
 }
 
 /**
@@ -255,6 +264,10 @@ class ScopeSync(
         @Volatile
         private var lastError: String? = null
 
+        // A `Retry-After` the last dial came back with, in ms, consumed by the next backoff. Written and
+        // read only by session()/runLoop(), which are the same coroutine.
+        private var retryFloorMs = 0L
+
         fun ensureRunning(host: CoroutineScope) {
             if (job?.isActive == true) return
             job = host.launch { runLoop() }
@@ -299,7 +312,13 @@ class ScopeSync(
             while (currentCoroutineContext().isActive) {
                 val reached = session()
                 backoff = if (reached) MIN_BACKOFF_MS else (backoff * 2).coerceAtMost(MAX_BACKOFF_MS)
-                delay(backoff + jitter())
+                // A spool refusing us at the transport layer (it is at its connection cap) says how long
+                // to stay away. Honour it as a floor only: replacing the backoff would forget how long we
+                // have already been failing, and dropping the jitter would re-synchronise every client one
+                // full spool turned away in the same instant — the exact population it was trying to shed.
+                val floor = retryFloorMs
+                retryFloorMs = 0L
+                delay(maxOf(backoff, floor) + jitter())
             }
         }
 
@@ -331,6 +350,7 @@ class ScopeSync(
             // A close code is the only explanation we get for auth/version/abuse rejections, and the
             // handshake itself never fails "loudly" — record it before the socket is discarded.
             socket.closeReason?.let { lastError = it }
+            retryFloorMs = socket.retryAfterMs ?: 0L
             socket.close(NORMAL_CLOSE, "done")
             connection = null
             spoolDigests.clear()

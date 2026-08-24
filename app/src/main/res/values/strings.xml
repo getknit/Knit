@@ -457,6 +457,7 @@
     </plurals>
     <string name="relays_no_photos">Carries messages only — no photos</string>
     <string name="relays_error_unreachable">Cannot be reached</string>
+    <string name="relays_error_busy">Busy — it is not taking new connections right now</string>
     <string name="relays_error_auth">Rejected the access token</string>
     <string name="relays_error_quota">Full — it is holding all it can for this conversation</string>
     <string name="relays_error_rate">Asking us to slow down</string>

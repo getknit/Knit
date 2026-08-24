@@ -334,6 +334,10 @@ private fun relayStatusLine(
  * registry (spec §7.2), so anything unrecognised falls through to the generic form carrying the raw
  * code rather than being swallowed — an unknown refusal the user can quote is worth more than a
  * confident wrong guess.
+ *
+ * The reason is not always an `err` code: a socket that never opened reports a transport failure
+ * instead, and the one worth separating is a spool at its connection cap. "Busy, it will come back on
+ * its own" and "broken, check the URL" ask opposite things of the user and would otherwise read alike.
  */
 @Composable
 private fun relayErrorLabel(code: String): String =
@@ -352,6 +356,10 @@ private fun relayErrorLabel(code: String): String =
 
         SpoolErrCode.POW -> {
             stringResource(R.string.relays_error_pow)
+        }
+
+        BUSY_STATUS -> {
+            stringResource(R.string.relays_error_busy)
         }
 
         else -> {
@@ -465,6 +473,13 @@ private fun RelayConsentBody(
 
 /** `SpoolStatus.lastError` when the socket could not be opened at all (`ScopeSync.UNREACHABLE`). */
 private const val UNREACHABLE = "unreachable"
+
+/**
+ * `SpoolStatus.lastError` when the spool refused the WebSocket upgrade because it is at its connection
+ * cap. Deliberately an HTTP status and not a close code: spec §7.1 defines four, and none of them means
+ * "come back later" — a full spool is a property of the box, not of the protocol.
+ */
+private const val BUSY_STATUS = "http 503"
 
 /** A close-reason string carrying spec §7.1's private-spool token rejection (`close 4001 …`). */
 private const val AUTH_CLOSE_CODE = "4001"

@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-23T00:00:00Z
+  updated: 2026-08-24T05:56:14Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -20,8 +20,7 @@ document:
 
 ## Unreleased
 
-> Voice notes, forward secrecy for direct messages and group chats, encrypted delivery receipts and
-> reactions, and optional Internet relays for when nobody is in radio range.
+> Voice notes, and optional Internet relays for when nobody is in radio range.
 
 ### Added
 
@@ -35,16 +34,6 @@ document:
 - Group delivered-ticks (the ✓✓ on your own group messages) now survive you being away: members'
   receipts are batched, encrypted, and carried by the mesh — and the Internet relays, where enabled —
   until they reach you, just like the messages themselves.
-- Direct messages between updated phones are now forward-secret. Each conversation derives its own key
-  material from a prekey published in your profile, then re-keys as the conversation goes back and
-  forth, and drops the old keys. Someone who records traffic today and gets hold of a phone later
-  cannot read the earlier messages.
-- Group chats gain the same property. Every member drives their own key chain and hands its current
-  seed to the others inside encrypted direct messages. A group's info screen says whether the group is
-  running the new scheme or still waiting on somebody to update.
-- Delivery receipts and reactions are encrypted. Until now they crossed the mesh readable by any phone
-  relaying them, so an onlooker could tell when a message reached you, and who reacted to which
-  message with what. They now travel sealed and look like ordinary messages on the wire.
 - Knit can now use Internet relays, which you turn on yourself. Knit remains a messenger that works
   with no internet and no account, but a message to somebody out of radio range used to wait for the
   two phones, or a chain of phones between them, to meet. With relays on, Knit parks a sealed copy on
@@ -77,11 +66,6 @@ document:
   voice note used to be told apart by a label sent alongside them in the clear; that label now travels
   encrypted with the message, where only the person you sent it to can read it. Relays still see roughly
   how large an attachment is, which they need in order to carry it for you.
-- Chats with a phone on an older version keep working, on the previous encryption scheme. A group
-  falls back the same way while any one member has not updated, and moves over on its own once
-  everyone has.
-- The Profile entry in the overflow menu is now called Settings, since the screen also holds settings
-  that are not about you, such as content filtering and the relay switch.
 
 ### Fixed
 
@@ -89,6 +73,51 @@ document:
   actually asked a relay for, ignores anything else the relay volunteers, and treats the relay's
   stated size limits as a claim to be capped rather than a fact. Relays were always untrusted with
   the contents of your messages; now they are untrusted with how much of your phone they can use.
+
+## [2.3.0](https://github.com/getknit/knit/releases/tag/v2.3.0) — 2026-08-24T05:56:14Z
+
+> Forward secrecy for direct messages and group chats, encrypted delivery receipts and reactions,
+> taking a photo without leaving the chat, and a crash report you can read before deciding to send it.
+
+### Added
+
+- Direct messages between updated phones are now forward-secret. Each conversation derives its own key
+  material from a prekey published in your profile, then re-keys as the conversation goes back and
+  forth, and drops the old keys. Someone who records traffic today and gets hold of a phone later
+  cannot read the earlier messages.
+- Group chats gain the same property. Every member drives their own key chain and hands its current
+  seed to the others inside encrypted direct messages. A group's info screen says whether the group is
+  running the new scheme or still waiting on somebody to update.
+- Delivery receipts and reactions are encrypted. Until now they crossed the mesh readable by any phone
+  relaying them, so an onlooker could tell when a message reached you, and who reacted to which
+  message with what. They now travel sealed and look like ordinary messages on the wire.
+- You can take a photo without leaving the chat. Long-press the attach button — the round button beside
+  an empty message field — and a viewfinder opens in place of the conversation. The shot is sent as an
+  attachment without ever being written to your gallery or handed to another app.
+- Long-pressing a message offers "Message info": who sent it, when, whether it has been delivered and
+  how it travelled, and the full list of who reacted with each emoji, which the reaction tally on the
+  bubble does not show.
+- Knit records its own crashes on the device. A Diagnostics row shows the report, with identifiers,
+  file paths and contact names stripped out of it, and you decide what happens next — copy it, share
+  it, or open a prefilled bug report. Nothing is uploaded, and there is no code in Knit that could
+  upload it.
+
+### Changed
+
+- Chats with a phone on an older version keep working, on the previous encryption scheme. A group
+  falls back the same way while any one member has not updated, and moves over on its own once
+  everyone has.
+- The Profile entry in the overflow menu is now called Settings, since the screen also holds settings
+  that are not about you, such as content filtering.
+
+### Fixed
+
+- Saving a received photo to your gallery now saves the photo. Attachments in direct messages and
+  group chats are stored encrypted, and the export wrote those encrypted bytes to Pictures/Knit under
+  an image name — an unopenable file, reported as a success.
+- Editing your name, status or photo now reaches the other phone straight away. An edit made soon
+  after first contact was re-sent under a label the mesh had already seen, so it was discarded on
+  arrival and stayed invisible for up to twelve hours.
 
 ## [2.2.3](https://github.com/getknit/knit/releases/tag/v2.2.3) — 2026-08-13T02:38:41Z
 

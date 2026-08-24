@@ -1,0 +1,14 @@
+Forward secrecy for direct messages and group chats, encrypted receipts and reactions, and a camera
+inside the chat.
+
+Conversations between updated phones now re-key as they go and drop the old keys, so someone who records
+traffic today and gets hold of a phone later cannot read the earlier messages. Group chats gain the same
+property. A chat with a phone on an older version keeps working, and moves over once everyone updates.
+Delivery receipts and reactions are now sealed too, instead of readable by any phone relaying them.
+
+Long-press the attach button to take a photo without leaving the chat, or a message for "Message info" —
+when it was delivered, and who reacted with what. Crashes are now recorded on the device, redacted, for
+you to read and report yourself; nothing is uploaded.
+
+Fixed: saving a received photo to your gallery wrote an unopenable file, and a profile edit made just
+after first contact could stay invisible to the other phone for hours.

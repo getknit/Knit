@@ -5,6 +5,7 @@ package app.getknit.knit.demo
 import android.content.Context
 import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
@@ -12,6 +13,7 @@ import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.withReply
@@ -44,6 +46,7 @@ class DemoWriter(
     private val peers = koin.get<PeerRepository>()
     private val messages = koin.get<MessageRepository>()
     private val reactions = koin.get<ReactionRepository>()
+    private val receipts = koin.get<MessageReceiptRepository>()
     private val groups = koin.get<GroupRepository>()
     private val settings = koin.get<SettingsStore>()
     private val blobs = koin.get<BlobRepository>()
@@ -114,7 +117,8 @@ class DemoWriter(
     }
 
     /**
-     * Writes one [DemoMsg] (message row + any inline reactions). For a DM, [dmPeer] is the other party so the
+     * Writes one [DemoMsg] (message row + any inline reactions + any per-member delivery receipts). For a
+     * DM, [dmPeer] is the other party so the
      * recipient is set per direction; for the room/group it's null. [received] doubles as the delivery tick and
      * is only meaningful for our own outbound messages, so it tracks "is this mine". A [DemoMsg.image] is
      * ingested as a plaintext blob (JPEG scene photo or animated WebP) and pinned via [MessageEntity.attachmentHash].
@@ -157,6 +161,10 @@ class DemoWriter(
         )
         m.reactions.forEach { r ->
             reactions.apply(ReactionEntity(m.id, nodeId(r.reactor), r.emoji, now - r.minsAgo * 60_000L))
+        }
+        // A receipt lands after the message it acks; a minute is enough to keep the ordering readable.
+        m.deliveredTo.forEach { slot ->
+            receipts.record(m.id, nodeId(slot), DeliveryPlane.Nearby, now - (m.minsAgo - 1) * 60_000L)
         }
     }
 

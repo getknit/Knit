@@ -2,16 +2,24 @@ package app.getknit.knit.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.getknit.knit.data.GroupRepository
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.group.GroupEntity
+import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.receivedPlane
+import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.receipt.MessageReceiptEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +47,17 @@ data class ReactorRow(
 private data class MessageSighting(
     val row: MessageEntity? = null,
     val everSeen: Boolean = false,
+)
+
+/**
+ * One person a message we sent was addressed to, resolved for display. [deliveredAt] is our own clock when
+ * their delivery receipt reached us (see [MessageReceiptEntity]) — null while we are still waiting on them.
+ */
+data class RecipientRow(
+    val nodeId: String,
+    val displayName: String,
+    val avatarHash: String?,
+    val deliveredAt: Long?,
 )
 
 /** One selectable emoji on the details screen's filter row — the chip's emoji and how many left it. */
@@ -71,26 +90,47 @@ data class MessageDetailsUiState(
     val plane: DeliveryPlane = DeliveryPlane.Unknown,
     val reactors: List<ReactorRow> = emptyList(),
     val filters: List<ReactionFilter> = emptyList(),
+    // Whether to render the per-recipient delivery split at all — see [MessageDetailsViewModel].
+    val showRecipients: Boolean = false,
+    val deliveredTo: List<RecipientRow> = emptyList(),
+    val waitingOn: List<RecipientRow> = emptyList(),
+    // The group roster excluding ourselves, i.e. the "of N" denominator. 0 in the broadcast room, which
+    // has no roster and therefore no total to count against.
+    val recipientTotal: Int = 0,
 )
 
 /**
- * Backs the message-details screen (keyed by [messageId]): who reacted and with what, plus the
- * per-message metadata the chat bubble has no room for — when it was sent, and how far it got.
+ * Backs the message-details screen (keyed by [messageId]): who reacted and with what, who a message we
+ * sent has actually reached, plus the per-message metadata the chat bubble has no room for — when it was
+ * sent, and how far it got.
  *
  * Read-only over rows this device already holds. The reactor identity the chat's
  * [ReactionSummary] tally aggregates away ("👍 3" says nothing about *which* three) is right there in
  * `reactions.reactorNodeId`; this just declines to throw it away, resolving each one through
  * [displayNameFor] so a reactor whose profile hasn't reached us still reads as a stable alias rather
- * than a raw node id.
+ * than a raw node id. The delivery half is the same move one table over: the ✓✓ on a group send means
+ * only "≥1 member received it" (a wire semantic, deliberately unchanged), while
+ * `message_receipts.ackerNodeId` names each member whose receipt has actually arrived.
  *
  * Reactions from blocked people are listed, not filtered: [ChatViewModel] filters blocked senders'
  * *messages* but never their reactions, so the chip this screen was opened from already counts them —
- * hiding them here would make the screen disagree with the chip.
+ * hiding them here would make the screen disagree with the chip. Blocked ackers follow the same rule.
+ *
+ * The delivery split is shown only for a message *we* sent, and only where "who" is answerable:
+ *
+ * - **Group** — the effective roster minus ourselves, split into delivered (ordered by when their
+ *   receipt reached us) and waiting. A message already ticked ✓✓ with no receipt rows at all predates
+ *   the table, so the split is hidden rather than claiming everyone missed it.
+ * - **Broadcast room** — an open "received by" list with no denominator: the room has no roster, so
+ *   there is nobody to be waiting on. Hidden until at least one ack lands.
+ * - **DM** — never: the single ✓✓ already names the only recipient there is.
  */
 class MessageDetailsViewModel(
     private val messageId: String,
     messages: MessageRepository,
     reactions: ReactionRepository,
+    receipts: MessageReceiptRepository,
+    groups: GroupRepository,
     peers: PeerRepository,
     settings: SettingsStore,
     identity: Identity,
@@ -109,7 +149,16 @@ class MessageDetailsViewModel(
             .scan(MessageSighting()) { previous, row -> MessageSighting(row, previous.everSeen || row != null) }
             .drop(1)
 
-    val state: StateFlow<MessageDetailsUiState> =
+    // Everything except the delivery split, which needs two more flows than `combine` has an overload for.
+    // The row and the peer index ride along so the second stage doesn't have to re-derive them.
+    private data class Base(
+        val state: MessageDetailsUiState,
+        val row: MessageEntity?,
+        val me: String?,
+        val peersByNode: Map<String, PeerEntity>,
+    )
+
+    private val base: Flow<Base> =
         combine(
             sightings,
             reactions.observeReactionsFor(messageId),
@@ -119,10 +168,10 @@ class MessageDetailsViewModel(
         ) { sighting, reacts, peerList, me, hideSensitive ->
             val message = sighting.row
             val everSeen = sighting.everSeen
+            val peersByNode = peerList.associateBy { it.nodeId }
             if (message == null) {
-                MessageDetailsUiState(messageId = messageId, vanished = everSeen)
+                Base(MessageDetailsUiState(messageId = messageId, vanished = everSeen), null, me, peersByNode)
             } else {
-                val peersByNode = peerList.associateBy { it.nodeId }
                 // Chronological, matching the DAO's `updatedAt ASC` — the order people reacted in reads
                 // better here than any ranking, and the filter chips carry the per-emoji grouping.
                 val rows =
@@ -137,26 +186,105 @@ class MessageDetailsViewModel(
                             isSelf = reaction.reactorNodeId == me,
                         )
                     }
-                MessageDetailsUiState(
-                    messageId = messageId,
-                    body = message.body,
-                    hasAttachment = message.attachmentHash != null,
-                    isVoiceNote = VoiceAudio.isVoice(message.attachmentMime),
-                    moderationFlagged = hideSensitive && message.moderation == MessageEntity.MODERATION_TEXT_FLAGGED,
-                    mine = message.senderId == me,
-                    senderName = displayNameFor(peersByNode[message.senderId]?.name, message.senderId),
-                    senderNodeId = message.senderId,
-                    sentAt = message.sentAt,
-                    delivery = DeliveryStatus.of(message),
-                    plane = message.receivedPlane,
-                    reactors = rows,
-                    filters = filtersOf(rows),
+                Base(
+                    MessageDetailsUiState(
+                        messageId = messageId,
+                        body = message.body,
+                        hasAttachment = message.attachmentHash != null,
+                        isVoiceNote = VoiceAudio.isVoice(message.attachmentMime),
+                        moderationFlagged = hideSensitive && message.moderation == MessageEntity.MODERATION_TEXT_FLAGGED,
+                        mine = message.senderId == me,
+                        senderName = displayNameFor(peersByNode[message.senderId]?.name, message.senderId),
+                        senderNodeId = message.senderId,
+                        sentAt = message.sentAt,
+                        delivery = DeliveryStatus.of(message),
+                        plane = message.receivedPlane,
+                        reactors = rows,
+                        filters = filtersOf(rows),
+                    ),
+                    message,
+                    me,
+                    peersByNode,
                 )
             }
+        }
+
+    val state: StateFlow<MessageDetailsUiState> =
+        combine(
+            base,
+            receipts.observeForMessage(messageId),
+            // Every group, not a flatMapLatest on this message's conversation: the roster caps at 8 and a
+            // device holds a handful of groups, so the whole table is cheaper than re-subscribing per row.
+            groups.observeGroups(),
+        ) { base, acks, groupList ->
+            val message = base.row ?: return@combine base.state
+            withRecipients(base, message, acks, groupList.firstOrNull { it.groupId == message.conversationId })
         }.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5_000),
             MessageDetailsUiState(messageId = messageId),
+        )
+
+    /**
+     * Folds the per-recipient delivery split onto [base]'s state — see the class doc for which
+     * conversations answer "who" and which don't.
+     */
+    private fun withRecipients(
+        base: Base,
+        message: MessageEntity,
+        acks: List<MessageReceiptEntity>,
+        group: GroupEntity?,
+    ): MessageDetailsUiState {
+        val ackedAt = acks.associate { it.ackerNodeId to it.notedAt }
+        return when {
+            !base.state.mine -> {
+                base.state
+            }
+
+            group != null -> {
+                // We never ack our own message, so our own row would sit in "waiting on" forever.
+                val roster = GroupMembersStore.decode(group.members).filterNot { it == base.me }
+                // Already ✓✓ with nothing recorded = acked before this device kept receipts. We know
+                // somebody got it and cannot say who, so we say nothing rather than accuse the roster.
+                if (acks.isEmpty() && message.received) {
+                    base.state
+                } else {
+                    base.state.copy(
+                        showRecipients = true,
+                        // Ordered by the DAO's `notedAt ASC`, so the list grows downward as receipts land.
+                        deliveredTo = acks.filter { it.ackerNodeId in roster }.map { row(base, it.ackerNodeId, it.notedAt) },
+                        waitingOn = roster.filterNot { it in ackedAt }.map { row(base, it, null) },
+                        recipientTotal = roster.size,
+                    )
+                }
+            }
+
+            // The public room has no roster, so this is an open list: everyone we heard back from, nobody
+            // to be waiting on, and no total to count against. Empty means we know nothing, not "nobody".
+            message.conversationId == Conversations.NEARBY && acks.isNotEmpty() -> {
+                base.state.copy(
+                    showRecipients = true,
+                    deliveredTo = acks.map { row(base, it.ackerNodeId, it.notedAt) },
+                )
+            }
+
+            // A DM's single ✓✓ already names its only recipient.
+            else -> {
+                base.state
+            }
+        }
+    }
+
+    private fun row(
+        base: Base,
+        nodeId: String,
+        deliveredAt: Long?,
+    ): RecipientRow =
+        RecipientRow(
+            nodeId = nodeId,
+            displayName = displayNameFor(base.peersByNode[nodeId]?.name, nodeId),
+            avatarHash = base.peersByNode[nodeId]?.avatarHash,
+            deliveredAt = deliveredAt,
         )
 
     /** Chip order: most-reacted first, ties broken by who got there first, so chips don't reshuffle. */

@@ -7,12 +7,15 @@ import org.junit.runner.RunWith
 
 /**
  * Black-box coverage of the one path issue #5 actually asks for: long-press a message → "Message info" →
- * see *who* reacted. It has to be driven from here rather than the Compose suite because the long-press
+ * see *who* reacted, and — for a message you sent to a group — *who has it*. It has to be driven from here
+ * rather than the Compose suite because the long-press
  * menu is a `Popup` — a separate window that doesn't inherit the NavHost's `testTagsAsResourceId`, so its
  * items are addressed by their (localized) text, exactly as the group-management and overflow tests do.
  *
- * The seeded "Trailhead Crew" message carries three reactors across two emoji (`DemoScenarios`), so this
- * exercises the populated screen, and the reactor tap proves the profile hop.
+ * The seeded "Trailhead Crew" message is one of ours, carries three reactors across two emoji, and is
+ * delivered to two of its three other members (`DemoScenarios`), so this exercises the populated screen on
+ * both halves — the delivered/waiting split as well as the reactor list — and the reactor tap proves the
+ * profile hop.
  */
 @RunWith(AndroidJUnit4::class)
 class MessageDetailsUiAutomatorTest : SeededUiAutomatorTest() {
@@ -25,6 +28,11 @@ class MessageDetailsUiAutomatorTest : SeededUiAutomatorTest() {
 
         assertText(str(R.string.message_details_title))
         assertTag("screen_message_details")
+        // The ✓✓ said "delivered"; this is the part it could never say — two of the three others have it,
+        // and the third is named rather than silently folded into the tick.
+        assertTag("message_details_delivered_header")
+        assertTag("recipient_row_$SAM")
+        assertTag("recipient_row_$THEO")
         // The chip said "👍 3"; this is the part it could never say.
         assertTag("reactor_row_$SAM")
         assertText(SAM_NAME)
@@ -59,6 +67,9 @@ class MessageDetailsUiAutomatorTest : SeededUiAutomatorTest() {
         // black-box check it is (the uiauto suite never reaches into the debug seed classes).
         const val SAM = "samr1v00"
         const val SAM_NAME = "Sam Rivera"
+
+        /** The one seeded member the message has NOT reached — the "waiting on" half. */
+        const val THEO = "theod001"
 
         const val OPEN_ATTEMPTS = 3
         const val OPEN_POLL_MS = 12_000L

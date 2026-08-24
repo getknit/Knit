@@ -10,6 +10,7 @@ import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GallerySaver
 import app.getknit.knit.data.GroupRepository
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
@@ -175,6 +176,7 @@ class ChatViewModel(
     private val groups: GroupRepository,
     private val peers: PeerRepository,
     private val reactions: ReactionRepository,
+    private val receipts: MessageReceiptRepository,
     private val meshManager: MeshController,
     private val identity: Identity,
     private val settings: SettingsStore,
@@ -611,8 +613,9 @@ class ChatViewModel(
     }
 
     /**
-     * Removes [messageId] from this device only — its row, its reactions, and (if no other message
-     * still references it) its content-addressed attachment blob. Sends nothing over the mesh.
+     * Removes [messageId] from this device only — its row, its reactions, its per-recipient delivery
+     * rows, and (if no other message still references it) its content-addressed attachment blob. Sends
+     * nothing over the mesh.
      */
     fun deleteMessage(messageId: String) {
         val hash =
@@ -622,6 +625,7 @@ class ChatViewModel(
         viewModelScope.launch {
             messages.delete(messageId)
             reactions.deleteForMessage(messageId)
+            receipts.deleteForMessage(messageId)
             blobs.deleteIfUnreferenced(hash)
             _events.tryEmit(R.string.chat_message_deleted)
         }

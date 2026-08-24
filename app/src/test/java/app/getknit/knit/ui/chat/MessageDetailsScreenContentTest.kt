@@ -1,5 +1,6 @@
 package app.getknit.knit.ui.chat
 
+import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -16,8 +17,9 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * What the details screen owes the person who opened it: every reactor by name (the thing a "👍 3" chip
- * cannot say), a filter row that actually narrows to one emoji, an empty state when nobody reacted, and
- * your own row inert while another reactor opens their profile.
+ * cannot say), a filter row that actually narrows to one emoji, an empty state when nobody reacted, your
+ * own row inert while another reactor opens their profile — and, for a message you sent, who it has
+ * actually reached (the thing a single ✓✓ cannot say) beside who it hasn't.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -96,6 +98,69 @@ class MessageDetailsScreenContentTest {
 
         compose.onNodeWithText("something nasty").assertDoesNotExist()
     }
+
+    @Test
+    fun `a group send lists who has it and who does not, under labelled headers`() {
+        render(withRecipients())
+
+        compose.onNodeWithText("Delivered to 2 of 3").assertIsDisplayed()
+        compose.onNodeWithText("Waiting on").assertIsDisplayed()
+        compose.onNodeWithTag("recipient_row_sam").assertIsDisplayed()
+        compose.onNodeWithTag("recipient_row_priya").assertIsDisplayed()
+        compose.onNodeWithTag("recipient_row_theo").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a recipient row announces its own delivery state — the header above it is not read with it`() {
+        render(withRecipients())
+
+        compose.onNodeWithTag("recipient_row_theo").assertContentDescriptionContains("Theo Diaz, not delivered yet")
+    }
+
+    @Test
+    fun `tapping a recipient opens their profile`() {
+        var opened: String? = null
+        render(withRecipients(), onOpenProfile = { opened = it })
+
+        compose.onNodeWithTag("recipient_row_theo").performClick()
+        assertEquals("theo", opened)
+    }
+
+    @Test
+    fun `everyone has it, so there is no waiting header at all`() {
+        render(withRecipients().copy(waitingOn = emptyList(), recipientTotal = 2))
+
+        compose.onNodeWithText("Delivered to 2 of 2").assertIsDisplayed()
+        compose.onNodeWithTag("message_details_waiting_header").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the broadcast room's open list drops the denominator`() {
+        render(withRecipients().copy(waitingOn = emptyList(), recipientTotal = 0))
+
+        compose.onNodeWithText("Received by 2").assertIsDisplayed()
+        compose.onNodeWithTag("message_details_waiting_header").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a message with no delivery split shows neither header`() {
+        render(populated())
+
+        compose.onNodeWithTag("message_details_delivered_header").assertDoesNotExist()
+        compose.onNodeWithTag("message_details_waiting_header").assertDoesNotExist()
+    }
+
+    private fun withRecipients() =
+        populated().copy(
+            showRecipients = true,
+            deliveredTo =
+                listOf(
+                    RecipientRow("sam", "Sam Rivera", null, 1_700_000_060_000L),
+                    RecipientRow("priya", "Priya Nair", null, 1_700_000_120_000L),
+                ),
+            waitingOn = listOf(RecipientRow("theo", "Theo Diaz", null, null)),
+            recipientTotal = 3,
+        )
 
     private fun populated() =
         MessageDetailsUiState(

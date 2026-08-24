@@ -38,6 +38,7 @@ val uiModule =
                 get(),
                 get(),
                 get(),
+                get(),
                 get<RelayStatusRepository>().facts,
                 androidContext(),
             )
@@ -52,7 +53,7 @@ val uiModule =
         // ProfileDetailsViewModel takes the tapped peer's node id as a runtime param.
         viewModel { params -> ProfileDetailsViewModel(params.get(), get(), get(), get(), get()) }
         // MessageDetailsViewModel takes the long-pressed message's id as a runtime param.
-        viewModel { params -> MessageDetailsViewModel(params.get(), get(), get(), get(), get(), get()) }
+        viewModel { params -> MessageDetailsViewModel(params.get(), get(), get(), get(), get(), get(), get(), get()) }
         // GroupDetailsViewModel takes the group id as a runtime param; the rest are resolved by type.
         viewModel { params ->
             GroupDetailsViewModel(params.get(), get(), get(), get(), get(), get(), get(), androidContext())

@@ -7,6 +7,7 @@ import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
@@ -93,6 +94,7 @@ import java.util.concurrent.ConcurrentHashMap
 class InboundPipeline(
     private val transport: MeshTransport,
     private val messages: MessageRepository,
+    private val receipts: MessageReceiptRepository,
     private val groups: GroupRepository,
     private val reactions: ReactionRepository,
     private val peers: PeerRepository,
@@ -309,7 +311,8 @@ class InboundPipeline(
      * or purging the carried copy — otherwise any node could forge a receipt to spoof delivery or evict an
      * undelivered DM. A broadcast/group message (recipientId null) keeps the legacy best-effort tick, and a
      * message we don't hold makes [MessageRepository.markReceived] a harmless no-op. [plane] is the plane
-     * this receipt arrived on, recorded with the tick it flips.
+     * this receipt arrived on, recorded with the tick it flips, alongside the acker [ackerFor] attributes
+     * it to (null = tick only, no per-recipient row).
      */
     private suspend fun handleReceipt(
         env: RelayEnvelope,
@@ -318,9 +321,49 @@ class InboundPipeline(
         val ackId = WireCodec.decodePayload<ReceiptContent>(env.payload)?.ackId ?: return
         val recipientOfAcked = messages.recipientOf(ackId)
         if (recipientOfAcked == null || recipientOfAcked == env.senderId) {
-            messages.markReceived(ackId, plane)
+            receipts.record(ackId, ackerFor(env, ackId, recipientOfAcked), plane, clock())
         }
         forwardSync.onAck(ackId, env.senderId)
+    }
+
+    /**
+     * The node a receipt for [ackId] is attributable to, or null when it must not be stored as a
+     * per-recipient row. Shared by the cleartext and sealed apply paths.
+     *
+     * This deliberately does **not** decide whether the tick flips — that rule is unchanged and lives at
+     * each call site. The tick is a wire semantic ("≥1 recipient received it") whose group form rests on
+     * the forged-ack guard's null arm accepting *any* signed sender; storing the sender turns that same
+     * null arm into a roster-spoofing surface, so the row — and only the row — takes a membership gate:
+     *
+     * - **DM** — the addressed recipient, which the caller's guard has already established.
+     * - **Group** — an acker in the group's *effective* roster (a departed member's late tick still ticks,
+     *   but names nobody the roster screen would show; a non-member's names nobody at all).
+     * - **Broadcast room** — any signed peer: the room is public and has no roster to check against, so
+     *   "received by" is an open list by construction.
+     *
+     * Null for a message we don't hold, so a receipt can never plant an orphan row (unlike a reaction, a
+     * receipt for a message that hasn't arrived is meaningless — we only ever ack what we authored).
+     */
+    private suspend fun ackerFor(
+        env: RelayEnvelope,
+        ackId: String,
+        recipientOfAcked: String?,
+    ): String? {
+        val conversationId = messages.conversationOf(ackId) ?: return null
+        return when {
+            recipientOfAcked != null -> {
+                env.senderId.takeIf { it == recipientOfAcked }
+            }
+
+            conversationId == Conversations.NEARBY -> {
+                env.senderId
+            }
+
+            else -> {
+                val roster = groups.find(conversationId)?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+                env.senderId.takeIf { it in roster }
+            }
+        }
     }
 
     /**
@@ -801,9 +844,10 @@ class InboundPipeline(
     /**
      * Applies a sealed `CTL_RECEIPT`: flip the tick with the cleartext path's forged-ack guard (null
      * recipient = a group/broadcast message keeps the best-effort tick — that IS the sealed group
-     * tick's shape). Deliberately NO [ForwardSync.onAck]: a carrier can't read a sealed receipt, so
-     * nobody vaccine-purges — the delivered message ages out of custody on the frame-global TTL
-     * uniformly on every node (docs/ENCRYPTED_RECEIPTS_REACTIONS.md). Runs inside the ctl commit.
+     * tick's shape) and store the acker [ackerFor] attributes it to, which is where a group's
+     * per-recipient list comes from. Deliberately NO [ForwardSync.onAck]: a carrier can't read a sealed
+     * receipt, so nobody vaccine-purges — the delivered message ages out of custody on the frame-global
+     * TTL uniformly on every node (docs/ENCRYPTED_RECEIPTS_REACTIONS.md). Runs inside the ctl commit.
      *
      * [plane] is the plane the sealed receipt arrived on, stored with the tick: [DeliveryPlane.Internet]
      * means the peer answered us across a spool rather than from radio range. This is the DM path, so it is
@@ -818,7 +862,7 @@ class InboundPipeline(
         ackId ?: return
         val recipientOfAcked = messages.recipientOf(ackId)
         if (recipientOfAcked == null || recipientOfAcked == env.senderId) {
-            messages.markReceived(ackId, plane)
+            receipts.record(ackId, ackerFor(env, ackId, recipientOfAcked), plane, clock())
         }
     }
 

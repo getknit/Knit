@@ -43,8 +43,8 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v5) creates and opens from the exported JSON`() {
-        val version = 5 // KnitDatabase @Database(version = 5) — bump alongside the DB (its retention is CLASS,
+    fun `the current schema (v6) creates and opens from the exported JSON`() {
+        val version = 6 // KnitDatabase @Database(version = 6) — bump alongside the DB (its retention is CLASS,
         // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
         helper.createDatabase(version).close()
     }
@@ -174,6 +174,40 @@ class KnitDatabaseMigrationTest {
                 assertEquals("image/jpeg", s.getText(1))
                 assertTrue(s.isNull(2))
                 assertTrue(s.isNull(3))
+            }
+        }
+    }
+
+    @Test
+    fun `migrate 5 to 6 adds an empty message_receipts table and keeps an already-ticked message`() {
+        // There is nothing to backfill and backfilling would be a lie: an already-received message was
+        // acked before this device recorded ackers, so we know somebody got it and cannot say who. The
+        // message-details screen reads exactly that — ticked with no rows means "predates the table", and
+        // it shows no roster rather than accusing every member of missing it.
+        helper.createDatabase(5).use { c ->
+            c.execSQL(
+                "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, receivedVia, " +
+                    "mentions, replyToHasAttachment, moderation, pendingKey, kind) " +
+                    "VALUES ('m1','me','g-1','hello',1,1,1,'[]',0,0,0,0)",
+            )
+        }
+        helper.runMigrationsAndValidate(6, listOf(KnitMigrations.MIGRATION_5_6)).use { c ->
+            c.prepare("SELECT body, received FROM messages WHERE id = 'm1'").use { s ->
+                assertTrue(s.step())
+                assertEquals("hello", s.getText(0))
+                assertEquals(1L, s.getLong(1))
+            }
+            c.prepare("SELECT COUNT(*) FROM message_receipts").use { s ->
+                assertTrue(s.step())
+                assertEquals(0L, s.getLong(0))
+            }
+            // The table is usable straight away, and its composite key absorbs a duplicate receipt.
+            c.execSQL("INSERT INTO message_receipts (messageId, ackerNodeId, notedAt, via) VALUES ('m1','sam',9,1)")
+            c.execSQL("INSERT OR IGNORE INTO message_receipts (messageId, ackerNodeId, notedAt, via) VALUES ('m1','sam',99,2)")
+            c.prepare("SELECT notedAt, via FROM message_receipts WHERE messageId = 'm1' AND ackerNodeId = 'sam'").use { s ->
+                assertTrue(s.step())
+                assertEquals(9L, s.getLong(0))
+                assertEquals(1L, s.getLong(1))
             }
         }
     }

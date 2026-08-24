@@ -12,6 +12,7 @@ import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GallerySaver
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.KnitDatabase
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
@@ -86,6 +87,7 @@ val appModule =
         single { get<KnitDatabase>().ratchetDao() }
         single { get<KnitDatabase>().groupRatchetDao() }
         single { get<KnitDatabase>().groupRootDao() }
+        single { get<KnitDatabase>().messageReceiptDao() }
         single { MessageRepository(get()) }
         single { PeerRepository(get()) }
         // Crash reports. The capture-side CrashStore is built by hand in KnitApplication.onCreate BEFORE
@@ -97,6 +99,9 @@ val appModule =
         // the encrypted DB and DataStore) and stages the share copy under cacheDir/crash.
         single { CrashReports(androidContext(), get(), get(), get(), get()) }
         single { ReactionRepository(get(), get()) }
+        // Who has acked each message — the message-details screen's per-recipient delivery split. Owns the
+        // delivery write (tick + acker row in one transaction), so it wraps MessageRepository.
+        single { MessageReceiptRepository(get(), get(), get()) }
         // BlobRepository: blobDao, messageDao, peerDao, settings, blobVerdictDao, groupDao, forwardDao, db.
         single { BlobRepository(get(), get(), get(), get(), get(), get(), get(), get()) }
         single { GroupRepository(get(), get(), get(), get(), get()) }

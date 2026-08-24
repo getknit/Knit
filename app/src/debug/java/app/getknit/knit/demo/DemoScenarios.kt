@@ -41,6 +41,10 @@ data class DemoMsg(
     val minsAgo: Long,
     val mentionsMe: Boolean = false,
     val reactions: List<DemoReaction> = emptyList(),
+    // Members whose delivery receipt has come back, for one of OUR messages — the per-recipient split on
+    // "Message info". Seeded rather than implied by `received`, because a partial delivery (some members
+    // in, one still waiting) is exactly the state worth auditing and no aggregate flag can express it.
+    val deliveredTo: List<Slot> = emptyList(),
     val replyTo: String? = null,
     val image: String? = null,
     // MIME of [image]: "image/jpeg" for the bundled scene photos, "image/webp" for the animated GIF beat
@@ -182,6 +186,9 @@ private val HIKING_SCENARIO =
                     Slot.ME,
                     "Works for me. I'll grab snacks.",
                     290,
+                    // Partial delivery, deliberately: this is the message the seeded/a11y runs open
+                    // "Message info" on, so it must exercise both halves of the delivered/waiting split.
+                    deliveredTo = listOf(Slot.SAM, Slot.PRIYA),
                     // Several reactors, deliberately: this is the message the seeded/a11y runs open
                     // "Message info" on, and one reactor would not exercise the emoji filter chips.
                     reactions =

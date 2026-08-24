@@ -115,11 +115,12 @@ val meshModule =
         // shipped build cannot be pointed at a plaintext relay. The plane itself stays dark until the user
         // opts in AND configures a spool — see SettingsStore.spoolEnabled.
         single<SpoolDialer> { OkHttpSpoolDialer(allowCleartext = BuildConfig.DEBUG) }
-        // Constructor order: transport, messages, groups, reactions, peers, identity, settings, blobs,
-        // imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet,
+        // Constructor order: transport, messages, receipts, groups, reactions, peers, identity, settings,
+        // blobs, imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet,
         // groupRatchet, groupRoots, scope, metrics, db, spoolDialer.
         single {
             MeshManager(
+                get(),
                 get(),
                 get(),
                 get(),

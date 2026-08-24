@@ -30,6 +30,8 @@ import app.getknit.knit.data.ratchet.RatchetSessionEntity
 import app.getknit.knit.data.ratchet.RatchetSkippedKeyEntity
 import app.getknit.knit.data.reaction.ReactionDao
 import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.data.receipt.MessageReceiptDao
+import app.getknit.knit.data.receipt.MessageReceiptEntity
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
 @Database(
@@ -40,7 +42,7 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         RatchetRecvEpochEntity::class, RatchetSkippedKeyEntity::class,
         GroupSendChainEntity::class, GroupRecvChainEntity::class,
         GroupSkippedKeyEntity::class, GroupKeySendEntity::class,
-        GroupRootEntity::class,
+        GroupRootEntity::class, MessageReceiptEntity::class,
     ],
     // v1: frozen launch baseline. The pre-1.0 alpha schema churn (the old destructive v2…v22 bumps that
     //     rode the wire/crypto breaks) is collapsed; docs/WIRE_COMPAT.md keeps the historical break record.
@@ -60,7 +62,11 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     //     the sending and receiving side, so voice notes need no wire field at all; null on every existing
     //     row, which is honest (a pre-upgrade voice note simply re-derives them when next played);
     //     migrated by KnitMigrations.MIGRATION_4_5.
-    version = 5,
+    // v6: one `message_receipts` table — who has acked each message (the message-details screen's
+    //     "delivered to / waiting on" split for a group send). Local bookkeeping only: the acker was always
+    //     on the wire as the receipt's authenticated senderId, the tick's "≥1 recipient" semantic is
+    //     unchanged, and no digest folds over it; migrated by KnitMigrations.MIGRATION_5_6.
+    version = 6,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without
@@ -87,6 +93,8 @@ abstract class KnitDatabase : RoomDatabase() {
     abstract fun groupRatchetDao(): GroupRatchetDao
 
     abstract fun groupRootDao(): GroupRootDao
+
+    abstract fun messageReceiptDao(): MessageReceiptDao
 
     companion object {
         /**

@@ -1,0 +1,40 @@
+package app.getknit.knit.data.receipt
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface MessageReceiptDao {
+    /**
+     * Records one acker's receipt, keeping the row already stored. First-evidence-wins by construction:
+     * a receipt is re-served routinely (a custody replay, a retried tick, a batch covering an id we have
+     * already seen), and only the first crossing describes when the message actually got there.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(receipt: MessageReceiptEntity)
+
+    /**
+     * Everyone whose receipt for [messageId] has reached us, oldest first — the per-recipient rows the
+     * message-details screen splits into "delivered to" and "waiting on". Narrowed by the `messageId`
+     * index.
+     */
+    @Query("SELECT * FROM message_receipts WHERE messageId = :messageId ORDER BY notedAt ASC")
+    fun observeForMessage(messageId: String): Flow<List<MessageReceiptEntity>>
+
+    /** Drops every receipt for a message (there is no FK cascade) when the message is deleted. */
+    @Query("DELETE FROM message_receipts WHERE messageId = :messageId")
+    suspend fun deleteForMessage(messageId: String)
+
+    /**
+     * Reclaims receipt rows whose message is no longer stored (the table has no FK cascade) — left behind
+     * by a deleted conversation, a group leave, or either retention trim. Unlike
+     * [app.getknit.knit.data.reaction.ReactionDao.deleteOrphansOlderThan] this needs no age floor: a
+     * receipt is only ever written for a message we already hold, so an orphan can only mean the message
+     * has since gone.
+     */
+    @Query("DELETE FROM message_receipts WHERE messageId NOT IN (SELECT id FROM messages)")
+    suspend fun deleteOrphans()
+}

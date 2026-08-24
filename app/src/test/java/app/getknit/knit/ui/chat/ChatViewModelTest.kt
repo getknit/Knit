@@ -9,6 +9,7 @@ import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GallerySaver
 import app.getknit.knit.data.GroupRepository
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
@@ -64,6 +65,7 @@ class ChatViewModelTest {
     private val groups = mockk<GroupRepository>(relaxed = true)
     private val peers = mockk<PeerRepository>(relaxed = true)
     private val reactions = mockk<ReactionRepository>(relaxed = true)
+    private val receipts = mockk<MessageReceiptRepository>(relaxed = true)
     private val mesh = FakeMeshController()
     private val identity = mockk<Identity>(relaxed = true)
     private val settings = mockk<SettingsStore>(relaxed = true)
@@ -118,6 +120,7 @@ class ChatViewModelTest {
             groups,
             peers,
             reactions,
+            receipts,
             mesh,
             identity,
             settings,

@@ -61,6 +61,13 @@ land atomically; a crash re-processes cleanly on re-serve):
   2 × the send-side batch cap (128), the forged-ack guard run **per id**:
   `recipientOf(id) == null || == sender`. The null arm is load-bearing: a group/broadcast message
   has no `recipientId`, and that IS the sealed group tick.
+  Since DB v6 the same call also records **who** acked, in the local `message_receipts` table
+  (`MessageReceiptRepository.record`, one transaction with the tick) — that is what lets "Message info"
+  name the members a group send has reached and the ones it hasn't (ADR 036). Nothing about it is a wire
+  change: the acker was always the receipt's authenticated `senderId`, and the tick still means "≥1
+  recipient received it". The one asymmetry to preserve: the **row** is gated on roster membership
+  (`InboundPipeline.ackerFor`) because the null arm would otherwise let any signed node write itself into
+  that list; the **tick** is not, and must never inherit that gate.
 - `CTL_REACTION` → `ReactionRepository.apply(messageId, sender, emoji, frame.sentAt)` — the same
   table and the same LWW clock as the cleartext path, so mixed-form retract/replace races converge
   regardless of which form each emit rode. Orphan-permissive (target may not have arrived; the 24 h

@@ -103,9 +103,11 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun internetRelays() = audit(route = "relays") { awaitTag("relays_switch") }
 
-    // demo-group-4 is seeded with three reactors across two emoji, so this audits the populated screen —
-    // the filter chips and the people list — not the empty state.
-    @Test fun messageDetails() = audit(route = "messageDetails/demo-group-4") { awaitTag("reactor_row_samr1v00") }
+    // demo-group-4 is one of ours, seeded with three reactors across two emoji AND delivered to two of its
+    // three other members, so this audits the populated screen — the filter chips, the people list, and both
+    // halves of the delivered/waiting split (whose rows carry their status in their own description, since a
+    // section header is not announced with the rows beneath it) — not the empty state.
+    @Test fun messageDetails() = audit(route = "messageDetails/demo-group-4") { awaitTag("recipient_row_samr1v00") }
 
     // The seeded build plants one synthetic crash (DemoSeeder.seedCrashReport), so this audits the real
     // screen — dense monospace trace and the error-tinted destructive action — not the empty state.

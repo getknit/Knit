@@ -7,6 +7,7 @@ import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
@@ -182,6 +183,7 @@ class MeshManagerTest {
         val transport = RecordingTransport()
         val forwardStore = FakeForwardStore()
         val messages = mockk<MessageRepository>(relaxed = true)
+        val receipts = mockk<MessageReceiptRepository>(relaxed = true)
         val peers = mockk<PeerRepository>(relaxed = true)
         val blobs = mockk<BlobRepository>(relaxed = true)
         val groups = mockk<GroupRepository>(relaxed = true)
@@ -226,6 +228,7 @@ class MeshManagerTest {
                 MeshManager(
                     transport = transport,
                     messages = messages,
+                    receipts = receipts,
                     groups = groups,
                     reactions = reactions,
                     peers = peers,

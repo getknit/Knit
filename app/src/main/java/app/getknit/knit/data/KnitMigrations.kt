@@ -152,6 +152,30 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v6 — per-recipient delivery: one `message_receipts` table recording which node's receipt flipped
+     * a message's tick, so the message-details screen can name the members a group send has reached and
+     * the ones it hasn't. Purely local bookkeeping — the acker was always on the wire as the receipt's
+     * authenticated `senderId`, the tick's "≥1 recipient received it" semantic is unchanged, and no
+     * content digest folds over this table. Existing messages get no rows, which is what the UI's
+     * "already ✓✓ but no rows = predates the feature, show no roster" fallback expects: we never observed
+     * who acked them and must not invent it. Additive only; the SQL must stay byte-equivalent to what Room
+     * generates for `app/schemas/**/6.json`.
+     */
+    val MIGRATION_5_6 =
+        object : Migration(5, 6) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `message_receipts` (" +
+                        "`messageId` TEXT NOT NULL, `ackerNodeId` TEXT NOT NULL, `notedAt` INTEGER NOT NULL, " +
+                        "`via` INTEGER NOT NULL, PRIMARY KEY(`messageId`, `ackerNodeId`))",
+                )
+                connection.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_message_receipts_messageId` ON `message_receipts` (`messageId`)",
+                )
+            }
+        }
+
     /** All migrations, applied by Room in order. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
 }

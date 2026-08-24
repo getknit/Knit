@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -41,6 +42,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -57,9 +60,10 @@ import org.koin.core.parameter.parametersOf
 private const val MAX_BODY_LINES = 4
 
 /**
- * "Message info" (keyed by [messageId]), reached from a message's long-press menu: everyone who reacted,
- * by display name and with the emoji they left, plus the per-message metadata the bubble has no room for
- * — when it was sent, and how far it got.
+ * "Message info" (keyed by [messageId]), reached from a message's long-press menu: for a message we sent,
+ * which people it has actually reached and which it hasn't; then everyone who reacted, by display name and
+ * with the emoji they left, plus the per-message metadata the bubble has no room for — when it was sent,
+ * and how far it got.
  *
  * The reaction chip under a bubble can only say "👍 3"; this is where the *which three* lives. Tapping a
  * reactor opens their profile ([onOpenProfile]); your own row is labelled "You" and isn't tappable, the
@@ -129,6 +133,10 @@ internal fun MessageDetailsScreenContent(
         ) {
             item { MessageSummary(state) }
             item { HorizontalDivider() }
+            if (state.showRecipients) {
+                recipientSections(state, onOpenProfile)
+                item { HorizontalDivider() }
+            }
             if (state.reactors.isEmpty()) {
                 item {
                     Text(
@@ -235,6 +243,115 @@ private fun MessageSummary(state: MessageDetailsUiState) {
     }
 }
 
+/**
+ * The per-recipient delivery split: who a message we sent has reached, then who it hasn't. The second half
+ * is absent in the broadcast room, which has no roster to be waiting on — there the first header drops the
+ * denominator and reads "Received by N" instead.
+ */
+private fun LazyListScope.recipientSections(
+    state: MessageDetailsUiState,
+    onOpenProfile: (nodeId: String) -> Unit,
+) {
+    item {
+        SectionHeader(
+            text =
+                if (state.recipientTotal > 0) {
+                    stringResource(R.string.message_details_delivered_to, state.deliveredTo.size, state.recipientTotal)
+                } else {
+                    stringResource(R.string.message_details_received_by, state.deliveredTo.size)
+                },
+            testTag = "message_details_delivered_header",
+        )
+    }
+    items(state.deliveredTo, key = { "delivered_${it.nodeId}" }) { recipient ->
+        RecipientListRow(recipient = recipient, onOpen = onOpenProfile)
+    }
+    if (state.waitingOn.isNotEmpty()) {
+        item {
+            SectionHeader(
+                text = stringResource(R.string.message_details_waiting_on),
+                testTag = "message_details_waiting_header",
+            )
+        }
+        items(state.waitingOn, key = { "waiting_${it.nodeId}" }) { recipient ->
+            RecipientListRow(recipient = recipient, onOpen = onOpenProfile)
+        }
+    }
+}
+
+/** A list-section label. Its own composable so the two delivery headers can't drift apart. */
+@Composable
+private fun SectionHeader(
+    text: String,
+    testTag: String,
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.testTag(testTag),
+    )
+}
+
+/**
+ * One recipient: avatar + name, and the time their receipt reached us, trailing — blank while we are still
+ * waiting on them.
+ *
+ * The section header above is not announced with the rows beneath it, so each row carries its own status in
+ * its content description; the trailing time alone would leave a waiting row saying nothing at all. Same
+ * rule [deliveryLabel] enforces for the bubble's tick — the glyph (or its absence) never carries the
+ * meaning.
+ */
+@Composable
+private fun RecipientListRow(
+    recipient: RecipientRow,
+    onOpen: (nodeId: String) -> Unit,
+) {
+    val context = LocalContext.current
+    val delivered =
+        recipient.deliveredAt?.let {
+            DateUtils.formatDateTime(context, it, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME)
+        }
+    val description =
+        if (delivered != null) {
+            stringResource(R.string.message_details_recipient_delivered, recipient.displayName, delivered)
+        } else {
+            stringResource(R.string.message_details_recipient_waiting, recipient.displayName)
+        }
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                // Clickable merges the row's children, so it is announced as one node; the description
+                // replaces that merged text with the status the header would otherwise have to carry.
+                .clickable(
+                    onClickLabel = stringResource(R.string.chat_view_profile, recipient.displayName),
+                    role = Role.Button,
+                ) { onOpen(recipient.nodeId) }
+                .semantics { contentDescription = description }
+                .testTag("recipient_row_${recipient.nodeId}")
+                .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Avatar(avatarHash = recipient.avatarHash, name = recipient.displayName, size = 40.dp)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = recipient.displayName,
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (delivered != null) {
+            Text(
+                text = delivered,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 /** All + one chip per emoji, filtering the list below. Chip order is fixed by the ViewModel. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -307,7 +424,7 @@ private fun ReactorListRow(
     }
 }
 
-@Preview(name = "Message details — reactions")
+@Preview(name = "Message details — delivery + reactions")
 @Composable
 fun MessageDetailsScreenPreview() =
     KnitPreview {
@@ -322,6 +439,14 @@ fun MessageDetailsScreenPreview() =
                     sentAt = PREVIEW_NOW - 10 * 60_000L,
                     delivery = DeliveryStatus.Delivered,
                     plane = DeliveryPlane.Internet,
+                    showRecipients = true,
+                    deliveredTo =
+                        listOf(
+                            RecipientRow("samr1v00", "Sam Rivera", null, PREVIEW_NOW - 9 * 60_000L),
+                            RecipientRow("priya001", "Priya Nair", null, PREVIEW_NOW - 5 * 60_000L),
+                        ),
+                    waitingOn = listOf(RecipientRow("theod001", "Theo Diaz", null, null)),
+                    recipientTotal = 3,
                     reactors =
                         listOf(
                             ReactorRow("samr1v00", "Sam Rivera", null, "👍", PREVIEW_NOW - 9 * 60_000L, false),

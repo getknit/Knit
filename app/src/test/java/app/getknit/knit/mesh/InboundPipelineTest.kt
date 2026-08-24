@@ -7,6 +7,7 @@ import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
@@ -21,6 +22,7 @@ import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.data.receipt.MessageReceiptEntity
 import app.getknit.knit.data.settings.InboundSettings
 import app.getknit.knit.identity.IdentitySource
 import app.getknit.knit.identity.NodeId
@@ -200,6 +202,10 @@ class InboundPipelineTest {
         val groupMap = ConcurrentHashMap<String, GroupEntity>()
         val peers = mockk<PeerRepository>(relaxed = true)
         val messages = mockk<MessageRepository>(relaxed = true)
+
+        // (messageId, acker) -> the stored per-recipient delivery row, so a test can assert WHO acked.
+        val receiptMap = ConcurrentHashMap<Pair<String, String>, MessageReceiptEntity>()
+        val receipts = mockk<MessageReceiptRepository>(relaxed = true)
         val groups = mockk<GroupRepository>(relaxed = true)
         val reactions = mockk<ReactionRepository>(relaxed = true)
         val blobs = mockk<BlobRepository>(relaxed = true)
@@ -279,6 +285,17 @@ class InboundPipelineTest {
             coEvery { messages.exists(any()) } answers { msgMap.containsKey(firstArg<String>()) }
             coEvery { messages.save(any()) } answers { msgMap[firstArg<MessageEntity>().id] = firstArg() }
             coEvery { messages.recipientOf(any()) } answers { msgMap[firstArg<String>()]?.recipientId }
+            coEvery { messages.conversationOf(any()) } answers { msgMap[firstArg<String>()]?.conversationId }
+            // The real repository writes the tick and the acker row in one transaction; the fake keeps that
+            // pairing so the existing markReceived verifications still describe what the pipeline did.
+            coEvery { receipts.record(any(), any(), any(), any()) } coAnswers {
+                val id = firstArg<String>()
+                val acker = secondArg<String?>()
+                val via = thirdArg<DeliveryPlane>()
+                messages.markReceived(id, via)
+                if (acker != null) receiptMap.putIfAbsent(id to acker, MessageReceiptEntity(id, acker, arg(3), via.code))
+                Unit
+            }
             coEvery { groups.find(any()) } answers { groupMap[firstArg()] }
             coEvery { groups.upsert(any()) } answers { groupMap[firstArg<GroupEntity>().groupId] = firstArg() }
             // isAccepted's group branch reads the thread's senders; back it with the fake message map.
@@ -296,6 +313,7 @@ class InboundPipelineTest {
                 InboundPipeline(
                     transport = transport,
                     messages = messages,
+                    receipts = receipts,
                     groups = groups,
                     reactions = reactions,
                     peers = peers,
@@ -2975,6 +2993,130 @@ class InboundPipelineTest {
             rig.deliver(alice, V2Author(alice, rig).dm("ctl-r3", "", ctl = MessageContent.CTL_RECEIPT, ack = "gm-out"))
 
             coVerify(exactly = 1) { rig.messages.markReceived("gm-out", DeliveryPlane.Nearby) }
+        }
+
+    // --- Per-recipient delivery: the receipt's acker, kept locally (message_receipts) ---
+    //
+    // The acker was always on the wire as the receipt's authenticated senderId; these pin that we now
+    // store it, and — the part that matters — that storing it changes NOTHING about when the tick flips.
+    // The tick's "≥1 recipient received it" rule is a wire semantic; the row is local bookkeeping, so the
+    // row (and only the row) takes a roster gate the tick must never inherit.
+
+    @Test
+    fun aGroupMembersSealedTickRecordsWhichMemberItWas() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.seedGroup("g-2", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = rig.self.nodeId)
+            rig.msgMap["gm-1"] =
+                MessageEntity(id = "gm-1", senderId = rig.self.nodeId, conversationId = "g-2", body = "", sentAt = 1L)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("ctl-p1", "", ctl = MessageContent.CTL_RECEIPT, ack = "gm-1"))
+
+            coVerify(exactly = 1) { rig.messages.markReceived("gm-1", DeliveryPlane.Nearby) }
+            assertEquals(alice.nodeId, rig.receiptMap["gm-1" to alice.nodeId]?.ackerNodeId)
+            assertEquals(DeliveryPlane.Nearby.code, rig.receiptMap["gm-1" to alice.nodeId]?.via)
+        }
+
+    @Test
+    fun aNonMembersGroupTickStillFlipsTheTickButNamesNobody() =
+        runTest {
+            // The forged-ack guard's null arm accepts any signed sender, and it must keep doing so — that
+            // null arm IS the group tick (ADR 033). What must NOT happen is a stranger writing themselves
+            // into the roster list the author reads as "who has this".
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.seedGroup("g-3", members = listOf(rig.self.nodeId, "sam"), createdBy = rig.self.nodeId)
+            rig.msgMap["gm-2"] =
+                MessageEntity(id = "gm-2", senderId = rig.self.nodeId, conversationId = "g-3", body = "", sentAt = 1L)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("ctl-p2", "", ctl = MessageContent.CTL_RECEIPT, ack = "gm-2"))
+
+            coVerify(exactly = 1) { rig.messages.markReceived("gm-2", DeliveryPlane.Nearby) }
+            assertTrue(rig.receiptMap.isEmpty())
+        }
+
+    @Test
+    fun aBatchedSealedTickRecordsItsSenderAgainstEveryIdItCovers() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.seedGroup("g-4", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = rig.self.nodeId)
+            rig.msgMap["gb-a"] =
+                MessageEntity(id = "gb-a", senderId = rig.self.nodeId, conversationId = "g-4", body = "", sentAt = 1L)
+            rig.msgMap["gb-b"] =
+                MessageEntity(id = "gb-b", senderId = rig.self.nodeId, conversationId = "g-4", body = "", sentAt = 1L)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("ctl-p3", "", ctl = MessageContent.CTL_RECEIPT, acks = listOf("gb-a", "gb-b")))
+
+            assertEquals(setOf("gb-a" to alice.nodeId, "gb-b" to alice.nodeId), rig.receiptMap.keys.toSet())
+        }
+
+    @Test
+    fun aCleartextBroadcastReceiptRecordsItsSender() =
+        runTest {
+            // The public room has no roster to check against, so any signed peer counts — an open
+            // "received by" list is the only honest shape there.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.msgMap["room-1"] =
+                MessageEntity(
+                    id = "room-1",
+                    senderId = rig.self.nodeId,
+                    conversationId = Conversations.NEARBY,
+                    body = "",
+                    sentAt = 1L,
+                )
+            val env = rig.receipt(alice, ackId = "room-1")
+
+            rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
+
+            assertEquals(alice.nodeId, rig.receiptMap["room-1" to alice.nodeId]?.ackerNodeId)
+        }
+
+    @Test
+    fun aReServedReceiptKeepsTheFirstCrossingsTimeAndPlane() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.seedGroup("g-5", members = listOf(rig.self.nodeId, alice.nodeId), createdBy = rig.self.nodeId)
+            rig.msgMap["gm-3"] =
+                MessageEntity(id = "gm-3", senderId = rig.self.nodeId, conversationId = "g-5", body = "", sentAt = 1L)
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("ctl-p4", "", ctl = MessageContent.CTL_RECEIPT, ack = "gm-3"))
+            val first = rig.receiptMap.getValue("gm-3" to alice.nodeId)
+            rig.nowMs += 60_000L
+            rig.deliver(
+                alice,
+                author.dm("ctl-p5", "", ctl = MessageContent.CTL_RECEIPT, ack = "gm-3"),
+                from = ScopeSync.SPOOL_SOURCE_PREFIX + "spool.example",
+            )
+
+            // First evidence wins on BOTH columns, the markReceived rule one table over: the row says when
+            // the message got there and how, not every route its receipt has since travelled.
+            assertEquals(first, rig.receiptMap.getValue("gm-3" to alice.nodeId))
+            assertEquals(DeliveryPlane.Nearby.code, rig.receiptMap.getValue("gm-3" to alice.nodeId).via)
+        }
+
+    @Test
+    fun aReceiptForAMessageWeDoNotHoldRecordsNothing() =
+        runTest {
+            // markReceived is already a harmless no-op for an unheld id; the row must be too, or a peer
+            // could plant orphans keyed on ids we never sent.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val env = rig.receipt(alice, ackId = "never-sent")
+
+            rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
+
+            assertTrue(rig.receiptMap.isEmpty())
         }
 
     @Test

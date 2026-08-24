@@ -7,6 +7,7 @@ import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
+import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
@@ -96,6 +97,9 @@ import java.util.concurrent.ConcurrentHashMap
 class MeshManager(
     private val transport: MeshTransport,
     private val messages: MessageRepository,
+    // Who has acked each message. Owns the delivery write (tick + per-acker row in one transaction), so
+    // the inbound receipt paths go through it rather than straight to [messages].
+    private val receipts: MessageReceiptRepository,
     private val groups: GroupRepository,
     private val reactions: ReactionRepository,
     private val peers: PeerRepository,
@@ -212,6 +216,7 @@ class MeshManager(
         InboundPipeline(
             transport = transport,
             messages = messages,
+            receipts = receipts,
             groups = groups,
             reactions = reactions,
             peers = peers,
@@ -1393,11 +1398,12 @@ class MeshManager(
         if (recipientId != null) transport.fastSend(wire, Peer(recipientId)) else transport.fastFanout(wire)
     }
 
-    /** On startup, sweep orphaned blobs/reactions and re-request attachment blobs we're still missing. */
+    /** On startup, sweep orphaned blobs/reactions/receipts and re-request attachment blobs we're still missing. */
     private fun resumePendingFetches(session: CoroutineScope) {
         session.launch {
             blobs.deleteOrphans() // reclaim blobs left by attachments staged but never sent (keeps carried ones)
             reactions.deleteOrphans(clock()) // reclaim reactions left by deleted messages
+            receipts.deleteOrphans() // ...and per-recipient delivery rows left by a deleted thread or a retention trim
             forwardSync.sweepExpired() // drop carried DMs whose TTL elapsed while we were down
             pendingInbound.sweepExpired() // and any key-wait frames whose TTL lapsed (in-memory, so usually a no-op)
             keyExchange.sweepExpired() // stale unauthenticated key-wants

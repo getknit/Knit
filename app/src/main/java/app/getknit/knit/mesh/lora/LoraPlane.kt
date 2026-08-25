@@ -1,0 +1,42 @@
+package app.getknit.knit.mesh.lora
+
+/**
+ * The LoRa plane's state as the connection header reports it — the board's counterpart of
+ * `RelayPlane`: one answer for the whole device, coarse on purpose (the header has room for a glyph;
+ * *which* board, its signal and its channel stay on the LoRa radio screen).
+ */
+enum class LoraPlane {
+    /** The plane is switched off, or no board is bound — the header says nothing about LoRa at all. */
+    Off,
+
+    /** A board is bound but the link is not up (connecting, reconnecting, pairing needed, Bluetooth off). */
+    Down,
+
+    /** The board session is ready: frames are crossing the air. */
+    Live,
+}
+
+/**
+ * What the chat UI reasons about the LoRa plane, flattened out of `LoraStatus` + settings: the header
+ * [plane], and whether private messages ride it ([dms] — `SettingsStore.loraDmEnabled`, true only while
+ * the plane is on). One flow rather than two so every ViewModel takes a single `Flow<LoraFacts>`.
+ */
+data class LoraFacts(
+    val plane: LoraPlane = LoraPlane.Off,
+    val dms: Boolean = false,
+)
+
+/**
+ * The [LoraPlane] for the settings + link state. Off outranks the link: a board that is still connected
+ * while the user switches the plane off is on its way down, and Off is what they asked for.
+ */
+internal fun loraPlaneFor(
+    enabled: Boolean,
+    bound: Boolean,
+    state: LinkState,
+): LoraPlane =
+    when {
+        !enabled || !bound -> LoraPlane.Off
+        state is LinkState.Ready -> LoraPlane.Live
+        else -> LoraPlane.Down
+    }

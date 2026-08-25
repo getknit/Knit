@@ -16,6 +16,7 @@ import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
+import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.ui.chat.DeliveryStatus
 import app.getknit.knit.ui.group
 import app.getknit.knit.ui.msg
@@ -63,6 +64,7 @@ class ChatListViewModelTest {
 
     // A finite stand-in for the production poller, which never idles under a virtual clock.
     private val relayFlow = MutableStateFlow(RelayFacts())
+    private val loraFlow = MutableStateFlow(LoraFacts())
 
     @Before
     fun setUp() {
@@ -81,7 +83,7 @@ class ChatListViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = ChatListViewModel(messages, peers, settings, identity, mesh, groups, relayFlow, context)
+    private fun vm() = ChatListViewModel(messages, peers, settings, identity, mesh, groups, relayFlow, loraFlow, context)
 
     @Test
     fun nearbyRoomIsAlwaysPresentEvenWithNoMessages() =

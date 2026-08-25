@@ -71,6 +71,7 @@ import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.isIgnoringBatteryOptimizations
 import app.getknit.knit.ui.preview.KnitPreview
@@ -420,9 +421,21 @@ private fun LoraRadioRow(
 ) {
     val subtitle =
         when {
-            !summary.enabled -> stringResource(R.string.lora_summary_off)
-            summary.boardName != null -> stringResource(R.string.lora_summary_on, summary.boardName)
-            else -> stringResource(R.string.lora_summary_connecting)
+            !summary.enabled -> {
+                stringResource(R.string.lora_summary_off)
+            }
+
+            summary.plane == LoraPlane.Live && summary.boardName != null -> {
+                stringResource(R.string.lora_summary_connected, summary.boardName)
+            }
+
+            summary.boardName != null -> {
+                stringResource(R.string.lora_summary_disconnected, summary.boardName)
+            }
+
+            else -> {
+                stringResource(R.string.lora_summary_connecting)
+            }
         }
     Row(
         modifier =

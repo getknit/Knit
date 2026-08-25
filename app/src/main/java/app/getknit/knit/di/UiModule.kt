@@ -1,6 +1,7 @@
 package app.getknit.knit.di
 
 import app.getknit.knit.data.relay.RelayStatusRepository
+import app.getknit.knit.mesh.lora.LoraStatusRepository
 import app.getknit.knit.ui.blocked.BlockedUsersViewModel
 import app.getknit.knit.ui.chat.ChatViewModel
 import app.getknit.knit.ui.chat.MessageDetailsViewModel
@@ -41,16 +42,29 @@ val uiModule =
                 get(),
                 get(),
                 get<RelayStatusRepository>().facts,
+                get<LoraStatusRepository>().facts,
                 androidContext(),
             )
         }
         viewModel {
-            ChatListViewModel(get(), get(), get(), get(), get(), get(), get<RelayStatusRepository>().facts, androidContext())
+            ChatListViewModel(
+                get(),
+                get(),
+                get(),
+                get(),
+                get(),
+                get(),
+                get<RelayStatusRepository>().facts,
+                get<LoraStatusRepository>().facts,
+                androidContext(),
+            )
         }
         viewModel { ContactsViewModel(get(), get(), get(), get(), get(), get()) }
         viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
         viewModel { CrashLogViewModel(get()) }
-        viewModel { ProfileViewModel(get(), get(), get(), get(), get<RelayStatusRepository>().facts) }
+        viewModel {
+            ProfileViewModel(get(), get(), get(), get(), get<RelayStatusRepository>().facts, get<LoraStatusRepository>().facts)
+        }
         // ProfileDetailsViewModel takes the tapped peer's node id as a runtime param.
         viewModel { params -> ProfileDetailsViewModel(params.get(), get(), get(), get(), get()) }
         // MessageDetailsViewModel takes the long-pressed message's id as a runtime param.

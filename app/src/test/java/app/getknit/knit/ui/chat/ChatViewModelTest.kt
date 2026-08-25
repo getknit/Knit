@@ -25,6 +25,7 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.b64
+import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.msg
@@ -89,6 +90,7 @@ class ChatViewModelTest {
     private val spoolEnabledFlow = MutableStateFlow(false)
     private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
     private val relayFactsFlow = MutableStateFlow(RelayFacts())
+    private val loraFactsFlow = MutableStateFlow(LoraFacts())
     private val deliveredCountsFlow = MutableStateFlow(emptyMap<String, Int>())
 
     @Before
@@ -150,6 +152,7 @@ class ChatViewModelTest {
             // `while(true) { emit; delay }`, and under runTest's virtual clock that delay is instant, so
             // `advanceUntilIdle()` below would never reach idle.
             relayFactsFlow,
+            loraFactsFlow,
             context,
         )
 

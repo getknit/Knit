@@ -6,6 +6,7 @@ import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.mesh.lora.LoraFacts
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -62,7 +63,7 @@ class ProfileViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = ProfileViewModel(settings, identity, avatars, blobs, MutableStateFlow(RelayFacts()))
+    private fun vm() = ProfileViewModel(settings, identity, avatars, blobs, MutableStateFlow(RelayFacts()), MutableStateFlow(LoraFacts()))
 
     @Test
     fun loadsPersistedProfileAndIsNotDirty() =

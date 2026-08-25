@@ -5,7 +5,7 @@ import androidx.lifecycle.viewModelScope
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.LinkState
-import app.getknit.knit.mesh.lora.LoraMeshTransport
+import app.getknit.knit.mesh.lora.LoraPlaneStatus
 import app.getknit.knit.mesh.lora.ProvisionResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -52,7 +52,7 @@ data class LoraRadioUiState(
  */
 internal class LoraRadioViewModel(
     private val settings: SettingsStore,
-    private val lora: LoraMeshTransport,
+    private val lora: LoraPlaneStatus,
     private val boards: BoardDirectory,
 ) : ViewModel() {
     // Transient, action-driven UI state (the provisioning spinner + its outcome) that isn't in a settings flow.

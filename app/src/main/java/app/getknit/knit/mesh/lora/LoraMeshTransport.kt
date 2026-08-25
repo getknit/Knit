@@ -70,7 +70,8 @@ internal class LoraMeshTransport(
     private val wallClock: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {},
     private val pace: LoraPacePolicy = LoraPacePolicy(),
-) : MeshTransport {
+) : MeshTransport,
+    LoraPlaneStatus {
     override val kind = TransportKind.LoRa
     override val hasFastPlane = true
     override val shortRange = false
@@ -92,7 +93,7 @@ internal class LoraMeshTransport(
     private val _status = MutableStateFlow(LoraStatus())
 
     /** A snapshot for the LoRa settings row + the `…debug.LORA` bridge; derived, never routing-affecting. */
-    val status = _status.asStateFlow()
+    override val status = _status.asStateFlow()
 
     // Coordination-plane dedup keyed on the first 8 bytes of the Ed25519 sig: records every frame we send
     // OR receive over LoRa, so (a) a frame heard over LoRa is not re-fanned back over it (the composite
@@ -160,7 +161,7 @@ internal class LoraMeshTransport(
      * channel by hand in the Meshtastic app. On [ProvisionResult.Provisioned] the settings VM persists the
      * returned index so this plane binds to it. Requires a Ready link.
      */
-    suspend fun provisionKnitChannel(): ProvisionResult = link.provisionChannel(ProvisionSpec(KnitChannel.NAME, KnitChannel.PSK))
+    override suspend fun provisionKnitChannel(): ProvisionResult = link.provisionChannel(ProvisionSpec(KnitChannel.NAME, KnitChannel.PSK))
 
     // --- outbound (fast plane only) ---
 

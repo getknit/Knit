@@ -12,6 +12,8 @@ import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.mesh.lora.LoraFacts
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.normalizeSingleLine
 import app.getknit.knit.ui.util.computeAvatarCrop
 import kotlinx.coroutines.flow.Flow
@@ -31,6 +33,8 @@ import kotlinx.coroutines.launch
 data class LoraSummary(
     val enabled: Boolean = false,
     val boardName: String? = null,
+    /** The live link, so the row can say "connected" rather than only "on". */
+    val plane: LoraPlane = LoraPlane.Off,
 )
 
 /** The Internet-relay plane, as the Profile row summarises it before handing off to its own screen. */
@@ -49,6 +53,7 @@ class ProfileViewModel(
     // clock makes its `delay` instant, so a ViewModel test that drives this with `advanceUntilIdle()`
     // would spin. Taking the flow lets a test supply a finite one.
     relayFacts: Flow<RelayFacts>,
+    loraFacts: Flow<LoraFacts>,
 ) : ViewModel() {
     val nodeId = MutableStateFlow("")
 
@@ -106,10 +111,11 @@ class ProfileViewModel(
             .map { RelaySummary(it.enabled, it.configured, it.connected) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RelaySummary())
 
-    /** Summary of the LoRa plane for the Profile row that navigates to its own screen (settings-only). */
+    /** Summary of the LoRa plane for the Profile row that navigates to its own screen: settings + the live link. */
     val loraSummary: StateFlow<LoraSummary> =
-        combine(settings.loraEnabled, settings.loraDeviceName) { enabled, name -> LoraSummary(enabled, name) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LoraSummary())
+        combine(settings.loraEnabled, settings.loraDeviceName, loraFacts) { enabled, name, lora ->
+            LoraSummary(enabled, name, lora.plane)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LoraSummary())
 
     init {
         viewModelScope.launch {

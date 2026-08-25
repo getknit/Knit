@@ -28,6 +28,8 @@ import app.getknit.knit.mesh.crypto.ratchet.SessionTransactor
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.LoraConfig
 import app.getknit.knit.mesh.lora.LoraMeshTransport
+import app.getknit.knit.mesh.lora.LoraPlaneStatus
+import app.getknit.knit.mesh.lora.LoraStatusRepository
 import app.getknit.knit.mesh.lora.MeshtasticGattDialer
 import app.getknit.knit.mesh.lora.MeshtasticLink
 import app.getknit.knit.mesh.lora.MeshtasticSession
@@ -202,4 +204,9 @@ val meshModule =
         // One place that turns settings + `spoolStatus()` into the relay facts the chat indicator, the
         // relay settings screen and Diagnostics all read.
         single { RelayStatusRepository(get(), get()) }
+        // The LoRa plane's UI face: the transport itself when the build ships the plane, a dark stand-in
+        // otherwise — so the chat header's repository (resolved by every open chat) never instantiates the
+        // board session in release. Its facts feed the header glyph, the DM notice and the composer hint.
+        single<LoraPlaneStatus> { if (BuildConfig.LORA_PLANE) get<LoraMeshTransport>() else LoraPlaneStatus.Dark }
+        single { LoraStatusRepository(get(), get()) }
     }

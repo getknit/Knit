@@ -25,6 +25,8 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.lora.LoraFacts
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.chat.DeliveryStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,6 +73,8 @@ data class ChatListUiState(
     // The Internet plane's state for the same header. [RelayPlane.Off] renders nothing, which is also the
     // default the plane ships in.
     val relayPlane: RelayPlane = RelayPlane.Off,
+    // The LoRa plane's state for the same header — the board glyph beside the cloud; [LoraPlane.Off] renders nothing.
+    val loraPlane: LoraPlane = LoraPlane.Off,
     // The radio-off warning banner to show (or null), already accounting for the user's dismissal.
     val radioWarning: RadioWarning? = null,
     // True only for the initial seed value (see [state]'s stateIn below), before the underlying Room +
@@ -96,6 +100,7 @@ class ChatListViewModel(
     // parameter: the production flow is an infinite poller, which a test driving this VM with
     // `advanceUntilIdle()` could never let go idle.
     relayFacts: Flow<RelayFacts>,
+    loraFacts: Flow<LoraFacts>,
     private val context: Context,
 ) : ViewModel() {
     private val myNodeId = MutableStateFlow<String?>(null)
@@ -120,6 +125,7 @@ class ChatListViewModel(
         val health: TransportHealth,
         val warning: RadioWarning?,
         val relayPlane: RelayPlane,
+        val loraPlane: LoraPlane,
     )
 
     private val messagesAndBlocks =
@@ -160,13 +166,18 @@ class ChatListViewModel(
     private val relayPlane =
         relayFacts.map { planeFor(it) }.distinctUntilChanged()
 
+    // Same collapse for the LoRa plane: the facts also carry the DM switch, which this screen never reads.
+    private val loraPlane =
+        loraFacts.map { it.plane }.distinctUntilChanged()
+
     private val meshStatus =
         combine(
             meshManager.neighborCount,
             meshManager.transportHealth,
             visibleWarning,
             relayPlane,
-        ) { count, health, warning, plane -> MeshStatus(count, health, warning, plane) }
+            loraPlane,
+        ) { count, health, warning, plane, lora -> MeshStatus(count, health, warning, plane, lora) }
 
     val state: StateFlow<ChatListUiState> =
         combine(
@@ -294,6 +305,7 @@ class ChatListViewModel(
                 neighborCount = mesh.neighborCount,
                 transportHealth = mesh.health,
                 relayPlane = mesh.relayPlane,
+                loraPlane = mesh.loraPlane,
                 radioWarning = mesh.warning,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatListUiState(isLoading = true))

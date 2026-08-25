@@ -40,6 +40,8 @@ import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.b64d
+import app.getknit.knit.mesh.lora.LoraFacts
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
@@ -177,6 +179,8 @@ data class ChatUiState(
     // The Internet plane's whole-device state, for the connection header. Coarser than [relayReach] and
     // about a different thing: whether the plane is up at all, not whether it covers this thread.
     val relayPlane: RelayPlane = RelayPlane.Off,
+    // The LoRa plane's whole-device state, for the same header (the board glyph beside the cloud).
+    val loraPlane: LoraPlane = LoraPlane.Off,
 )
 
 class ChatViewModel(
@@ -202,6 +206,8 @@ class ChatViewModel(
     // virtual clock its `delay` is instant, so a test that drives this VM with `advanceUntilIdle()` could
     // never reach idle. Taking the flow lets a test supply a finite one.
     private val relayFacts: Flow<RelayFacts>,
+    // The LoRa plane's facts, the same way (a pushed flow in production, but a test still supplies its own).
+    private val loraFacts: Flow<LoraFacts>,
     private val context: Context,
 ) : ViewModel() {
     /** This thread is the broadcast room (vs a 1:1 DM keyed by the peer's node id). */
@@ -343,13 +349,14 @@ class ChatViewModel(
             )
         }
 
-    // Neighbor count + radio health + the "who's typing" map + Internet-relay reach folded into one
-    // source so the main state combine stays within its five-flow arity.
+    // Neighbor count + radio health + the "who's typing" map + Internet-relay reach + the LoRa plane folded
+    // into one source so the main state combine stays within its five-flow arity.
     private data class MeshStatus(
         val neighborCount: Int,
         val transportHealth: TransportHealth,
         val typing: Map<String, Set<String>>,
         val relay: RelayFacts,
+        val lora: LoraFacts,
     )
 
     private val meshStatus =
@@ -358,7 +365,8 @@ class ChatViewModel(
             meshManager.transportHealth,
             meshManager.typing,
             relayFacts,
-        ) { count, health, typing, relay -> MeshStatus(count, health, typing, relay) }
+            loraFacts,
+        ) { count, health, typing, relay, lora -> MeshStatus(count, health, typing, relay, lora) }
 
     val state: StateFlow<ChatUiState> =
         combine(
@@ -508,6 +516,7 @@ class ChatViewModel(
                 typingPeers = typingPeers,
                 relayReach = reachFor(conversationId, relay),
                 relayPlane = planeFor(relay),
+                loraPlane = mesh.lora.plane,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState(isRoom = isRoom))
 

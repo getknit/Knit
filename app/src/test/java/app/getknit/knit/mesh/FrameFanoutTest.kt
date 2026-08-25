@@ -8,49 +8,46 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * `shouldFastFanout` decides which frames also ride the ~255 B coordination-plane fast path: the plaintext
- * broadcast room + the cleartext metadata frames, but never an E2E DM/group chat (wrapped keys won't fit)
- * nor the point-to-point/typing frames.
+ * The two fan-out predicates split every frame between the coordination plane ([shouldFastFanout]: the room +
+ * cleartext metadata) and the long-range plane ([shouldLongRangeFanout]: sealed DM-form chat, ADR 039), and
+ * never both — a frame that rode both would reach the LoRa child twice.
  */
 class FrameFanoutTest {
     private fun env(
         type: String,
         recipientId: String? = null,
         group: GroupInfo? = null,
-    ) = RelayEnvelope(
-        type = type,
-        id = "id",
-        senderId = "s",
-        recipientId = recipientId,
-        group = group,
-        payload = ByteArray(0),
-    )
+    ) = RelayEnvelope(type = type, id = "id", senderId = "alice", recipientId = recipientId, group = group, payload = ByteArray(0))
+
+    private val group = GroupInfo(id = "g-x", members = listOf("alice", "bob"), createdBy = "alice")
 
     @Test
-    fun broadcastRoomChatFansOut() {
-        assertTrue(shouldFastFanout(env(FrameType.CHAT)))
+    fun aDmFormChatRidesOnlyTheLongRangePlane() {
+        val dm = env(FrameType.CHAT, recipientId = "bob")
+        assertTrue(shouldLongRangeFanout(dm))
+        assertFalse(shouldFastFanout(dm))
     }
 
     @Test
-    fun dmChatDoesNotFanOut() {
-        assertFalse(shouldFastFanout(env(FrameType.CHAT, recipientId = "bob")))
+    fun theRoomAndCleartextMetadataRideOnlyTheCoordinationPlane() {
+        for (e in listOf(env(FrameType.CHAT), env(FrameType.REACTION), env(FrameType.RECEIPT), env(FrameType.PROFILE))) {
+            assertTrue(e.type, shouldFastFanout(e))
+            assertFalse(e.type, shouldLongRangeFanout(e))
+        }
     }
 
     @Test
-    fun groupChatDoesNotFanOut() {
-        val group = GroupInfo(id = "g-1", members = listOf("a", "b"), createdBy = "a")
-        assertFalse(shouldFastFanout(env(FrameType.CHAT, group = group)))
+    fun groupFormChatRidesNeither() {
+        val g = env(FrameType.CHAT, group = group)
+        assertFalse(shouldFastFanout(g))
+        assertFalse(shouldLongRangeFanout(g))
     }
 
     @Test
-    fun cleartextMetadataFramesFanOut() {
-        listOf(FrameType.REACTION, FrameType.RECEIPT, FrameType.PROFILE, FrameType.GROUP_UPDATE, FrameType.GROUP_LEAVE)
-            .forEach { type -> assertTrue("$type should fast-fanout", shouldFastFanout(env(type))) }
-    }
-
-    @Test
-    fun pointToPointRequestsAndTypingCuesDoNotFanOut() {
-        listOf(FrameType.BLOB_REQ, FrameType.KEY_REQ, FrameType.TYPING)
-            .forEach { type -> assertFalse("$type should not fast-fanout", shouldFastFanout(env(type))) }
+    fun pointToPointRequestsRideNeither() {
+        for (e in listOf(env(FrameType.BLOB_REQ), env(FrameType.KEY_REQ), env(FrameType.TYPING, recipientId = "bob"))) {
+            assertFalse(e.type, shouldFastFanout(e))
+            assertFalse(e.type, shouldLongRangeFanout(e))
+        }
     }
 }

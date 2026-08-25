@@ -69,10 +69,18 @@ internal class LoraPacePolicy(
     }
 }
 
-/** A whole frame queued for the LoRa hop: its already-encoded fragment messages plus a diagnostic label. */
+/**
+ * The pacing class of a queued frame, highest first: the profile is the key bootstrap (nothing verifies
+ * without it), a sealed DM outranks ambient room traffic, and the Nearby room is the class the queue sheds
+ * first under airtime pressure.
+ */
+internal enum class FrameClass { BOOTSTRAP, DM, ROOM }
+
+/** A whole frame queued for the LoRa hop: its already-encoded fragment messages, a diagnostic label, its class. */
 internal class OutboundFrame(
     val messages: List<ByteArray>,
     val label: String,
+    val klass: FrameClass = FrameClass.ROOM,
 ) {
     val fragmented: Boolean get() = messages.size > 1
 }

@@ -433,6 +433,13 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
             if (metrics.loraNak > 0) {
                 MetricRow(stringResource(R.string.diagnostics_metric_lora_nak), metrics.loraNak.toString())
             }
+            // Sealed DM-form frames (ADR 039): a DM that crossed kilometres with no radio in range.
+            if (metrics.loraDmSent > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_lora_dm_sent), metrics.loraDmSent.toString())
+            }
+            if (metrics.loraDmReceived > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_lora_dm_received), metrics.loraDmReceived.toString())
+            }
         }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an
         // intermittent "can link one peer but not the second" is visible and attributable (RADIO vs other).

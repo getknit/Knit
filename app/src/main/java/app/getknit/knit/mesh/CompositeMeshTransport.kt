@@ -336,6 +336,15 @@ class CompositeMeshTransport(
         }
     }
 
+    /**
+     * The long-range fan-out goes to every child and each decides for itself (the interface default is a
+     * no-op; only a plane with no data path overrides it). Deliberately NO `send(wire, null)` fallback for a
+     * link child — the router's flood already carries the frame over its links, so that would only double-flood.
+     */
+    override fun longRangeFanout(wire: WireEnvelope) {
+        for (child in children) child.longRangeFanout(wire)
+    }
+
     /** First child (preference order) that currently holds a live data-path link to [nodeId], or null. */
     private fun childHoldingLinkTo(nodeId: String): MeshTransport? =
         children.firstOrNull { c -> c.neighbors.value.any { it.nodeId == nodeId } }

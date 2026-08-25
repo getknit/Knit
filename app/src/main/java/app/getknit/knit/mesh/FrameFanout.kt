@@ -29,6 +29,17 @@ internal fun shouldFastFanout(env: RelayEnvelope): Boolean =
     }
 
 /**
+ * Whether [env] should *also* ride [MeshTransport.longRangeFanout] — the fan-out reserved for a plane with
+ * **no data path at all** (the LoRa bridge, ADR 039), for which it is the only path a frame can take. It
+ * admits exactly the **DM-form** chat frames [shouldFastFanout] excludes: `chat` with a recipient and no
+ * group. That form is deliberately opaque — a real DM, its sealed receipt or reaction, a session reset, a
+ * group-key seed and an escalated delivery tick are wire-indistinguishable (ADR 016/018), so all of them
+ * ride and none is singled out. Group-form chat (`group != null`) stays out: the long-range plane carries no
+ * group conversation, so its frames would only burn airtime. Disjoint from [shouldFastFanout] by construction.
+ */
+internal fun shouldLongRangeFanout(env: RelayEnvelope): Boolean = env.type == FrameType.CHAT && env.recipientId != null && env.group == null
+
+/**
  * Pull-time soft cap on bytes held *purely* to custody other peers' images (a carried frame references
  * them but no local message does — see [app.getknit.knit.data.blob.BlobDao.carrierOnlyBlobBytes]). Our
  * own/received images are uncapped (kept via their message row); this bounds only the altruistic relay

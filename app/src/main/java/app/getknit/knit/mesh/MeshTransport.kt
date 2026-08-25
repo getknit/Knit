@@ -280,6 +280,17 @@ interface MeshTransport {
     ) {}
 
     /**
+     * Best-effort **long-range** fan-out of [wire] — a frame the reliable flood + store-and-forward custody
+     * already carry — offered only to a plane with **no data path at all** ([shortRange] false, [neighbors]
+     * always empty; today the LoRa bridge). Such a plane never receives a frame by flood, custody sync or a
+     * re-serve, so this is its *only* path — which is why, unlike [fastFanout], it admits the sealed DM-form
+     * chat frames (`FrameFanout.shouldLongRangeFanout`, ADR 039). The transport size-gates and dedups; the
+     * receiver's [MeshRouter] SeenSet drops any copy that also arrives another way. Default no-op — a radio
+     * with a data path (Bluetooth, Wi-Fi Aware) and the fakes ignore it.
+     */
+    fun longRangeFanout(wire: WireEnvelope) {}
+
+    /**
      * Sends a file (avatar or attachment) tagged with [meta] to a single neighbor. Returns whether the
      * transfer was **accepted for delivery** (enqueued on a live link, or scheduled by the composite's
      * fast-plane wait); false means no live route existed — the file went nowhere and the caller's

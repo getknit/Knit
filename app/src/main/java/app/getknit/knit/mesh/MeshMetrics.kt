@@ -199,6 +199,8 @@ class MeshMetrics {
     private val loraSuppressed = AtomicLong()
     private val loraNak = AtomicLong()
     private val loraSessionUps = AtomicLong()
+    private val loraDmSent = AtomicLong()
+    private val loraDmReceived = AtomicLong()
 
     /** A frame this device authored and injected into the mesh. */
     fun onOriginated() {
@@ -514,6 +516,19 @@ class MeshMetrics {
         loraSessionUps.incrementAndGet()
     }
 
+    /**
+     * A **DM-form** frame sent over LoRa (ADR 039) — a sealed chat addressed to one peer. The transport cannot
+     * read it, so this counts real DMs and their sealed receipts/reactions/ctl frames alike.
+     */
+    fun onLoraDmSent() {
+        loraDmSent.incrementAndGet()
+    }
+
+    /** A DM-form frame received over LoRa — same opacity caveat as [onLoraDmSent]. */
+    fun onLoraDmReceived() {
+        loraDmReceived.incrementAndGet()
+    }
+
     @Suppress("LongMethod") // a flat field-by-field copy — one line per counter; splitting it would only scatter it
     fun snapshot(): Snapshot {
         val byReason = drops.mapValues { it.value.get() }
@@ -580,6 +595,8 @@ class MeshMetrics {
             loraSuppressed = loraSuppressed.get(),
             loraNak = loraNak.get(),
             loraSessionUps = loraSessionUps.get(),
+            loraDmSent = loraDmSent.get(),
+            loraDmReceived = loraDmReceived.get(),
         )
     }
 
@@ -645,5 +662,7 @@ class MeshMetrics {
         val loraSuppressed: Long = 0,
         val loraNak: Long = 0,
         val loraSessionUps: Long = 0,
+        val loraDmSent: Long = 0,
+        val loraDmReceived: Long = 0,
     )
 }

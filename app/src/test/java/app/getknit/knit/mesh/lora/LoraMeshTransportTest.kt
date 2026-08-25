@@ -176,6 +176,36 @@ class LoraMeshTransportTest {
         }
 
     @Test
+    fun aSealedDmCrossesOverLoraAndIsNotReFannedBack() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+
+            // The long-range fan-out is the DM's only path onto this plane (ADR 039).
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "sealed bytes"))
+            runCurrent()
+
+            val delivered = b.received.firstOrNull { it.envelope.type == FrameType.CHAT && it.envelope.recipientId == "bob" }
+            assertTrue("bob received alice's DM over LoRa", delivered != null)
+            assertEquals("fromNodeId is the frame's senderId", "alice", delivered!!.fromNodeId)
+            assertEquals(1L, a.metrics.snapshot().loraDmSent)
+            assertEquals(1L, b.metrics.snapshot().loraDmReceived)
+
+            // The pipeline re-fans a relayed DM over the long-range plane; a copy heard over LoRa must not bounce.
+            val bSentBefore = b.link.sent.size
+            b.transport.longRangeFanout(delivered.wire)
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("bob does not re-send a LoRa-received DM over LoRa", bSentBefore, b.link.sent.size)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    @Test
     fun aVerbatimResendIsSuppressedInsideTheWindowThenAllowedAfter() =
         runTest {
             val air = FakeMeshtasticAir()
@@ -245,7 +275,6 @@ class LoraMeshTransportTest {
             a.transport.start()
             runCurrent()
             val baseline = a.link.sent.size
-            a.transport.fastFanout(frame(FrameType.CHAT, "alice", recipientId = "bob")) // a DM
             a.transport.fastFanout(
                 frame(FrameType.CHAT, "alice", group = GroupInfo("g-x", members = listOf("alice", "bob"), createdBy = "alice")),
             )

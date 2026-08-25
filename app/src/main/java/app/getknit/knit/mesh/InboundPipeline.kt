@@ -200,6 +200,10 @@ class InboundPipeline(
         // frames re-fan; a point-to-point frame (relay = false, e.g. a broadcast receipt) reaches its addressee
         // and goes no further.
         if (wire.relay && shouldFastFanout(env)) transport.fastFanout(wire)
+        // The long-range sibling: a sealed DM-form frame re-fans over a plane with no data path (LoRa) for the
+        // same once-per-node reason; that plane's own sig-keyed dedup keeps a frame heard over it from bouncing
+        // straight back onto it.
+        if (wire.relay && shouldLongRangeFanout(env)) transport.longRangeFanout(wire)
         // Completes the no-throw contract: a per-type handler must NEVER throw out of onDeliver. The router
         // schedules the relay only *after* this returns, so an escape would silently stop this node forwarding
         // the frame (a propagation black hole). verifyInbound/decrypt are already runCatching-guarded

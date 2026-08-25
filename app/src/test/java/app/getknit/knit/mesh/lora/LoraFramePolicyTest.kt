@@ -36,10 +36,15 @@ class LoraFramePolicyTest {
     }
 
     @Test
-    fun dmAndGroupChatDoNotFanOut() {
-        assertFalse("a DM chat is E2E and not for LoRa", fanout(env(FrameType.CHAT, recipientId = "bob")))
+    fun dmFormChatFansOutButGroupFormDoesNot() {
+        // ADR 039: a sealed DM-form chat rides the long-range plane, whatever its relay flag (a flooded DM, or a
+        // sealed receipt/reaction/ctl riding as one — the policy cannot and must not tell them apart).
+        assertTrue("a DM chat rides LoRa", fanout(env(FrameType.CHAT, recipientId = "bob")))
+        assertTrue("a relay=false DM-form frame rides too", fanout(env(FrameType.CHAT, recipientId = "bob"), wire(relay = false)))
+        assertTrue(LoraFramePolicy.isDmForm(env(FrameType.CHAT, recipientId = "bob")))
+        assertFalse(LoraFramePolicy.isDmForm(env(FrameType.CHAT)))
         assertFalse(
-            "a group chat is E2E and not for LoRa",
+            "a group chat is not carried — the plane has no group conversation",
             fanout(env(FrameType.CHAT, group = GroupInfo(id = "g-x", members = listOf("alice", "bob"), createdBy = "alice"))),
         )
         assertFalse(

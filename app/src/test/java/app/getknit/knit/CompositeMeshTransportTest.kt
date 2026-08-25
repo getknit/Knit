@@ -62,6 +62,7 @@ class CompositeMeshTransportTest {
         val sentFiles = mutableListOf<Pair<Peer, FileMeta>>()
         val sentDigests = mutableListOf<Pair<Peer, List<String>>>()
         val fastFanouts = mutableListOf<WireEnvelope>()
+        val longRangeFanouts = mutableListOf<WireEnvelope>()
         val fastSends = mutableListOf<Peer>()
         val suppressCalls = mutableListOf<Set<String>>()
         val foreignCalls = mutableListOf<Set<String>>()
@@ -103,6 +104,10 @@ class CompositeMeshTransportTest {
 
         override fun fastFanout(wire: WireEnvelope) {
             fastFanouts += wire
+        }
+
+        override fun longRangeFanout(wire: WireEnvelope) {
+            longRangeFanouts += wire
         }
 
         override fun fastSend(
@@ -480,6 +485,24 @@ class CompositeMeshTransportTest {
             advanceUntilIdle()
             assertEquals("NAN gets the coordination-plane blast", 1, nan.fastFanouts.size)
             assertEquals("BT gets a normal flood instead", listOf<Peer?>(null), bt.sends.map { it.second })
+        }
+
+    @Test
+    fun longRangeFanoutReachesEveryChildAndNeverFallsBackToSend() =
+        runTest(UnconfinedTestDispatcher()) {
+            val bt = FakeChild(hasFastPlane = false)
+            val nan = FakeChild(hasFastPlane = true)
+            val composite = CompositeMeshTransport(listOf(bt, nan), backgroundScope)
+            bt.setNeighbors(Peer("p"))
+            advanceUntilIdle()
+            composite.longRangeFanout(wire())
+            advanceUntilIdle()
+            // Every child is offered the frame and decides for itself (only a no-data-path plane acts on it) —
+            // there is no send() fallback: the router's flood already carries a DM over a link child's links.
+            assertEquals(1, bt.longRangeFanouts.size)
+            assertEquals(1, nan.longRangeFanouts.size)
+            assertTrue("no flood duplicate over the link child", bt.sends.isEmpty())
+            assertTrue("the coordination-plane blast is a different path", nan.fastFanouts.isEmpty())
         }
 
     @Test

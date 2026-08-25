@@ -1840,6 +1840,7 @@ class MeshManager(
         router.originate(wire, env.id)
         forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_SELF)
         if (shouldFastFanout(env)) transport.fastFanout(wire)
+        if (shouldLongRangeFanout(env)) transport.longRangeFanout(wire)
         // Our own sends are the latency-sensitive case, so nudge the Internet plane instead of waiting for
         // its tick. Relayed frames ride the next heal round — they are already in flight on the radios.
         scopeSync?.onCustodyChanged()

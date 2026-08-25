@@ -111,6 +111,7 @@ class MeshManagerTest {
     /** A [MeshTransport] that records every frame the manager originates (both flood + fast-fanout copies). */
     private class RecordingTransport : MeshTransport {
         val sent = mutableListOf<Pair<WireEnvelope, Peer?>>()
+        val longRangeFanouts = mutableListOf<WireEnvelope>()
         override val neighbors = MutableStateFlow<Set<Peer>>(emptySet()).asStateFlow()
         override val health = MutableStateFlow(TransportHealth.Healthy).asStateFlow()
         override val inbound = MutableSharedFlow<InboundFrame>().asSharedFlow()
@@ -127,6 +128,10 @@ class MeshManagerTest {
             to: Peer?,
         ) {
             sent += wire to to
+        }
+
+        override fun longRangeFanout(wire: WireEnvelope) {
+            longRangeFanouts += wire
         }
 
         override suspend fun sendFile(
@@ -371,6 +376,7 @@ class MeshManagerTest {
             assertEquals("the room is plaintext — body rides in the clear", "gm mesh", content.body)
             assertNull("and is not encrypted", content.enc)
             assertTrue("the message is captured for store-and-forward custody", rig.forwardStore.has(frame.id))
+            assertTrue("a room post is not offered to the long-range plane (ADR 039)", rig.transport.longRangeFanouts.isEmpty())
         }
 
     // --- DM: end-to-end encrypted when the key is known ---
@@ -399,6 +405,9 @@ class MeshManagerTest {
             val opened = rig.bob.crypto.open(content.enc!!, header, rig.bob.nodeId)
             assertNotNull("the addressed recipient can decrypt", opened)
             assertEquals("meet at 8", opened!!.body)
+            // ADR 039: a DM is also offered to the long-range (LoRa) plane, exactly once, as the same signed bytes.
+            val far = rig.transport.longRangeFanouts.single()
+            assertEquals(frame.id, WireCodec.decodeEnvelope(far.signed)!!.id)
         }
 
     // --- DM: deferred (pendingKey) when the recipient's key is not yet known ---
@@ -437,6 +446,7 @@ class MeshManagerTest {
             assertTrue(ok)
             val frame = rig.sentChatFrames().single()
             assertEquals("the roster rides on the frame so members can rebuild the group", members, frame.group?.members)
+            assertTrue("group-form chat never rides the long-range plane (ADR 039)", rig.transport.longRangeFanouts.isEmpty())
 
             val content = WireCodec.decodePayload<ChatContent>(frame.payload)!!
             val enc = content.enc!!

@@ -106,9 +106,21 @@ class CoordinationPlaneSizeBudgetTest {
             ack: String? = null,
             rp: ReactionPayload? = null,
             acks: List<String>? = null,
+            attachmentHash: String? = null,
+            attachmentKey: String? = null,
         ): RelayEnvelope {
             val aad = MessageCrypto.header(id, party.nodeId, SENT_AT, to.nodeId)
-            val plain = MessageContent(body = body, ctl = ctl, ack = ack, rp = rp, acks = acks).encode()
+            val plain =
+                MessageContent(
+                    body = body,
+                    attachmentHash = attachmentHash,
+                    attachmentMime = attachmentHash?.let { "image/jpeg" },
+                    attachmentKey = attachmentKey,
+                    ctl = ctl,
+                    ack = ack,
+                    rp = rp,
+                    acks = acks,
+                ).encode()
             val sealed = checkNotNull(engine.seal(session, plain, aad, toSpk.pub, now = SESSION_AT))
             session = sealed.session
             val h = sealed.header
@@ -121,6 +133,7 @@ class CoordinationPlaneSizeBudgetTest {
                 payload =
                     WireCodec.encodePayload(
                         ChatContent(
+                            attachmentHash = attachmentHash,
                             enc =
                                 EncEnvelope(
                                     v = EncEnvelope.VERSION_RATCHET,
@@ -444,6 +457,35 @@ class CoordinationPlaneSizeBudgetTest {
         val tick = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, ack = FrameId.new()), relay = false)
         val parts = checkNotNull(loraParts(tick)) { "a single sealed tick must fit the LoRa hop" }
         assertTrue("sealed tick in <= 3 LoRa packets (was $parts)", parts <= FastFrameCodec.MAX_PARTS)
+    }
+
+    /**
+     * ADR 039: the sealed DM is what the long-range plane now carries. Pins the ceilings the docs quote — a
+     * 100-char DM rides in 2 packets steady-state and ≤ 3 with the X3DH init attached (every frame until the
+     * peer's first reply), an attachment *reference* still fits, and a max-length message is `loraTooBig`.
+     */
+    @Test
+    fun sealedDmsFitTheLoraHop() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        val init = alice.sign(sealer.dm(FrameId.new(), body = "a".repeat(100)))
+        report("sealed-dm-100char-init", init, alice)
+        val initParts = checkNotNull(loraParts(init)) { "a session-initial 100-char DM must fit the LoRa hop" }
+        assertTrue("session-initial DM in <= 3 LoRa packets (was $initParts)", initParts <= FastFrameCodec.MAX_PARTS)
+
+        sealer.confirm()
+        val steady = alice.sign(sealer.dm(FrameId.new(), body = "b".repeat(100)))
+        report("sealed-dm-100char-steady", steady, alice)
+        assertTrue("a 100-char steady-state DM rides in 2 LoRa packets", checkNotNull(loraParts(steady)) <= 2)
+
+        val withImage =
+            alice.sign(sealer.dm(FrameId.new(), body = "photo", attachmentHash = "ab".repeat(32), attachmentKey = "k".repeat(44)))
+        val imageParts = checkNotNull(loraParts(withImage)) { "a DM carrying an attachment reference must fit" }
+        assertTrue("attachment-ref DM in <= 3 LoRa packets (was $imageParts)", imageParts <= FastFrameCodec.MAX_PARTS)
+
+        val huge = alice.sign(sealer.dm(FrameId.new(), body = "c".repeat(TextLimits.MESSAGE)))
+        assertEquals("a max-length DM is loraTooBig — it rides the radios and custody instead", null, loraParts(huge))
     }
 
     @Test

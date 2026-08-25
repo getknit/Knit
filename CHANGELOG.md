@@ -81,6 +81,12 @@ document:
   that model off, and carries on — Diagnostics says so, and offers to try it again. While it is off,
   messages in the Nearby room are still checked against the word list; direct messages, group chats and
   photos are not checked.
+- Knit no longer crashes when Android restarts the mesh out of sight. Phones that run short of memory —
+  and some that simply prune background apps hard — stop Knit while it is off screen and start it again a
+  moment later. Since Android 12 that restart is not allowed to put the mesh notification back up, and Knit
+  was treating the refusal as a crash. It now stands down quietly and picks the mesh up again the next time
+  you open the app or restart your phone. To have the mesh survive on its own instead, turn on **Allow
+  background battery use** during setup or from Profile.
 - A relay you have configured can no longer flood the app's memory. Knit now holds only what it
   actually asked a relay for, ignores anything else the relay volunteers, and treats the relay's
   stated size limits as a claim to be capped rather than a fact. Relays were always untrusted with

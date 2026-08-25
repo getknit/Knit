@@ -1968,3 +1968,56 @@ over the pair scope for existing contacts (no `unsub` record, `maxScopes` pressu
 `getknit.app/.well-known/assetlinks.json` with **both** signing certificates and a `/c` landing page
 building the `knit://` link client-side — until then Android 12+ opens the https link in the browser.
 
+## 043. A refused foreground start retires the service instead of crashing, and the wedge cure asks first
+
+Play reported `ForegroundServiceStartNotAllowedException` out of `MeshService.onCreate` on Android 15
+(Galaxy A14 5G, v2.2.3, still reproducible at HEAD — `5da5601` fixed the *other* one, the 10 s
+`ForegroundServiceDidNotStartInTimeException`). The tell is **where** it threw: at `Service.startForeground`
+inside `handleCreateService`, not at the `startForegroundService` call site, which is where a blocked
+`MeshService.start` would have thrown. So the *creation* was allowed and only the foreground *promotion*
+was refused — the signature of a `START_STICKY` restart. Android 12+ lets a backgrounded app claim the
+foreground only under a listed exemption, and a system-initiated sticky restart is not one of them. Any
+process death off screen — low memory, an OEM app-sleep sweep, or our own Tier-2 wedge cure — therefore
+came back to a guaranteed throw out of `onCreate`, which is a guaranteed process kill.
+
+**Why it isn't everyone.** The battery-optimization exemption *is* on the list, and Knit offers it on the
+onboarding permission screen. Opt-in, so it splits the install base: users who granted it never see this,
+users who didn't crash on every background restart. That is also why the fix cannot be "assume the
+exemption" — the unexempted case is the common one.
+
+**The service declines rather than crashes.** `postForeground` returns a `Boolean` and catches
+`IllegalStateException` — `ForegroundServiceStartNotAllowedException` extends it, so the catch needs no
+`Build.VERSION` dance and no API-31 class reference on a minSdk-29 file. A refused claim makes the instance
+a **stillbirth**: `onCreate` calls `stopSelf()` and returns before resolving a single injected field, and
+`onStartCommand`/`onDestroy` bail on the same flag — `onDestroy` especially, because `powerMonitor` and
+`meshManager` are `by inject()` and touching them there would build the exact Koin graph the early return
+exists to skip. `onDestroy` still cancels the heartbeat alarm (no graph needed) so an alarm left armed by an
+earlier ungraceful death stops waking the device every 15 minutes for a start the system will refuse anyway.
+
+**`stopSelf()`, not `START_NOT_STICKY`.** Dropping stickiness would fix the crash and cost the mesh every
+recovery it currently gets — including the Tier-2 cure, which is *built* on it. `stopSelf()` in `onCreate`
+clears the sticky restart record for this instance only, so the system stops retrying a start that cannot
+succeed while `START_STICKY` keeps meaning what it means everywhere else. `meshEnabled` is deliberately
+left true: recovery is the next foreground app open (`KnitApp`'s `LaunchedEffect`) or the next reboot
+(`BootReceiver`, which *is* exempt — `connectedDevice` is boot-permitted through Android 16), both of which
+already start the mesh with no new machinery.
+
+**The wedge cure now asks whether it can come back.** `WifiAwareTransport.checkWedge`'s Tier 2 kills the
+process to clear a leaked NAN request, relying on `START_STICKY` in its own KDoc. Against an unexempted
+backgrounded app that trade was: a wedged data plane in, no mesh at all out, plus a crash. It is now gated
+on `canReclaimForegroundService` (`mesh/MeshService.kt`, a top-level function beside `shouldStartMeshOnBoot`
+so the transports need no dependency on the service class), which checks the two exemptions we can read
+cheaply — a visible activity via `ActivityManager.getMyMemoryState` (`IMPORTANCE_FOREGROUND`; the service
+alone only reaches the weaker `IMPORTANCE_FOREGROUND_SERVICE`, so it can't self-satisfy) and the
+battery-optimization exemption. **The gate lives in the transport, not in `NanWatchdogPolicy`**: the policy
+is the pure episode clock and stays untouched, the transport owns the side effects, and a binder call per
+30 s watchdog tick becomes a binder call only when a kill is actually on the table. Declining leaves the
+episode clock running and `lastRestartAt` unstamped, so the cure fires on the next check once the app is
+foreground or exempt and the wedge has persisted; Tier 1's session cycle keeps retrying at its own cooldown
+throughout, so nothing is lost in the meantime.
+
+**Not covered, deliberately.** The 15-minute heartbeat is `setInexactRepeating` + `PendingIntent.getService`,
+and only *exact* alarms carry an FGS-start exemption — so after an ungraceful death that alarm cannot revive
+the service either; the system blocks the background `startService` silently. Left as is: the alarm's job is
+to nudge a *running* service, moving it to an exact alarm would need `SCHEDULE_EXACT_ALARM` for a
+best-effort wakeup, and the two real recovery paths above already cover the case.

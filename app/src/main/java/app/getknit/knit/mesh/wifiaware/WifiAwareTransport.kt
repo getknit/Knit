@@ -45,6 +45,7 @@ import app.getknit.knit.mesh.ReceivedFile
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
+import app.getknit.knit.mesh.canReclaimForegroundService
 import app.getknit.knit.mesh.link.FastFrameCodec
 import app.getknit.knit.mesh.link.FragReassembler
 import app.getknit.knit.mesh.link.FramedLink
@@ -590,7 +591,9 @@ class WifiAwareTransport(
      * starts when divergence appears and **resets on any link** (progress) or on convergence, so a restart only
      * happens when the mesh genuinely cannot sync for the full window. `reattach()` cannot clear this wedge (the
      * orphaned callback ref is lost, so it is never unregistered), so the only proven cure is **process death**;
-     * MeshService is `START_STICKY`, so the foreground service is recreated. Rate-limited so it can't restart-storm.
+     * MeshService is `START_STICKY`, so the foreground service is recreated — *provided the system will let it
+     * come back*, which off-screen it often won't ([canReclaimForegroundService]). Rate-limited so it can't
+     * restart-storm.
      *
      * P2 demotion: with the ghost-proof recycle + the flap-handshake session cycle in front of it, this should
      * ~never fire — it remains the true last resort for a framework cache ghosted while another aware client
@@ -607,7 +610,8 @@ class WifiAwareTransport(
      *   (field-observed 2026-07-04). The session cycle is safe at 0 NDPs (the NAN-down wipe clears any ghost an
      *   in-place unregister would mint) and cheap, so it needs no corroboration.
      * - **Tier 2 (last resort, [WEDGE_RESTART_MS]):** still owed *and* [anySyncOwed] (corroborated) → process
-     *   kill. Corroboration stays on the kill so an out-of-range-but-cueing peer can't self-kill the node.
+     *   kill. Corroboration stays on the kill so an out-of-range-but-cueing peer can't self-kill the node, and
+     *   [canReclaimForegroundService] gates it so the cure can't cost more than the wedge.
      */
     private fun checkWedge() {
         val now = SystemClock.elapsedRealtime()
@@ -639,6 +643,16 @@ class WifiAwareTransport(
 
             // Tier 2: last-resort process kill (MeshService is START_STICKY, so the service is recreated).
             NanWatchdogPolicy.Action.RestartProcess -> {
+                // ...but only when the system would actually let the service back. A sticky restart is not an
+                // exemption to the Android 12+ background foreground-service-start rule, so killing an
+                // unexempted backgrounded process trades a wedged data plane for no mesh at all until the user
+                // next opens the app (and, before MeshService learned to decline, a crash). Deliberately leaves
+                // the episode clock running and [lastRestartAt] unstamped, so the cure still fires on the next
+                // check once the app is foreground or battery-exempt and the wedge has persisted.
+                if (!canReclaimForegroundService(appContext)) {
+                    Log.w(TAG, "NAN data plane wedged but the foreground service can't be re-claimed — not restarting")
+                    return
+                }
                 lastRestartAt = now
                 Log.e(TAG, "NAN data plane wedged (sync owed ${now - syncOwedSince}ms with no link) — restarting process")
                 logState()

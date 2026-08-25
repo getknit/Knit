@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh
 
+import android.app.ActivityManager
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.PendingIntent
@@ -13,6 +14,7 @@ import android.hardware.TriggerEventListener
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -23,6 +25,7 @@ import app.getknit.knit.R
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.power.PowerMonitor
 import app.getknit.knit.notifications.NotificationChannels
+import app.getknit.knit.ui.isIgnoringBatteryOptimizations
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -46,6 +49,13 @@ class MeshService : LifecycleService() {
     private val sensorManager by lazy { getSystemService(SensorManager::class.java) }
     private var significantMotion: Sensor? = null
 
+    /**
+     * Whether this instance actually holds the foreground state. False marks a **stillbirth** — the system
+     * created the service at a moment we were not allowed to be foreground (see [postForeground]) — and every
+     * lifecycle callback bails on it rather than touching the injected graph.
+     */
+    private var foregrounded = false
+
     private val motionListener =
         object : TriggerEventListener() {
             override fun onTrigger(event: TriggerEvent?) {
@@ -62,7 +72,14 @@ class MeshService : LifecycleService() {
         // Claim the foreground state before anything resolves the Koin graph — see [startForeground]. Every
         // line below it (observeStatus, powerMonitor, meshManager, settings) opens the database and the
         // keystore identity, and doing that first is what used to blow the 10 s startForegroundService grace.
-        startForeground()
+        foregrounded = startForeground()
+        // Refused (see [postForeground]): leave without resolving the graph and without clearing `meshEnabled`,
+        // so the next foreground app open (KnitApp) or the next reboot (BootReceiver) starts the mesh normally.
+        // stopSelf() also clears the sticky restart record, so the system stops retrying a start that can't work.
+        if (!foregrounded) {
+            stopSelf()
+            return
+        }
         observeStatus()
         powerMonitor.start() // seed power state before the discovery loop first reads it
         meshManager.start()
@@ -79,6 +96,12 @@ class MeshService : LifecycleService() {
         startId: Int,
     ): Int {
         super.onStartCommand(intent, flags, startId)
+        // Stillborn instance: don't act on the intent — every branch below resolves the Koin graph — and don't
+        // return START_STICKY, which would re-arm the restart that landed us here.
+        if (!foregrounded) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_STOP -> {
                 // User tapped Stop on the ongoing notification: remember it so we don't auto-restart on
@@ -96,6 +119,15 @@ class MeshService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        // Nothing was ever started (see [onCreate]); touching the injected fields here would build the very
+        // Koin graph the stillbirth path exists to skip. The heartbeat alarm is still cancelled: it needs no
+        // graph, and a live one left armed by an earlier ungraceful death would otherwise keep waking the
+        // device every 15 minutes to attempt a background service start the system will refuse.
+        if (!foregrounded) {
+            cancelHeartbeat()
+            super.onDestroy()
+            return
+        }
         powerMonitor.stop()
         significantMotion?.let { sensorManager.cancelTriggerSensor(motionListener, it) }
         cancelHeartbeat()
@@ -140,10 +172,10 @@ class MeshService : LifecycleService() {
      * hardware that graph build was a launch-time crash. Now the foreground state is claimed first and the
      * graph is built after, where it can take as long as it needs; [observeStatus] replaces this text with
      * the live count/health as soon as the first value arrives.
+     *
+     * Returns whether the foreground state was actually claimed — it can be refused, see [postForeground].
      */
-    private fun startForeground() {
-        postForeground(buildNotification(count = 0, health = null))
-    }
+    private fun startForeground(): Boolean = postForeground(buildNotification(count = 0, health = null))
 
     /**
      * Keep the ongoing notification's text in step with live connectivity: the reachable-peer count and
@@ -228,26 +260,42 @@ class MeshService : LifecycleService() {
     private fun isAirplaneModeOn(): Boolean = Settings.Global.getInt(contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) != 0
 
     /**
-     * (Re-)post the foreground notification. Calling [ServiceCompat.startForeground] again with the same
-     * id is the supported way to update it, and — unlike `NotificationManagerCompat.notify` — needs no
-     * `POST_NOTIFICATIONS` permission.
+     * (Re-)post the foreground notification, reporting whether the foreground state is held. Calling
+     * [ServiceCompat.startForeground] again with the same id is the supported way to update it, and — unlike
+     * `NotificationManagerCompat.notify` — needs no `POST_NOTIFICATIONS` permission.
+     *
+     * **The first call can be refused.** Since Android 12 an app may only claim the foreground while it is
+     * itself foreground or holds one of the listed exemptions, and *the system creating this service is not
+     * one of them*: a `START_STICKY` restart after the process dies — to low memory, to an OEM app-sleep
+     * sweep, or to our own last-resort wedge cure (`WifiAwareTransport.checkWedge`) — arrives in the
+     * background with nothing to stand on and gets `ForegroundServiceStartNotAllowedException` (an
+     * [IllegalStateException] subclass, so no `Build.VERSION` dance is needed to catch it). Thrown out of
+     * `onCreate` that was a crash, field-observed on Android 15; declining instead costs the mesh only the
+     * time until the app is next opened. See [canReclaimForegroundService] for the pre-check that keeps us
+     * from *choosing* to land here.
      */
-    private fun postForeground(notification: Notification) {
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            notification,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                // Wi-Fi Aware needs no location, so the service is connectedDevice-only (the runtime type
-                // must match the manifest's foregroundServiceType — see AndroidManifest.xml).
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            } else {
-                0
-            },
-        )
-    }
+    private fun postForeground(notification: Notification): Boolean =
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    // Wi-Fi Aware needs no location, so the service is connectedDevice-only (the runtime type
+                    // must match the manifest's foregroundServiceType — see AndroidManifest.xml).
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                } else {
+                    0
+                },
+            )
+            true
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "foreground start refused — mesh stays down until the app is next opened", e)
+            false
+        }
 
     companion object {
+        private const val TAG = "MeshService"
         private val CHANNEL_ID = NotificationChannels.STATUS
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "app.getknit.knit.STOP_MESH"
@@ -263,4 +311,29 @@ class MeshService : LifecycleService() {
             )
         }
     }
+}
+
+/**
+ * Whether the system would let us claim the mesh foreground service *right now* — the precondition for any
+ * deliberate end to this process that expects `START_STICKY` to bring the service back.
+ *
+ * Since Android 12 a backgrounded app can only start a foreground service under a listed exemption, and a
+ * system-initiated sticky restart is not one of them. A process that dies while backgrounded and unexempted
+ * therefore comes back to a refused [MeshService.postForeground] and no mesh at all. Two of the exemptions
+ * are ours to check cheaply, and they are the two a Knit user can actually be in:
+ *
+ * - **A visible activity.** `IMPORTANCE_FOREGROUND` really does mean the UI is up — the service on its own
+ *   only ever reaches the weaker `IMPORTANCE_FOREGROUND_SERVICE`, so this can't self-satisfy.
+ * - **The battery-optimization exemption**, offered on the onboarding permission screen. Opt-in, so most
+ *   installs won't have it; that is exactly why the background case has to be handled rather than assumed.
+ *
+ * A top-level function (like [shouldStartMeshOnBoot]) so the transports can consult it without depending on
+ * the service class.
+ */
+fun canReclaimForegroundService(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+    if (isIgnoringBatteryOptimizations(context)) return true
+    val state = ActivityManager.RunningAppProcessInfo()
+    ActivityManager.getMyMemoryState(state)
+    return state.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
 }

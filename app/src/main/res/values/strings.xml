@@ -418,6 +418,7 @@
     <string name="action_open_settings">Open settings</string>
     <string name="action_back">Back</string>
     <string name="action_close">Close</string>
+    <string name="action_dismiss">Dismiss</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_save">Save</string>
 
@@ -469,6 +470,14 @@
     <string name="lora_open_settings">Open Bluetooth settings</string>
     <string name="lora_forget">Forget this board</string>
     <string name="lora_channel_label">Channel index: %1$d</string>
+    <string name="lora_provision_button">Set up Knit channel on this board</string>
+    <string name="lora_provision_running">Configuring board…</string>
+    <string name="lora_provisioned">Knit channel written. The board may reboot to apply it — it will reconnect on its own.</string>
+    <string name="lora_provision_already">This board already has the Knit channel.</string>
+    <string name="lora_provision_no_slot">No free channel slot on the board. Free one in the Meshtastic app, then try again.</string>
+    <string name="lora_provision_failed">Couldn\'t configure the board. Make sure it\'s connected and try again.</string>
+    <string name="lora_provision_not_ready">Connect to the board first, then set up the channel.</string>
+    <string name="lora_channel_manual_hint">Or set the channel index by hand (both boards must use the same channel):</string>
     <string name="lora_status_connected">Connected</string>
     <string name="lora_status_connecting">Connecting…</string>
     <string name="lora_status_reconnecting">Reconnecting…</string>

@@ -1674,6 +1674,17 @@ not relitigating:
 9. **Gated like ADR 031, not stripped.** `BuildConfig.LORA_PLANE` (debug true, release/staging false,
    `-PloraPlane=` override) gates the composite child, the `relays`-style settings route, and
    `SettingsStore.loraEnabled`; the classes stay in the APK (R8 prunes the `if (LORA_PLANE)` branches).
+10. **Knit provisions its own channel (2026-08-24 addendum).** "Set up Knit channel" (or `…debug.LORAPROV`)
+    writes the derived `KnitChannel` (name "Knit" + a 16-byte AES128 PSK) as a **secondary** channel over
+    the Meshtastic **admin** API — `get_channel` for a `session_passkey`, then `begin_edit → set_channel →
+    commit_edit` echoing it, into a free slot (reusing an existing same-named channel; one fresh-key retry
+    on `ADMIN_BAD_SESSION_KEY`). The commit reboots the board to apply it, so the session re-handshakes.
+    The PSK is HKDF-SHA256-derived from **public** constants (`"nearby"` + a domain label), so it is
+    deterministic and shared but **not secret** — a **rendezvous** channel, honest for the cleartext Nearby
+    room, never a confidentiality boundary. Written SECONDARY so the board's primary/radio config (region,
+    modem preset) is untouched. Pinned by `KnitChannelTest` (the derivation — changing it strands
+    already-provisioned boards) + `MeshtasticProtoTest` (the admin wire). A confidential per-deployment PSK
+    (shared out-of-band via a channel QR/URL) is deferred.
 
 Import boundary honoured: `mesh/lora/` is pure/Android-free and JVM-tested end-to-end (a `FakeMeshtasticAir`
 floods bytes between two fake boards); the only `android.bluetooth.*` importer is
@@ -1684,6 +1695,6 @@ Honest residuals (accepted for the MVP): one board per BLE clique (two would eac
 locally-seen frame — the board dedups `(from,id)`, so that doubles airtime); a Nearby-only LoRa peer
 appears in the contact picker but a DM to it strands in custody until radio/spool contact; and a sealed
 tick over LoRa establishes a ratchet session with a far author over a plane that can't carry the DMs it
-enables (harmless). Deferred: a Knit-provisioned channel (today the user sets a PSK channel in the
-Meshtastic app and Knit picks the index), DM-over-LoRa, a periodic beacon, and multi-board dedup.
-Scheme + device bring-up: `context/lora-bridge.md`.
+enables (harmless). Deferred: a user-set/shared **private** PSK (the shipped channel is a public
+rendezvous), DM-over-LoRa, a periodic beacon, and multi-board dedup. Scheme + device bring-up:
+`context/lora-bridge.md`.

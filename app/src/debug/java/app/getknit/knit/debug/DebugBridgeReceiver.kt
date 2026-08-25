@@ -239,6 +239,10 @@ class DebugBridgeReceiver :
                             handleLoraTx(intent)
                         }
 
+                        ACTION_LORAPROV -> {
+                            handleLoraProv()
+                        }
+
                         ACTION_HEAL -> {
                             mesh.heal()
                             reply("ok", "healed")
@@ -1025,6 +1029,25 @@ class DebugBridgeReceiver :
         return reply("ok", "sent").put("result", result::class.simpleName).put("channel", channel)
     }
 
+    /**
+     * Writes the well-known Knit channel onto the connected board over the Meshtastic admin API (the
+     * headless equivalent of the settings screen's "Set up Knit channel"), and — on success — binds the
+     * plane to the slot it landed in. Requires the board Ready.
+     */
+    private suspend fun handleLoraProv(): JSONObject {
+        val result = lora.provisionKnitChannel()
+        if (result is app.getknit.knit.mesh.lora.ProvisionResult.Provisioned) settings.setLoraChannelIndex(result.index)
+        val index =
+            when (result) {
+                is app.getknit.knit.mesh.lora.ProvisionResult.Provisioned -> result.index
+                else -> -1
+            }
+        return reply("ok", "provision requested")
+            .put("result", result::class.simpleName)
+            .put("channel", if (index >= 0) index else JSONObject.NULL)
+            .put("state", lora.status.value.state::class.simpleName)
+    }
+
     private fun reply(
         status: String,
         message: String,
@@ -1087,6 +1110,7 @@ class DebugBridgeReceiver :
         const val ACTION_RATCHET = "app.getknit.knit.debug.RATCHET"
         const val ACTION_LORA = "app.getknit.knit.debug.LORA"
         const val ACTION_LORATX = "app.getknit.knit.debug.LORATX"
+        const val ACTION_LORAPROV = "app.getknit.knit.debug.LORAPROV"
 
         const val EXTRA_TEXT = "text"
         const val EXTRA_ADDRESS = "address"

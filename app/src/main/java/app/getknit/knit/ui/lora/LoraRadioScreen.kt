@@ -17,6 +17,8 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,6 +61,8 @@ fun LoraRadioScreen(onBack: () -> Unit) {
         onPickBoard = viewModel::pickBoard,
         onForgetBoard = viewModel::forgetBoard,
         onSetChannel = viewModel::setChannel,
+        onProvision = viewModel::provisionChannel,
+        onDismissProvision = viewModel::dismissProvisionOutcome,
     )
 }
 
@@ -71,6 +75,8 @@ internal fun LoraRadioScreenContent(
     onPickBoard: (BoardOption) -> Unit = {},
     onForgetBoard: () -> Unit = {},
     onSetChannel: (Int) -> Unit = {},
+    onProvision: () -> Unit = {},
+    onDismissProvision: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Scaffold(
@@ -132,6 +138,16 @@ internal fun LoraRadioScreenContent(
                 text = stringResource(R.string.lora_channel_label, state.channel),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
+            )
+            ProvisionSection(
+                state = state,
+                onProvision = onProvision,
+                onDismissProvision = onDismissProvision,
+            )
+            Text(
+                text = stringResource(R.string.lora_channel_manual_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             ChannelRow(channel = state.channel, onSetChannel = onSetChannel)
 
@@ -207,6 +223,50 @@ private fun ChannelRow(
         ) { Text("+") }
     }
 }
+
+@Composable
+private fun ProvisionSection(
+    state: LoraRadioUiState,
+    onProvision: () -> Unit,
+    onDismissProvision: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = onProvision,
+            enabled = state.connection == LoraConnState.Ready && !state.provisioning,
+            modifier = Modifier.testTag("lora_provision"),
+        ) {
+            if (state.provisioning) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(stringResource(R.string.lora_provision_running))
+            } else {
+                Text(stringResource(R.string.lora_provision_button))
+            }
+        }
+        state.provisionOutcome?.let { outcome ->
+            val (message, isError) = outcome.messageAndSeverity()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(message),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).testTag("lora_provision_outcome"),
+                )
+                TextButton(onClick = onDismissProvision) { Text(stringResource(R.string.action_dismiss)) }
+            }
+        }
+    }
+}
+
+private fun LoraProvisionOutcome.messageAndSeverity(): Pair<Int, Boolean> =
+    when (this) {
+        LoraProvisionOutcome.Provisioned -> R.string.lora_provisioned to false
+        LoraProvisionOutcome.AlreadyPresent -> R.string.lora_provision_already to false
+        LoraProvisionOutcome.NoFreeSlot -> R.string.lora_provision_no_slot to true
+        LoraProvisionOutcome.Failed -> R.string.lora_provision_failed to true
+        LoraProvisionOutcome.NotReady -> R.string.lora_provision_not_ready to true
+    }
 
 @Composable
 private fun StatusRow(state: LoraRadioUiState) {

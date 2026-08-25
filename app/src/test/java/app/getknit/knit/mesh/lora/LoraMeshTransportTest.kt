@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -332,5 +333,31 @@ class LoraMeshTransportTest {
             )
             a.transport.stop()
             b.transport.stop()
+        }
+
+    @Test
+    fun provisionKnitChannelDelegatesToTheLinkWithTheDerivedKnitChannel() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.link.provisionResult = ProvisionResult.Provisioned(index = 3, alreadyPresent = false)
+
+            val result = a.transport.provisionKnitChannel()
+
+            assertEquals(ProvisionResult.Provisioned(3, false), result)
+            assertEquals(1, a.link.provisioned.size)
+            assertEquals(
+                KnitChannel.NAME,
+                a.link.provisioned
+                    .single()
+                    .name,
+            )
+            assertArrayEquals(
+                KnitChannel.PSK,
+                a.link.provisioned
+                    .single()
+                    .psk,
+            )
+            a.transport.stop()
         }
 }

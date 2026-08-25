@@ -35,10 +35,46 @@ internal interface MeshtasticLink {
         hopLimit: Int? = null,
     ): SendResult
 
+    /**
+     * Writes the well-known Knit channel ([spec]) onto the connected board as a **secondary** channel,
+     * picking a free slot (or reusing an existing same-named one), and returns where it landed so the caller
+     * can bind the plane to that index. The board typically reboots to apply the edit; the link rides that
+     * out (it re-handshakes) — the result is returned as soon as the write is accepted, before the reboot.
+     */
+    suspend fun provisionChannel(spec: ProvisionSpec): ProvisionResult
+
     /** (Re)connects to [address], retrying with backoff while started. Idempotent for the same address. */
     fun start(address: String)
 
     fun stop()
+}
+
+/** The name + PSK to write; the link chooses the secondary index. */
+internal data class ProvisionSpec(
+    val name: String,
+    val psk: ByteArray,
+)
+
+/** The outcome of [MeshtasticLink.provisionChannel]. */
+internal sealed interface ProvisionResult {
+    /** The Knit channel is at [index] (freshly written, or [alreadyPresent] and left as-is); bind the plane to it. */
+    data class Provisioned(
+        val index: Int,
+        val alreadyPresent: Boolean,
+    ) : ProvisionResult
+
+    /** Every secondary slot (1..7) is already taken by a different channel; the user must free one. */
+    data object NoFreeSlot : ProvisionResult
+
+    /** The board never accepted the write (e.g. it kept rejecting the admin session key). */
+    data class Failed(
+        val reason: String,
+    ) : ProvisionResult
+
+    /** The link wasn't [LinkState.Ready] when asked. */
+    data class NotReady(
+        val state: LinkState,
+    ) : ProvisionResult
 }
 
 /** The link's lifecycle. Terminal states ([NeedsPairing], [StaleBond]) stop retrying until [MeshtasticLink.start]. */

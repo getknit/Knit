@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 
 /**
@@ -93,6 +94,14 @@ internal class MeshtasticSession(
         if (st !is LinkState.Ready) return SendResult.NotReady(st)
         val reply = CompletableDeferred<SendResult>()
         inbox.send(Cmd.Send(channelIndex, portnum, hopLimit, payload, reply))
+        return reply.await()
+    }
+
+    override suspend fun provisionChannel(spec: ProvisionSpec): ProvisionResult {
+        val st = _state.value
+        if (st !is LinkState.Ready) return ProvisionResult.NotReady(st)
+        val reply = CompletableDeferred<ProvisionResult>()
+        inbox.send(Cmd.Provision(spec, reply))
         return reply.await()
     }
 
@@ -203,6 +212,7 @@ internal class MeshtasticSession(
             is GattEvent.Disconnected -> SessionEnd(reason = "gatt disconnect ${outcome.status}")
             is GattEvent.Notified -> drain(address, channel, awaitId = null)
             is Cmd.Send -> doSend(address, channel, outcome)
+            is Cmd.Provision -> runProvision(channel, outcome)
             Cmd.Heartbeat -> maybeHeartbeat(address, channel)
             else -> null
         }
@@ -399,6 +409,232 @@ internal class MeshtasticSession(
         return end
     }
 
+    // --- channel provisioning (an AdminMessage to the local node, over portnum ADMIN) ---
+
+    /**
+     * Writes [Cmd.Provision.spec] as a **secondary** channel: reuse an existing same-named one, else pick a
+     * free slot, GET a session passkey, then begin→set→commit echoing it. The commit reboots the board to
+     * apply the edit, so on success this ends the session (resetting the backoff) for a fresh handshake that
+     * reloads the channel table. Runs inside the actor, so its GATT ops stay serialized with sends.
+     */
+    private suspend fun runProvision(
+        channel: GattChannel,
+        cmd: Cmd.Provision,
+    ): SessionEnd? {
+        val myNode = board?.myNodeNum
+        if (_state.value !is LinkState.Ready || myNode == null) {
+            cmd.reply.complete(ProvisionResult.NotReady(_state.value))
+            return null
+        }
+        channels.firstOrNull { it.name == cmd.spec.name && it.index != PRIMARY_INDEX }?.let { existing ->
+            log("lora provision reuse ch${existing.index} '${cmd.spec.name}'")
+            cmd.reply.complete(ProvisionResult.Provisioned(existing.index, alreadyPresent = true))
+            return null
+        }
+        val slot = freeSecondarySlot()
+        if (slot == null) {
+            cmd.reply.complete(ProvisionResult.NoFreeSlot)
+            return null
+        }
+        return applyChannel(channel, myNode, ChannelWrite(index = slot, name = cmd.spec.name, psk = cmd.spec.psk), cmd.reply)
+    }
+
+    /** The lowest secondary index (1..7) not already holding a live channel, or null when all are taken. */
+    private fun freeSecondarySlot(): Int? {
+        val used = channels.filter { it.role != ROLE_DISABLED && it.name.isNotEmpty() }.map { it.index }.toSet()
+        return (FIRST_SECONDARY..LAST_SECONDARY).firstOrNull { it !in used }
+    }
+
+    private suspend fun applyChannel(
+        channel: GattChannel,
+        myNode: UInt,
+        write: ChannelWrite,
+        reply: CompletableDeferred<ProvisionResult>,
+    ): SessionEnd? {
+        var outcome = writeChannel(channel, myNode, adminGet(channel, myNode)?.passkey, write)
+        if (outcome == AdminOutcome.BadSessionKey) {
+            outcome = writeChannel(channel, myNode, adminGet(channel, myNode)?.passkey, write) // one fresh-key retry
+        }
+        return when (outcome) {
+            AdminOutcome.Applied -> {
+                log("lora provision wrote ch${write.index} '${write.name}'")
+                reply.complete(ProvisionResult.Provisioned(write.index, alreadyPresent = false))
+                SessionEnd(reason = "provisioned", resetStreak = true) // the commit reboots; reconnect reloads channels
+            }
+
+            AdminOutcome.BadSessionKey -> {
+                reply.complete(ProvisionResult.Failed("admin session key rejected"))
+                null
+            }
+
+            AdminOutcome.Failed -> {
+                reply.complete(ProvisionResult.Failed("board refused the channel write"))
+                null
+            }
+        }
+    }
+
+    /** begin_edit → set_channel → commit_edit, each echoing [passkey]; the transaction saves+reboots at commit. */
+    private suspend fun writeChannel(
+        channel: GattChannel,
+        myNode: UInt,
+        passkey: ByteArray?,
+        write: ChannelWrite,
+    ): AdminOutcome {
+        val begin = writeAdmin(channel, myNode, MeshtasticProto.encodeAdminBeginEdit(passkey))
+        if (begin == AdminOutcome.BadSessionKey) return begin
+        val set = writeAdmin(channel, myNode, MeshtasticProto.encodeAdminSetChannel(write, passkey))
+        if (set != AdminOutcome.Applied) return set
+        // commit triggers the implicit save+reboot: the routing reply may never arrive, so don't wait on it.
+        writeAdmin(channel, myNode, MeshtasticProto.encodeAdminCommitEdit(passkey), expectReply = false)
+        return AdminOutcome.Applied
+    }
+
+    /** Sends `get_channel_request(0)` to the local node and returns the reply carrying a fresh session passkey. */
+    private suspend fun adminGet(
+        channel: GattChannel,
+        myNode: UInt,
+    ): AdminReply? {
+        val id = ids.next()
+        val packet =
+            OutboundPacket(
+                to = myNode,
+                channelIndex = 0,
+                id = id,
+                portnum = MeshtasticProto.PORT_ADMIN,
+                payload = MeshtasticProto.encodeAdminGetChannel(0),
+                wantResponse = true,
+            )
+        if (channel.writeToRadio(MeshtasticProto.encodePacket(packet), WRITE_TIMEOUT_MS) !is GattResult.Ok) return null
+        return (awaitAdminResponse(channel, id, now() + ADMIN_TIMEOUT_MS) as? AdminResp.Admin)?.reply
+    }
+
+    /** Writes one admin message to [myNode]; when [expectReply], classifies the routing reply (ack / bad key / error). */
+    private suspend fun writeAdmin(
+        channel: GattChannel,
+        myNode: UInt,
+        adminBytes: ByteArray,
+        expectReply: Boolean = true,
+    ): AdminOutcome {
+        val id = ids.next()
+        val packet =
+            OutboundPacket(
+                to = myNode,
+                channelIndex = 0,
+                id = id,
+                portnum = MeshtasticProto.PORT_ADMIN,
+                payload = adminBytes,
+                wantResponse = expectReply,
+            )
+        if (channel.writeToRadio(MeshtasticProto.encodePacket(packet), WRITE_TIMEOUT_MS) !is GattResult.Ok) return AdminOutcome.Failed
+        if (!expectReply) return AdminOutcome.Applied
+        return when (val resp = awaitAdminResponse(channel, id, now() + ADMIN_TIMEOUT_MS)) {
+            is AdminResp.Routing -> {
+                when (resp.reason) {
+                    RoutingError.ADMIN_BAD_SESSION_KEY -> AdminOutcome.BadSessionKey
+                    RoutingError.NONE -> AdminOutcome.Applied
+                    else -> AdminOutcome.Failed
+                }
+            }
+
+            // Local admin often sends no routing ack; a reboot, an admin echo, or a quiet drain all mean "processed".
+            else -> {
+                AdminOutcome.Applied
+            }
+        }
+    }
+
+    /**
+     * Reads FromRadio (waiting on FromNum notifies) until a packet addressed to us settles the admin request
+     * [reqId]: an ADMIN reply, the matching ROUTING outcome, a reboot, or the deadline. Other traffic seen in
+     * the window is dropped — provisioning is a rare, brief, user-initiated action.
+     */
+    private suspend fun awaitAdminResponse(
+        channel: GattChannel,
+        reqId: UInt,
+        deadlineMs: Long,
+    ): AdminResp {
+        while (now() < deadlineMs) {
+            when (val read = channel.readFromRadio(READ_TIMEOUT_MS)) {
+                is GattResult.Ok -> {
+                    if (read.value.isEmpty()) {
+                        val wait = (deadlineMs - now()).coerceAtLeast(0)
+                        when (withTimeoutOrNull(wait) { channel.events.receiveCatching().getOrNull() }) {
+                            is GattEvent.Notified -> Unit
+
+                            // more to read
+                            else -> return AdminResp.None // disconnect, closed, or deadline
+                        }
+                    } else {
+                        matchAdminResponse(read.value, reqId)?.let { return it }
+                    }
+                }
+
+                else -> {
+                    return AdminResp.None
+                }
+            }
+        }
+        return AdminResp.None
+    }
+
+    /** Classifies one FromRadio against admin request [reqId]; null means "not the reply — keep reading". */
+    private fun matchAdminResponse(
+        bytes: ByteArray,
+        reqId: UInt,
+    ): AdminResp? =
+        when (val fr = MeshtasticProto.decodeFromRadio(bytes)) {
+            FromRadio.Rebooted -> {
+                AdminResp.Reboot
+            }
+
+            is FromRadio.QueueStatus -> {
+                _queue.value = QueueInfo(fr.free, fr.maxlen, now())
+                null
+            }
+
+            is FromRadio.Packet -> {
+                val data = fr.packet.decoded
+                when {
+                    data == null -> {
+                        null
+                    }
+
+                    data.portnum == MeshtasticProto.PORT_ADMIN -> {
+                        AdminResp.Admin(MeshtasticProto.decodeAdmin(data.payload) ?: AdminReply(null, null))
+                    }
+
+                    data.portnum == MeshtasticProto.PORT_ROUTING && data.requestId == reqId -> {
+                        AdminResp.Routing(MeshtasticProto.decodeRouting(data.payload) ?: RoutingError.UNKNOWN)
+                    }
+
+                    else -> {
+                        null
+                    }
+                }
+            }
+
+            else -> {
+                null
+            }
+        }
+
+    private enum class AdminOutcome { Applied, BadSessionKey, Failed }
+
+    private sealed interface AdminResp {
+        data class Admin(
+            val reply: AdminReply,
+        ) : AdminResp
+
+        data class Routing(
+            val reason: RoutingError,
+        ) : AdminResp
+
+        data object Reboot : AdminResp
+
+        data object None : AdminResp
+    }
+
     // --- heartbeat ---
 
     private suspend fun heartbeatTicker() {
@@ -475,6 +711,11 @@ internal class MeshtasticSession(
             val reply: CompletableDeferred<SendResult>,
         ) : Cmd
 
+        class Provision(
+            val spec: ProvisionSpec,
+            val reply: CompletableDeferred<ProvisionResult>,
+        ) : Cmd
+
         data object Heartbeat : Cmd
     }
 
@@ -487,7 +728,14 @@ internal class MeshtasticSession(
         const val READ_TIMEOUT_MS = 30_000L
         const val HANDSHAKE_TIMEOUT_MS = 120_000L
         const val HEARTBEAT_MS = 180_000L
+        const val ADMIN_TIMEOUT_MS = 8_000L
         const val MAX_STALE_READS = 32
+
+        // Channel provisioning: index 0 is the board's primary; Knit writes into a free secondary (1..7).
+        const val PRIMARY_INDEX = 0
+        const val FIRST_SECONDARY = 1
+        const val LAST_SECONDARY = 7
+        const val ROLE_DISABLED = 0
         const val PACKET_BUFFER = 256
         const val OUTCOME_BUFFER = 64
 

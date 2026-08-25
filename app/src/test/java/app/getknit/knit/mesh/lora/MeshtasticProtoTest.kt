@@ -76,6 +76,87 @@ class MeshtasticProtoTest {
         assertTrue("worst-case ToRadio is one ATT write under MTU 512: ${bytes.size}", bytes.size <= 259)
     }
 
+    @Test
+    fun encodePacketEmitsWantResponse() {
+        // want_response (Data field 3) rides an admin request; here on a self-addressed ADMIN packet.
+        val bytes =
+            MeshtasticProto.encodePacket(
+                OutboundPacket(
+                    to = 0x11223344u,
+                    channelIndex = 0,
+                    id = 0xAABBCCDDu,
+                    portnum = MeshtasticProto.PORT_ADMIN,
+                    payload = byteArrayOf(0x08, 0x01),
+                    wantResponse = true,
+                ),
+            )
+        // packet{ to=11223344, decoded{ portnum=6, payload=08 01, want_response=true }, id=AABBCCDD }
+        assertEquals(
+            "0A 14 15 44 33 22 11 22 08 08 06 12 02 08 01 18 01 35 DD CC BB AA",
+            bytes.hex(),
+        )
+    }
+
+    // --- admin encode vectors ---
+
+    @Test
+    fun encodeAdminGetChannelIsIndexPlusOne() {
+        assertEquals("08 01", MeshtasticProto.encodeAdminGetChannel(0).hex())
+        assertEquals("08 08", MeshtasticProto.encodeAdminGetChannel(7).hex())
+    }
+
+    @Test
+    fun encodeAdminBeginAndCommitEdit() {
+        assertEquals("80 04 01", MeshtasticProto.encodeAdminBeginEdit(null).hex())
+        assertEquals("88 04 01", MeshtasticProto.encodeAdminCommitEdit(null).hex())
+    }
+
+    @Test
+    fun encodeAdminCommitEchoesSessionPasskey() {
+        // commit_edit_settings=true (field 65) then session_passkey=AA BB CC (field 101).
+        assertEquals(
+            "88 04 01 AA 06 03 AA BB CC",
+            MeshtasticProto.encodeAdminCommitEdit(byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte())).hex(),
+        )
+    }
+
+    @Test
+    fun encodeAdminSetChannel() {
+        val bytes =
+            MeshtasticProto.encodeAdminSetChannel(
+                ChannelWrite(index = 1, name = "A", psk = byteArrayOf(1, 2), role = MeshtasticProto.ROLE_SECONDARY),
+                passkey = null,
+            )
+        // set_channel(33){ index=1, settings{ psk=01 02, name="A" }, role=2 }
+        assertEquals("8A 02 0D 08 01 12 07 12 02 01 02 1A 01 41 18 02", bytes.hex())
+    }
+
+    // --- admin decode vectors ---
+
+    @Test
+    fun decodeAdminReadsChannelAndPasskey() {
+        // get_channel_response(2){ index=2, settings{name="knit"}, role=2 } + session_passkey(101)=AA BB CC
+        val reply = MeshtasticProto.decodeAdmin(hex("12 0C 08 02 12 06 1A 04 6B 6E 69 74 18 02 AA 06 03 AA BB CC"))!!
+        assertEquals(ChannelInfo(index = 2, name = "knit", role = 2), reply.channel)
+        assertEquals("AA BB CC", reply.passkey!!.hex())
+    }
+
+    @Test
+    fun decodeAdminWithoutPasskeyOrChannelIsEmptyReply() {
+        val reply = MeshtasticProto.decodeAdmin(ByteArray(0))!!
+        assertNull(reply.passkey)
+        assertNull(reply.channel)
+    }
+
+    @Test
+    fun decodeAdminIsTotalOnGarbage() {
+        val rng = Random(7)
+        repeat(2_000) {
+            val bytes = ByteArray(rng.nextInt(0, 24)) { rng.nextInt().toByte() }
+            MeshtasticProto.decodeAdmin(bytes) // must never throw
+        }
+    }
+
     // --- decode vectors ---
 
     @Test

@@ -163,6 +163,87 @@ internal object BoardBytes {
         reason: RoutingError,
     ): ByteArray = packet(from, 0, MeshtasticProto.PORT_ROUTING, ProtoWriter().varint(3, reason.code).toByteArray(), requestId = requestId)
 
+    /** The `to`, `portnum`, and `Data.payload` of a ToRadio{packet}, or null when [toRadio] isn't a packet. */
+    data class OutboundData(
+        val to: UInt,
+        val portnum: Int,
+        val payload: ByteArray,
+    )
+
+    fun outboundData(toRadio: ByteArray): OutboundData? {
+        if (!isPacket(toRadio)) return null
+        val reader = ProtoReader(toRadio)
+        reader.readTag() // packet (ToRadio field 1)
+        val mp = reader.sub()
+        var to = 0u
+        var portnum = 0
+        var payload = ByteArray(0)
+        while (mp.hasMore) {
+            val tag = mp.readTag()
+            when (tag ushr WireType.FIELD_SHIFT) {
+                2 -> {
+                    to = mp.readFixed32()
+                }
+
+                4 -> {
+                    val d = mp.sub()
+                    while (d.hasMore) {
+                        val t = d.readTag()
+                        when (t ushr WireType.FIELD_SHIFT) {
+                            1 -> portnum = d.readVarint32()
+                            2 -> payload = d.readBytes()
+                            else -> d.skip(t and WireType.MASK)
+                        }
+                    }
+                }
+
+                else -> {
+                    mp.skip(tag and WireType.MASK)
+                }
+            }
+        }
+        return OutboundData(to, portnum, payload)
+    }
+
+    /** An admin `get_channel_request` (its payload leads with field 1 → tag 0x08). */
+    fun isAdminGet(toRadio: ByteArray): Boolean =
+        outboundData(toRadio)?.let { it.portnum == MeshtasticProto.PORT_ADMIN && it.payload.firstOrNull() == 0x08.toByte() } ?: false
+
+    fun isAdmin(toRadio: ByteArray): Boolean = outboundData(toRadio)?.portnum == MeshtasticProto.PORT_ADMIN
+
+    /** An admin `set_channel` (its payload leads with field 33 → tag bytes 0x8A 0x02). */
+    fun isAdminSet(toRadio: ByteArray): Boolean =
+        outboundData(toRadio)?.let {
+            it.portnum == MeshtasticProto.PORT_ADMIN && it.payload.size >= 2 && it.payload[0] == 0x8A.toByte() &&
+                it.payload[1] == 0x02.toByte()
+        } ?: false
+
+    /** A board→phone `AdminMessage { get_channel_response{ index, name, role }, session_passkey }`. */
+    fun adminGetResponse(
+        from: UInt,
+        requestId: UInt,
+        passkey: ByteArray,
+        index: Int = 0,
+        name: String = "",
+        role: Int = 1,
+    ): ByteArray =
+        packet(
+            from = from,
+            channel = 0,
+            portnum = MeshtasticProto.PORT_ADMIN,
+            payload =
+                ProtoWriter()
+                    .apply {
+                        message(2) {
+                            varint(1, index)
+                            message(2) { string(3, name) }
+                            varint(3, role)
+                        }
+                        bytes(101, passkey)
+                    }.toByteArray(),
+            requestId = requestId,
+        )
+
     /** The first byte identifies a ToRadio: 0x18 want_config, 0x0A packet, 0x3A heartbeat, 0x20 disconnect. */
     fun isWantConfig(toRadio: ByteArray): Boolean = toRadio.isNotEmpty() && toRadio[0] == 0x18.toByte()
 

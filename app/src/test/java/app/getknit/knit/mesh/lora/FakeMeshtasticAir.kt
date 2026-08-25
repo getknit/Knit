@@ -70,6 +70,15 @@ internal class FakeMeshtasticLink(
         return SendResult.Queued(id, QueueInfo(free, 16, 0))
     }
 
+    /** What [provisionChannel] returns; a test can script a different outcome. */
+    var provisionResult: ProvisionResult = ProvisionResult.Provisioned(index = 1, alreadyPresent = false)
+    val provisioned = mutableListOf<ProvisionSpec>()
+
+    override suspend fun provisionChannel(spec: ProvisionSpec): ProvisionResult {
+        provisioned += spec
+        return provisionResult
+    }
+
     override fun start(address: String) {
         _state.value = LinkState.Ready(BoardInfo(nodeNum, "heltec-v4", "2.5.0"), listOf(ChannelInfo(0, channelName, 1)), 512)
         air.register(this)

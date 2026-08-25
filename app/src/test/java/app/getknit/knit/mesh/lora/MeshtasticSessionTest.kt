@@ -334,4 +334,125 @@ class MeshtasticSessionTest {
             collector.cancel()
             session.stop()
         }
+
+    // --- channel provisioning ---
+
+    private val provisionSpec = ProvisionSpec(name = "Knit", psk = byteArrayOf(1, 2, 3, 4))
+
+    /**
+     * Scripts a board: the config handshake reports [channels] (index, name, role), admin GETs return a
+     * passkey, and admin SETs are ACKed — except the first [nakFirstSet] SETs, which NAK with [nakReason].
+     */
+    private fun scriptBoard(
+        ch: FakeGattChannel,
+        channels: List<Triple<Int, String, Int>>,
+        nakFirstSet: Int = 0,
+        nakReason: RoutingError = RoutingError.ADMIN_BAD_SESSION_KEY,
+    ) {
+        var sets = 0
+        ch.onWrite = { bytes ->
+            when {
+                BoardBytes.isWantConfig(bytes) -> {
+                    ch.enqueueRead(BoardBytes.myInfo(0xABCDu, "heltec-v4"))
+                    channels.forEach { (i, n, r) -> ch.enqueueRead(BoardBytes.channel(i, n, r)) }
+                    ch.enqueueRead(BoardBytes.configComplete(nonce))
+                }
+
+                BoardBytes.isAdminGet(bytes) -> {
+                    ch.enqueueRead(BoardBytes.adminGetResponse(0xABCDu, BoardBytes.packetId(bytes), passkey = byteArrayOf(0x0A, 0x0B)))
+                }
+
+                BoardBytes.isAdminSet(bytes) -> {
+                    val reason = if (sets++ < nakFirstSet) nakReason else RoutingError.NONE
+                    ch.enqueueRead(BoardBytes.nak(0xABCDu, BoardBytes.packetId(bytes), reason))
+                }
+
+                BoardBytes.isAdmin(bytes) -> {
+                    // begin/commit — a plain ACK
+                    ch.enqueueRead(BoardBytes.nak(0xABCDu, BoardBytes.packetId(bytes), RoutingError.NONE))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun provisionWritesAFreeSecondarySlot() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1))) // only the (unnamed) primary
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val call = async { session.provisionChannel(provisionSpec) }
+            runCurrent()
+            val result = call.await()
+            assertEquals(ProvisionResult.Provisioned(index = 1, alreadyPresent = false), result)
+            assertTrue("a set_channel was written", ch.writes.any { BoardBytes.isAdminSet(it) })
+            session.stop()
+        }
+
+    @Test
+    fun provisionReusesAnExistingSameNamedChannelWithoutWriting() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(2, "Knit", 2)))
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val call = async { session.provisionChannel(provisionSpec) }
+            runCurrent()
+            val result = call.await()
+            assertEquals(ProvisionResult.Provisioned(index = 2, alreadyPresent = true), result)
+            assertTrue("no set_channel written on reuse", ch.writes.none { BoardBytes.isAdminSet(it) })
+            session.stop()
+        }
+
+    @Test
+    fun provisionReportsNoFreeSlotWhenEverySecondaryIsTaken() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = (0..7).map { Triple(it, "ch$it", if (it == 0) 1 else 2) })
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val call = async { session.provisionChannel(provisionSpec) }
+            runCurrent()
+            assertEquals(ProvisionResult.NoFreeSlot, call.await())
+            assertTrue("no set_channel written", ch.writes.none { BoardBytes.isAdminSet(it) })
+            session.stop()
+        }
+
+    @Test
+    fun provisionRetriesOnceAfterABadSessionKey() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), nakFirstSet = 1)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val call = async { session.provisionChannel(provisionSpec) }
+            runCurrent()
+            val result = call.await()
+            assertEquals(ProvisionResult.Provisioned(index = 1, alreadyPresent = false), result)
+            assertEquals("first set NAK'd, second succeeded", 2, ch.writes.count { BoardBytes.isAdminSet(it) })
+            session.stop()
+        }
+
+    @Test
+    fun provisionOnANonReadyLinkIsRejected() =
+        runTest {
+            val ch = FakeGattChannel() // never handshakes → stays Connecting/Disconnected
+            val dialer = FakeGattDialer(ch).apply { dialResults.addLast(DialResult.Timeout) }
+            val session = session(dialer, backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val result = session.provisionChannel(provisionSpec)
+            assertTrue("got $result", result is ProvisionResult.NotReady)
+            session.stop()
+        }
 }

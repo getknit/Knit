@@ -10,6 +10,7 @@ package app.getknit.knit.mesh.lora
  * Field numbers are pinned against `meshtastic/protobufs` and covered by golden byte vectors in that test;
  * every decode is total — malformed input yields `null`, never a throw (via [ProtoException]).
  */
+@Suppress("TooManyFunctions") // a flat codec: one small encode/decode helper per Meshtastic message we speak
 internal object MeshtasticProto {
     /** `Data.payload`'s hard cap (`Constants.DATA_PAYLOAD_LEN`); a larger payload is refused before the radio. */
     const val MAX_PAYLOAD = 233
@@ -22,6 +23,12 @@ internal object MeshtasticProto {
 
     /** `PortNum.ROUTING_APP` — how the mesh delivers a NAK (an `error_reason`) back to the sender. */
     const val PORT_ROUTING = 5
+
+    /** `PortNum.ADMIN_APP` — carries an `AdminMessage`; Knit uses it only to self-configure the local board. */
+    const val PORT_ADMIN = 6
+
+    /** `Channel.Role.SECONDARY` — the role Knit writes its channel as, so the board's primary is never touched. */
+    const val ROLE_SECONDARY = 2
 
     // --- ToRadio (phone → board) ---
 
@@ -48,10 +55,73 @@ internal object MeshtasticProto {
                 message(MP_DECODED) {
                     varint(DATA_PORTNUM, packet.portnum)
                     bytes(DATA_PAYLOAD, packet.payload)
+                    if (packet.wantResponse) bool(DATA_WANT_RESPONSE, true)
                 }
                 fixed32(MP_ID, packet.id)
                 if (packet.hopLimit != null) varint(MP_HOP_LIMIT, packet.hopLimit)
             }.toByteArray()
+
+    // --- Admin (phone → local board): an AdminMessage rides a Data{portnum = ADMIN} packet addressed to self ---
+
+    /**
+     * `AdminMessage { get_channel_request = index + 1 }` — a read whose response carries the channel AND a
+     * fresh `session_passkey` the board then demands on the matching set. (The `+ 1` is the wire convention:
+     * the field doubles as a presence flag, so index 0 is requested as 1.)
+     */
+    fun encodeAdminGetChannel(index: Int): ByteArray = ProtoWriter().varint(ADMIN_GET_CHANNEL_REQUEST, index + 1).toByteArray()
+
+    /**
+     * `AdminMessage { begin_edit_settings = true }` — opens a transaction so the board defers its implicit
+     * save-and-reboot until [encodeAdminCommitEdit], collapsing a multi-write channel edit into one reboot.
+     */
+    fun encodeAdminBeginEdit(passkey: ByteArray?): ByteArray = admin(passkey) { bool(ADMIN_BEGIN_EDIT, true) }
+
+    /** `AdminMessage { set_channel = Channel { index, settings { psk, name }, role } }`. */
+    fun encodeAdminSetChannel(
+        spec: ChannelWrite,
+        passkey: ByteArray?,
+    ): ByteArray =
+        admin(passkey) {
+            message(ADMIN_SET_CHANNEL) {
+                varint(CHANNEL_INDEX, spec.index)
+                message(CHANNEL_SETTINGS) {
+                    bytes(CHANNEL_SETTINGS_PSK, spec.psk)
+                    string(CHANNEL_SETTINGS_NAME, spec.name)
+                }
+                varint(CHANNEL_ROLE, spec.role)
+            }
+        }
+
+    /** `AdminMessage { commit_edit_settings = true }` — applies the open transaction (and may reboot the board). */
+    fun encodeAdminCommitEdit(passkey: ByteArray?): ByteArray = admin(passkey) { bool(ADMIN_COMMIT_EDIT, true) }
+
+    /** Wraps one AdminMessage `oneof` member ([block]) and appends the `session_passkey` the board issued, if any. */
+    private inline fun admin(
+        passkey: ByteArray?,
+        block: ProtoWriter.() -> Unit,
+    ): ByteArray =
+        ProtoWriter()
+            .apply {
+                block()
+                if (passkey != null && passkey.isNotEmpty()) bytes(ADMIN_SESSION_PASSKEY, passkey)
+            }.toByteArray()
+
+    /** Decodes an inbound `AdminMessage` down to the two fields provisioning reads: the passkey and a channel. */
+    fun decodeAdmin(payload: ByteArray): AdminReply? =
+        runCatching {
+            val reader = ProtoReader(payload)
+            var passkey: ByteArray? = null
+            var channel: ChannelInfo? = null
+            while (reader.hasMore) {
+                val tag = reader.readTag()
+                when (tag ushr WireType.FIELD_SHIFT) {
+                    ADMIN_GET_CHANNEL_RESPONSE -> channel = decodeChannelInfo(reader.sub())
+                    ADMIN_SESSION_PASSKEY -> passkey = reader.readBytes()
+                    else -> reader.skip(tag and WireType.MASK)
+                }
+            }
+            AdminReply(passkey, channel)
+        }.getOrNull()
 
     // --- FromRadio (board → phone) ---
 
@@ -210,7 +280,10 @@ internal object MeshtasticProto {
         return FromRadio.QueueStatus(res, free, maxlen, meshPacketId)
     }
 
-    private fun decodeChannel(reader: ProtoReader): FromRadio.Channel {
+    private fun decodeChannel(reader: ProtoReader): FromRadio.Channel = FromRadio.Channel(decodeChannelInfo(reader))
+
+    /** Decodes a `Channel { index, settings { name }, role }` — shared by the config handshake and admin reads. */
+    private fun decodeChannelInfo(reader: ProtoReader): ChannelInfo {
         var index = 0
         var name = ""
         var role = 0
@@ -223,7 +296,7 @@ internal object MeshtasticProto {
                 else -> reader.skip(tag and WireType.MASK)
             }
         }
-        return FromRadio.Channel(ChannelInfo(index, name, role))
+        return ChannelInfo(index, name, role)
     }
 
     private fun decodeChannelName(reader: ProtoReader): String {
@@ -281,7 +354,19 @@ internal object MeshtasticProto {
     // Data field numbers.
     private const val DATA_PORTNUM = 1
     private const val DATA_PAYLOAD = 2
+    private const val DATA_WANT_RESPONSE = 3
     private const val DATA_REQUEST_ID = 6
+
+    // AdminMessage field numbers (a `oneof`, so at most one of these per message) + its session key.
+    private const val ADMIN_GET_CHANNEL_REQUEST = 1
+    private const val ADMIN_GET_CHANNEL_RESPONSE = 2
+    private const val ADMIN_SET_CHANNEL = 33
+    private const val ADMIN_BEGIN_EDIT = 64
+    private const val ADMIN_COMMIT_EDIT = 65
+    private const val ADMIN_SESSION_PASSKEY = 101
+
+    // ChannelSettings field numbers (psk + name; the rest are left at their proto3 defaults).
+    private const val CHANNEL_SETTINGS_PSK = 2
 
     // QueueStatus / MyNodeInfo / Channel / DeviceMetadata / Routing field numbers.
     private const val QS_RES = 1
@@ -306,6 +391,22 @@ internal data class OutboundPacket(
     val portnum: Int = MeshtasticProto.PORT_PRIVATE_APP,
     val payload: ByteArray,
     val hopLimit: Int? = null,
+    /** Set on an admin request so the local node returns a response (the passkey / get-channel reply). */
+    val wantResponse: Boolean = false,
+)
+
+/** One channel Knit writes to the board via `set_channel`: a secondary slot with a name + AES PSK. */
+internal data class ChannelWrite(
+    val index: Int,
+    val name: String,
+    val psk: ByteArray,
+    val role: Int = MeshtasticProto.ROLE_SECONDARY,
+)
+
+/** The two fields provisioning reads out of an inbound `AdminMessage`: the [passkey] and any [channel] returned. */
+internal data class AdminReply(
+    val passkey: ByteArray?,
+    val channel: ChannelInfo?,
 )
 
 /** A decoded inbound `MeshPacket`. [decoded] is null when the packet arrived [encrypted] (a foreign channel). */

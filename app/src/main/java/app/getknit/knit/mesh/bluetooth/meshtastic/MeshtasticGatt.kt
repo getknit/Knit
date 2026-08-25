@@ -408,6 +408,7 @@ internal class MeshtasticGatt(
         const val MTU_TIMEOUT_MS = 10_000L
         const val DISCOVER_TIMEOUT_MS = 10_000L
         const val REQUEST_MTU = 512
+
         // A floor to catch a failed negotiation (default ATT MTU 23); a real board negotiates 255+ and the
         // transport sizes its fragments DOWN to whatever this is, so no single write ever needs splitting.
         const val MIN_MTU = 128

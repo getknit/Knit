@@ -66,8 +66,10 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   `state/boardNodeNum/snr/rssi/queueFree/heard/counters`. The counters (`loraSent`/`loraReceived`/
   `loraReassembled`/`loraNak`/`loraTooBig`) are the two-board range oracle. `…debug.LORATX --es text <s>`
   sends a raw payload straight to the board (bypassing the frame codec) to confirm the board transmits via
-  `meshtastic --noproto`. Both need the plane enabled and the board Ready. (New action = add to BOTH the
-  `when` and the debug manifest `<intent-filter>`.)
+  `meshtastic --noproto`. `…debug.LORAPROV` writes the derived **Knit channel** onto the board over the
+  Meshtastic admin API (the headless "Set up Knit channel") and binds the plane to the slot it lands in —
+  run it on both phones so the boards converge. All need the plane enabled and the board Ready. (New action
+  = add to BOTH the `when` and the debug manifest `<intent-filter>`.)
 - `…debug.RATCHET` — dumps the **DM ratchet's per-peer state** and, with `--es reset <peerNodeId>`, forces a
   session reset past the heuristic that guards it. Exists because every gate in the recovery path returns
   *silently*: a peer we hold no prekey for (`peerPrekeyPinned:false` — a reset from this side is impossible

@@ -146,6 +146,13 @@ internal class LoraMeshTransport(
         foreignReachable = peers
     }
 
+    /**
+     * Writes the well-known [KnitChannel] onto the connected board — the one-tap alternative to setting up a
+     * channel by hand in the Meshtastic app. On [ProvisionResult.Provisioned] the settings VM persists the
+     * returned index so this plane binds to it. Requires a Ready link.
+     */
+    suspend fun provisionKnitChannel(): ProvisionResult = link.provisionChannel(ProvisionSpec(KnitChannel.NAME, KnitChannel.PSK))
+
     // --- outbound (fast plane only) ---
 
     override fun fastFanout(wire: WireEnvelope) {

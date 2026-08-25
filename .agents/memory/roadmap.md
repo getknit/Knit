@@ -41,11 +41,14 @@ doc). **Don't start a deferred item without explicit direction.**
   (the GATT client, device-verified only). Carries only the Nearby-room broadcast subset (chat, reaction,
   ✓✓ tick, profile); DM/group/typing/files refused. **Still owed:** the **two-phone device trial** (pair
   both boards, verify a Nearby post + ✓✓ + reaction cross when the phones are out of BLE/NAN range) — the
-  GATT layer has no host test. Deferred by design: a **Knit-provisioned channel** (today the user sets a PSK
-  channel in the Meshtastic app and Knit picks the index), **DM-over-LoRa**, a **periodic self-profile
-  beacon**, **multi-board-per-clique dedup** (one board per clique for now), and a **long-post UI hint**
-  (posts over ~500 chars are LoRa-invisible, counted `loraTooBig`, with no bubble marker). See
-  `context/lora-bridge.md`.
+  GATT layer has no host test. **Knit-provisioned channel SHIPPED** (2026-08-24): "Set up Knit channel" (or
+  `…debug.LORAPROV`) writes the derived `KnitChannel` as a secondary channel over the Meshtastic admin API —
+  the user no longer hand-configures the boards; region/modem-preset still set once at flash. Still deferred:
+  a **user-set/shared private PSK** (the shipped channel is a public rendezvous, right for the cleartext
+  Nearby room; a confidential channel would need out-of-band PSK sharing — QR/URL), **DM-over-LoRa**, a
+  **periodic self-profile beacon**, **multi-board-per-clique dedup** (one board per clique for now), and a
+  **long-post UI hint** (posts over ~500 chars are LoRa-invisible, counted `loraTooBig`, with no bubble
+  marker). See `context/lora-bridge.md`.
 
 - **The spool plane is hidden in shipped builds** (2026-08-22, ADR 031) — `BuildConfig.INTERNET_PLANE`
   is true in debug, false in release/staging, `-PinternetPlane=true|false` overrides. It gates

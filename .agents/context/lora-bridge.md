@@ -71,22 +71,52 @@ frame and bounds AckSync's 24 h verbatim tick retries.
 profile is never dropped for pacing (it's the bootstrap). `BleConnectArbiter` lets the board dial pause the
 mesh BLE scan for its connect window (scanning starves connects).
 
+## Channel provisioning (Knit writes its own channel)
+
+`LoraMeshTransport.provisionKnitChannel()` (settings button "Set up Knit channel" or `…debug.LORAPROV`)
+writes the well-known **`KnitChannel`** onto the board over the Meshtastic **admin** API so the user never
+hand-configures a channel. Flow, all inside `MeshtasticSession` (serialized with sends): `get_channel` to
+the local node (`to = myNodeNum`, portnum ADMIN=6, `want_response`) → grab the `session_passkey` (field 101,
+300 s TTL) and pick a **free secondary slot** (reuse an existing same-named channel; else lowest 1..7 not
+live) → `begin_edit_settings` → `set_channel{ index, settings{ psk, name }, role=SECONDARY }` →
+`commit_edit_settings`, each echoing the passkey. The commit reboots the board to apply the edit, so the
+session ends (reset backoff) and re-handshakes, reloading the channel table; the result returns as soon as
+the write is accepted. A `Routing.ADMIN_BAD_SESSION_KEY` NAK triggers one fresh-passkey retry.
+
+**`KnitChannel`** (`mesh/lora/KnitChannel.kt`): name `"Knit"`, 16-byte AES128 PSK **derived** (pinned +
+guarded by `KnitChannelTest`) via `HKDF-SHA256(ikm="nearby", salt=0³², info="knit/lora/channel/psk/v1")`.
+The seed is public, so the PSK is public — deliberately: the Nearby room is cleartext, so this channel is a
+**rendezvous** (keeps Knit off stock LongFast; any two Knit boards converge with zero coordination), not a
+confidentiality boundary. Knit's per-frame Ed25519 signatures remain the integrity boundary. It is written
+as SECONDARY, so the board's primary channel and radio config (region, modem preset) are never touched. A
+confidential per-deployment PSK (shared out-of-band via a channel QR/URL) is deferred — see `roadmap.md`.
+
+Admin wire (pinned by `MeshtasticProtoTest`): `AdminMessage{ get_channel_request=1, get_channel_response=2,
+set_channel=33, begin_edit_settings=64, commit_edit_settings=65, session_passkey=101 }`;
+`Channel{ index=1, settings=2, role=3 }` (Role SECONDARY=2); `ChannelSettings{ psk=2, name=3 }`;
+`Data.want_response=3`.
+
 ## Board setup (once, Meshtastic CLI or app)
 
 Flash `firmware-heltec-v4-<ver>`; `--set lora.region <US|EU_868|…>`; `--set network.wifi_enabled false`;
 `--set bluetooth.enabled true --set bluetooth.mode RANDOM_PIN`; same `lora.modem_preset` (LongFast) on
-both. Private channel: `--ch-add knit` on A, `--qr-all` → `--seturl <url>` on B; confirm `--info` lists it
-identically. Set the Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.mesh`.
+both. **The channel no longer needs hand-setup** — pair the board in Knit, then tap "Set up Knit channel"
+(or `…debug.LORAPROV`) on each phone and both converge on the derived `KnitChannel`. (The old manual path
+still works: `--ch-add knit` on A, `--qr-all` → `--seturl <url>` on B, then pick the index in Knit.) Set the
+Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.mesh`.
 
 ## On-device verification (physical devices only, with an explicit go-ahead — `rules/devices.md`)
 
 - Pair: Profile → LoRa radio → pick the bonded board → status `Ready`. `adb logcat -s MeshtasticGatt
   MeshtasticLink LoraMeshTransport`: `lora dial … bonded=true` → `mtu 517` → `handshake nonce=…` →
   `my_info !… pio=heltec-v4` → `config complete` → `ready`.
+- Provision the channel: tap "Set up Knit channel" (or `…debug.LORAPROV`) on **both** phones → log
+  `lora provision wrote chN 'Knit'` (or `reuse`) → the board reboots and the link reconnects → the channel
+  index in settings now points at the Knit slot. Both boards must be provisioned before frames cross.
 - `…debug.LORA` (debug bridge): `--es address <MAC>` + `--es name <n>` binds a board, `--ei channel <idx>`,
   `--ez on <true|false>`; no extras dumps `state/boardNodeNum/snr/rssi/queueFree/heard/counters`. It is the
   two-board oracle. `…debug.LORATX --es text <s>` sends a raw payload straight to the board (board-side
-  sanity via `meshtastic --noproto`).
+  sanity via `meshtastic --noproto`). `…debug.LORAPROV` writes the Knit channel headlessly (reports the slot).
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips
   ✓✓ (sealed tick over LoRa); a reaction crosses. Move B out of BLE/NAN range and repeat. Counters:
   `loraSent/loraReceived/loraReassembled` climb, `loraNak == 0`, `loraDroppedQueue == 0` at chat pace,

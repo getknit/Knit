@@ -16,6 +16,7 @@ import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.content.ContextCompat
 import app.getknit.knit.mesh.lora.BoardDirectory
+import app.getknit.knit.mesh.lora.BoardFilter
 import app.getknit.knit.mesh.lora.BoardRef
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -30,8 +31,12 @@ internal data class MeshtasticCandidate(
 )
 
 /**
- * Lists the bonded Meshtastic boards for the settings picker. A `SecurityException` (permission revoked
- * out from under us) degrades to an empty list rather than crashing, matching the mesh BLE plane's posture.
+ * Lists the bonded devices for the settings picker, each with a verdict on whether it looks like a Meshtastic
+ * board: LE-capable (a board is never Classic-only, which rules out most headsets outright), and either a
+ * board-like name ([BoardFilter.looksLikeBoard]) or the Meshtastic service UUID in the stack's cached
+ * services — a positive-only signal, since the cache is empty for most LE bonds until a first connection. A
+ * `SecurityException` (permission revoked out from under us) degrades to an empty list rather than crashing,
+ * matching the mesh BLE plane's posture.
  */
 @SuppressLint("MissingPermission")
 internal class BondedBoardDirectory(
@@ -42,7 +47,16 @@ internal class BondedBoardDirectory(
 
     override fun bonded(): List<BoardRef> =
         runCatching {
-            adapter?.bondedDevices.orEmpty().map { BoardRef(it.address, it.name ?: it.address) }
+            adapter?.bondedDevices.orEmpty().map { device ->
+                val name = device.name ?: device.address
+                BoardRef(
+                    address = device.address,
+                    name = name,
+                    meshtastic =
+                        device.type != BluetoothDevice.DEVICE_TYPE_CLASSIC &&
+                            (BoardFilter.looksLikeBoard(name) || device.uuids?.any { it.uuid == MeshtasticUuids.SERVICE } == true),
+                )
+            }
         }.getOrDefault(emptyList())
 }
 

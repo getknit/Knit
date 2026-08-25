@@ -1,12 +1,15 @@
 package app.getknit.knit.ui.profile
 
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -27,6 +30,7 @@ class ProfileScreenContentTest {
     private fun form(
         isDirty: Boolean,
         relay: RelaySummary = RelaySummary(),
+        lora: LoraSummary = LoraSummary(),
     ) = ProfileFormState(
         name = "Alice",
         status = "Hiking",
@@ -35,7 +39,7 @@ class ProfileScreenContentTest {
         avatarHash = null,
         contentFilteringEnabled = true,
         relay = relay,
-        lora = LoraSummary(),
+        lora = lora,
         isDirty = isDirty,
     )
 
@@ -45,11 +49,12 @@ class ProfileScreenContentTest {
         relay: RelaySummary = RelaySummary(),
         onOpenRelays: () -> Unit = {},
         showInternetRelays: Boolean = true,
+        lora: LoraSummary = LoraSummary(),
     ) {
         compose.setContent {
             KnitTheme {
                 ProfileScreenContent(
-                    form = form(isDirty, relay),
+                    form = form(isDirty, relay, lora),
                     batteryExempt = true,
                     onBack = {},
                     onNameChange = {},
@@ -104,5 +109,17 @@ class ProfileScreenContentTest {
         render(isDirty = false, showInternetRelays = false)
 
         compose.onNodeWithTag("profile_relays").assertDoesNotExist()
+    }
+
+    @Test
+    fun theLoraRowSaysWhetherTheBoardIsConnected() {
+        render(isDirty = false, lora = LoraSummary(enabled = true, boardName = "Meshtastic_1a2b", plane = LoraPlane.Live))
+        compose.onNodeWithText("On · Meshtastic_1a2b · connected").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun theLoraRowSaysWhenTheBoundBoardIsNotConnected() {
+        render(isDirty = false, lora = LoraSummary(enabled = true, boardName = "Meshtastic_1a2b", plane = LoraPlane.Down))
+        compose.onNodeWithText("On · Meshtastic_1a2b · not connected").performScrollTo().assertIsDisplayed()
     }
 }

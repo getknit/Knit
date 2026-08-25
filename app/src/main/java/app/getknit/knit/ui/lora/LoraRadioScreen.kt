@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,10 +37,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.ui.preview.KnitPreview
@@ -48,12 +51,17 @@ import org.koin.androidx.compose.koinViewModel
 /**
  * LoRa radio settings: the master switch, the bonded-board picker, a channel-index selector, and the live
  * link status. Structurally the sibling of the Internet-relays screen. Pairing itself happens in the system
- * Bluetooth settings (the board shows a PIN on its OLED); this screen picks from already-bonded boards.
+ * Bluetooth settings (the board shows a PIN on its OLED); this screen picks from already-bonded boards —
+ * re-listed on every resume, so a board paired over there is offered the moment the user comes back.
  */
 @Composable
 fun LoraRadioScreen(onBack: () -> Unit) {
     val viewModel: LoraRadioViewModel = koinViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
+    LifecycleResumeEffect(Unit) {
+        viewModel.refreshBoards()
+        onPauseOrDispose {}
+    }
     LoraRadioScreenContent(
         state = state,
         onBack = onBack,
@@ -61,6 +69,7 @@ fun LoraRadioScreen(onBack: () -> Unit) {
         onToggleDms = viewModel::onToggleDms,
         onPickBoard = viewModel::pickBoard,
         onForgetBoard = viewModel::forgetBoard,
+        onShowAllBoards = viewModel::setShowAllBoards,
         onSetChannel = viewModel::setChannel,
         onProvision = viewModel::provisionChannel,
         onDismissProvision = viewModel::dismissProvisionOutcome,
@@ -76,6 +85,7 @@ internal fun LoraRadioScreenContent(
     onToggleDms: (Boolean) -> Unit = {},
     onPickBoard: (BoardOption) -> Unit = {},
     onForgetBoard: () -> Unit = {},
+    onShowAllBoards: (Boolean) -> Unit = {},
     onSetChannel: (Int) -> Unit = {},
     onProvision: () -> Unit = {},
     onDismissProvision: () -> Unit = {},
@@ -116,16 +126,34 @@ internal fun LoraRadioScreenContent(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
             )
-            if (state.boards.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.lora_board_none),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                state.boards.forEach { board ->
-                    BoardRow(board = board, onClick = { onPickBoard(board) })
+            when {
+                state.boards.isNotEmpty() -> {
+                    state.boards.forEach { board ->
+                        BoardRow(board = board, onClick = { onPickBoard(board) })
+                    }
                 }
+
+                // Two empty states, because they ask for different things: pair a board at all, or reveal
+                // the paired devices the board filter is hiding.
+                !state.anyBonded -> {
+                    Text(
+                        text = stringResource(R.string.lora_board_none),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                else -> {
+                    Text(
+                        text = stringResource(R.string.lora_board_none_meshtastic),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("lora_board_none_meshtastic"),
+                    )
+                }
+            }
+            if (state.hiddenBoards > 0 || state.showAllBoards) {
+                ShowAllBoardsRow(hidden = state.hiddenBoards, checked = state.showAllBoards, onToggle = onShowAllBoards)
             }
             OutlinedButton(
                 onClick = { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) },
@@ -138,9 +166,16 @@ internal fun LoraRadioScreenContent(
             }
 
             Text(
-                text = stringResource(R.string.lora_channel_label, state.channel),
+                // The slot's name once the board has told us (the index alone is opaque — "Knit" is the whole point).
+                text =
+                    when {
+                        state.channelName != null -> stringResource(R.string.lora_channel_named, state.channel, state.channelName)
+                        state.connection == LoraConnState.Ready -> stringResource(R.string.lora_channel_unnamed, state.channel)
+                        else -> stringResource(R.string.lora_channel_label, state.channel)
+                    },
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag("lora_channel_title"),
             )
             ProvisionSection(
                 state = state,
@@ -216,6 +251,36 @@ private fun DmSwitchRow(
     }
 }
 
+/** Reveals the bonded devices the board filter hides — a heuristic, so the user can always see everything. */
+@Composable
+private fun ShowAllBoardsRow(
+    hidden: Int,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .toggleable(value = checked, onValueChange = onToggle, role = Role.Switch)
+                .testTag("lora_show_all_boards"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.lora_show_all_boards), style = MaterialTheme.typography.bodyMedium)
+            if (hidden > 0) {
+                Text(
+                    text = pluralStringResource(R.plurals.lora_boards_hidden, hidden, hidden),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
 @Composable
 private fun BoardRow(
     board: BoardOption,
@@ -265,11 +330,19 @@ private fun ProvisionSection(
     onDismissProvision: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            onClick = onProvision,
-            enabled = state.connection == LoraConnState.Ready && !state.provisioning,
-            modifier = Modifier.testTag("lora_provision"),
-        ) {
+        // Connected, but the selected slot is not the Knit channel: the one setup step most people still owe
+        // (both boards must be provisioned before a frame crosses), so it is said out loud and the button below
+        // is the filled, emphasized one. Once the slot is Knit the button drops to a tonal "done" weight.
+        if (state.channelMismatch) {
+            Text(
+                text = stringResource(R.string.lora_channel_mismatch, state.channel),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("lora_channel_warning"),
+            )
+        }
+        val enabled = state.connection == LoraConnState.Ready && !state.provisioning
+        val label: @Composable () -> Unit = {
             if (state.provisioning) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(12.dp))
@@ -277,6 +350,11 @@ private fun ProvisionSection(
             } else {
                 Text(stringResource(R.string.lora_provision_button))
             }
+        }
+        if (state.channelMismatch) {
+            Button(onClick = onProvision, enabled = enabled, modifier = Modifier.testTag("lora_provision")) { label() }
+        } else {
+            FilledTonalButton(onClick = onProvision, enabled = enabled, modifier = Modifier.testTag("lora_provision")) { label() }
         }
         state.provisionOutcome?.let { outcome ->
             val (message, isError) = outcome.messageAndSeverity()
@@ -313,19 +391,28 @@ private fun StatusRow(state: LoraRadioUiState) {
             LoraConnState.Unavailable -> stringResource(R.string.lora_status_bt_off)
             LoraConnState.Off -> stringResource(R.string.lora_status_off)
         }
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("lora_status")) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
         if (state.connection == LoraConnState.Ready) {
-            state.boardNodeNum?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            val detail = MaterialTheme.typography.bodySmall
+            val muted = MaterialTheme.colorScheme.onSurfaceVariant
+            state.boardNodeNum?.let { Text(it, style = detail, color = muted) }
+            state.firmware?.let { Text(stringResource(R.string.lora_firmware, it), style = detail, color = muted) }
             if (state.snr != null || state.rssi != null) {
                 Text(
                     text = stringResource(R.string.lora_signal, state.snr ?: 0f, state.rssi ?: 0),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = detail,
+                    color = muted,
                 )
             }
+            // Who the board has heard speak Knit (the plane's 45-min reachable linger): the only sign, short
+            // of a message, that the far side is provisioned and in range.
+            Text(
+                text = pluralStringResource(R.plurals.lora_peers_heard, state.heard, state.heard),
+                style = detail,
+                color = muted,
+                modifier = Modifier.testTag("lora_peers_heard"),
+            )
         }
     }
 }
@@ -347,7 +434,12 @@ private fun LoraRadioScreenPreview() =
                     boardNodeNum = "!12345678",
                     snr = 6.5f,
                     rssi = -85,
+                    heard = 2,
+                    firmware = "2.5.0",
+                    channelName = "Knit",
                     boards = listOf(BoardOption("AA:BB:CC:DD:EE:FF", "Meshtastic_1a2b", selected = true)),
+                    hiddenBoards = 1,
+                    anyBonded = true,
                 ),
             onBack = {},
             onToggle = {},

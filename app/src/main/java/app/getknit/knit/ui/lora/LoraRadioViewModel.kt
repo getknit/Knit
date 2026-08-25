@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.lora.BoardDirectory
+import app.getknit.knit.mesh.lora.BoardFilter
+import app.getknit.knit.mesh.lora.BoardRef
+import app.getknit.knit.mesh.lora.KnitChannel
 import app.getknit.knit.mesh.lora.LinkState
 import app.getknit.knit.mesh.lora.LoraPlaneStatus
 import app.getknit.knit.mesh.lora.ProvisionResult
@@ -40,7 +43,18 @@ data class LoraRadioUiState(
     val snr: Float? = null,
     val rssi: Int? = null,
     val heard: Int = 0,
+    /** The board's firmware, once the handshake has told us. */
+    val firmware: String? = null,
+    /** The name the connected board gives the selected [channel] slot; null while not connected or when unnamed. */
+    val channelName: String? = null,
+    /** Connected, but the selected slot is not the Knit channel — the setup step most likely still owed. */
+    val channelMismatch: Boolean = false,
     val boards: List<BoardOption> = emptyList(),
+    /** Bonded devices the picker hides as not board-like (`BoardFilter`); the "show all" toggle reveals them. */
+    val hiddenBoards: Int = 0,
+    val showAllBoards: Boolean = false,
+    /** Whether the phone has *any* bonded device — splits "pair one first" from "none of these looks like a board". */
+    val anyBonded: Boolean = false,
     val provisioning: Boolean = false,
     val provisionOutcome: LoraProvisionOutcome? = null,
 )
@@ -58,19 +72,44 @@ internal class LoraRadioViewModel(
     // Transient, action-driven UI state (the provisioning spinner + its outcome) that isn't in a settings flow.
     private val provisionState = MutableStateFlow(ProvisionState())
 
+    // Bumped to re-read the bonded list (the screen does so on resume, after the user pairs a board in the
+    // system settings); the toggle that reveals the devices the board filter hides.
+    private val refresh = MutableStateFlow(0)
+    private val showAll = MutableStateFlow(false)
+
+    /** The bonded list is a Binder call into the Bluetooth service, so it is read on its own arm — never on link churn. */
+    private data class Picker(
+        val address: String?,
+        val bonded: List<BoardRef>,
+        val showAll: Boolean,
+    )
+
+    private val picker =
+        combine(settings.loraDeviceAddress, refresh, showAll) { address, _, all ->
+            Picker(address, runCatching { boards.bonded() }.getOrDefault(emptyList()), all)
+        }
+
     val state: StateFlow<LoraRadioUiState> =
         combine(
             combine(settings.loraEnabled, settings.loraDmEnabled) { on, dms -> on to dms },
-            settings.loraDeviceAddress,
+            picker,
             settings.loraChannelIndex,
             lora.status,
             provisionState,
-        ) { (enabled, dmEnabled), address, channel, status, provision ->
-            val bonded = runCatching { boards.bonded() }.getOrDefault(emptyList())
+        ) { (enabled, dmEnabled), picker, channel, status, provision ->
+            val address = picker.address
+            val ready = status.state as? LinkState.Ready
+            // Slot 0 is the board's unnamed primary, so it reads as a mismatch too — correctly: Knit is never there.
+            val channelName =
+                ready
+                    ?.channels
+                    ?.firstOrNull { it.index == channel }
+                    ?.name
+                    ?.takeIf { it.isNotEmpty() }
             LoraRadioUiState(
                 enabled = enabled,
                 dmEnabled = dmEnabled,
-                boardName = bonded.firstOrNull { it.address == address }?.name ?: address,
+                boardName = picker.bonded.firstOrNull { it.address == address }?.name ?: address,
                 boardAddress = address,
                 channel = channel,
                 connection = status.state.toConnState(),
@@ -78,11 +117,30 @@ internal class LoraRadioViewModel(
                 snr = status.lastSnr,
                 rssi = status.lastRssi,
                 heard = status.heard,
-                boards = bonded.map { BoardOption(it.address, it.name, it.address == address) },
+                firmware = ready?.board?.firmwareVersion,
+                channelName = channelName,
+                channelMismatch = ready != null && channelName != KnitChannel.NAME,
+                boards =
+                    BoardFilter
+                        .visible(picker.bonded, address, picker.showAll)
+                        .map { BoardOption(it.address, it.name, it.address == address) },
+                hiddenBoards = BoardFilter.hidden(picker.bonded, address),
+                showAllBoards = picker.showAll,
+                anyBonded = picker.bonded.isNotEmpty(),
                 provisioning = provision.running,
                 provisionOutcome = provision.outcome,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LoraRadioUiState())
+
+    /** Re-reads the bonded list — the screen calls this on resume, so a board paired in Settings shows up on return. */
+    fun refreshBoards() {
+        refresh.update { it + 1 }
+    }
+
+    /** Reveals (or re-hides) the bonded devices the board filter keeps out of the picker. */
+    fun setShowAllBoards(on: Boolean) {
+        showAll.value = on
+    }
 
     fun onToggle(on: Boolean) {
         viewModelScope.launch { settings.setLoraEnabled(on) }

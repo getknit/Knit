@@ -105,6 +105,9 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun internetRelays() = audit(route = "relays") { awaitTag("relays_switch") }
 
+    // The seeded emulator has no Bluetooth adapter, so this audits the screen's empty state (no boards paired).
+    @Test fun loraRadio() = audit(route = "lora") { awaitTag("lora_switch") }
+
     // demo-group-4 is one of ours, seeded with three reactors across two emoji AND delivered to two of its
     // three other members, so this audits the populated screen — the filter chips, the people list, and both
     // halves of the delivered/waiting split (whose rows carry their status in their own description, since a

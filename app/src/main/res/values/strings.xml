@@ -478,9 +478,18 @@
     <string name="lora_dm_subtitle">Direct messages stay end-to-end encrypted, but who is messaging whom, and when, is visible to any LoRa radio in range — kilometres, not metres. Turn this off to keep private messages on the phone-to-phone radios.</string>
     <string name="lora_board_section">Board</string>
     <string name="lora_board_none">No paired Meshtastic boards found. Pair one in Bluetooth settings first (the board shows a PIN on its screen).</string>
+    <string name="lora_board_none_meshtastic">None of your paired devices looks like a Meshtastic board. Pair one in Bluetooth settings, or show all paired devices.</string>
+    <string name="lora_show_all_boards">Show all paired devices</string>
+    <plurals name="lora_boards_hidden">
+        <item quantity="one">%d other paired device hidden</item>
+        <item quantity="other">%d other paired devices hidden</item>
+    </plurals>
     <string name="lora_open_settings">Open Bluetooth settings</string>
     <string name="lora_forget">Forget this board</string>
     <string name="lora_channel_label">Channel index: %1$d</string>
+    <string name="lora_channel_named">Channel %1$d · %2$s</string>
+    <string name="lora_channel_unnamed">Channel %1$d · unnamed</string>
+    <string name="lora_channel_mismatch">This board\'s channel %1$d isn\'t the Knit channel — set it up below, or pick the Knit channel\'s index.</string>
     <string name="lora_provision_button">Set up Knit channel on this board</string>
     <string name="lora_provision_running">Configuring board…</string>
     <string name="lora_provisioned">Knit channel written. The board may reboot to apply it — it will reconnect on its own.</string>
@@ -496,6 +505,11 @@
     <string name="lora_status_bt_off">Bluetooth off or board unavailable</string>
     <string name="lora_status_off">Not in use</string>
     <string name="lora_signal">Signal: SNR %1$.1f dB · RSSI %2$d dBm</string>
+    <string name="lora_firmware">Firmware %1$s</string>
+    <plurals name="lora_peers_heard">
+        <item quantity="one">%d peer heard over LoRa</item>
+        <item quantity="other">%d peers heard over LoRa</item>
+    </plurals>
     <string name="lora_summary_off">Off</string>
     <string name="lora_summary_connected">On · %1$s · connected</string>
     <string name="lora_summary_disconnected">On · %1$s · not connected</string>

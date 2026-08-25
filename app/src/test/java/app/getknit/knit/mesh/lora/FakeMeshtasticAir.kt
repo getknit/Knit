@@ -53,6 +53,8 @@ internal class FakeMeshtasticLink(
     private val _rxQuality = MutableStateFlow<RxQuality?>(null)
     override val rxQuality = _rxQuality
 
+    override val battery = MutableStateFlow<BoardBattery?>(null)
+
     var free = 16
     private var nextId = 1u
     val sent = mutableListOf<ByteArray>()

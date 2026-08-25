@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -131,5 +132,24 @@ class LoraRadioScreenContentTest {
         compose.onNodeWithText("Channel index: 0").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_provision").assertIsNotEnabled()
         compose.onNodeWithTag("lora_peers_heard").assertDoesNotExist()
+    }
+
+    @Test
+    fun aConnectedBoardShowsItsBattery() {
+        render(connected().copy(battery = BoardBattery(percent = 78, voltage = 3.92f, powered = false)))
+        compose.onNodeWithTag("lora_battery").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Battery 78% · 3.92 V").assertIsDisplayed()
+    }
+
+    @Test
+    fun aPluggedInBoardSaysSo() {
+        render(connected().copy(battery = BoardBattery(percent = null, voltage = 4.1f, powered = true)))
+        compose.onNodeWithText("Plugged in · 4.10 V").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun noBatteryReadingMeansNoBatteryLine() {
+        render(connected())
+        compose.onNodeWithTag("lora_battery").assertDoesNotExist()
     }
 }

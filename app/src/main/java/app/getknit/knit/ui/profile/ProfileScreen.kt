@@ -71,6 +71,7 @@ import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
+import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.isIgnoringBatteryOptimizations
@@ -426,7 +427,7 @@ private fun LoraRadioRow(
             }
 
             summary.plane == LoraPlane.Live && summary.boardName != null -> {
-                stringResource(R.string.lora_summary_connected, summary.boardName)
+                loraConnectedSubtitle(summary.boardName, summary.battery)
             }
 
             summary.boardName != null -> {
@@ -465,6 +466,18 @@ private fun LoraRadioRow(
         )
     }
 }
+
+/** "On · <board> · connected", with the board's battery appended once it has reported one. */
+@Composable
+private fun loraConnectedSubtitle(
+    boardName: String,
+    battery: BoardBattery?,
+): String =
+    when {
+        battery == null -> stringResource(R.string.lora_summary_connected, boardName)
+        battery.percent != null -> stringResource(R.string.lora_summary_connected_battery, boardName, battery.percent)
+        else -> stringResource(R.string.lora_summary_connected_powered, boardName)
+    }
 
 /**
  * Whether the app is currently exempt from battery optimization, refreshed on every screen resume.

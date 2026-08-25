@@ -283,6 +283,31 @@ class MeshtasticProtoTest {
     // --- totality / robustness ---
 
     @Test
+    fun decodeNodeInfoWithDeviceMetrics() {
+        // node_info (field 4) { num = 42, device_metrics (field 6) { battery_level = 78, voltage = 3.92f } }
+        val fr = MeshtasticProto.decodeFromRadio(hex("22 0B 08 2A 32 07 08 4E 15 48 E1 7A 40"))
+        assertEquals(FromRadio.NodeInfo(42u, DeviceMetrics(batteryLevel = 78, voltage = 3.92f)), fr)
+    }
+
+    @Test
+    fun decodeNodeInfoWithoutMetricsHasNone() {
+        assertEquals(FromRadio.NodeInfo(42u, null), MeshtasticProto.decodeFromRadio(hex("22 02 08 2A")))
+    }
+
+    @Test
+    fun decodeTelemetryReadsDeviceMetricsAndSkipsTheRest() {
+        // Telemetry { time = 0x66A1B2C3, device_metrics { battery_level = 101, voltage = 3.92f, uptime_seconds = 1000 } }
+        val metrics = MeshtasticProto.decodeTelemetry(hex("0D C3 B2 A1 66 12 0A 08 65 15 48 E1 7A 40 28 E8 07"))
+        assertEquals(DeviceMetrics(batteryLevel = 101, voltage = 3.92f), metrics)
+    }
+
+    @Test
+    fun decodeTelemetryOfAnotherVariantIsNull() {
+        // Telemetry { environment_metrics (field 3) { temperature = 20.0f } } — says nothing about the battery.
+        assertNull(MeshtasticProto.decodeTelemetry(hex("1A 05 0D 00 00 A0 41")))
+    }
+
+    @Test
     fun everyPrefixTruncationDecodesToNullNeverThrows() {
         val vectors =
             listOf(
@@ -290,6 +315,7 @@ class MeshtasticProtoTest {
                 "5A 0A 10 0F 18 10 20 EF FD B6 F5 0D",
                 "52 0C 08 01 12 06 1A 04 6B 6E 69 74 18 02",
                 "12 10 0D 78 56 34 12 15 FF FF FF FF 2A 04 DE AD BE EF",
+                "22 0B 08 2A 32 07 08 4E 15 48 E1 7A 40",
             )
         for (v in vectors) {
             val full = hex(v)
@@ -308,6 +334,7 @@ class MeshtasticProtoTest {
             val bytes = ByteArray(rng.nextInt(0, 64)) { rng.nextInt().toByte() }
             MeshtasticProto.decodeFromRadio(bytes)
             MeshtasticProto.decodeRouting(bytes)
+            MeshtasticProto.decodeTelemetry(bytes)
         }
     }
 

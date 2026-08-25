@@ -14,4 +14,6 @@ internal data class LoraStatus(
     val lastRssi: Int? = null,
     val queueFree: Int? = null,
     val heard: Int = 0,
+    /** The board's own power reading, once its handshake or telemetry has reported one. */
+    val battery: BoardBattery? = null,
 )

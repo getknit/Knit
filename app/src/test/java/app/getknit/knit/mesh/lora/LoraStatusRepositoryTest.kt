@@ -74,4 +74,14 @@ class LoraStatusRepositoryTest {
             assertEquals(listOf(LoraFacts(LoraPlane.Down, dms = true), LoraFacts(LoraPlane.Live, dms = true)), seen)
             job.cancel()
         }
+
+    @Test
+    fun `the battery rides the facts only while the link is live`() =
+        runTest {
+            val battery = BoardBattery(percent = 78, voltage = 3.92f, powered = false)
+            status.value = LoraStatus(state = LinkState.Idle, battery = battery)
+            assertEquals(LoraFacts(LoraPlane.Down, dms = true), repo.facts.first())
+            status.value = LoraStatus(state = ready, battery = battery)
+            assertEquals(LoraFacts(LoraPlane.Live, dms = true, battery = battery), repo.facts.first())
+        }
 }

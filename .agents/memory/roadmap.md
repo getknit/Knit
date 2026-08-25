@@ -59,7 +59,8 @@ doc). **Don't start a deferred item without explicit direction.**
   go through `BleConnectArbiter`; the picker filters bonded devices instead, ADR 040), and a **per-message
   `loraTooBig` marker** (no persisted evidence; ADR 040's composer hint covers the sending side). **The plane's
   UI SHIPPED** (2026-08-25, ADR 040): `DeliveryPlane.LoRa` + bubble glyph, the header glyph, the board-only
-  picker with a channel verdict, the LoRa-only DM notice and the long-message composer hint. See
+  picker with a channel verdict, the LoRa-only DM notice and the long-message composer hint; the board's
+  battery in the status + Profile rows followed (ADR 041). See
   `context/lora-bridge.md`.
 
 - **The spool plane is hidden in shipped builds** (2026-08-22, ADR 031) — `BuildConfig.INTERNET_PLANE`

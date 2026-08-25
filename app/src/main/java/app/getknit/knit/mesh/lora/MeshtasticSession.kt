@@ -54,6 +54,9 @@ internal class MeshtasticSession(
     private val _rxQuality = MutableStateFlow<RxQuality?>(null)
     override val rxQuality = _rxQuality.asStateFlow()
 
+    private val _battery = MutableStateFlow<BoardBattery?>(null)
+    override val battery = _battery.asStateFlow()
+
     private val inbox = Channel<Cmd>(Channel.BUFFERED)
     private var loopJob: Job? = null
 
@@ -80,6 +83,7 @@ internal class MeshtasticSession(
         loopJob = null
         address = null
         failAllPending(SendResult.NotReady(LinkState.Idle))
+        _battery.value = null
         _state.value = LinkState.Idle
     }
 
@@ -226,6 +230,7 @@ internal class MeshtasticSession(
         _state.value = LinkState.Handshaking(null)
         board = null
         channels = emptyList()
+        _battery.value = null
         classify(address, channel.subscribeFromNum(SUBSCRIBE_TIMEOUT_MS))?.let { return it }
         // Drain any stale queue from a previous phone session before our want_config nonce.
         drainQuietly(channel)
@@ -250,6 +255,7 @@ internal class MeshtasticSession(
                         is FromRadio.MyInfo -> board = BoardInfo(fr.myNodeNum, fr.pioEnv, board?.firmwareVersion)
                         is FromRadio.Metadata -> board = (board ?: BLANK_BOARD).copy(firmwareVersion = fr.firmwareVersion)
                         is FromRadio.Channel -> channels = channels + fr.channel
+                        is FromRadio.NodeInfo -> onNodeInfo(fr)
                         else -> Unit
                     }
                 }
@@ -322,6 +328,11 @@ internal class MeshtasticSession(
                 if (_state.value is LinkState.Ready) Signal.Rehandshake else Signal.Continue
             }
 
+            is FromRadio.NodeInfo -> {
+                onNodeInfo(fr)
+                Signal.Continue
+            }
+
             else -> {
                 Signal.Continue
             }
@@ -334,6 +345,11 @@ internal class MeshtasticSession(
         // handled before the self-echo guard below — otherwise `from == myNodeNum` would swallow them.
         if (data.portnum == MeshtasticProto.PORT_ROUTING) {
             routeNak(data)
+            return
+        }
+        // The board's own device telemetry (its battery) is addressed from itself too: read, never surfaced.
+        if (data.portnum == MeshtasticProto.PORT_TELEMETRY && packet.from == board?.myNodeNum) {
+            MeshtasticProto.decodeTelemetry(data.payload)?.let(::onSelfMetrics)
             return
         }
         if (board?.myNodeNum == packet.from) return // our own broadcast echoed back (belt-and-suspenders)
@@ -350,6 +366,15 @@ internal class MeshtasticSession(
                 hopsAway = packet.hopsAway,
             ),
         )
+    }
+
+    /** The handshake streams the whole NodeDB; only the board's own entry carries *its* battery. */
+    private fun onNodeInfo(info: FromRadio.NodeInfo) {
+        if (info.num == board?.myNodeNum) info.metrics?.let(::onSelfMetrics)
+    }
+
+    private fun onSelfMetrics(metrics: DeviceMetrics) {
+        _battery.value = BoardBattery.of(metrics.batteryLevel, metrics.voltage)
     }
 
     private fun routeNak(data: MeshData) {

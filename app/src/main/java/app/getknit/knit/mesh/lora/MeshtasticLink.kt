@@ -27,6 +27,13 @@ internal interface MeshtasticLink {
     /** Last received signal quality — separate from [state] so it doesn't churn the state on every packet. */
     val rxQuality: StateFlow<RxQuality?>
 
+    /**
+     * The board's own battery, from its `NodeInfo` in the handshake and the device telemetry it sends the
+     * phone about once a minute; null until reported and again once the link is stopped. Kept out of [state]
+     * for the same reason as [rxQuality].
+     */
+    val battery: StateFlow<BoardBattery?>
+
     /** Enqueues one packet on the board. Returns synchronously once the board acknowledges (or refuses) it. */
     suspend fun send(
         payload: ByteArray,

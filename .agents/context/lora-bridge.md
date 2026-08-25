@@ -171,6 +171,13 @@ set_channel=33, begin_edit_settings=64, commit_edit_settings=65, session_passkey
   DMs-off variant; the composer's "long message" hint (`chat_lora_size_hint`) when the draft exceeds
   `LoraSizeHint`'s budget for its `LoraCarry` form (room 400 B, DM 320 B, −260 B replying, −170 B with a
   photo; pinned in `CoordinationPlaneSizeBudgetTest`).
+- **Battery (ADR 041).** The board's own `DeviceMetrics` — its `FromRadio.node_info` (the entry whose `num`
+  is `my_info`'s) in the handshake, then the TELEMETRY_APP packet the firmware sends the phone about once a
+  minute — land in `MeshtasticLink.battery` (`BoardBattery`: `percent` / `voltage` / `powered`, folded by
+  `BoardBattery.of`; a level above 100 is "plugged in", 0 with no voltage is no reading) → `LoraStatus.battery`
+  → the status row's "Battery 78% · 3.92 V" / "Plugged in · 4.10 V" (`lora_battery`, error-coloured at ≤ 20 %)
+  and the Profile row's "· battery 78%" while live (`LoraFacts.battery`, never a reach input). Never polled;
+  cleared with the link.
 - **Seam.** UI code reaches the transport only through `LoraPlaneStatus` (`status`, `provisionKnitChannel`),
   bound to `LoraMeshTransport` under `BuildConfig.LORA_PLANE` and to `LoraPlaneStatus.Dark` otherwise.
 
@@ -188,6 +195,8 @@ Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.me
 - Pair: Profile → LoRa radio → pick the bonded board → status `Ready`. `adb logcat -s MeshtasticGatt
   MeshtasticLink LoraMeshTransport`: `lora dial … bonded=true` → `mtu 517` → `handshake nonce=…` →
   `my_info !… pio=heltec-v4` → `config complete` → `ready`.
+- Battery: the status row shows the reading with `ready` (the handshake's `node_info`) and refreshes within a
+  minute; unplug USB and "Plugged in" becomes a percentage on the next telemetry, replug and it flips back.
 - Provision the channel: tap "Set up Knit channel" (or `…debug.LORAPROV`) on **both** phones → log
   `lora provision wrote chN 'Knit'` (or `reuse`) → the board reboots and the link reconnects → the channel
   index in settings now points at the Knit slot. Both boards must be provisioned before frames cross.

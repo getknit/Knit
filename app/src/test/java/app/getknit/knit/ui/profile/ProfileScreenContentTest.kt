@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
@@ -121,5 +122,15 @@ class ProfileScreenContentTest {
     fun theLoraRowSaysWhenTheBoundBoardIsNotConnected() {
         render(isDirty = false, lora = LoraSummary(enabled = true, boardName = "Meshtastic_1a2b", plane = LoraPlane.Down))
         compose.onNodeWithText("On · Meshtastic_1a2b · not connected").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun theLoraRowShowsTheBoardsBattery() {
+        val battery = BoardBattery(percent = 78, voltage = 3.92f, powered = false)
+        render(
+            isDirty = false,
+            lora = LoraSummary(enabled = true, boardName = "Meshtastic_1a2b", plane = LoraPlane.Live, battery = battery),
+        )
+        compose.onNodeWithText("On · Meshtastic_1a2b · connected · battery 78%").performScrollTo().assertIsDisplayed()
     }
 }

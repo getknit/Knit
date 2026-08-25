@@ -506,12 +506,18 @@
     <string name="lora_status_off">Not in use</string>
     <string name="lora_signal">Signal: SNR %1$.1f dB · RSSI %2$d dBm</string>
     <string name="lora_firmware">Firmware %1$s</string>
+    <string name="lora_battery_percent">Battery %1$d%%</string>
+    <string name="lora_battery_percent_voltage">Battery %1$d%% · %2$.2f V</string>
+    <string name="lora_battery_powered">Plugged in</string>
+    <string name="lora_battery_powered_voltage">Plugged in · %1$.2f V</string>
     <plurals name="lora_peers_heard">
         <item quantity="one">%d peer heard over LoRa</item>
         <item quantity="other">%d peers heard over LoRa</item>
     </plurals>
     <string name="lora_summary_off">Off</string>
     <string name="lora_summary_connected">On · %1$s · connected</string>
+    <string name="lora_summary_connected_battery">On · %1$s · connected · battery %2$d%%</string>
+    <string name="lora_summary_connected_powered">On · %1$s · connected · plugged in</string>
     <string name="lora_summary_disconnected">On · %1$s · not connected</string>
     <string name="lora_summary_connecting">On · connecting…</string>
     <plurals name="relays_scope_count">

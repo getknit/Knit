@@ -24,6 +24,8 @@ enum class LoraPlane {
 data class LoraFacts(
     val plane: LoraPlane = LoraPlane.Off,
     val dms: Boolean = false,
+    /** The board's battery while [plane] is [LoraPlane.Live] (the Profile row shows it); never a reach input. */
+    val battery: BoardBattery? = null,
 )
 
 /**

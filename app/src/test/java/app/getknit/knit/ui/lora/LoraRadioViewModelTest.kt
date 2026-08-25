@@ -1,6 +1,7 @@
 package app.getknit.knit.ui.lora
 
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardInfo
 import app.getknit.knit.mesh.lora.BoardRef
@@ -181,5 +182,19 @@ class LoraRadioViewModelTest {
             assertNull(vm.state.value.channelName)
             assertFalse(vm.state.value.channelMismatch)
             assertNull(vm.state.value.firmware)
+        }
+
+    @Test
+    fun `a connected board reports its battery, a disconnected one does not`() =
+        runTest {
+            val vm = start()
+            val battery = BoardBattery(percent = 78, voltage = 3.92f, powered = false)
+            status.value = LoraStatus(state = ready(emptyList()), battery = battery)
+            advanceUntilIdle()
+            assertEquals(battery, vm.state.value.battery)
+
+            status.value = LoraStatus(state = LinkState.Disconnected("gatt", retryAtMs = 5_000, streak = 1), battery = battery)
+            advanceUntilIdle()
+            assertNull(vm.state.value.battery)
         }
 }

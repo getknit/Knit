@@ -19,6 +19,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -577,5 +578,20 @@ class LoraMeshTransportTest {
                     .psk,
             )
             a.transport.stop()
+        }
+
+    @Test
+    fun theStatusSnapshotCarriesTheBoardsBattery() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            assertNull(a.transport.status.value.battery)
+
+            val battery = BoardBattery(percent = 42, voltage = 3.7f, powered = false)
+            a.link.battery.value = battery
+            runCurrent()
+            assertEquals(battery, a.transport.status.value.battery)
         }
 }

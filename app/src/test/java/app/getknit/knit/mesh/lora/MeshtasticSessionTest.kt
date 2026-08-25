@@ -455,4 +455,54 @@ class MeshtasticSessionTest {
             assertTrue("got $result", result is ProvisionResult.NotReady)
             session.stop()
         }
+
+    // --- the board's battery ---
+
+    @Test
+    fun theHandshakeReadsTheBoardsOwnBatteryAndIgnoresOtherNodes() =
+        runTest {
+            val ch = FakeGattChannel()
+            ch.onWrite = { bytes ->
+                if (BoardBytes.isWantConfig(bytes)) {
+                    ch.enqueueRead(BoardBytes.myInfo(0xABCDu, "heltec-v4"))
+                    ch.enqueueRead(BoardBytes.nodeInfo(0xABCDu, batteryLevel = 78, voltage = 3.92f))
+                    ch.enqueueRead(BoardBytes.nodeInfo(0x9999u, batteryLevel = 5, voltage = 3.3f)) // a neighbour's
+                    ch.enqueueRead(BoardBytes.configComplete(nonce))
+                }
+            }
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            assertTrue(session.state.value is LinkState.Ready)
+            assertEquals(BoardBattery(percent = 78, voltage = 3.92f, powered = false), session.battery.value)
+            session.stop()
+            assertNull("a reading never outlives its link", session.battery.value)
+        }
+
+    @Test
+    fun theBoardsTelemetryRefreshesTheBatteryAndIsNeverSurfaced() =
+        runTest {
+            val ch = FakeGattChannel().also(::scriptHandshake)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            val received = mutableListOf<ReceivedPacket>()
+            val collector = backgroundScope.launch { session.packets.collect { received += it } }
+            session.start("AA")
+            runCurrent()
+            assertNull(session.battery.value) // this handshake carried no node_info
+
+            ch.enqueueRead(BoardBytes.telemetry(from = 0xABCDu, batteryLevel = 101, voltage = 4.1f))
+            ch.notify()
+            runCurrent()
+            assertEquals(BoardBattery(percent = null, voltage = 4.1f, powered = true), session.battery.value)
+            assertTrue("the board's own telemetry is not an inbound packet", received.isEmpty())
+
+            // A neighbour's telemetry is theirs, not ours: the reading stands.
+            ch.enqueueRead(BoardBytes.telemetry(from = 0x1234u, batteryLevel = 9, voltage = 3.4f))
+            ch.notify()
+            runCurrent()
+            assertEquals(true, session.battery.value?.powered)
+            collector.cancel()
+            session.stop()
+        }
 }

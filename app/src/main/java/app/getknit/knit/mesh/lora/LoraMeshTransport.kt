@@ -132,6 +132,7 @@ internal class LoraMeshTransport(
         jobs += scope.launch { link.packets.collect(::onLoraPacket) }
         jobs += scope.launch { link.queue.collect { it?.let { q -> pace.onQueueStatus(q.free) } } }
         jobs += scope.launch { link.outcomes.collect(::onNak) }
+        jobs += scope.launch { link.battery.collect { publishStatus() } }
         jobs += scope.launch { pacerLoop() }
         jobs += scope.launch { lingerSweepLoop() }
     }
@@ -477,6 +478,7 @@ internal class LoraMeshTransport(
                 lastRssi = link.rxQuality.value?.rssi,
                 queueFree = link.queue.value?.free,
                 heard = _reachable.value.size,
+                battery = link.battery.value,
             )
     }
 

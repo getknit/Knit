@@ -27,6 +27,9 @@ internal object MeshtasticProto {
     /** `PortNum.ADMIN_APP` — carries an `AdminMessage`; Knit uses it only to self-configure the local board. */
     const val PORT_ADMIN = 6
 
+    /** `PortNum.TELEMETRY_APP` — the board's own `DeviceMetrics` (its battery) arrive here, addressed from itself. */
+    const val PORT_TELEMETRY = 67
+
     /** `Channel.Role.SECONDARY` — the role Knit writes its channel as, so the board's primary is never touched. */
     const val ROLE_SECONDARY = 2
 
@@ -131,24 +134,48 @@ internal object MeshtasticProto {
             if (bytes.isEmpty()) return FromRadio.Empty
             val reader = ProtoReader(bytes)
             var result: FromRadio = FromRadio.Empty
-            // A known field with an unexpected wire type reads as garbage and the outer runCatching turns
-            // that into null — no per-field wire guard needed, which keeps this dispatch under the cap.
             while (reader.hasMore) {
-                val tag = reader.readTag()
-                val field = tag ushr WireType.FIELD_SHIFT
-                result =
-                    when (field) {
-                        FR_PACKET -> FromRadio.Packet(decodeMeshPacket(reader.sub()))
-                        FR_MY_INFO -> decodeMyInfo(reader.sub())
-                        FR_CONFIG_COMPLETE -> FromRadio.ConfigComplete(reader.readVarint32().toUInt())
-                        FR_REBOOTED -> FromRadio.Rebooted.also { reader.readVarint64() }
-                        FR_QUEUE_STATUS -> decodeQueueStatus(reader.sub())
-                        FR_CHANNEL -> decodeChannel(reader.sub())
-                        FR_METADATA -> decodeMetadata(reader.sub())
-                        else -> FromRadio.Other(field).also { reader.skip(tag and WireType.MASK) }
-                    }
+                result = decodeVariant(reader, reader.readTag())
             }
             result
+        }.getOrNull()
+
+    /**
+     * One `FromRadio` field by number. A known field with an unexpected wire type reads as garbage and
+     * [decodeFromRadio]'s `runCatching` turns that into null — no per-field wire guard needed.
+     */
+    private fun decodeVariant(
+        reader: ProtoReader,
+        tag: Int,
+    ): FromRadio =
+        when (val field = tag ushr WireType.FIELD_SHIFT) {
+            FR_PACKET -> FromRadio.Packet(decodeMeshPacket(reader.sub()))
+            FR_MY_INFO -> decodeMyInfo(reader.sub())
+            FR_NODE_INFO -> decodeNodeInfo(reader.sub())
+            FR_CONFIG_COMPLETE -> FromRadio.ConfigComplete(reader.readVarint32().toUInt())
+            FR_REBOOTED -> FromRadio.Rebooted.also { reader.readVarint64() }
+            FR_QUEUE_STATUS -> decodeQueueStatus(reader.sub())
+            FR_CHANNEL -> decodeChannel(reader.sub())
+            FR_METADATA -> decodeMetadata(reader.sub())
+            else -> FromRadio.Other(field).also { reader.skip(tag and WireType.MASK) }
+        }
+
+    /**
+     * The `device_metrics` inside a TELEMETRY_APP `Data.payload` (`Telemetry { time, device_metrics }`), or
+     * null when the packet carries another telemetry variant (environment, power, …) or is malformed.
+     */
+    fun decodeTelemetry(payload: ByteArray): DeviceMetrics? =
+        runCatching {
+            val reader = ProtoReader(payload)
+            var metrics: DeviceMetrics? = null
+            while (reader.hasMore) {
+                val tag = reader.readTag()
+                when (tag ushr WireType.FIELD_SHIFT) {
+                    TELEMETRY_DEVICE_METRICS -> metrics = decodeDeviceMetrics(reader.sub())
+                    else -> reader.skip(tag and WireType.MASK)
+                }
+            }
+            metrics
         }.getOrNull()
 
     /** The `error_reason` inside a ROUTING_APP `Data.payload` (`Routing { error_reason }`), or null if malformed. */
@@ -262,6 +289,36 @@ internal object MeshtasticProto {
         return FromRadio.MyInfo(myNodeNum, pioEnv)
     }
 
+    /** `NodeInfo { num, device_metrics }` — the board's own entry is where its battery first shows up. */
+    private fun decodeNodeInfo(reader: ProtoReader): FromRadio.NodeInfo {
+        var num: UInt = 0u
+        var metrics: DeviceMetrics? = null
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            when (tag ushr WireType.FIELD_SHIFT) {
+                NODEINFO_NUM -> num = reader.readVarint32().toUInt()
+                NODEINFO_DEVICE_METRICS -> metrics = decodeDeviceMetrics(reader.sub())
+                else -> reader.skip(tag and WireType.MASK)
+            }
+        }
+        return FromRadio.NodeInfo(num, metrics)
+    }
+
+    /** `DeviceMetrics { battery_level, voltage }` — both proto3-`optional`, so an absent field stays null. */
+    private fun decodeDeviceMetrics(reader: ProtoReader): DeviceMetrics {
+        var level: Int? = null
+        var voltage: Float? = null
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            when (tag ushr WireType.FIELD_SHIFT) {
+                DM_BATTERY_LEVEL -> level = reader.readVarint32()
+                DM_VOLTAGE -> voltage = reader.readFloat()
+                else -> reader.skip(tag and WireType.MASK)
+            }
+        }
+        return DeviceMetrics(level, voltage)
+    }
+
     private fun decodeQueueStatus(reader: ProtoReader): FromRadio.QueueStatus {
         var res = 0
         var free = 0
@@ -333,6 +390,7 @@ internal object MeshtasticProto {
     // FromRadio field numbers.
     private const val FR_PACKET = 2
     private const val FR_MY_INFO = 3
+    private const val FR_NODE_INFO = 4
     private const val FR_CONFIG_COMPLETE = 7
     private const val FR_REBOOTED = 8
     private const val FR_CHANNEL = 10
@@ -381,6 +439,13 @@ internal object MeshtasticProto {
     private const val CHANNEL_ROLE = 3
     private const val METADATA_FIRMWARE_VERSION = 1
     private const val ROUTING_ERROR_REASON = 3
+
+    // NodeInfo / Telemetry / DeviceMetrics field numbers (the battery path).
+    private const val NODEINFO_NUM = 1
+    private const val NODEINFO_DEVICE_METRICS = 6
+    private const val TELEMETRY_DEVICE_METRICS = 2
+    private const val DM_BATTERY_LEVEL = 1
+    private const val DM_VOLTAGE = 2
 }
 
 /** A `MeshPacket` we send: broadcast, one `Data` sub-message, a client-assigned [id] for NAK correlation. */
@@ -426,6 +491,15 @@ internal class MeshPacket(
     val hopsAway: Int? get() = if (hopStart > 0) (hopStart - hopLimit).coerceAtLeast(0) else null
 }
 
+/**
+ * The two `DeviceMetrics` fields the bridge reads: `battery_level` (0–100; above 100 means external power;
+ * absent when the board can't tell) and `voltage` (volts). Folded for display by [BoardBattery.of].
+ */
+internal data class DeviceMetrics(
+    val batteryLevel: Int?,
+    val voltage: Float?,
+)
+
 /** A decoded `Data` sub-message. */
 internal class MeshData(
     val portnum: Int,
@@ -452,6 +526,12 @@ internal sealed interface FromRadio {
 
     data class Metadata(
         val firmwareVersion: String?,
+    ) : FromRadio
+
+    /** One NodeDB entry, streamed in the handshake (and pushed on change); only the board's own [metrics] are read. */
+    data class NodeInfo(
+        val num: UInt,
+        val metrics: DeviceMetrics?,
     ) : FromRadio
 
     data class Channel(

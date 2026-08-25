@@ -31,9 +31,11 @@ internal class LoraStatusRepository(
                 settings.loraDmEnabled,
                 lora.status,
             ) { enabled, address, dms, status ->
+                val plane = loraPlaneFor(enabled, bound = address != null, state = status.state)
                 LoraFacts(
-                    plane = loraPlaneFor(enabled, bound = address != null, state = status.state),
+                    plane = plane,
                     dms = enabled && dms,
+                    battery = status.battery.takeIf { plane == LoraPlane.Live },
                 )
             }.distinctUntilChanged()
         }

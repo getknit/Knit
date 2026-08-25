@@ -3,6 +3,7 @@ package app.getknit.knit.ui.lora
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardFilter
 import app.getknit.knit.mesh.lora.BoardRef
@@ -45,6 +46,8 @@ data class LoraRadioUiState(
     val heard: Int = 0,
     /** The board's firmware, once the handshake has told us. */
     val firmware: String? = null,
+    /** The board's own battery, once it has reported one; null while not connected. */
+    val battery: BoardBattery? = null,
     /** The name the connected board gives the selected [channel] slot; null while not connected or when unnamed. */
     val channelName: String? = null,
     /** Connected, but the selected slot is not the Knit channel — the setup step most likely still owed. */
@@ -118,6 +121,7 @@ internal class LoraRadioViewModel(
                 rssi = status.lastRssi,
                 heard = status.heard,
                 firmware = ready?.board?.firmwareVersion,
+                battery = ready?.let { status.battery },
                 channelName = channelName,
                 channelMismatch = ready != null && channelName != KnitChannel.NAME,
                 boards =

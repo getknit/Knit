@@ -12,6 +12,7 @@ import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.normalizeSingleLine
@@ -35,6 +36,8 @@ data class LoraSummary(
     val boardName: String? = null,
     /** The live link, so the row can say "connected" rather than only "on". */
     val plane: LoraPlane = LoraPlane.Off,
+    /** The connected board's battery, once it has reported one. */
+    val battery: BoardBattery? = null,
 )
 
 /** The Internet-relay plane, as the Profile row summarises it before handing off to its own screen. */
@@ -114,7 +117,7 @@ class ProfileViewModel(
     /** Summary of the LoRa plane for the Profile row that navigates to its own screen: settings + the live link. */
     val loraSummary: StateFlow<LoraSummary> =
         combine(settings.loraEnabled, settings.loraDeviceName, loraFacts) { enabled, name, lora ->
-            LoraSummary(enabled, name, lora.plane)
+            LoraSummary(enabled, name, lora.plane, lora.battery)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LoraSummary())
 
     init {

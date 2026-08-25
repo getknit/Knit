@@ -134,6 +134,41 @@ internal object BoardBytes {
                 varint(3, role)
             }.toByteArray()
 
+    /** A FromRadio.node_info for [num], with `device_metrics { battery_level, voltage }` when either is given. */
+    fun nodeInfo(
+        num: UInt,
+        batteryLevel: Int? = null,
+        voltage: Float? = null,
+    ): ByteArray =
+        ProtoWriter()
+            .message(4) {
+                uint32(1, num)
+                if (batteryLevel != null || voltage != null) {
+                    message(6) {
+                        if (batteryLevel != null) varint(1, batteryLevel)
+                        if (voltage != null) fixed32(2, voltage.toRawBits().toUInt())
+                    }
+                }
+            }.toByteArray()
+
+    /** A TELEMETRY_APP packet from [from] carrying `Telemetry { device_metrics { battery_level, voltage } }`. */
+    fun telemetry(
+        from: UInt,
+        batteryLevel: Int,
+        voltage: Float,
+    ): ByteArray =
+        packet(
+            from = from,
+            channel = 0,
+            portnum = MeshtasticProto.PORT_TELEMETRY,
+            payload =
+                ProtoWriter()
+                    .message(2) {
+                        varint(1, batteryLevel)
+                        fixed32(2, voltage.toRawBits().toUInt())
+                    }.toByteArray(),
+        )
+
     /** A FromRadio.packet carrying a decoded Data payload on [portnum]. */
     fun packet(
         from: UInt,

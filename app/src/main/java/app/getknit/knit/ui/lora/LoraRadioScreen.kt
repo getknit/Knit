@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
+import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.ui.preview.KnitPreview
 import org.koin.androidx.compose.koinViewModel
 
@@ -398,6 +399,14 @@ private fun StatusRow(state: LoraRadioUiState) {
             val muted = MaterialTheme.colorScheme.onSurfaceVariant
             state.boardNodeNum?.let { Text(it, style = detail, color = muted) }
             state.firmware?.let { Text(stringResource(R.string.lora_firmware, it), style = detail, color = muted) }
+            state.battery?.let { battery ->
+                Text(
+                    text = batteryText(battery),
+                    style = detail,
+                    color = if (battery.low) MaterialTheme.colorScheme.error else muted,
+                    modifier = Modifier.testTag("lora_battery"),
+                )
+            }
             if (state.snr != null || state.rssi != null) {
                 Text(
                     text = stringResource(R.string.lora_signal, state.snr ?: 0f, state.rssi ?: 0),
@@ -414,6 +423,22 @@ private fun StatusRow(state: LoraRadioUiState) {
                 modifier = Modifier.testTag("lora_peers_heard"),
             )
         }
+    }
+}
+
+/**
+ * "Battery 78% · 3.92 V" or, on external power (no [BoardBattery.percent]), "Plugged in · 4.10 V"; the
+ * voltage clause only when the board measures one.
+ */
+@Composable
+private fun batteryText(battery: BoardBattery): String {
+    val percent = battery.percent
+    val volts = battery.voltage
+    return when {
+        percent != null && volts != null -> stringResource(R.string.lora_battery_percent_voltage, percent, volts)
+        percent != null -> stringResource(R.string.lora_battery_percent, percent)
+        volts != null -> stringResource(R.string.lora_battery_powered_voltage, volts)
+        else -> stringResource(R.string.lora_battery_powered)
     }
 }
 
@@ -436,6 +461,7 @@ private fun LoraRadioScreenPreview() =
                     rssi = -85,
                     heard = 2,
                     firmware = "2.5.0",
+                    battery = BoardBattery(percent = 78, voltage = 3.92f, powered = false),
                     channelName = "Knit",
                     boards = listOf(BoardOption("AA:BB:CC:DD:EE:FF", "Meshtastic_1a2b", selected = true)),
                     hiddenBoards = 1,

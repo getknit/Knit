@@ -169,15 +169,21 @@ class InboundPipeline(
         deriveObtainedVoiceMeta(hash)
     }
 
+    /**
+     * Delivers one first-seen frame. [kind] is the radio it arrived over (stamped by the composite transport;
+     * [TransportKind.Other] for a replay with no radio, e.g. `MeshManager.replayCustodiedGroupFrames`), read
+     * only to record the delivery plane — see [planeOf].
+     */
     suspend fun onDeliver(
         wire: WireEnvelope,
         env: RelayEnvelope,
         fromNodeId: String,
+        kind: TransportKind = TransportKind.Other,
     ) {
         // Strict authentication gate: a flooded frame that isn't signed by the key its senderId binds
         // to is dropped (not delivered locally). We still return normally so MeshRouter relays it
         // onward — other peers verify independently, and we don't become a propagation black hole.
-        if (!verifyInbound(env, wire, fromNodeId)) return
+        if (!verifyInbound(env, wire, fromNodeId, kind)) return
         // Carry every floodable frame we see — store-and-forward, so we can re-offer it to a neighbor
         // that joins later. That includes a DM addressed to US: with sealed receipts nobody vaccine-
         // purges (a carrier can't read them), so the delivered DM stays live in every carrier's digest
@@ -212,7 +218,7 @@ class InboundPipeline(
         // would otherwise crash both delivery and the shared block-on-send path). A swallowed error is logged
         // (it's a should-never-happen bug path); the custody capture above already ran, so the frame still
         // re-serves later.
-        runCatching { dispatchByType(env, wire, fromNodeId) }
+        runCatching { dispatchByType(env, wire, fromNodeId, kind) }
             .onFailure { Log.w(TAG, "handler error on ${env.type} ${env.id} from ${env.senderId}: ${it.message}") }
     }
 
@@ -226,11 +232,12 @@ class InboundPipeline(
         env: RelayEnvelope,
         wire: WireEnvelope,
         fromNodeId: String,
+        kind: TransportKind,
     ) {
         // The one thing the source's *plane* is read for: a delivery receipt records which plane it reached
         // us on, so the ✓✓ can say how the message got there (MessageEntity.receivedVia). It rides the
         // receipt paths only — carry, relay and convergence stay plane-blind, as ADR 019 requires.
-        val plane = planeOf(fromNodeId)
+        val plane = planeOf(fromNodeId, kind)
         when (env.type) {
             FrameType.CHAT -> {
                 handleChat(env, plane)
@@ -275,18 +282,25 @@ class InboundPipeline(
     }
 
     /**
-     * The plane an inbound frame arrived on, from the source the router tagged it with — the single place
-     * that maps a delivery source onto a [DeliveryPlane].
+     * The plane an inbound frame arrived on — the single place that maps a delivery source onto a
+     * [DeliveryPlane], and the only reader of [InboundFrame.kind] anywhere.
      *
-     * A spool-tagged source names the Internet plane; anything else is a neighbouring node, i.e. one of the
-     * radios. Which radio is not knowable here today: [MeshTransport.kind] distinguishes them and
-     * `CompositeMeshTransport` tags each child with it, but [InboundFrame] does not carry it up, so every
-     * radio delivery collapses to [DeliveryPlane.Nearby]. Plumbing that kind through the router is all it
-     * would take to return [DeliveryPlane.Bluetooth]/[DeliveryPlane.WifiAware] here instead — everything
-     * downstream (column, threading, UI) already speaks the enum.
+     * A spool-tagged source names the Internet plane (it is never a neighbour, so the tag lives in the
+     * source id); a frame off the LoRa board names [DeliveryPlane.LoRa] (ADR 040 — kilometre-range, slow,
+     * photo-less: worth saying); every other radio collapses to [DeliveryPlane.Nearby] on purpose. The kind
+     * is known now, so returning [DeliveryPlane.Bluetooth]/[DeliveryPlane.WifiAware] here is a one-line
+     * change if the UI ever has something different to say about them. Keep this map in the pipeline —
+     * `data/` must not learn `mesh/`'s [TransportKind].
      */
-    private fun planeOf(fromNodeId: String): DeliveryPlane =
-        if (ScopeSync.isSpoolSource(fromNodeId)) DeliveryPlane.Internet else DeliveryPlane.Nearby
+    private fun planeOf(
+        fromNodeId: String,
+        kind: TransportKind,
+    ): DeliveryPlane =
+        when {
+            ScopeSync.isSpoolSource(fromNodeId) -> DeliveryPlane.Internet
+            kind == TransportKind.LoRa -> DeliveryPlane.LoRa
+            else -> DeliveryPlane.Nearby
+        }
 
     /**
      * Records a best-effort "now typing" cue in [typingTracker] so the chat UI can show it. The conversation is
@@ -413,6 +427,7 @@ class InboundPipeline(
         env: RelayEnvelope,
         wire: WireEnvelope,
         fromNodeId: String,
+        kind: TransportKind,
     ): Boolean =
         runCatching {
             if (env.type == FrameType.BLOB_REQ) return true
@@ -437,7 +452,7 @@ class InboundPipeline(
                     keyExchange.want(env.senderId)
                     // Park a deliverable frame so it's replayed once the key arrives (handleProfile), instead of
                     // being lost — the inbound complement of the outbound pendingKey/flushPendingFor retransmit.
-                    if (FrameType.isReplayable(env.type)) pendingInbound.hold(wire, env, fromNodeId)
+                    if (FrameType.isReplayable(env.type)) pendingInbound.hold(wire, env, fromNodeId, kind)
                 }
                 Log.w(TAG, "drop ${env.type} ${env.id} from ${env.senderId}: no key to verify it")
                 return false
@@ -1681,21 +1696,26 @@ class InboundPipeline(
         conversationId: String,
         // The plane this frame reached us on, stored on the row: an inbound message needs no receipt to
         // know how it travelled — it IS the evidence. (Our own sends learn their plane later, from the
-        // receipt that flips their tick.) The broadcast path re-upserts on every re-serve instead of
-        // early-returning on the exists-gate, but the room never crosses the Internet plane, so the
-        // value it rewrites is the same one every time.
+        // receipt that flips their tick.) The broadcast path reaches here on every re-serve rather than
+        // early-returning on the exists-gate, and a re-serve can cross a different plane (a room post heard
+        // over LoRa, then re-served over Bluetooth custody) — which is why the default persist below is
+        // first-write-wins: the row keeps the plane it first arrived on, like markReceived keeps the first
+        // receipt's.
         plane: DeliveryPlane,
         attachmentKey: String? = null,
-        // How the built row is persisted. The default is the plain idempotent upsert; the v2 ratchet
-        // path substitutes a hook that commits the ratchet delta + the row in one transaction.
-        persist: suspend (MessageEntity) -> Unit = { messages.save(it) },
+        // How the built row is persisted. The default inserts only if the row is absent: a re-served frame is
+        // the same signed bytes, so it can never carry anything new, while a blind upsert would rewrite the
+        // arrival plane, wipe the voice-note metadata setVoiceMeta added after the insert, and — for one of
+        // OUR room posts looping back after the SeenSet lapsed — reset its ✓✓ to ✓. The v2 ratchet path
+        // substitutes a hook that commits the ratchet delta + the row in one transaction (exists-gated first).
+        persist: suspend (MessageEntity) -> Unit = { messages.saveIfAbsent(it) },
     ) {
         // A real message from this sender supersedes any "typing" indicator for them in this thread — clear it
         // now (idempotent, and a no-op if they weren't shown as typing). Runs on re-delivery too, harmlessly.
         typingTracker.onMessageFrom(conversationId, env.senderId)
         // First-ever delivery? Store-and-forward can re-serve a DM we already hold (after the 10-min
         // SeenSet window, or after a restart that empties it); notifying again would replay old messages.
-        // The save below is an idempotent upsert, so only the notification needs gating.
+        // The save below leaves an existing row untouched, so only the notification needs gating.
         val isNew = !messages.exists(env.id)
         val hash = content.attachmentHash
         persist(
@@ -2076,7 +2096,7 @@ class InboundPipeline(
         // later store-and-forward re-serve of the same frame a no-op.
         pendingInbound.release(env.senderId).forEach {
             metrics.onFrameReplayed()
-            onDeliver(it.wire, it.env, it.fromNodeId)
+            onDeliver(it.wire, it.env, it.fromNodeId, it.kind)
         }
     }
 

@@ -35,9 +35,11 @@ data class Peer(
 enum class TransportHealth { Healthy, Degraded, Unavailable }
 
 /**
- * Which physical radio a [MeshTransport] drives. Used only for diagnostics — [CompositeMeshTransport] tags
- * each child so the Diagnostics screen can attribute a peer/count to Bluetooth vs Wi-Fi Aware. [Other] is the
- * default for fakes / the demo transport, which have no real radio.
+ * Which physical radio a [MeshTransport] drives. [CompositeMeshTransport] tags each child with it so the
+ * Diagnostics screen can attribute a peer/count to Bluetooth vs Wi-Fi Aware vs LoRa, and stamps it on every
+ * [InboundFrame] it merges ([InboundFrame.kind]) so the delivery path can record which plane a frame arrived
+ * on (`DeliveryPlane` — a presentation fact only; carry, relay and convergence never read it, ADR 019/040).
+ * [Other] is the default for fakes / the demo transport, which have no real radio.
  */
 enum class TransportKind { Bluetooth, WifiAware, LoRa, Other }
 
@@ -62,12 +64,18 @@ internal val NOT_CONTENDED: StateFlow<Boolean> = MutableStateFlow(false)
 /**
  * A frame received from a neighbor: the verbatim [wire] (its [WireEnvelope.signed]/[WireEnvelope.sig]
  * are forwarded byte-for-byte on relay) plus the already-decoded [envelope] (so the router and delivery
- * paths don't each re-decode it), tagged with the neighbor it arrived from.
+ * paths don't each re-decode it), tagged with the neighbor it arrived from and the radio it arrived over.
+ *
+ * [kind] is stamped by [CompositeMeshTransport] as it merges its children — the one place that knows which
+ * child emitted the frame (`FramedLink` is shared by Bluetooth and Wi-Fi Aware and cannot tell) — so a
+ * transport constructs frames without it and the default [TransportKind.Other] holds for fakes and the demo
+ * transport. Read only by the delivery path to record the plane a message arrived on; never by routing.
  */
 data class InboundFrame(
     val wire: WireEnvelope,
     val envelope: RelayEnvelope,
     val fromNodeId: String,
+    val kind: TransportKind = TransportKind.Other,
 )
 
 /** What a transferred file is, so the receiver can route an avatar apart from a chat attachment. */
@@ -157,8 +165,9 @@ interface MeshTransport {
     val hasFastPlane: Boolean get() = false
 
     /**
-     * Which physical radio this transport is, for the Diagnostics screen — so a merged
-     * [CompositeMeshTransport] can attribute peers and counts to Bluetooth vs Wi-Fi Aware. Defaults to
+     * Which physical radio this transport is — so a merged [CompositeMeshTransport] can attribute peers and
+     * counts to Bluetooth vs Wi-Fi Aware vs LoRa for the Diagnostics screen, and stamp [InboundFrame.kind] so
+     * the delivery path can record the plane a message arrived on. Never a routing input. Defaults to
      * [TransportKind.Other]; only the real radio transports override it.
      */
     val kind: TransportKind get() = TransportKind.Other
@@ -168,7 +177,7 @@ interface MeshTransport {
      * moves megabytes in well under a second; Bluetooth's L2CAP CoC takes seconds-to-minutes), so
      * [CompositeMeshTransport] can prefer it for **large file payloads** ([FileKind.ATTACHMENT] blobs) while
      * frames, digests, and avatars keep the normal preference order. A routing capability, deliberately
-     * distinct from [kind] (which is diagnostics-only). Default false; only Wi-Fi Aware overrides it.
+     * distinct from [kind] (which never steers routing). Default false; only Wi-Fi Aware overrides it.
      */
     val highThroughput: Boolean get() = false
 
@@ -179,7 +188,7 @@ interface MeshTransport {
      * A long-range plane (LoRa, whose peer may be kilometres away) overrides this to false so those siblings
      * ignore its sightings; [CompositeMeshTransport] excludes non-short-range children from every foreign set
      * and from [CompositeMeshTransport.shortRangeReachable]. A routing/semantics flag, deliberately distinct
-     * from [kind] (diagnostics-only). Default true — only a long-range transport overrides it.
+     * from [kind] (which never steers routing). Default true — only a long-range transport overrides it.
      */
     val shortRange: Boolean get() = true
 

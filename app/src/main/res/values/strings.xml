@@ -126,6 +126,9 @@
     <string name="chat_status_delivered_internet">Delivered over the Internet</string>
     <string name="chat_status_arrived_internet">Arrived over the Internet</string>
     <string name="chat_status_arrived_nearby">Arrived nearby</string>
+    <!-- LoRa plane (ADR 040): the frame, or the receipt that flipped the tick, crossed a Meshtastic board -->
+    <string name="chat_status_delivered_lora">Delivered over LoRa</string>
+    <string name="chat_status_arrived_lora">Arrived over LoRa</string>
     <string name="chat_status_pending_key">Not sent yet — waiting for their key</string>
     <string name="chat_time_just_now">Just now</string>
     <string name="chat_action_copy">Copy text</string>

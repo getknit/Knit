@@ -7,14 +7,17 @@ import app.getknit.knit.mesh.protocol.WireEnvelope
  * A frame parked because its sender's key wasn't pinned when it arrived (the `NO_SENDER_KEY` drop in
  * `MeshManager.verifyInbound`). [wire] is the immutable signed unit replayed verbatim once the key
  * lands; [env] is its decoded routing envelope ([RelayEnvelope.senderId] keys recovery, [RelayEnvelope.id]
- * dedups); [fromNodeId] is the neighbor we received it from, preserved so the replay re-runs the exact
- * inbound path. [parkedAt] drives the TTL sweep. A plain class (it holds [ByteArray]s, like [CarriedFrame]).
+ * dedups); [fromNodeId] is the neighbor we received it from and [kind] the radio it arrived over, both
+ * preserved so the replay re-runs the exact inbound path (and records the plane the frame really came in
+ * on — a LoRa DM parked ahead of its sender's beacon must not replay as "nearby"). [parkedAt] drives the TTL
+ * sweep. A plain class (it holds [ByteArray]s, like [CarriedFrame]).
  */
 class HeldFrame(
     val wire: WireEnvelope,
     val env: RelayEnvelope,
     val fromNodeId: String,
     val parkedAt: Long,
+    val kind: TransportKind = TransportKind.Other,
 )
 
 /**
@@ -56,10 +59,11 @@ class PendingInbound(
         wire: WireEnvelope,
         env: RelayEnvelope,
         fromNodeId: String,
+        kind: TransportKind = TransportKind.Other,
     ) {
         if (held.containsKey(env.id)) return
         if (held.values.count { it.env.senderId == env.senderId } >= maxPerSender) return
-        held[env.id] = HeldFrame(wire, env, fromNodeId, now())
+        held[env.id] = HeldFrame(wire, env, fromNodeId, now(), kind)
         metrics.onFrameHeld()
     }
 

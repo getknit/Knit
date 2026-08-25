@@ -77,7 +77,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -1213,20 +1212,21 @@ private fun MessageBubble(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             // Our own messages show a delivery tick: one check sent, two checks acked. A
-                            // globe ahead of the ✓✓ says the receipt came back over the Internet plane
-                            // rather than a nearby radio — how it got there, on the one line that already
-                            // says whether it did. It sits before the tick so the tick keeps the same
-                            // trailing position on every row.
+                            // plane glyph ahead of the ✓✓ (a globe for the Internet, the radio-waves mark
+                            // for LoRa) says the receipt came back over that plane rather than a nearby
+                            // radio — how it got there, on the one line that already says whether it did.
+                            // It sits before the tick so the tick keeps the same trailing position on
+                            // every row, and only once acked: an un-acked send has no plane to show.
                             if (row.mine) {
-                                val viaInternet = row.received && row.deliveredVia == DeliveryPlane.Internet
-                                if (viaInternet) {
+                                val glyph = if (row.received) planeGlyph(row.deliveredVia) else null
+                                if (glyph != null) {
                                     Icon(
-                                        imageVector = Icons.Filled.Public,
+                                        imageVector = glyph,
                                         // Decorative: the tick's own description below already says
                                         // "Delivered over the Internet", and announcing both repeats it.
                                         contentDescription = null,
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(12.dp).testTag("chat_tick_relay"),
+                                        modifier = Modifier.size(12.dp).testTag("chat_tick_${planeTag(row.deliveredVia)}"),
                                     )
                                 }
                                 Icon(
@@ -1251,16 +1251,17 @@ private fun MessageBubble(
                                 )
                             }
                             // A received message has no tick — delivery is not ours to report — but the
-                            // same globe still says it reached this phone over the Internet rather than a
-                            // nearby radio. Here it carries its own description: with no tick beside it,
-                            // nothing else would announce it.
-                            if (!row.mine && row.deliveredVia == DeliveryPlane.Internet) {
+                            // same glyph still says it reached this phone over the Internet or LoRa rather
+                            // than a nearby radio. Here it carries its own description: with no tick beside
+                            // it, nothing else would announce it.
+                            val arrivalGlyph = if (row.mine) null else planeGlyph(row.deliveredVia)
+                            if (arrivalGlyph != null) {
                                 Icon(
-                                    imageVector = Icons.Filled.Public,
+                                    imageVector = arrivalGlyph,
                                     contentDescription =
                                         deliveryLabel(DeliveryStatus.Delivered, row.deliveredVia, mine = false).resolve(),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(12.dp).testTag("chat_arrived_relay"),
+                                    modifier = Modifier.size(12.dp).testTag("chat_arrived_${planeTag(row.deliveredVia)}"),
                                 )
                             }
                         }

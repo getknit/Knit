@@ -4,7 +4,9 @@ import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -65,7 +67,8 @@ fun DeliveryText.resolve(): String = stringResource(resId, *args.toTypedArray())
  *
  * The plane only qualifies a delivery that actually happened: a [DeliveryStatus.Sent] message has no
  * receipt yet, so there is no plane to name. For an inbound message the frame's own arrival plane is the
- * evidence ([MessageEntity.receivedVia]), and all three radio values read as "nearby" — see [DeliveryPlane].
+ * evidence ([MessageEntity.receivedVia]); the Internet and LoRa planes are named, and every phone radio
+ * reads as "nearby" — see [DeliveryPlane].
  *
  * [delivered]/[total] are the per-recipient counts for a **group** message we sent (`message_receipts`
  * against the effective roster, ADR 036). Given both, the line reports the ratio instead of a bare
@@ -90,12 +93,8 @@ fun deliveryLabel(
     total: Int? = null,
 ): DeliveryText =
     when {
-        !mine && plane == DeliveryPlane.Internet -> {
-            DeliveryText(R.string.chat_status_arrived_internet)
-        }
-
         !mine -> {
-            DeliveryText(R.string.chat_status_arrived_nearby)
+            arrivalText(plane)
         }
 
         status == DeliveryStatus.Pending -> {
@@ -106,17 +105,54 @@ fun deliveryLabel(
             DeliveryText(R.string.chat_status_delivered_count, listOf(delivered, total))
         }
 
-        status == DeliveryStatus.Delivered && plane == DeliveryPlane.Internet -> {
-            DeliveryText(R.string.chat_status_delivered_internet)
-        }
-
         status == DeliveryStatus.Delivered -> {
-            DeliveryText(R.string.chat_status_delivered)
+            deliveredText(plane)
         }
 
         else -> {
             DeliveryText(R.string.chat_status_sent)
         }
+    }
+
+/** How a message we received got here — the plane is named only when it is worth a word. */
+private fun arrivalText(plane: DeliveryPlane): DeliveryText =
+    DeliveryText(
+        when (plane) {
+            DeliveryPlane.Internet -> R.string.chat_status_arrived_internet
+            DeliveryPlane.LoRa -> R.string.chat_status_arrived_lora
+            else -> R.string.chat_status_arrived_nearby
+        },
+    )
+
+/** How our acked message got there, by the plane its first receipt crossed. */
+private fun deliveredText(plane: DeliveryPlane): DeliveryText =
+    DeliveryText(
+        when (plane) {
+            DeliveryPlane.Internet -> R.string.chat_status_delivered_internet
+            DeliveryPlane.LoRa -> R.string.chat_status_delivered_lora
+            else -> R.string.chat_status_delivered
+        },
+    )
+
+/**
+ * The glyph that says which plane carried a message — painted ahead of the ✓✓ on our acked sends and on
+ * its own on an arrival: a globe for the Internet plane, the radio-waves mark for LoRa, and nothing for a
+ * phone radio (the plain case needs no ornament). Pair it with [deliveryLabel] — the glyph never carries
+ * the words; [planeTag] names its test tag.
+ */
+fun planeGlyph(plane: DeliveryPlane): ImageVector? =
+    when (plane) {
+        DeliveryPlane.Internet -> Icons.Filled.Public
+        DeliveryPlane.LoRa -> Icons.Filled.Sensors
+        else -> null
+    }
+
+/** The test-tag suffix of [plane]'s glyph (`chat_tick_<tag>` / `chat_arrived_<tag>`); null when it paints none. */
+fun planeTag(plane: DeliveryPlane): String? =
+    when (plane) {
+        DeliveryPlane.Internet -> "relay"
+        DeliveryPlane.LoRa -> "lora"
+        else -> null
     }
 
 /**

@@ -284,6 +284,9 @@ class InboundPipelineTest {
             coEvery { peers.verifiedNodeIds() } answers { peerMap.values.filter { it.verified }.map { it.nodeId } }
             coEvery { messages.exists(any()) } answers { msgMap.containsKey(firstArg<String>()) }
             coEvery { messages.save(any()) } answers { msgMap[firstArg<MessageEntity>().id] = firstArg() }
+            coEvery { messages.saveIfAbsent(any()) } answers {
+                msgMap.putIfAbsent(firstArg<MessageEntity>().id, firstArg()) == null
+            }
             coEvery { messages.recipientOf(any()) } answers { msgMap[firstArg<String>()]?.recipientId }
             coEvery { messages.conversationOf(any()) } answers { msgMap[firstArg<String>()]?.conversationId }
             // The real repository writes the tick and the acker row in one transaction; the fake keeps that
@@ -370,13 +373,15 @@ class InboundPipelineTest {
         /**
          * Signs [env] with [author]'s key and drives it through the pipeline (the common onDeliver call).
          * [from] names the source it arrived from — a neighbouring node by default, or a spool-tagged
-         * source (`ScopeSync.SPOOL_SOURCE_PREFIX`) to stand in for a pull off the Internet plane.
+         * source (`ScopeSync.SPOOL_SOURCE_PREFIX`) to stand in for a pull off the Internet plane; [kind]
+         * the radio it came over (the composite's stamp), LoRa standing in for a frame off the board.
          */
         suspend fun deliver(
             author: Party,
             env: RelayEnvelope,
             from: String = author.nodeId,
-        ) = pipeline.onDeliver(author.sign(env), env, from)
+            kind: TransportKind = TransportKind.Other,
+        ) = pipeline.onDeliver(author.sign(env), env, from, kind)
 
         fun drops(reason: DropReason): Long = metrics.snapshot().dropsByReason[reason] ?: 0L
 
@@ -909,6 +914,91 @@ class InboundPipelineTest {
 
             assertEquals(DeliveryPlane.Internet, rig.msgMap["in-relay"]?.receivedPlane)
             assertEquals(DeliveryPlane.Nearby, rig.msgMap["in-radio"]?.receivedPlane)
+        }
+
+    @Test
+    fun aDmHeardOverLoraRecordsTheLoraPlane() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+
+            rig.deliver(alice, rig.dmChat(alice, rig.self, id = "in-lora", body = "from the hills"), kind = TransportKind.LoRa)
+            rig.deliver(alice, rig.dmChat(alice, rig.self, id = "in-ble", body = "from next door"), kind = TransportKind.Bluetooth)
+
+            assertEquals(DeliveryPlane.LoRa, rig.msgMap["in-lora"]?.receivedPlane)
+            // The phone radios still collapse to Nearby on purpose — the UI has nothing different to say about them.
+            assertEquals(DeliveryPlane.Nearby, rig.msgMap["in-ble"]?.receivedPlane)
+        }
+
+    @Test
+    fun aReceiptHeardOverLoraMarksTheTickLoraDelivered() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = rig.self.nodeId, recipientId = alice.nodeId, body = "", sentAt = 1L)
+
+            rig.deliver(alice, rig.receipt(alice, ackId = "m1"), kind = TransportKind.LoRa)
+
+            coVerify { rig.messages.markReceived("m1", DeliveryPlane.LoRa) }
+        }
+
+    @Test
+    fun aParkedLoraFrameKeepsItsPlaneThroughTheReplay() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party() // unpinned: the chat races ahead of her beacon, as it does over LoRa
+
+            val chat = rig.broadcastChat(alice, id = "c-lora", body = "over the hills")
+            rig.deliver(alice, chat, kind = TransportKind.LoRa)
+            assertFalse(rig.msgMap.containsKey("c-lora"))
+
+            // The beacon lands (over whichever plane) and the parked frame replays — as the LoRa arrival it was.
+            rig.deliver(alice, rig.profile(alice))
+
+            assertEquals("over the hills", rig.msgMap["c-lora"]?.body)
+            assertEquals(DeliveryPlane.LoRa, rig.msgMap["c-lora"]?.receivedPlane)
+        }
+
+    @Test
+    fun aReServedRoomPostKeepsThePlaneItFirstArrivedOn() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val post = rig.broadcastChat(alice, id = "room-1", body = "hello valley")
+
+            rig.deliver(alice, post, kind = TransportKind.LoRa)
+            // The same signed frame, re-served over Bluetooth custody once the router's SeenSet lapsed: the
+            // plaintext room path runs deliverChat again, and the row must keep the plane it first arrived on.
+            rig.deliver(alice, post, kind = TransportKind.Bluetooth)
+
+            assertEquals(DeliveryPlane.LoRa, rig.msgMap["room-1"]?.receivedPlane)
+        }
+
+    @Test
+    fun ourOwnRoomPostReServedByAPeerNeverResetsItsTick() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val post = rig.broadcastChat(rig.self, id = "mine-1", body = "my own post")
+            rig.msgMap["mine-1"] =
+                MessageEntity(
+                    id = "mine-1",
+                    senderId = rig.self.nodeId,
+                    body = "my own post",
+                    sentAt = 5L,
+                    received = true,
+                    receivedVia = DeliveryPlane.Nearby.code,
+                )
+
+            // Our own frame looping back after our SeenSet lapsed (a peer re-served it): verifyInbound admits
+            // it so custody re-carries it, but the row we wrote when we sent it must stay exactly as it is.
+            rig.deliver(rig.self, post, kind = TransportKind.LoRa)
+
+            val row = rig.msgMap.getValue("mine-1")
+            assertTrue(row.received)
+            assertEquals(DeliveryPlane.Nearby, row.receivedPlane)
         }
 
     @Test

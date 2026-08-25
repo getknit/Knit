@@ -30,6 +30,13 @@ class MessageRepository(
 
     suspend fun save(message: MessageEntity) = dao.upsert(message)
 
+    /**
+     * Writes [message] only if no row with its id exists yet; true when it was inserted. The inbound
+     * delivery write — first-write-wins, so a custody re-serve of a message we already hold never rewrites
+     * the row (its arrival plane included).
+     */
+    suspend fun saveIfAbsent(message: MessageEntity): Boolean = dao.insertIfAbsent(message) != -1L
+
     suspend fun exists(id: String): Boolean = dao.exists(id)
 
     /** The DM recipient of message [id], or null for a broadcast/group message or one we don't hold. */

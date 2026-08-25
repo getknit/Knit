@@ -1,9 +1,13 @@
 package app.getknit.knit.ui.chat
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Sensors
 import app.getknit.knit.R
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -98,6 +102,40 @@ class DeliveryStatusTest {
                 DeliveryText(R.string.chat_status_arrived_nearby),
                 deliveryLabel(DeliveryStatus.Delivered, plane, mine = false),
             )
+        }
+    }
+
+    @Test
+    fun `a LoRa delivery names its plane in both directions`() {
+        assertEquals(
+            DeliveryText(R.string.chat_status_delivered_lora),
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.LoRa, mine = true),
+        )
+        assertEquals(
+            DeliveryText(R.string.chat_status_arrived_lora),
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.LoRa, mine = false),
+        )
+        // An un-acked send still names no plane, and the group count still outranks it.
+        assertEquals(
+            DeliveryText(R.string.chat_status_sent),
+            deliveryLabel(DeliveryStatus.Sent, DeliveryPlane.LoRa, mine = true),
+        )
+        assertEquals(
+            DeliveryText(R.string.chat_status_delivered_count, listOf(1, 4)),
+            deliveryLabel(DeliveryStatus.Delivered, DeliveryPlane.LoRa, mine = true, delivered = 1, total = 4),
+        )
+    }
+
+    @Test
+    fun `the plane glyph is painted for the Internet and LoRa only`() {
+        assertEquals(Icons.Filled.Public, planeGlyph(DeliveryPlane.Internet))
+        assertEquals("relay", planeTag(DeliveryPlane.Internet))
+        assertEquals(Icons.Filled.Sensors, planeGlyph(DeliveryPlane.LoRa))
+        assertEquals("lora", planeTag(DeliveryPlane.LoRa))
+        // A phone radio (and an unknown plane) paints nothing — the plain case needs no ornament.
+        for (plane in listOf(DeliveryPlane.Nearby, DeliveryPlane.Bluetooth, DeliveryPlane.WifiAware, DeliveryPlane.Unknown)) {
+            assertNull(planeGlyph(plane))
+            assertNull(planeTag(plane))
         }
     }
 

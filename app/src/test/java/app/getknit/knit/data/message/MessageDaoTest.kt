@@ -92,6 +92,35 @@ class MessageDaoTest : RoomDbTest() {
         }
 
     @Test
+    fun `insertIfAbsent leaves an existing row untouched`() =
+        runTest {
+            // The inbound write: a re-served frame is the same signed bytes, so the first row for an id is
+            // the only one that ever should be — its arrival plane, its tick, and what was added since.
+            dao.upsert(msg("m1", received = true).copy(receivedVia = DeliveryPlane.LoRa.code, voiceDurationMs = 1_500))
+
+            assertEquals(-1L, dao.insertIfAbsent(msg("m1", received = false)))
+
+            val row = dao.observeAll().first().single { it.id == "m1" }
+            assertTrue(row.received)
+            assertEquals(DeliveryPlane.LoRa, row.receivedPlane)
+            assertEquals(1_500, row.voiceDurationMs)
+        }
+
+    @Test
+    fun `insertIfAbsent inserts a new row`() =
+        runTest {
+            assertTrue(dao.insertIfAbsent(msg("m2").copy(receivedVia = DeliveryPlane.LoRa.code)) != -1L)
+            assertEquals(
+                DeliveryPlane.LoRa,
+                dao
+                    .observeAll()
+                    .first()
+                    .single { it.id == "m2" }
+                    .receivedPlane,
+            )
+        }
+
+    @Test
     fun `recipientOf distinguishes a DM from a broadcast or absent message`() =
         runTest {
             dao.upsert(msg("dm", recipientId = "bob"))

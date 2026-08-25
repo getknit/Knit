@@ -32,7 +32,7 @@ class MeshRouter(
     private val jitterWindowMs: Long = DEFAULT_JITTER_WINDOW_MS,
     private val suppressThreshold: Int = DEFAULT_SUPPRESS_THRESHOLD,
     private val jitter: () -> Long = { Random.nextLong(jitterWindowMs) },
-    private val onDeliver: suspend (wire: WireEnvelope, envelope: RelayEnvelope, fromNodeId: String) -> Unit,
+    private val onDeliver: suspend (wire: WireEnvelope, envelope: RelayEnvelope, fromNodeId: String, kind: TransportKind) -> Unit,
 ) {
     /**
      * A relay scheduled but not yet fired. [relayed] is the hop-incremented wrapper (its signed blob +
@@ -56,17 +56,25 @@ class MeshRouter(
     /** Begins consuming inbound frames from the transport. */
     fun start() {
         scope.launch {
-            transport.inbound.collect { (wire, envelope, fromNodeId) ->
-                handleInbound(wire, envelope, fromNodeId)
+            // Deliberately not destructured: a positional destructuring silently drops any component past
+            // the ones named, and the frame's kind (the plane it arrived on) would read as Other for every frame.
+            transport.inbound.collect { frame ->
+                handleInbound(frame.wire, frame.envelope, frame.fromNodeId, frame.kind)
             }
         }
     }
 
-    /** Processes one inbound frame: deliver+schedule if new, else count it toward overhear suppression. */
+    /**
+     * Processes one inbound frame: deliver+schedule if new, else count it toward overhear suppression.
+     * [kind] is the radio the frame arrived over, handed to [onDeliver] for the delivery-plane record only —
+     * dedup, relay scheduling and split horizon never read it. Defaulted so a source with no radio (the
+     * Internet plane's `ScopeSync` bridge) calls the three-argument form.
+     */
     suspend fun handleInbound(
         wire: WireEnvelope,
         envelope: RelayEnvelope,
         fromNodeId: String,
+        kind: TransportKind = TransportKind.Other,
     ) {
         if (!seen.add(envelope.id)) {
             // Duplicate: never re-deliver or start a second relay, but it IS evidence the frame is
@@ -76,7 +84,7 @@ class MeshRouter(
             return
         }
         metrics.onDelivered()
-        onDeliver(wire, envelope, fromNodeId)
+        onDeliver(wire, envelope, fromNodeId, kind)
         scheduleRelay(wire, envelope.id, fromNodeId)
     }
 

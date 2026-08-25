@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -157,8 +158,14 @@ class CompositeMeshTransport(
             }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
         }
 
+    // Stamp each frame with the child it came off (InboundFrame.kind) before the merge erases that — the
+    // delivery path records it as the message's DeliveryPlane. Presentation only: the router never reads it.
     override val inbound: Flow<InboundFrame> =
-        if (children.isEmpty()) emptyFlow() else children.map { it.inbound }.merge()
+        if (children.isEmpty()) {
+            emptyFlow()
+        } else {
+            children.map { child -> child.inbound.map { it.copy(kind = child.kind) } }.merge()
+        }
 
     override val incomingFiles: Flow<ReceivedFile> =
         if (children.isEmpty()) emptyFlow() else children.map { it.incomingFiles }.merge()

@@ -1,6 +1,7 @@
 package app.getknit.knit
 
 import app.getknit.knit.mesh.PendingInbound
+import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireCodec
@@ -29,6 +30,16 @@ class PendingInboundTest {
         assertEquals("n", released.first().fromNodeId)
         // Once released it's gone — a second release yields nothing.
         assertTrue(buffer.release("alice").isEmpty())
+    }
+
+    @Test
+    fun releaseReturnsTheKindAFrameWasParkedWith() {
+        // A LoRa DM parked ahead of its sender's beacon must replay as a LoRa arrival, not as "nearby".
+        val buffer = PendingInbound(now = { 0L })
+        buffer.hold(wireFor("m1", "alice"), envFor("m1", "alice"), fromNodeId = "n", kind = TransportKind.LoRa)
+        buffer.hold(wireFor("m2", "alice"), envFor("m2", "alice"), fromNodeId = "n")
+
+        assertEquals(listOf(TransportKind.LoRa, TransportKind.Other), buffer.release("alice").map { it.kind })
     }
 
     @Test

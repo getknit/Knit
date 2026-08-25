@@ -215,6 +215,31 @@ class ChatRelayIndicatorTest {
     }
 
     @Test
+    fun aLoraDeliveredMessageShowsTheRadioMarkBesideTheTick() {
+        render(rows = listOf(row(received = true, deliveredVia = DeliveryPlane.LoRa)))
+        compose.onNodeWithTag("chat_tick_lora", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("chat_tick_relay", useUnmergedTree = true).assertDoesNotExist()
+        // Same one-announcement rule as the globe: the mark is decorative and the tick carries the fact.
+        compose.onNodeWithContentDescription("Delivered over LoRa").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Delivered").assertDoesNotExist()
+    }
+
+    @Test
+    fun anUndeliveredMessageNeverShowsTheRadioMark() {
+        render(rows = listOf(row(received = false, deliveredVia = DeliveryPlane.LoRa)))
+        compose.onNodeWithTag("chat_tick_lora", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Sent").assertIsDisplayed()
+    }
+
+    @Test
+    fun anIncomingMessageThatCameOverLoraShowsTheRadioMark() {
+        render(rows = listOf(row(mine = false, deliveredVia = DeliveryPlane.LoRa)))
+        compose.onNodeWithTag("chat_arrived_lora", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("chat_arrived_relay", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Arrived over LoRa").assertIsDisplayed()
+    }
+
+    @Test
     fun anIncomingMessageShowsNoTickAtAll() {
         // Ticks are for our own sends: a received message says how it arrived, never that it was
         // "delivered" — that claim belongs to the sender's phone.

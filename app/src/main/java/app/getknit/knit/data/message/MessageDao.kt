@@ -1,6 +1,8 @@
 package app.getknit.knit.data.message
 
 import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
@@ -24,6 +26,15 @@ interface MessageDao {
 
     @Upsert
     suspend fun upsert(message: MessageEntity)
+
+    /**
+     * Inserts [message] unless a row with its id already exists, returning the new rowid or -1 when it was
+     * left alone. The inbound delivery path's write: a re-served frame is the same signed bytes, so the
+     * first row written for an id is the only one that ever should be (it keeps the plane the message first
+     * arrived on and whatever was added to the row since — see `InboundPipeline.deliverChat`).
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(message: MessageEntity): Long
 
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE id = :id)")
     suspend fun exists(id: String): Boolean

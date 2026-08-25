@@ -11,11 +11,12 @@ package app.getknit.knit.data.message
  * planes, never renumber.
  *
  * [Bluetooth] and [WifiAware] are the finer split of [Nearby], reserved so attributing a delivery to a
- * specific radio stays a pure addition. **Nothing writes them yet:** the inbound path can tell the
- * Internet plane from a radio (a spool-tagged source), but not one radio from the other — that needs
- * `MeshTransport.InboundFrame` to carry the child transport's `TransportKind`, which
- * `CompositeMeshTransport` already knows per child. Until then every radio delivery is [Nearby], and a
- * reader must treat all three as "arrived nearby".
+ * specific radio stays a pure addition. **Nothing writes them yet:** `MeshTransport.InboundFrame` now
+ * carries the child transport's `TransportKind` (stamped by `CompositeMeshTransport`), so the inbound path
+ * *could* tell them apart, but it still collapses both phone radios to [Nearby] on purpose — the UI has
+ * nothing different to say about them — and a reader must treat all three as "arrived nearby". [LoRa] is
+ * the one radio that earns its own code: a delivery over a Meshtastic board (ADR 038/039) is
+ * kilometre-range, slow, and photo-less, which the tick is worth saying.
  */
 @Suppress("MagicNumber") // the literals ARE the frozen stored codes; naming each one would only restate it
 enum class DeliveryPlane(
@@ -35,6 +36,9 @@ enum class DeliveryPlane(
 
     /** Reserved: a Wi-Fi Aware delivery, once inbound frames carry their radio. */
     WifiAware(4),
+
+    /** The LoRa plane: the frame (or the receipt) reached us over a Meshtastic board (ADR 038/039). */
+    LoRa(5),
     ;
 
     companion object {

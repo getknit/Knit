@@ -294,6 +294,28 @@ class CompositeMeshTransportTest {
         }
 
     @Test
+    fun inboundFramesAreStampedWithTheirChildsKind() =
+        runTest(UnconfinedTestDispatcher()) {
+            val bt = FakeChild(kind = TransportKind.Bluetooth)
+            val lora = FakeChild(kind = TransportKind.LoRa)
+            val composite = CompositeMeshTransport(listOf(bt, lora), backgroundScope)
+            val frames = mutableListOf<InboundFrame>()
+            backgroundScope.launch { composite.inbound.collect { frames += it } }
+            advanceUntilIdle()
+
+            // A child constructs its frames without a kind (FramedLink is shared by BLE and NAN and cannot
+            // know); the composite is the one place that knows which child a frame came off.
+            bt.emitInbound(InboundFrame(wire(), envelope("m1", "s1"), "s1"))
+            lora.emitInbound(InboundFrame(wire(), envelope("m2", "s2"), "s2"))
+            advanceUntilIdle()
+
+            assertEquals(
+                mapOf("m1" to TransportKind.Bluetooth, "m2" to TransportKind.LoRa),
+                frames.associate { it.envelope.id to it.kind },
+            )
+        }
+
+    @Test
     fun inboundFilesAndDigestsMergeFromBothChildren() =
         runTest(UnconfinedTestDispatcher()) {
             val bt = FakeChild()

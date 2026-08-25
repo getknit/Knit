@@ -77,6 +77,7 @@ class LoraMeshTransportTest {
         selfNode: String,
         scope: kotlinx.coroutines.CoroutineScope,
         config: kotlinx.coroutines.flow.Flow<LoraConfig?> = MutableStateFlow(LoraConfig("AA:$nodeNum", 0)),
+        farFrames: suspend (String) -> List<WireEnvelope> = { emptyList() },
         now: () -> Long,
     ): Rig {
         val link = FakeMeshtasticLink(nodeNum, air)
@@ -87,6 +88,7 @@ class LoraMeshTransportTest {
                 link = link,
                 config = config,
                 selfProfile = profileSource(selfNode),
+                farFrames = farFrames,
                 scope = scope,
                 metrics = metrics,
                 clock = now,
@@ -276,6 +278,81 @@ class LoraMeshTransportTest {
             a.transport.stop()
             b.transport.stop()
             c.transport.stop()
+        }
+
+    private fun idOf(wire: WireEnvelope): String = WireCodec.decodeEnvelope(wire.signed)!!.id
+
+    @Test
+    fun firstHearingALoraOnlyPeerReoffersItsCarriedDms() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val fannedLive = frame(FrameType.CHAT, "alice", recipientId = "bob", body = "sent while bob was off")
+            val carried = frame(FrameType.CHAT, "carol", recipientId = "bob", body = "relayed for carol")
+            val notForBob = frame(FrameType.CHAT, "alice", recipientId = "dave", body = "custody's mistake")
+            val asked = mutableListOf<String>()
+            val a =
+                rig(air, 1u, "alice", backgroundScope, farFrames = { peer ->
+                    asked += peer
+                    listOf(fannedLive, carried, notForBob)
+                }) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            // alice fanned the first DM live a moment ago (bob's board was off) — still inside the dedup window.
+            a.transport.longRangeFanout(fannedLive)
+            advanceTimeBy(2 * 60_000)
+            runCurrent()
+            val aSentBefore = a.link.sent.size
+
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            b.transport.start() // bob beacons; alice hears him for the first time
+            advanceTimeBy(4_000)
+            runCurrent()
+
+            assertEquals("custody is asked once, for bob", listOf("bob"), asked)
+            // The addressee is double-checked, and the frame fanned inside the dedup window is skipped.
+            assertEquals(1L, a.metrics.snapshot().loraReoffered)
+            assertEquals("alice's first-hearing beacon + one re-offered frame", aSentBefore + 2, a.link.sent.size)
+            assertTrue("bob received the re-offered DM", b.received.any { it.envelope.id == idOf(carried) })
+            assertFalse(b.received.any { it.envelope.id == idOf(notForBob) })
+
+            // Hearing bob again inside the linger is not a first hearing.
+            b.transport.fastFanout(frame(FrameType.CHAT, "bob", body = "hi", sentAt = testScheduler.currentTime))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals(listOf("bob"), asked)
+
+            // Once bob ages out of reachable and reappears, custody is asked again (and the dedup window has lapsed).
+            advanceTimeBy(46 * 60_000)
+            b.transport.fastFanout(frame(FrameType.CHAT, "bob", body = "back", sentAt = testScheduler.currentTime))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals(listOf("bob", "bob"), asked)
+            assertEquals(3L, a.metrics.snapshot().loraReoffered)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    @Test
+    fun aReofferIsSkippedForAPeerAnotherPlaneAlreadyCarries() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val asked = mutableListOf<String>()
+            val a =
+                rig(air, 1u, "alice", backgroundScope, farFrames = { peer ->
+                    asked += peer
+                    listOf(frame(FrameType.CHAT, "alice", recipientId = "bob"))
+                }) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            a.transport.onForeignReachable(setOf("bob")) // bob is also on BLE/NAN — custody syncs there for real
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            b.transport.start()
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertTrue("custody is not even asked", asked.isEmpty())
+            assertEquals(0L, a.metrics.snapshot().loraReoffered)
+            a.transport.stop()
+            b.transport.stop()
         }
 
     @Test

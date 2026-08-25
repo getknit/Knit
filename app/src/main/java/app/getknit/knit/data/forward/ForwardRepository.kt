@@ -176,6 +176,15 @@ class ForwardRepository(
 
     override suspend fun liveIds(now: Long): List<String> = dao.liveIds(now)
 
+    override suspend fun liveFramesTo(
+        recipientId: String,
+        now: Long,
+        limit: Int,
+    ): List<CarriedFrame> =
+        dao.liveRowsTo(recipientId, now, limit).mapNotNull { row ->
+            WireCodec.decodeEnvelope(row.signed)?.let { CarriedFrame(it, row.sig, row.signed) }
+        }
+
     override suspend fun attachmentHashesNeedingFetch(): List<String> = dao.attachmentHashesNeedingFetch()
 
     override suspend fun recipientOf(id: String): String? = dao.recipientOf(id)

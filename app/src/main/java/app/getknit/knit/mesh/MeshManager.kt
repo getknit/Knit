@@ -130,7 +130,8 @@ class MeshManager(
     // module) is unchanged; mirrors the house convention — ForwardSync(clock = …), AckSync, KeyExchange.
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) : MeshController,
-    ProfileFrameSource {
+    ProfileFrameSource,
+    FarPeerFrameSource {
     // Per-session scope for the collectors + metrics loop + router; cancelled in stop() so they don't
     // accumulate across start/stop cycles (e.g. a Diagnostics-triggered restart()).
     private var sessionScope: CoroutineScope? = null
@@ -1867,6 +1868,25 @@ class MeshManager(
     override suspend fun signedProfile(): WireEnvelope = sign(currentProfileEnvelope())
 
     /**
+     * [FarPeerFrameSource]: the carried DM-form frames worth re-offering to [nodeId] when a long-range plane
+     * first hears it (ADR 039) — the newest [FAR_REOFFER_LIMIT] live custody frames addressed to it, minus our
+     * own frames the peer has already acked (an own frame with no unacked message row is either delivered or a
+     * sealed ctl, neither worth an airslot; a relayed frame's fate is unknowable, so it is offered). Verbatim
+     * custody bytes re-wrapped like a custody re-serve: the receiver's SeenSet / exists-gate make a duplicate
+     * harmless, and a re-delivered DM re-draws its receipt — which is how a tick lost over LoRa heals.
+     */
+    override suspend fun framesFor(nodeId: String): List<WireEnvelope> {
+        val now = clock()
+        val carried = forwardStore.liveFramesTo(nodeId, now, FAR_REOFFER_LIMIT)
+        if (carried.isEmpty()) return emptyList()
+        val me = identity.nodeId()
+        val ownUnacked = messages.unackedDmsTo(nodeId, me, since = now - RESEAL_WINDOW_MS).mapTo(HashSet()) { it.id }
+        return carried
+            .filter { it.envelope.senderId != me || it.envelope.id in ownUnacked }
+            .map { WireEnvelope(sig = it.sig, signed = it.signed) }
+    }
+
+    /**
      * Whether [text] is non-blank and the on-device moderator flags it as abusive. Always runs — not
      * gated by the content-filtering setting, which only governs receive-side hiding. Drives both
      * block-on-send (in [sendChat], a send-side "good-citizen"/Nearby check) and the stored flag on
@@ -2016,6 +2036,9 @@ class MeshManager(
 
         /** How far back the post-reset DM re-seal reaches — the custody TTL (older frames left the mesh). */
         const val RESEAL_WINDOW_MS = 24 * 60 * 60_000L
+
+        /** How many carried DM-form frames a long-range plane re-offers per first hearing of a peer (≤ 3 packets each). */
+        const val FAR_REOFFER_LIMIT = 4
 
         /** Per-(group, member) floor on proactive/responder seed re-sends (docs/GROUP_FORWARD_SECRECY.md #10). */
         const val SEED_RESEND_FLOOR_MS = 15 * 60_000L

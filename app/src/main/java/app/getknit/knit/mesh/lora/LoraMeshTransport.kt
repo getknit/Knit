@@ -47,6 +47,9 @@ import java.util.concurrent.atomic.AtomicLong
  *   plane's `emitFastWire`, so the router's dedup/verify/custody/relay all run unchanged.
  * - [shortRange] is false: a LoRa sighting doesn't imply proximity, so siblings ignore its `reachable` set.
  *
+ * On first hearing a peer the transport also re-offers the carried DM-form frames addressed to it
+ * ([reofferTo]) — the plane's only backfill, since custody's digest sync needs a data path.
+ *
  * Key bootstrap over LoRa (the far side has never seen the author's profile) rides two paths: the mesh's
  * existing `watchReachable` reflood, plus a self-profile beacon this transport sends on session-up (under a
  * 5-min floor) and on first hearing a peer (under a 60-s gap, so a two-sided bootstrap completes without a
@@ -60,6 +63,7 @@ internal class LoraMeshTransport(
     private val link: MeshtasticLink,
     private val config: Flow<LoraConfig?>,
     private val selfProfile: suspend () -> WireEnvelope?,
+    private val farFrames: suspend (nodeId: String) -> List<WireEnvelope> = { emptyList() },
     private val scope: CoroutineScope,
     private val metrics: MeshMetrics,
     private val clock: () -> Long,
@@ -262,6 +266,31 @@ internal class LoraMeshTransport(
         sendSelfProfile(wire, minGapMs)
     }
 
+    /**
+     * Re-offers the carried DM-form frames addressed to [peer] — pulled through [farFrames] (custody, via
+     * [app.getknit.knit.mesh.FarPeerFrameSource]) — on first hearing it (ADR 039): this plane has no custody
+     * sync, so a DM sent while the peer's board was off is otherwise lost to it until radio contact. Bounded by
+     * the source (the newest few), the sig-keyed dedup (a frame fanned inside the window is skipped) and the
+     * 45-min linger (a peer is "first heard" at most once per window). Skipped for a peer another plane already
+     * carries — it gets custody's real digest sync there.
+     */
+    private suspend fun reofferTo(peer: Peer) {
+        if (peer.nodeId in foreignReachable) return
+        farFrames(peer.nodeId).forEach { wire -> reofferOne(wire, peer.nodeId) }
+    }
+
+    /** Enqueues one re-offered frame if it is a DM-form chat addressed to [to] and not fanned inside the dedup window. */
+    private fun reofferOne(
+        wire: WireEnvelope,
+        to: String,
+    ) {
+        val env = WireCodec.decodeEnvelope(wire.signed) ?: return
+        if (!LoraFramePolicy.isDmForm(env) || env.recipientId != to) return
+        if (!sigSeen.add(sigKey(wire))) return
+        enqueue(wire, "reoffer:${env.id}", FrameClass.DM)
+        metrics.onLoraReoffered()
+    }
+
     /** Whether [minGapMs] has elapsed since the last self-profile; overflow-safe against the [NEVER] sentinel. */
     private fun profileGapElapsed(
         now: Long,
@@ -384,7 +413,12 @@ internal class LoraMeshTransport(
         val firstHeard = lastHeardAt.put(peer.nodeId, now) == null
         heardPeers[peer.nodeId] = peer
         recomputeReachable(now)
-        if (firstHeard) scope.launch { beaconProfile(FIRST_HEARING_GAP_MS) }
+        if (firstHeard) {
+            scope.launch {
+                beaconProfile(FIRST_HEARING_GAP_MS)
+                reofferTo(peer)
+            }
+        }
     }
 
     private fun recomputeReachable(now: Long) {

@@ -881,6 +881,7 @@ class DebugBridgeReceiver :
             .put("loraSessionUps", snap.loraSessionUps)
             .put("loraDmSent", snap.loraDmSent)
             .put("loraDmReceived", snap.loraDmReceived)
+            .put("loraReoffered", snap.loraReoffered)
 
     /**
      * Dumps the DM ratchet's per-peer state and, with `--es reset <peerNodeId>`, forces a session reset

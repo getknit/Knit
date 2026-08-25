@@ -410,6 +410,62 @@ class MeshManagerTest {
             assertEquals(frame.id, WireCodec.decodeEnvelope(far.signed)!!.id)
         }
 
+    // --- the long-range re-offer set (FarPeerFrameSource, ADR 039) ---
+
+    /** A carried frame from [sender] to [recipient] as custody would hold it (the fake store never verifies). */
+    private fun carried(
+        id: String,
+        sender: String,
+        recipient: String,
+        sentAt: Long,
+    ): CarriedFrame {
+        val env =
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = sender,
+                sentAt = sentAt,
+                recipientId = recipient,
+                payload = WireCodec.encodePayload(ChatContent(body = "")),
+            )
+        return CarriedFrame(env, sig = ByteArray(64), signed = WireCodec.encodeEnvelope(env))
+    }
+
+    @Test
+    fun farPeerFramesAreTheNewestCarriedDmsToThePeerMinusOurAckedOnes() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pin(rig.bob)
+            val carol = party()
+            assertTrue(rig.manager.sendChat("still unacked", recipientId = rig.bob.nodeId))
+            rig.clockNow += 1_000
+            assertTrue(rig.manager.sendChat("already acked", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+            val (unacked, acked) = rig.saved
+            rig.forwardStore.store(carried("relayed", carol.nodeId, rig.bob.nodeId, rig.now + 5_000), ForwardStore.ORIGIN_RELAY, rig.now)
+            rig.forwardStore.store(carried("own-ctl", rig.me.nodeId, rig.bob.nodeId, rig.now + 9_000), ForwardStore.ORIGIN_SELF, rig.now)
+            rig.forwardStore.store(carried("to-carol", rig.me.nodeId, carol.nodeId, rig.now + 9_500), ForwardStore.ORIGIN_SELF, rig.now)
+            coEvery { rig.messages.unackedDmsTo(rig.bob.nodeId, rig.me.nodeId, any()) } returns listOf(unacked)
+
+            val ids = rig.manager.framesFor(rig.bob.nodeId).map { WireCodec.decodeEnvelope(it.signed)!!.id }
+
+            // Newest first; our acked DM and our row-less (ctl) frame are dropped, a relayed frame is always offered.
+            assertEquals(listOf("relayed", unacked.id), ids)
+            assertFalse(acked.id in ids)
+        }
+
+    @Test
+    fun farPeerFramesAreCappedAtTheReofferLimit() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            val carol = party()
+            repeat(6) { i ->
+                rig.forwardStore.store(carried("r$i", carol.nodeId, rig.bob.nodeId, rig.now + i), ForwardStore.ORIGIN_RELAY, rig.now)
+            }
+            val ids = rig.manager.framesFor(rig.bob.nodeId).map { WireCodec.decodeEnvelope(it.signed)!!.id }
+            assertEquals(listOf("r5", "r4", "r3", "r2"), ids)
+        }
+
     // --- DM: deferred (pendingKey) when the recipient's key is not yet known ---
 
     @Test

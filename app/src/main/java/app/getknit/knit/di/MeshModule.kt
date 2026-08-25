@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.mesh.CompositeMeshTransport
+import app.getknit.knit.mesh.FarPeerFrameSource
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshManager
 import app.getknit.knit.mesh.MeshMetrics
@@ -136,8 +137,10 @@ val meshModule =
             MeshtasticSession(dialer = get(), scope = get(), now = SystemClock::elapsedRealtime, log = { Log.d("MeshtasticLink", it) })
         }
         single<BoardDirectory> { BondedBoardDirectory(androidContext()) }
-        // MeshManager supplies the signed profile frame for the LoRa key-bootstrap beacon (a third alias).
+        // MeshManager supplies the signed profile frame for the LoRa key-bootstrap beacon (a third alias) and
+        // the carried DM-form frames the plane re-offers to a peer it first hears (a fourth).
         single<ProfileFrameSource> { get<MeshManager>() }
+        single<FarPeerFrameSource> { get<MeshManager>() }
         single {
             val settings = get<app.getknit.knit.data.settings.SettingsStore>()
             LoraMeshTransport(
@@ -148,6 +151,7 @@ val meshModule =
                         if (on && addr != null) LoraConfig(addr, ch) else null
                     },
                 selfProfile = { get<ProfileFrameSource>().signedProfile() },
+                farFrames = { get<FarPeerFrameSource>().framesFor(it) },
                 scope = get(),
                 metrics = get(),
                 clock = SystemClock::elapsedRealtime,

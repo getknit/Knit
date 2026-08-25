@@ -349,6 +349,7 @@
     <string name="diagnostics_metric_lora_nak">LoRa NAKs</string>
     <string name="diagnostics_metric_lora_dm_sent">LoRa private messages sent</string>
     <string name="diagnostics_metric_lora_dm_received">LoRa private messages received</string>
+    <string name="diagnostics_metric_lora_reoffered">LoRa private messages re-offered</string>
     <string name="diagnostics_metric_spool_bridged">Messages received via Internet relays</string>
     <string name="diagnostics_metric_spool_invalid">Relay blobs quarantined</string>
     <string name="diagnostics_metric_spool_errors">Relay errors</string>

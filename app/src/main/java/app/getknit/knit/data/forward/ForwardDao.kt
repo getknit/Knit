@@ -34,6 +34,17 @@ interface ForwardDao {
     @Query("SELECT * FROM forward_store WHERE expiresAt >= :now ORDER BY receivedAt DESC")
     suspend fun liveRows(now: Long): List<ForwardEntity>
 
+    /** The newest live chat frames addressed to [recipientId] — the long-range plane's re-offer set (ADR 039). */
+    @Query(
+        "SELECT * FROM forward_store WHERE recipientId = :recipientId AND type = 'chat' AND expiresAt >= :now " +
+            "ORDER BY sentAt DESC, id DESC LIMIT :limit",
+    )
+    suspend fun liveRowsTo(
+        recipientId: String,
+        now: Long,
+        limit: Int,
+    ): List<ForwardEntity>
+
     @Query("SELECT EXISTS(SELECT 1 FROM forward_store WHERE id = :id)")
     suspend fun exists(id: String): Boolean
 

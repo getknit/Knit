@@ -32,6 +32,21 @@ class ForwardDaoTest : RoomDbTest() {
         }
 
     @Test
+    fun `liveRowsTo returns the newest live chat frames addressed to one recipient`() =
+        runTest {
+            dao.insert(fwd("old", recipientId = "bob", sentAt = 1L))
+            dao.insert(fwd("mid", recipientId = "bob", sentAt = 5L))
+            dao.insert(fwd("new", recipientId = "bob", sentAt = 9L))
+            dao.insert(fwd("expired", recipientId = "bob", sentAt = 10L, expiresAt = 50L))
+            dao.insert(fwd("other", recipientId = "carol", sentAt = 11L))
+            dao.insert(fwd("room", recipientId = null, sentAt = 12L))
+            dao.insert(fwd("receipt", recipientId = "bob", sentAt = 13L).copy(type = "receipt"))
+            assertEquals(listOf("new", "mid"), dao.liveRowsTo("bob", now = 100L, limit = 2).map { it.id })
+            assertEquals(listOf("new", "mid", "old"), dao.liveRowsTo("bob", now = 100L, limit = 10).map { it.id })
+            assertTrue(dao.liveRowsTo("nobody", now = 100L, limit = 10).isEmpty())
+        }
+
+    @Test
     fun `deleteExpired removes only rows strictly past their frame-global expiry`() =
         runTest {
             dao.insert(fwd("gone", expiresAt = 999L))

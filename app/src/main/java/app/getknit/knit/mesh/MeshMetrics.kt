@@ -201,6 +201,7 @@ class MeshMetrics {
     private val loraSessionUps = AtomicLong()
     private val loraDmSent = AtomicLong()
     private val loraDmReceived = AtomicLong()
+    private val loraReoffered = AtomicLong()
 
     /** A frame this device authored and injected into the mesh. */
     fun onOriginated() {
@@ -529,6 +530,11 @@ class MeshMetrics {
         loraDmReceived.incrementAndGet()
     }
 
+    /** A carried DM-form frame re-offered over LoRa to a peer just heard for the first time (ADR 039). */
+    fun onLoraReoffered() {
+        loraReoffered.incrementAndGet()
+    }
+
     @Suppress("LongMethod") // a flat field-by-field copy — one line per counter; splitting it would only scatter it
     fun snapshot(): Snapshot {
         val byReason = drops.mapValues { it.value.get() }
@@ -597,6 +603,7 @@ class MeshMetrics {
             loraSessionUps = loraSessionUps.get(),
             loraDmSent = loraDmSent.get(),
             loraDmReceived = loraDmReceived.get(),
+            loraReoffered = loraReoffered.get(),
         )
     }
 
@@ -664,5 +671,6 @@ class MeshMetrics {
         val loraSessionUps: Long = 0,
         val loraDmSent: Long = 0,
         val loraDmReceived: Long = 0,
+        val loraReoffered: Long = 0,
     )
 }

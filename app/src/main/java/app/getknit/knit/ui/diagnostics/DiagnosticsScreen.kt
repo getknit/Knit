@@ -440,6 +440,9 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
             if (metrics.loraDmReceived > 0) {
                 MetricRow(stringResource(R.string.diagnostics_metric_lora_dm_received), metrics.loraDmReceived.toString())
             }
+            if (metrics.loraReoffered > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_lora_reoffered), metrics.loraReoffered.toString())
+            }
         }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an
         // intermittent "can link one peer but not the second" is visible and attributable (RADIO vs other).

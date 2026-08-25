@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh
 
+import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 
 /**
@@ -42,6 +43,21 @@ interface ForwardStore {
 
     /** Ids of the non-expired carried frames (at [now]) — advertised to a neighbor for the data-path id-diff. */
     suspend fun liveIds(now: Long): List<String>
+
+    /**
+     * The newest (by frame-global `sentAt`) non-expired carried **chat** frames addressed to [recipientId], at
+     * most [limit] — what a plane with no custody sync re-offers to that peer when it first hears it (ADR 039).
+     * The default derives it from [liveFrames]; the Room implementation queries the indexed column.
+     */
+    suspend fun liveFramesTo(
+        recipientId: String,
+        now: Long,
+        limit: Int,
+    ): List<CarriedFrame> =
+        liveFrames(now)
+            .filter { it.envelope.recipientId == recipientId && it.envelope.type == FrameType.CHAT }
+            .sortedByDescending { it.envelope.sentAt }
+            .take(limit)
 
     /**
      * Content hashes referenced by a carried chat frame whose blob we don't yet hold — the carrier's side of

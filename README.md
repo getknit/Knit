@@ -6,6 +6,8 @@
 
 Your phones talk directly to each other over Wi-Fi Aware and Bluetooth LE, and relay for one another hop by hop.
 
+🌐 **[getknit.app](https://getknit.app)** — the Knit website
+
 ![Platform](https://img.shields.io/badge/Android-10%2B%20(API%2029)-3DDC84?logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.4.10-7F52FF?logo=kotlin&logoColor=white)
 ![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)
@@ -478,5 +480,5 @@ See [`docs/CONTENT_MODERATION.md`](docs/CONTENT_MODERATION.md) for how they are 
 ---
 
 <div align="center">
-<sub>GPL-3.0-or-later — <code>app.getknit.knit</code></sub>
+<sub><a href="https://getknit.app">getknit.app</a> — GPL-3.0-or-later — <code>app.getknit.knit</code></sub>
 </div>

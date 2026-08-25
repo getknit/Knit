@@ -38,6 +38,7 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.b64d
 import app.getknit.knit.mesh.lora.LoraFacts
@@ -181,6 +182,10 @@ data class ChatUiState(
     val relayPlane: RelayPlane = RelayPlane.Off,
     // The LoRa plane's whole-device state, for the same header (the board glyph beside the cloud).
     val loraPlane: LoraPlane = LoraPlane.Off,
+    // Whether the board alone can hear this DM's peer — the pinned notice under the header. See [loraReachFor].
+    val loraReach: LoraReach = LoraReach.Silent,
+    // Whether (and in which form) a draft here rides LoRa — sizes the composer's length hint. See [loraCarryFor].
+    val loraCarry: LoraCarry = LoraCarry.None,
 )
 
 class ChatViewModel(
@@ -349,14 +354,28 @@ class ChatViewModel(
             )
         }
 
-    // Neighbor count + radio health + the "who's typing" map + Internet-relay reach + the LoRa plane folded
+    // The LoRa plane's facts + the radios this thread's peer is reachable over, folded first so the LoRa
+    // notice costs the mesh-status combine one arm, not two. Only this conversation's entry is watched, and
+    // de-duplicated, so another peer's sighting never rebuilds the screen.
+    private data class LoraThread(
+        val facts: LoraFacts,
+        val peerKinds: Set<TransportKind>?,
+    )
+
+    private val loraThread =
+        combine(
+            loraFacts,
+            meshManager.peerTransports.map { it[conversationId] }.distinctUntilChanged(),
+        ) { facts, kinds -> LoraThread(facts, kinds) }.distinctUntilChanged()
+
+    // Neighbor count + radio health + the "who's typing" map + Internet-relay reach + the LoRa thread folded
     // into one source so the main state combine stays within its five-flow arity.
     private data class MeshStatus(
         val neighborCount: Int,
         val transportHealth: TransportHealth,
         val typing: Map<String, Set<String>>,
         val relay: RelayFacts,
-        val lora: LoraFacts,
+        val lora: LoraThread,
     )
 
     private val meshStatus =
@@ -365,7 +384,7 @@ class ChatViewModel(
             meshManager.transportHealth,
             meshManager.typing,
             relayFacts,
-            loraFacts,
+            loraThread,
         ) { count, health, typing, relay, lora -> MeshStatus(count, health, typing, relay, lora) }
 
     val state: StateFlow<ChatUiState> =
@@ -516,7 +535,9 @@ class ChatViewModel(
                 typingPeers = typingPeers,
                 relayReach = reachFor(conversationId, relay),
                 relayPlane = planeFor(relay),
-                loraPlane = mesh.lora.plane,
+                loraPlane = mesh.lora.facts.plane,
+                loraReach = loraReachFor(conversationId, mesh.lora.facts, mesh.lora.peerKinds, reachFor(conversationId, relay)),
+                loraCarry = loraCarryFor(conversationId, isGroup, mesh.lora.facts),
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState(isRoom = isRoom))
 

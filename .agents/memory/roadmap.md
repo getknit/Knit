@@ -54,8 +54,12 @@ doc). **Don't start a deferred item without explicit direction.**
   triggers a beacon exchange or a re-offer), **Meshtastic unicast + `want_ack`** for DMs (needs a
   nodeNum↔nodeId map and a Routing `NONE`-is-success branch), **re-offer beyond the heard peer** (a
   board-less recipient behind another board-holder — the "true DM routing" deferral),
-  **multi-board-per-clique dedup** (one board per clique for now), and a **long-post UI hint** (room posts
-  over ~500 chars and DMs over ~400 are LoRa-invisible, counted `loraTooBig`, with no bubble marker). See
+  **multi-board-per-clique dedup** (one board per clique for now), an **in-app scan + bond flow**
+  (`MeshtasticScanner`/`MeshtasticBonder` are written but unwired — device-only verifiable, and the scan must
+  go through `BleConnectArbiter`; the picker filters bonded devices instead, ADR 040), and a **per-message
+  `loraTooBig` marker** (no persisted evidence; ADR 040's composer hint covers the sending side). **The plane's
+  UI SHIPPED** (2026-08-25, ADR 040): `DeliveryPlane.LoRa` + bubble glyph, the header glyph, the board-only
+  picker with a channel verdict, the LoRa-only DM notice and the long-message composer hint. See
   `context/lora-bridge.md`.
 
 - **The spool plane is hidden in shipped builds** (2026-08-22, ADR 031) — `BuildConfig.INTERNET_PLANE`

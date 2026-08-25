@@ -9,6 +9,7 @@ import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.link.FastFrameCodec
 import app.getknit.knit.mesh.lora.LoraFrameCodec
+import app.getknit.knit.mesh.lora.LoraSizeHint
 import app.getknit.knit.mesh.lora.MeshtasticProto
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
@@ -23,10 +24,12 @@ import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
+import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.mesh.wifiaware.WifiAwareTransport
+import app.getknit.knit.ui.chat.REPLY_SNIPPET_MAX
 import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
@@ -34,6 +37,7 @@ import com.google.crypto.tink.hybrid.HpkePrivateKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.random.Random
 
 /**
  * Executable size budget for the Wi-Fi Aware coordination-plane fast path ([WifiAwareTransport]'s
@@ -108,6 +112,7 @@ class CoordinationPlaneSizeBudgetTest {
             acks: List<String>? = null,
             attachmentHash: String? = null,
             attachmentKey: String? = null,
+            replyTo: ReplyRef? = null,
         ): RelayEnvelope {
             val aad = MessageCrypto.header(id, party.nodeId, SENT_AT, to.nodeId)
             val plain =
@@ -120,6 +125,7 @@ class CoordinationPlaneSizeBudgetTest {
                     ack = ack,
                     rp = rp,
                     acks = acks,
+                    replyTo = replyTo,
                 ).encode()
             val sealed = checkNotNull(engine.seal(session, plain, aad, toSpk.pub, now = SESSION_AT))
             session = sealed.session
@@ -406,6 +412,7 @@ class CoordinationPlaneSizeBudgetTest {
     private fun broadcastChat(
         alice: Party,
         body: String,
+        replyTo: ReplyRef? = null,
     ): WireEnvelope =
         alice.sign(
             RelayEnvelope(
@@ -413,7 +420,7 @@ class CoordinationPlaneSizeBudgetTest {
                 id = FrameId.new(),
                 senderId = alice.nodeId,
                 sentAt = SENT_AT,
-                payload = WireCodec.encodePayload(ChatContent(body = body)),
+                payload = WireCodec.encodePayload(ChatContent(body = body, replyTo = replyTo)),
             ),
         )
 
@@ -488,6 +495,60 @@ class CoordinationPlaneSizeBudgetTest {
         assertEquals("a max-length DM is loraTooBig — it rides the radios and custody instead", null, loraParts(huge))
     }
 
+    /**
+     * ADR 040: the composer's "long message" hint is sized by [LoraSizeHint]'s body budgets, which must be
+     * *under* the real ceilings — a draft at the budget must still fit in ≤ 3 packets in every form the hint
+     * covers: a room post (deflate-hostile body, the honest upper bound — real text compresses better), a
+     * session-initial DM, and each with the largest reply and an attachment reference riding along.
+     */
+    @Test
+    fun theComposerHintBudgetsFitTheLoraHop() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        val random = Random(seed = 7)
+        // Printable ASCII, uniformly random: ~6.5 bits of entropy per byte, so the codec's deflate gains nothing.
+        val noise = String(CharArray(LoraSizeHint.ROOM_BODY_BYTES) { (PRINTABLE_FIRST + random.nextInt(PRINTABLE_COUNT)).toChar() })
+        val reply =
+            ReplyRef(
+                messageId = FrameId.new(),
+                authorId = bob.nodeId,
+                author = "n".repeat(TextLimits.DISPLAY_NAME),
+                snippet = "s".repeat(REPLY_SNIPPET_MAX),
+                hasAttachment = true,
+            )
+
+        fun fits(
+            label: String,
+            wire: WireEnvelope,
+        ) {
+            val parts = checkNotNull(loraParts(wire)) { "$label must fit the LoRa hop at its hint budget" }
+            assertTrue("$label in <= 3 LoRa packets (was $parts)", parts <= FastFrameCodec.MAX_PARTS)
+        }
+        val room = LoraSizeHint.ROOM_BODY_BYTES
+        fits("room post", broadcastChat(alice, noise.take(room)))
+        fits("room reply", broadcastChat(alice, noise.take(LoraSizeHint.budget(room, replying = true, attached = false)), replyTo = reply))
+        val dm = LoraSizeHint.DM_BODY_BYTES
+        fits("session-initial DM", alice.sign(sealer.dm(FrameId.new(), body = noise.take(dm))))
+        fits(
+            "session-initial DM reply",
+            alice.sign(
+                sealer.dm(FrameId.new(), body = noise.take(LoraSizeHint.budget(dm, replying = true, attached = false)), replyTo = reply),
+            ),
+        )
+        fits(
+            "session-initial DM with a photo",
+            alice.sign(
+                sealer.dm(
+                    FrameId.new(),
+                    body = noise.take(LoraSizeHint.budget(dm, replying = false, attached = true)),
+                    attachmentHash = "ab".repeat(32),
+                    attachmentKey = "k".repeat(44),
+                ),
+            ),
+        )
+    }
+
     @Test
     fun loraFragmentCeilingArithmetic() {
         // 3 parts x (233-B payload - 4-B fragment header) is the most any compact frame can carry over LoRa.
@@ -495,6 +556,8 @@ class CoordinationPlaneSizeBudgetTest {
     }
 
     private companion object {
+        const val PRINTABLE_FIRST = 0x21
+        const val PRINTABLE_COUNT = 0x5E
         const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"
         const val SIG_TEMPLATE = "ED25519_RAW"
         const val SPK_ID = 1

@@ -81,6 +81,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -100,6 +101,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -128,9 +130,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -170,6 +174,7 @@ import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.demo.DemoComposeCommand
 import app.getknit.knit.demo.DemoComposer
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.lora.LoraSizeHint
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.ui.camera.PhotoCapture
@@ -482,6 +487,7 @@ internal fun ChatScreenContent(
     var headerMenuOpen by remember { mutableStateOf(false) }
     var showEncryptionInfo by remember { mutableStateOf(false) }
     var showRelayInfo by remember { mutableStateOf(false) }
+    var showLoraInfo by remember { mutableStateOf(false) }
     // The message whose "nearby only" marker was tapped, so the explanation can name its actual cause
     // (too big vs. relays that carry no photos). Null when no explanation is open.
     var relayMarkerExplained by remember { mutableStateOf<AttachmentRelay?>(null) }
@@ -708,6 +714,7 @@ internal fun ChatScreenContent(
                 onReceiveImage = onReceiveImage,
                 onSend = onSend,
                 onTyping = onTyping,
+                loraBudget = loraBudgetFor(state.loraCarry, replying = replyingTo != null, attached = pendingAttachment != null),
                 // Voice notes are DM/group only: the Nearby room floods unencrypted to everyone in range and
                 // no on-device model can screen speech, so it is the one place unscreenable audio is not
                 // offered. See docs/CONTENT_MODERATION.md.
@@ -727,6 +734,7 @@ internal fun ChatScreenContent(
         // about the whole thread, and one that scrolled away would be found only by accident.
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             RelayNotice(reach = state.relayReach, onClick = { showRelayInfo = true })
+            LoraNotice(reach = state.loraReach, onClick = { showLoraInfo = true })
             // weight(1f), not fillMaxSize(): the notice above is an unweighted sibling, so the list must
             // take the space that is left rather than ask for the whole column.
             if (state.rows.isEmpty() && state.typingPeers.isEmpty()) {
@@ -852,6 +860,25 @@ internal fun ChatScreenContent(
         )
     }
 
+    if (showLoraInfo) {
+        val dmsOff = state.loraReach == LoraReach.LoraOnlyDmsOff
+        AlertDialog(
+            onDismissRequest = { showLoraInfo = false },
+            icon = { Icon(Icons.Outlined.Sensors, contentDescription = null) },
+            title = {
+                Text(stringResource(if (dmsOff) R.string.chat_lora_only_dms_off_title else R.string.chat_lora_only_title))
+            },
+            text = {
+                Text(stringResource(if (dmsOff) R.string.chat_lora_only_dms_off_body else R.string.chat_lora_only_body, state.title))
+            },
+            confirmButton = {
+                TextButton(onClick = { showLoraInfo = false }) {
+                    Text(stringResource(R.string.action_close))
+                }
+            },
+        )
+    }
+
     relayMarkerExplained?.let { cause ->
         // The peer's name makes the fallback concrete ("arrives when you and Ana are in range") rather
         // than abstract; in the room and in groups the title is already the collective noun.
@@ -926,6 +953,46 @@ private fun RelayNotice(
         ) {
             Icon(
                 imageVector = Icons.Filled.CloudOff,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(text = stringResource(label), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/**
+ * The standing statement that this DM's peer is reachable over the LoRa board alone, pinned under the
+ * header beside the relay notice. Renders nothing for [LoraReach.Silent]. The same `surfaceVariant` tint
+ * as [RelayNotice], for the same reason: nothing has failed — the message still goes, at SMS pace.
+ */
+@Composable
+private fun LoraNotice(
+    reach: LoraReach,
+    onClick: () -> Unit,
+) {
+    val label =
+        when (reach) {
+            LoraReach.LoraOnly -> R.string.chat_lora_only
+            LoraReach.LoraOnlyDmsOff -> R.string.chat_lora_only_dms_off
+            LoraReach.Silent -> return
+        }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().testTag("chat_lora_notice"),
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onClick, role = Role.Button)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Sensors,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
             )
@@ -2003,6 +2070,9 @@ private fun MessageInput(
     onReceiveImage: (Uri) -> Unit,
     onSend: () -> Unit,
     onTyping: () -> Unit = {},
+    // The LoRa body budget for this draft ([loraBudgetFor]), or null when it would not ride the board. Above
+    // it the composer shows the "long message" hint — a hedge, since the true ceiling is a little higher.
+    loraBudget: Int? = null,
     // Voice notes. Off in the broadcast room (see the call site). While `voiceRecording` is non-null the
     // whole input row is replaced by the recording bar — there is nothing useful to type mid-recording, and
     // leaving the field live would put the keyboard over the cancel affordance.
@@ -2161,6 +2231,24 @@ private fun MessageInput(
             if (replyingTo != null) {
                 ReplyPreview(replyTo = replyingTo, myNodeId = myNodeId, onCancel = onCancelReply)
                 Spacer(Modifier.height(8.dp))
+            }
+            if (loraBudget != null) {
+                // Derived so the row recomposes only when the draft crosses the budget, not per keystroke.
+                val overLora by remember(loraBudget) { derivedStateOf { LoraSizeHint.utf8Length(state.text) > loraBudget } }
+                if (overLora) {
+                    Text(
+                        text = stringResource(R.string.chat_lora_long_message),
+                        style = MaterialTheme.typography.bodySmall,
+                        // Not an error: the message still goes, over the phone radios — only the board is out.
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier =
+                            Modifier
+                                .padding(horizontal = 16.dp)
+                                .testTag("chat_lora_size_hint")
+                                .semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
             }
             // The mic is offered when the composer is otherwise idle, and *kept* for as long as a recording
             // it started is running — until it locks, at which point the stop button takes over the trailing

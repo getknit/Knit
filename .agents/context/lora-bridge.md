@@ -149,6 +149,31 @@ set_channel=33, begin_edit_settings=64, commit_edit_settings=65, session_passkey
 `Channel{ index=1, settings=2, role=3 }` (Role SECONDARY=2); `ChannelSettings{ psk=2, name=3 }`;
 `Data.want_response=3`.
 
+## UI surfaces (ADR 040)
+
+- **Per message.** A frame off the board is stored `DeliveryPlane.LoRa` (`messages.receivedVia = 5`; the
+  composite stamps `InboundFrame.kind`, `InboundPipeline.planeOf` maps it), and the receipt that flips our
+  ✓✓ over LoRa records the same. `ui/chat/DeliveryStatus.kt` paints `Icons.Filled.Sensors` beside the ✓✓
+  (`chat_tick_lora`) or on an arrival (`chat_arrived_lora`) with "Delivered over LoRa" / "Arrived over LoRa";
+  the message-details screen swaps the icon the same way. Inbound rows are first-write-wins
+  (`MessageDao.insertIfAbsent`), so a room post keeps the plane it first arrived on across re-serves.
+- **Header.** `LoraPlane { Off, Down, Live }` (`mesh/lora/LoraPlane.kt`) from `LoraStatusRepository.facts`
+  (pushed) → `ConnectionStatusRow(lora = …)`: `Icons.Outlined.Sensors` (Live, tertiary) / `SensorsOff` (Down)
+  after the cloud, spoken as "LoRa radio connected / not connected"; 45 s grace on the Down edge.
+- **LoRa radio screen.** `BondedBoardDirectory` marks each bonded device board-like (LE + `Meshtastic_xxxx` /
+  `<short>_xxxx` / the service UUID in cache); `BoardFilter.visible` lists those plus the bound board, with
+  "Show all paired devices" (`lora_show_all_boards`) for the rest; the list re-reads on resume
+  (`refreshBoards`). A connected board shows "Channel N · name" (`lora_channel_title`), a mismatch warning
+  (`lora_channel_warning`) when the slot is not `Knit`, firmware, and peers heard (`lora_peers_heard`). The
+  Profile row reads "On · <board> · connected / not connected".
+- **Chat.** `LoraNotice` (`chat_lora_notice`, `ui/chat/LoraReach.kt`) under the relay notice for a DM whose
+  peer only the board has heard (`peerTransports[peer] == {LoRa}`, plane live, not relay-covered), with a
+  DMs-off variant; the composer's "long message" hint (`chat_lora_size_hint`) when the draft exceeds
+  `LoraSizeHint`'s budget for its `LoraCarry` form (room 400 B, DM 320 B, −260 B replying, −170 B with a
+  photo; pinned in `CoordinationPlaneSizeBudgetTest`).
+- **Seam.** UI code reaches the transport only through `LoraPlaneStatus` (`status`, `provisionKnitChannel`),
+  bound to `LoraMeshTransport` under `BuildConfig.LORA_PLANE` and to `LoraPlaneStatus.Dark` otherwise.
+
 ## Board setup (once, Meshtastic CLI or app)
 
 Flash `firmware-heltec-v4-<ver>`; `--set lora.region <US|EU_868|…>`; `--set network.wifi_enabled false`;

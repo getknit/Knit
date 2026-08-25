@@ -23,9 +23,11 @@ import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
+import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.mesh.lora.LoraFacts
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.msg
@@ -130,6 +132,12 @@ class ChatViewModelTest {
         createdBy = "me",
         createdAt = 0L,
     )
+
+    /** The per-thread flows setUp stubs only for the room and the group — a DM thread needs its own. */
+    private fun stubDm(peerId: String) {
+        every { messages.observeMessages(peerId) } returns messagesFlow
+        every { groups.observeGroup(peerId) } returns groupFlow
+    }
 
     private fun vm(conversationId: String = Conversations.NEARBY) =
         ChatViewModel(
@@ -572,6 +580,47 @@ class ChatViewModelTest {
             advanceUntilIdle()
 
             coVerify { gallerySaver.saveToPictures(any(), "h", "image/jpeg") }
+        }
+
+    @Test
+    fun aDmReadsLoraOnlyWhenOnlyTheBoardHearsThePeer() =
+        runTest {
+            stubDm("ana")
+            loraFactsFlow.value = LoraFacts(LoraPlane.Live, dms = true)
+            mesh.peerTransports.value = mapOf("ana" to setOf(TransportKind.LoRa))
+            val vm = vm("ana")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            advanceUntilIdle()
+
+            assertEquals(LoraPlane.Live, vm.state.value.loraPlane)
+            assertEquals(LoraReach.LoraOnly, vm.state.value.loraReach)
+            assertEquals(LoraCarry.Dm, vm.state.value.loraCarry)
+
+            // Bluetooth hears them too: the notice goes quiet, the draft still rides LoRa.
+            mesh.peerTransports.value = mapOf("ana" to setOf(TransportKind.LoRa, TransportKind.Bluetooth))
+            advanceUntilIdle()
+            assertEquals(LoraReach.Silent, vm.state.value.loraReach)
+            assertEquals(LoraCarry.Dm, vm.state.value.loraCarry)
+        }
+
+    @Test
+    fun loraCarryFollowsThePlaneAndTheDmSwitch() =
+        runTest {
+            stubDm("ana")
+            loraFactsFlow.value = LoraFacts(LoraPlane.Live, dms = false)
+            mesh.peerTransports.value = mapOf("ana" to setOf(TransportKind.LoRa))
+            val vm = vm("ana")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            advanceUntilIdle()
+
+            assertEquals(LoraReach.LoraOnlyDmsOff, vm.state.value.loraReach)
+            assertEquals(LoraCarry.None, vm.state.value.loraCarry)
+
+            loraFactsFlow.value = LoraFacts(LoraPlane.Down, dms = true)
+            advanceUntilIdle()
+            assertEquals(LoraPlane.Down, vm.state.value.loraPlane)
+            assertEquals(LoraReach.Silent, vm.state.value.loraReach)
+            assertEquals(LoraCarry.None, vm.state.value.loraCarry)
         }
 
     private companion object {

@@ -1,21 +1,28 @@
-# LoRa bridge (Meshtastic over BLE) — the long-range Nearby-room plane
+# LoRa bridge (Meshtastic over BLE) — the long-range Nearby-room + DM plane
 
-How Knit carries **broadcast (Nearby-room) frames** over LoRa via a Meshtastic board attached over BLE.
-The design rationale is ADR 038; this file is the operational detail. Off by default, behind
-`BuildConfig.LORA_PLANE` (debug on, release/staging off, `-PloraPlane=true|false`).
+How Knit carries **broadcast (Nearby-room) frames and sealed 1:1 DMs** over LoRa via a Meshtastic board
+attached over BLE. The design rationale is ADR 038 (the plane) and ADR 039 (DMs); this file is the
+operational detail. Off by default, behind `BuildConfig.LORA_PLANE` (debug on, release/staging off,
+`-PloraPlane=true|false`).
 
 ## Shape
 
 `LoraMeshTransport` (`mesh/lora/`, pure) is a **fast-plane-only** `CompositeMeshTransport` child, added
 LAST (lowest send-preference). `neighbors` is always empty, so the flood / custody digest sync / keyreq /
 blob pulls never touch the ~1 kbps link — `send`/`sendFile`/`sendDigest` are no-ops. Only
-`fastFanout`/`fastSend` ride it, gated by `LoraFramePolicy`:
+`fastFanout`/`longRangeFanout`/`fastSend` ride it, gated by `LoraFramePolicy`:
 
-- **FANOUT**: broadcast `chat` + broadcast `reaction` (recipientId == null && group == null) + `profile`.
-- **TARGETED**: `receipt`, and `chat && !wire.relay && recipientId == to` (AckSync's sealed `CTL_RECEIPT`
-  tick — *not* a DM, which is always `relay = true`).
+- **FANOUT** (`fastFanout` — the composite's coordination-plane blast — and `longRangeFanout` — the seam
+  reserved for a plane with no data path, ADR 039; both land in one internal `fanout`): broadcast `chat` +
+  broadcast `reaction` (recipientId == null && group == null), `profile`, and **DM-form chat** (`chat &&
+  recipientId != null && group == null`, any `relay`). The DM form is admitted opaque: a DM, its sealed
+  receipt/reaction, a session reset, a group-key seed and an escalated group tick are wire-indistinguishable
+  and all ride. `shouldLongRangeFanout` (`mesh/FrameFanout.kt`) is what feeds it, from `originateSigned` and
+  `onDeliver` — never widen `shouldFastFanout` for this; that predicate is the NAN coordination plane's.
+- **TARGETED** (`fastSend`, unchanged): `receipt`, and `chat && !wire.relay && recipientId == to` (AckSync's
+  sealed `CTL_RECEIPT` tick — a flooded DM never rides this path, so no `fastSend` caller can widen it).
 
-Everything else (DM/group chat, group meta, `typing`, `blobreq`/`keyreq`) is refused.
+Everything else (group-form chat, `groupupdate`/`groupleave`, `typing`, `blobreq`/`keyreq`) is refused.
 
 Outbound decodes `wire.signed` only to apply the policy, then reuses `FastFrameCodec` (ADR 030) to
 compact/fragment: `sig`/`signed` pass through byte-exact, so this is **not a wire change** and the
@@ -27,7 +34,8 @@ custody / relay all run unchanged.
 ## The layers
 
 ```
-LoraMeshTransport (pure)      fastFanout/fastSend · LoraFramePolicy · LoraFrameCodec · LoraPacePolicy · reachable(45min linger)
+LoraMeshTransport (pure)      fastFanout/longRangeFanout/fastSend · LoraFramePolicy (+ isFresh) · LoraFrameCodec ·
+                              LoraPacePolicy (class shedding) · reachable(45min linger) · beacon + reofferTo on first hearing
   └─ MeshtasticLink (seam)    state / packets / outcomes / queue / rxQuality · suspend send()
        └─ MeshtasticSession   pure actor: want_config handshake · drain-until-empty on FromNum · 180s heartbeat ·
           (pure)              client packet ids ↔ queueStatus/NAK · reconnect-with-backoff (ConnectBackoffPolicy)
@@ -59,17 +67,62 @@ Golden byte vectors pin every field number; malformed input decodes to null, nev
 
 Two paths: (1) `MeshManager.watchReachable` already refloods our profile on a new `reachable` peer;
 (2) `LoraMeshTransport` beacons its own signed profile (`ProfileFrameSource` ← `MeshManager`) on
-session-up and on first hearing a peer, under a **5-min floor** (no periodic beacon). Both stamp the same
-floor. `PendingInbound` (~2 min) replays the parked chat once the profile pins the key. A **sig-keyed
+session-up under a **5-min floor** and on first hearing a peer under a **60-s gap** (one timestamp, two
+gaps — ADR 039 §8: a peer that just appeared has demonstrably never heard us, and without a periodic beacon
+this is the only way a late arrival learns our key). The composite's self-profile `fastFanout` shares the
+5-min floor. `PendingInbound` (~2 min) replays the parked chat once the profile pins the key. A **sig-keyed
 SeenSet** (first 8 B of `sig`, 10 min) recorded on send *and* receive stops re-fanning a LoRa-received
 frame and bounds AckSync's 24 h verbatim tick retries.
 
 ## Pacing
 
-`LoraPacePolicy` (pure): 3 s min inter-packet gap, 12-frame queue dropping the **oldest whole frame**
-(never a lone fragment), NAK back-off (rate/duty → gap ×2 for 60 s), hold while `queueFree == 0`. A
-profile is never dropped for pacing (it's the bootstrap). `BleConnectArbiter` lets the board dial pause the
-mesh BLE scan for its connect window (scanning starves connects).
+`LoraPacePolicy` (pure): 3 s min inter-packet gap, a 12-frame queue, NAK back-off (rate/duty → a 60 s
+cool-down), hold while `queueFree == 0`. When full the queue **sheds by class** (`FrameClass`: BOOTSTRAP >
+DM > ROOM): the oldest **whole** frame (never a lone fragment) of the lowest class present goes, the
+newcomer included — a room post alone at the bottom is `REFUSED` rather than evicting a DM, and nothing ever
+evicts the profile bootstrap. Dequeue stays FIFO. Both eviction and refusal count as `loraDroppedQueue`.
+
+**Freshness gate** (fan-out paths only, room included): a `chat`/`reaction` whose `sentAt` is more than
+15 min old (`LoraFramePolicy.FRESH_MS`) is a custody re-serve and is not fanned — without it a newcomer's
+whole backfill re-fanned over the air, twelve frames at a time. Profiles (publish-stamped `sentAt`) and
+receipts are exempt, as are the targeted path (AckSync's verbatim retries) and the re-offer. It reads the
+injected `wallClock` (epoch) — the transport's `clock` is `elapsedRealtime` and is not comparable to a
+frame's `sentAt`. Counted with the sig-window rejections under `loraSuppressed`. `BleConnectArbiter` lets
+the board dial pause the mesh BLE scan for its connect window (scanning starves connects).
+
+## DMs (ADR 039)
+
+A 1:1 DM rides as its ordinary sealed frame — nothing is re-encoded, the signature verifies unchanged, and
+the far side needs only the pinned profile (key + `CAP_RATCHET` + prekey) the beacon already carries; X3DH
+attaches its init to every frame until the first reply, so no round trip is needed. The epoch ratchet
+tolerates a lossy hop by design (independent epochs, ≤ 200 skipped keys per epoch). Sizes
+(`CoordinationPlaneSizeBudgetTest.sealedDmsFitTheLoraHop`): a 100-char DM compacts to **387 B** steady-state
+and **439 B** with the init — 2 packets either way; the 3-packet ceiling (687 B) is ≈ 400 characters steady /
+≈ 335 with the init; an attachment *reference* costs ~167 B more and still fits; a `TextLimits.MESSAGE`-length
+DM is `loraTooBig` and rides the radios/custody. The ✓✓ is the recipient's sealed `CTL_RECEIPT` — a DM-form
+frame originated `relay = true`, so it crosses back on the same rule, and it re-runs on every re-delivery via
+the pre-decrypt exists-gate (which is how a tick lost over LoRa heals when the DM is re-offered).
+
+**Re-offer on first hearing.** The plane has no custody sync, so a DM sent while the peer's board was off
+would be lost to it. On first hearing a peer (once per 45-min linger), after the beacon, the transport pulls
+`FarPeerFrameSource.framesFor(peer)` (`MeshManager`: the newest 4 live custody frames addressed to the peer
+via `ForwardStore.liveFramesTo`, minus our own frames it already acked via `MessageDao.unackedDmsTo`),
+re-wraps them verbatim and enqueues them class DM through a private path (`reofferTo`). Skipped for a peer
+another plane carries (`foreignReachable`) — custody syncs to it for real there. Bounded: ≤ 4 frames × ≤ 3
+packets per sighting; a frame fanned inside the sig window is skipped. Counted as `loraReoffered`.
+
+**What still doesn't cross:** group chat (group-form frames are refused; sealed group *machinery* — seeds,
+key req/ack, escalated ticks — crosses opaquely and is bounded by the group logic), `typing`, attachment
+bytes (a DM with an image arrives as text plus a loading placeholder until a radio/spool path exists —
+`blobreq` never rides LoRa; `AttachmentDeferPolicy` already ignores LoRa sightings), and DMs beyond the
+size ceiling. A board-less recipient behind another board-holder gets live DMs via that phone's relay but
+no re-offer (no routing table). Airtime is SMS pace: ~2 packets per DM plus ~2 per receipt at ~2.5 s each.
+
+**Metadata.** Content stays end-to-end sealed, but a DM's cleartext `senderId`/`recipientId`, timing and
+size now travel on the public-PSK rendezvous channel at kilometre range. `SettingsStore.loraDmEnabled`
+(default **on**, the "Private messages over LoRa" switch on the LoRa radio screen, `…debug.LORA --ez dms`)
+rides into `LoraConfig.dms`; off, the transport refuses DM-form on fan-out and skips the re-offer while the
+room keeps riding. Each side gates its own sends. The confidentiality fix remains the deferred private PSK.
 
 ## Channel provisioning (Knit writes its own channel)
 
@@ -121,6 +174,13 @@ Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.me
   ✓✓ (sealed tick over LoRa); a reaction crosses. Move B out of BLE/NAN range and repeat. Counters:
   `loraSent/loraReceived/loraReassembled` climb, `loraNak == 0`, `loraDroppedQueue == 0` at chat pace,
   `loraTooBig` only for long posts. Diagnostics tags a LoRa-reachable node `LoRa`.
+- DM (ADR 039): `…debug.SEND --es conv <peerId> --es text …` on A → appears on B within ~10 s; A's tick
+  flips ✓✓ (the sealed receipt crossed back); `loraDmSent`/`loraDmReceived` climb on both, `loraTooBig == 0`.
+  Reply from B (turnaround epoch) and a DM reaction cross; a 500-char DM counts `loraTooBig` and lands later
+  over BLE. Power B's board off, send two DMs from A, power it on → B beacons, A logs `reoffer` ×2, both land,
+  ✓✓ returns, `loraReoffered == 2`. `…debug.LORA --ez dms false` on A → a new DM stays LoRa-silent
+  (`loraDmSent` flat) while a room post crosses. Rejoin a BLE clique after an hour of history:
+  `loraSuppressed` climbs, `loraDroppedQueue` stays 0.
 
 ## First-session unknowns to confirm (assumptions, not blockers)
 

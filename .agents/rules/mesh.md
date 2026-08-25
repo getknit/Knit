@@ -18,8 +18,10 @@ behind each lives in `context/mesh-transport.md`, `context/wire-format.md`, and
 - Everything above the transport talks only to the `MeshTransport` interface; `CompositeMeshTransport`
   runs every radio at once behind that seam (Bluetooth preferred, Wi-Fi Aware second, LoRa last), so
   orchestration (`MeshManager`/`MeshRouter`) is unchanged and another sibling transport drops in the same
-  way — the LoRa plane (ADR 038) is a fast-plane-only child, `neighbors` always empty, that carries only the
-  broadcast subset. `MeshTransport.shortRange` (LoRa = false) tells the composite a sighting doesn't imply
+  way — the LoRa plane (ADR 038) is a fast-plane-only child, `neighbors` always empty, that carries the
+  broadcast subset plus sealed DM-form chat, the latter through `MeshTransport.longRangeFanout` — the seam
+  reserved for a plane with no data path (ADR 039; never widen `shouldFastFanout` for it, that is the NAN
+  coordination plane). `MeshTransport.shortRange` (LoRa = false) tells the composite a sighting doesn't imply
   proximity, so it's excluded from the foreign-reachable union and from `shortRangeReachable`. The socket
   record codec (`mesh/link/LinkFraming`) is transport-neutral and shared by the NAN NDP socket and the BLE
   L2CAP socket.

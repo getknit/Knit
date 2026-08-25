@@ -28,9 +28,9 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   `.agents/context/wire-format.md` (CBOR wire), `.agents/context/store-and-forward.md` (custody /
   convergence), `.agents/context/e2e-encryption.md` (crypto).
 - **When touching `mesh/lora/` or `mesh/bluetooth/meshtastic/` (the LoRa/Meshtastic bridge):** READ
-  `.agents/context/lora-bridge.md` — a Meshtastic board over BLE GATT extends the **Nearby room** over
-  LoRa as a fast-plane-only `MeshTransport` child, off by default behind `BuildConfig.LORA_PLANE`
-  (ADR 038). `mesh/lora/` is pure/JVM-tested; the only `android.bluetooth.*` importer is
+  `.agents/context/lora-bridge.md` — a Meshtastic board over BLE GATT extends the **Nearby room and 1:1
+  DMs** over LoRa as a fast-plane-only `MeshTransport` child, off by default behind `BuildConfig.LORA_PLANE`
+  (ADR 038 + 039). `mesh/lora/` is pure/JVM-tested; the only `android.bluetooth.*` importer is
   `mesh/bluetooth/meshtastic/MeshtasticGatt`.
 - **When touching `mesh/crypto/scope/`, `mesh/spool/`, or the spool/internet-relay plane:** READ
   `docs/SPOOL_PROTOCOL.md` (the normative public spec; its §13 vectors are pinned by

@@ -30,6 +30,8 @@ enum class LoraProvisionOutcome { Provisioned, AlreadyPresent, NoFreeSlot, Faile
 
 data class LoraRadioUiState(
     val enabled: Boolean = false,
+    /** Whether private messages ride LoRa too (`SettingsStore.loraDmEnabled`; meaningful only while [enabled]). */
+    val dmEnabled: Boolean = true,
     val boardName: String? = null,
     val boardAddress: String? = null,
     val channel: Int = 0,
@@ -58,15 +60,16 @@ internal class LoraRadioViewModel(
 
     val state: StateFlow<LoraRadioUiState> =
         combine(
-            settings.loraEnabled,
+            combine(settings.loraEnabled, settings.loraDmEnabled) { on, dms -> on to dms },
             settings.loraDeviceAddress,
             settings.loraChannelIndex,
             lora.status,
             provisionState,
-        ) { enabled, address, channel, status, provision ->
+        ) { (enabled, dmEnabled), address, channel, status, provision ->
             val bonded = runCatching { boards.bonded() }.getOrDefault(emptyList())
             LoraRadioUiState(
                 enabled = enabled,
+                dmEnabled = dmEnabled,
                 boardName = bonded.firstOrNull { it.address == address }?.name ?: address,
                 boardAddress = address,
                 channel = channel,
@@ -83,6 +86,10 @@ internal class LoraRadioViewModel(
 
     fun onToggle(on: Boolean) {
         viewModelScope.launch { settings.setLoraEnabled(on) }
+    }
+
+    fun onToggleDms(on: Boolean) {
+        viewModelScope.launch { settings.setLoraDmEnabled(on) }
     }
 
     fun pickBoard(board: BoardOption) {

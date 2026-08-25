@@ -147,9 +147,12 @@ val meshModule =
                 selfId = { get<app.getknit.knit.identity.Identity>().nodeId() },
                 link = get(),
                 config =
-                    combine(settings.loraEnabled, settings.loraDeviceAddress, settings.loraChannelIndex) { on, addr, ch ->
-                        if (on && addr != null) LoraConfig(addr, ch) else null
-                    },
+                    combine(
+                        settings.loraEnabled,
+                        settings.loraDeviceAddress,
+                        settings.loraChannelIndex,
+                        settings.loraDmEnabled,
+                    ) { on, addr, ch, dms -> if (on && addr != null) LoraConfig(addr, ch, dms) else null },
                 selfProfile = { get<ProfileFrameSource>().signedProfile() },
                 farFrames = { get<FarPeerFrameSource>().framesFor(it) },
                 scope = get(),

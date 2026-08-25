@@ -58,6 +58,7 @@ fun LoraRadioScreen(onBack: () -> Unit) {
         state = state,
         onBack = onBack,
         onToggle = viewModel::onToggle,
+        onToggleDms = viewModel::onToggleDms,
         onPickBoard = viewModel::pickBoard,
         onForgetBoard = viewModel::forgetBoard,
         onSetChannel = viewModel::setChannel,
@@ -72,6 +73,7 @@ internal fun LoraRadioScreenContent(
     state: LoraRadioUiState,
     onBack: () -> Unit,
     onToggle: (Boolean) -> Unit,
+    onToggleDms: (Boolean) -> Unit = {},
     onPickBoard: (BoardOption) -> Unit = {},
     onForgetBoard: () -> Unit = {},
     onSetChannel: (Int) -> Unit = {},
@@ -107,6 +109,7 @@ internal fun LoraRadioScreenContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            DmSwitchRow(enabled = state.dmEnabled, active = state.enabled, onToggle = onToggleDms)
 
             Text(
                 text = stringResource(R.string.lora_board_section),
@@ -179,6 +182,37 @@ private fun MasterSwitchRow(
         }
         Spacer(Modifier.width(12.dp))
         Switch(checked = enabled, onCheckedChange = null)
+    }
+}
+
+/**
+ * The private-messages switch (ADR 039): DMs stay end-to-end encrypted over LoRa, but their metadata becomes
+ * visible at kilometre range, so the user can keep them on the phone radios. Inert while the plane is off.
+ */
+@Composable
+private fun DmSwitchRow(
+    enabled: Boolean,
+    active: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .toggleable(value = enabled, enabled = active, onValueChange = onToggle, role = Role.Switch)
+                .testTag("lora_dm_switch"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.lora_dm_title), style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = stringResource(R.string.lora_dm_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = enabled, onCheckedChange = null, enabled = active)
     }
 }
 

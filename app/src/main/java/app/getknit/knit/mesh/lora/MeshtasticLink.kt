@@ -193,4 +193,6 @@ internal data class PacketOutcome(
 internal data class LoraConfig(
     val address: String,
     val channelIndex: Int,
+    /** Whether sealed DM-form chat may ride this plane (`SettingsStore.loraDmEnabled`, ADR 039); the room always does. */
+    val dms: Boolean = true,
 )

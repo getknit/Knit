@@ -466,8 +466,10 @@
     <!-- LoRa (Meshtastic-over-BLE) radio settings -->
     <string name="lora_title">LoRa radio</string>
     <string name="settings_lora_title">Use a LoRa radio</string>
-    <string name="settings_lora_subtitle">Extend the reach of the Nearby room over long-range LoRa by pairing a Meshtastic board over Bluetooth. Only broadcast (Nearby) messages travel over LoRa.</string>
-    <string name="lora_off_note">Turning this off closes the board connection. Direct messages and groups never travel over LoRa.</string>
+    <string name="settings_lora_subtitle">Extend the reach of the Nearby room and your private messages over long-range LoRa by pairing a Meshtastic board over Bluetooth. Groups, typing and photos stay on the phone-to-phone radios.</string>
+    <string name="lora_off_note">Turning this off closes the board connection. Groups and attachments never travel over LoRa.</string>
+    <string name="lora_dm_title">Private messages over LoRa</string>
+    <string name="lora_dm_subtitle">Direct messages stay end-to-end encrypted, but who is messaging whom, and when, is visible to any LoRa radio in range — kilometres, not metres. Turn this off to keep private messages on the phone-to-phone radios.</string>
     <string name="lora_board_section">Board</string>
     <string name="lora_board_none">No paired Meshtastic boards found. Pair one in Bluetooth settings first (the board shows a PIN on its screen).</string>
     <string name="lora_open_settings">Open Bluetooth settings</string>

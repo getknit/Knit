@@ -179,6 +179,16 @@ class SettingsStore(
     val loraEnabled: Flow<Boolean> =
         dataStore.data.map { BuildConfig.LORA_PLANE && (it[KEY_LORA_ENABLED] ?: false) }
 
+    /**
+     * Whether sealed 1:1 DMs may ride the LoRa plane (ADR 039) — **default on** whenever the plane is on. The
+     * content stays end-to-end encrypted either way; what this controls is metadata exposure: on a public-PSK
+     * rendezvous channel a DM's sender/recipient ids, timing and size are visible to any LoRa radio in range
+     * (kilometres, where the phone radios exposed them at tens of metres). Off keeps DMs on the radios and the
+     * spool while the Nearby room keeps riding LoRa. Gated on `BuildConfig.LORA_PLANE` like [loraEnabled].
+     */
+    val loraDmEnabled: Flow<Boolean> =
+        dataStore.data.map { BuildConfig.LORA_PLANE && (it[KEY_LORA_DM_ENABLED] ?: true) }
+
     /** The bonded Meshtastic board's MAC address the LoRa plane binds to, or null if none is chosen. */
     val loraDeviceAddress: Flow<String?> = dataStore.data.map { it[KEY_LORA_ADDRESS] }
 
@@ -268,6 +278,8 @@ class SettingsStore(
     suspend fun setSpoolEnabled(value: Boolean) = dataStore.edit { it[KEY_SPOOL_ENABLED] = value }
 
     suspend fun setLoraEnabled(value: Boolean) = dataStore.edit { it[KEY_LORA_ENABLED] = value }
+
+    suspend fun setLoraDmEnabled(value: Boolean) = dataStore.edit { it[KEY_LORA_DM_ENABLED] = value }
 
     /** Records the chosen board's address + name in one write so the row can never show a name without an address. */
     suspend fun setLoraDevice(
@@ -384,6 +396,7 @@ class SettingsStore(
         val KEY_SPOOL_SEEDED = booleanPreferencesKey("spool_defaults_seeded")
         val KEY_SPOOL_CONSENTED = booleanPreferencesKey("spool_consented")
         val KEY_LORA_ENABLED = booleanPreferencesKey("lora_enabled")
+        val KEY_LORA_DM_ENABLED = booleanPreferencesKey("lora_dm_enabled")
         val KEY_LORA_ADDRESS = stringPreferencesKey("lora_device_address")
         val KEY_LORA_NAME = stringPreferencesKey("lora_device_name")
         val KEY_LORA_CHANNEL = intPreferencesKey("lora_channel_index")

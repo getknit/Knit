@@ -337,8 +337,8 @@ paid tiers, or subscriptions; development is funded entirely by optional tips (s
 Knit runs **two radios at once** (Wi-Fi Aware + Bluetooth LE) behind a single transport seam, has **no
 Google Play services dependency**, end-to-end encrypts DMs and groups, and needs no dedicated hardware
 (unlike Meshtastic's LoRa radios) — just an Android phone. The two are complementary rather than rivals:
-Knit can *optionally* pair a Meshtastic board over Bluetooth to relay its **Nearby room** across long-range
-LoRa, extending reach beyond phone-to-phone range (off by default; a preview).
+Knit can *optionally* pair a Meshtastic board over Bluetooth to relay its **Nearby room and 1:1 messages**
+across long-range LoRa, extending reach beyond phone-to-phone range (off by default; a preview).
 
 ## 📚 Documentation
 

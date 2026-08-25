@@ -183,6 +183,7 @@ internal class LoraMeshTransport(
             return
         }
         if (!LoraFramePolicy.eligible(env, wire, LoraFramePolicy.Path.FANOUT)) return
+        if (LoraFramePolicy.isDmForm(env) && currentConfig?.dms != true) return // the user keeps DMs off this plane
         if (!LoraFramePolicy.isFresh(env, wallClock())) {
             metrics.onLoraSuppressed() // a custody re-serve of an old frame — custody's business, not a live plane's
             return
@@ -275,7 +276,7 @@ internal class LoraMeshTransport(
      * carries — it gets custody's real digest sync there.
      */
     private suspend fun reofferTo(peer: Peer) {
-        if (peer.nodeId in foreignReachable) return
+        if (currentConfig?.dms != true || peer.nodeId in foreignReachable) return
         farFrames(peer.nodeId).forEach { wire -> reofferOne(wire, peer.nodeId) }
     }
 

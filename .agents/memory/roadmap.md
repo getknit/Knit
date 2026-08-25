@@ -38,17 +38,25 @@ doc). **Don't start a deferred item without explicit direction.**
   It gates the LoRa child in `CompositeMeshTransport`, the `lora` settings route + Profile row, and
   `SettingsStore.loraEnabled`. The code is **not** stripped (R8 prunes the `if (LORA_PLANE)` branches).
   MVP shipped: `mesh/lora/` (pure, JVM-tested end-to-end over a fake board/air) + `mesh/bluetooth/meshtastic/`
-  (the GATT client, device-verified only). Carries only the Nearby-room broadcast subset (chat, reaction,
-  ✓✓ tick, profile); DM/group/typing/files refused. **Still owed:** the **two-phone device trial** (pair
-  both boards, verify a Nearby post + ✓✓ + reaction cross when the phones are out of BLE/NAN range) — the
-  GATT layer has no host test. **Knit-provisioned channel SHIPPED** (2026-08-24): "Set up Knit channel" (or
-  `…debug.LORAPROV`) writes the derived `KnitChannel` as a secondary channel over the Meshtastic admin API —
-  the user no longer hand-configures the boards; region/modem-preset still set once at flash. Still deferred:
-  a **user-set/shared private PSK** (the shipped channel is a public rendezvous, right for the cleartext
-  Nearby room; a confidential channel would need out-of-band PSK sharing — QR/URL), **DM-over-LoRa**, a
-  **periodic self-profile beacon**, **multi-board-per-clique dedup** (one board per clique for now), and a
-  **long-post UI hint** (posts over ~500 chars are LoRa-invisible, counted `loraTooBig`, with no bubble
-  marker). See `context/lora-bridge.md`.
+  (the GATT client, device-verified only). Carries the Nearby-room broadcast subset (chat, reaction, ✓✓ tick,
+  profile) and, since ADR 039 (2026-08-24), **sealed 1:1 DMs** — the whole DM form, receipts/reactions/ctl
+  included — via `MeshTransport.longRangeFanout`, with class-aware queue shedding, a 15-min freshness gate,
+  a bounded re-offer of carried DMs to a peer first heard, and a default-on `loraDmEnabled` switch (the
+  metadata-exposure control). Group chat/meta, typing and files stay refused. **Still owed:** the
+  **two-phone device trial** (pair both boards, verify a Nearby post + ✓✓ + reaction cross, then a DM + its
+  ✓✓ + a reply, and a DM sent while the far board was off landing via the re-offer once it returns — all
+  with the phones out of BLE/NAN range) — the GATT layer has no host test. **Knit-provisioned channel
+  SHIPPED** (2026-08-24): "Set up Knit channel" (or `…debug.LORAPROV`) writes the derived `KnitChannel` as a
+  secondary channel over the Meshtastic admin API — the user no longer hand-configures the boards;
+  region/modem-preset still set once at flash. Still deferred: a **user-set/shared private PSK** (the shipped
+  channel is a public rendezvous; with DMs aboard it is also what would hide their metadata — needs
+  out-of-band PSK sharing, QR/URL), a **periodic self-profile beacon** (a peer that only listens never
+  triggers a beacon exchange or a re-offer), **Meshtastic unicast + `want_ack`** for DMs (needs a
+  nodeNum↔nodeId map and a Routing `NONE`-is-success branch), **re-offer beyond the heard peer** (a
+  board-less recipient behind another board-holder — the "true DM routing" deferral),
+  **multi-board-per-clique dedup** (one board per clique for now), and a **long-post UI hint** (room posts
+  over ~500 chars and DMs over ~400 are LoRa-invisible, counted `loraTooBig`, with no bubble marker). See
+  `context/lora-bridge.md`.
 
 - **The spool plane is hidden in shipped builds** (2026-08-22, ADR 031) — `BuildConfig.INTERNET_PLANE`
   is true in debug, false in release/staging, `-PinternetPlane=true|false` overrides. It gates

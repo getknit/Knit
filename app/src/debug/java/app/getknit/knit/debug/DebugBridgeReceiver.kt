@@ -996,7 +996,8 @@ class DebugBridgeReceiver :
     /**
      * Configures and inspects the LoRa (Meshtastic) plane — the only way to drive it on a locked lab
      * device. `--es address <MAC>` + `--es name <n>` binds a bonded board, `--ei channel <idx>` sets the
-     * channel index, `--ez on <true|false>` flips the switch; no extras just dumps status. The reply's
+     * channel index, `--ez on <true|false>` flips the switch, `--ez dms <true|false>` the private-messages
+     * switch (ADR 039); no extras just dumps status. The reply's
      * `state`/`heard`/counters are the field oracle for the two-board range trial.
      */
     private suspend fun handleLora(intent: Intent): JSONObject {
@@ -1004,11 +1005,13 @@ class DebugBridgeReceiver :
         if (address != null) settings.setLoraDevice(address.trim(), intent.getStringExtra("name")?.trim() ?: address.trim())
         if (intent.hasExtra("channel")) settings.setLoraChannelIndex(intent.getIntExtra("channel", 0))
         if (intent.hasExtra(EXTRA_ON)) settings.setLoraEnabled(intent.getBooleanExtra(EXTRA_ON, false))
+        if (intent.hasExtra("dms")) settings.setLoraDmEnabled(intent.getBooleanExtra("dms", true))
 
         val status = lora.status.value
         return JSONObject()
             .put("status", "ok")
             .put("enabled", settings.loraEnabled.first())
+            .put("dms", settings.loraDmEnabled.first())
             .put("address", settings.loraDeviceAddress.first() ?: JSONObject.NULL)
             .put("channel", settings.loraChannelIndex.first())
             .put("state", status.state::class.simpleName)

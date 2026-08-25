@@ -333,6 +333,45 @@ class LoraMeshTransportTest {
         }
 
     @Test
+    fun withDmsOffTheRoomStillRidesButDmsAndReoffersDoNot() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val asked = mutableListOf<String>()
+            val a =
+                rig(
+                    air,
+                    1u,
+                    "alice",
+                    backgroundScope,
+                    config = MutableStateFlow(LoraConfig("AA:1", 0, dms = false)),
+                    farFrames = { peer ->
+                        asked += peer
+                        listOf(frame(FrameType.CHAT, "alice", recipientId = "bob"))
+                    },
+                ) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            val baseline = a.link.sent.size
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "private"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("a DM stays off the plane", baseline, a.link.sent.size)
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "room post"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("the room keeps riding", baseline + 1, a.link.sent.size)
+
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            b.transport.start()
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertTrue("no re-offer either", asked.isEmpty())
+            assertEquals(0L, a.metrics.snapshot().loraDmSent)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    @Test
     fun aReofferIsSkippedForAPeerAnotherPlaneAlreadyCarries() =
         runTest {
             val air = FakeMeshtasticAir()

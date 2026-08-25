@@ -91,4 +91,31 @@ class RadioWarningTest {
             ),
         )
     }
+
+    @Test
+    fun disabledLoraChildRaisesNoBannerWhileANamedRadioIsUp() {
+        // A LoRa plane that is off/unpaired reports Unavailable; with a named radio up, that must not warn
+        // (LoRa is opt-in, not a radio the user forgot to switch on).
+        assertNull(
+            radioWarningFor(
+                listOf(
+                    status(TransportKind.Bluetooth, TransportHealth.Healthy),
+                    status(TransportKind.LoRa, TransportHealth.Unavailable),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun everyRadioOffIncludingLoraIsAllRadiosOff() {
+        assertEquals(
+            RadioWarning.AllRadiosOff,
+            radioWarningFor(
+                listOf(
+                    status(TransportKind.Bluetooth, TransportHealth.Unavailable),
+                    status(TransportKind.LoRa, TransportHealth.Unavailable),
+                ),
+            ),
+        )
+    }
 }

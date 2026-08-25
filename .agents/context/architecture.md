@@ -35,8 +35,12 @@ mesh/crypto/   E2E (Tink): MessageCrypto (per-msg seal/open) · PublicKeyBundle 
 mesh/wifiaware/ WifiAwareTransport — the ONLY place that imports android.net.wifi.aware.* · pure
                JVM-tested policies: NanConnectPolicy/NanServePolicy/NanSyncPolicy (sync-owed folds)
                /NanWatchdogPolicy (wedge episode clock)/NanCueCodec (cue/SSI codec)
-mesh/bluetooth/ BluetoothMeshTransport (BLE advertise/scan + persistent L2CAP links) — the ONLY place
-               that imports android.bluetooth.* · ScanDemandPolicy/PromotionPolicy/ConnectBackoffPolicy
+mesh/bluetooth/ BluetoothMeshTransport (BLE advertise/scan + persistent L2CAP links) · the
+               android.bluetooth.* boundary (Meshtastic GATT client at bluetooth/meshtastic/) ·
+               ScanDemandPolicy/PromotionPolicy/ConnectBackoffPolicy/BleConnectArbiter
+mesh/lora/     LoraMeshTransport — fast-plane-only child carrying the Nearby-room broadcast subset over a
+               Meshtastic board (off by default, BuildConfig.LORA_PLANE, ADR 038) · pure JVM-tested
+               MeshtasticSession/MeshtasticProto/LoraFramePolicy/LoraPacePolicy over the MeshtasticLink seam
 moderation/    on-device TextModerator (LexicalTextFilter + MlTextModerator) + ImageModerator
                (NsfwImageModerator) + ImageScreeningService (screens image blobs, caches NSFW
                verdicts — pulled out of BlobRepository) · ModelLoadGuard/ModelLoadPolicy (poison-pill:

@@ -34,6 +34,7 @@ import app.getknit.knit.ui.diagnostics.CrashLogScreen
 import app.getknit.knit.ui.diagnostics.DiagnosticsScreen
 import app.getknit.knit.ui.donate.DonateScreen
 import app.getknit.knit.ui.group.GroupDetailsScreen
+import app.getknit.knit.ui.lora.LoraRadioScreen
 import app.getknit.knit.ui.onboarding.OnboardingScreen
 import app.getknit.knit.ui.profile.ProfileDetailsScreen
 import app.getknit.knit.ui.profile.ProfileScreen
@@ -58,6 +59,7 @@ private object Routes {
     const val DONATE = "donate"
     const val VERIFY = "verify"
     const val INTERNET_RELAYS = "relays"
+    const val LORA_RADIO = "lora"
     const val SHARE = "share"
     const val CHAT = "chat/{conversationId}"
 
@@ -288,6 +290,7 @@ fun KnitApp(startRoute: String? = null) {
             ProfileScreen(
                 onBack = { navController.popBackStack() },
                 onOpenRelays = { navController.navigate(Routes.INTERNET_RELAYS) },
+                onOpenLora = { navController.navigate(Routes.LORA_RADIO) },
             )
         }
         // The Internet-relay plane's editor exists only in builds that introduce the feature — the route
@@ -297,6 +300,13 @@ fun KnitApp(startRoute: String? = null) {
         if (BuildConfig.INTERNET_PLANE) {
             composable(Routes.INTERNET_RELAYS) {
                 InternetRelayScreen(onBack = { navController.popBackStack() })
+            }
+        }
+        // The LoRa radio screen exists only in builds that introduce the feature; the route is not
+        // registered when the flag is off, and Profile hides its row on the same flag.
+        if (BuildConfig.LORA_PLANE) {
+            composable(Routes.LORA_RADIO) {
+                LoraRadioScreen(onBack = { navController.popBackStack() })
             }
         }
         composable(Routes.DIAGNOSTICS) {

@@ -8,6 +8,8 @@ import app.getknit.knit.mesh.crypto.TinkInit
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.link.FastFrameCodec
+import app.getknit.knit.mesh.lora.LoraFrameCodec
+import app.getknit.knit.mesh.lora.MeshtasticProto
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
@@ -385,6 +387,69 @@ class CoordinationPlaneSizeBudgetTest {
             753,
             FastFrameCodec.MAX_PARTS * (WifiAwareTransport.COORD_MSG_MAX - FastFrameCodec.FRAG_HEADER_BYTES),
         )
+    }
+
+    /** A plaintext Nearby-room chat (both addressing fields null) — the frame LoRa exists to carry. */
+    private fun broadcastChat(
+        alice: Party,
+        body: String,
+    ): WireEnvelope =
+        alice.sign(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = FrameId.new(),
+                senderId = alice.nodeId,
+                sentAt = SENT_AT,
+                payload = WireCodec.encodePayload(ChatContent(body = body)),
+            ),
+        )
+
+    // --- budgets: the LoRa hop (Meshtastic Data.payload cap = 233 B, <= 3 fragments) ---
+
+    /** Part count for [wire] on the LoRa hop, or null when no encoding fits <= 3 fragments. */
+    private fun loraParts(wire: WireEnvelope): Int? = LoraFrameCodec.encode(wire, fragId = 1)?.size
+
+    @Test
+    fun broadcastChatFitsTheLoraHop() {
+        val alice = party()
+        val short = checkNotNull(loraParts(broadcastChat(alice, "See you at the north gate"))) { "40-char room chat must fit" }
+        val long = checkNotNull(loraParts(broadcastChat(alice, "x".repeat(200)))) { "200-char room chat must fit" }
+        assertTrue("a short room post fits one LoRa packet", short == 1)
+        assertTrue("a 200-char room post fits <= 3 LoRa packets", long <= FastFrameCodec.MAX_PARTS)
+    }
+
+    @Test
+    fun cleartextMetadataFitsOneLoraPacket() {
+        val alice = party()
+        assertEquals(1, loraParts(cleartextReceipt(alice)))
+        assertEquals(1, loraParts(cleartextReaction(alice)))
+    }
+
+    @Test
+    fun theProfileBootstrapFitsTheLoraHop() {
+        val alice = party()
+        val parts =
+            checkNotNull(loraParts(fullProfile(alice, RatchetCrypto.generateKeyPair()))) {
+                "the profile is the key bootstrap — it MUST fit <= 3 LoRa packets or first contact never verifies"
+            }
+        assertTrue("profile in <= 3 LoRa packets (was $parts)", parts <= FastFrameCodec.MAX_PARTS)
+    }
+
+    @Test
+    fun aSealedTickFitsTheLoraHop() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        sealer.confirm()
+        val tick = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, ack = FrameId.new()), relay = false)
+        val parts = checkNotNull(loraParts(tick)) { "a single sealed tick must fit the LoRa hop" }
+        assertTrue("sealed tick in <= 3 LoRa packets (was $parts)", parts <= FastFrameCodec.MAX_PARTS)
+    }
+
+    @Test
+    fun loraFragmentCeilingArithmetic() {
+        // 3 parts x (233-B payload - 4-B fragment header) is the most any compact frame can carry over LoRa.
+        assertEquals(687, FastFrameCodec.MAX_PARTS * (MeshtasticProto.MAX_PAYLOAD - FastFrameCodec.FRAG_HEADER_BYTES))
     }
 
     private companion object {

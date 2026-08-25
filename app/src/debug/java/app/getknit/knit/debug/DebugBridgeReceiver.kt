@@ -148,6 +148,8 @@ class DebugBridgeReceiver :
     private val exits: ProcessExitReasons by inject()
     private val notifier: Notifier by inject()
     private val scope: CoroutineScope by inject()
+    private val lora: app.getknit.knit.mesh.lora.LoraMeshTransport by inject()
+    private val loraLink: app.getknit.knit.mesh.lora.MeshtasticLink by inject()
 
     override fun onReceive(
         context: Context,
@@ -227,6 +229,14 @@ class DebugBridgeReceiver :
 
                         ACTION_RATCHET -> {
                             handleRatchet(intent)
+                        }
+
+                        ACTION_LORA -> {
+                            handleLora(intent)
+                        }
+
+                        ACTION_LORATX -> {
+                            handleLoraTx(intent)
                         }
 
                         ACTION_HEAL -> {
@@ -856,6 +866,15 @@ class DebugBridgeReceiver :
             // The two-island photo trial reads as `spoolAttachDeferred` climbing while the devices are
             // together and `spoolAttachPushed` starting within a heal round of separating them.
             .put("spoolAttachDeferred", snap.spoolAttachDeferred)
+            .put("loraSent", snap.loraSent)
+            .put("loraFragSent", snap.loraFragSent)
+            .put("loraReceived", snap.loraReceived)
+            .put("loraReassembled", snap.loraReassembled)
+            .put("loraTooBig", snap.loraTooBig)
+            .put("loraDroppedQueue", snap.loraDroppedQueue)
+            .put("loraSuppressed", snap.loraSuppressed)
+            .put("loraNak", snap.loraNak)
+            .put("loraSessionUps", snap.loraSessionUps)
 
     /**
      * Dumps the DM ratchet's per-peer state and, with `--es reset <peerNodeId>`, forces a session reset
@@ -967,6 +986,45 @@ class DebugBridgeReceiver :
             .put("counters", metricsJson(metrics.snapshot()))
     }
 
+    /**
+     * Configures and inspects the LoRa (Meshtastic) plane — the only way to drive it on a locked lab
+     * device. `--es address <MAC>` + `--es name <n>` binds a bonded board, `--ei channel <idx>` sets the
+     * channel index, `--ez on <true|false>` flips the switch; no extras just dumps status. The reply's
+     * `state`/`heard`/counters are the field oracle for the two-board range trial.
+     */
+    private suspend fun handleLora(intent: Intent): JSONObject {
+        val address = intent.getStringExtra(EXTRA_ADDRESS)?.takeIf { it.isNotBlank() }
+        if (address != null) settings.setLoraDevice(address.trim(), intent.getStringExtra("name")?.trim() ?: address.trim())
+        if (intent.hasExtra("channel")) settings.setLoraChannelIndex(intent.getIntExtra("channel", 0))
+        if (intent.hasExtra(EXTRA_ON)) settings.setLoraEnabled(intent.getBooleanExtra(EXTRA_ON, false))
+
+        val status = lora.status.value
+        return JSONObject()
+            .put("status", "ok")
+            .put("enabled", settings.loraEnabled.first())
+            .put("address", settings.loraDeviceAddress.first() ?: JSONObject.NULL)
+            .put("channel", settings.loraChannelIndex.first())
+            .put("state", status.state::class.simpleName)
+            .put("boardNodeNum", status.boardNodeNum?.let { "!%08x".format(it.toInt()) } ?: JSONObject.NULL)
+            .put("snr", status.lastSnr?.toDouble() ?: JSONObject.NULL)
+            .put("rssi", status.lastRssi ?: JSONObject.NULL)
+            .put("queueFree", status.queueFree ?: JSONObject.NULL)
+            .put("heard", status.heard)
+            .put("counters", metricsJson(metrics.snapshot()))
+    }
+
+    /**
+     * Sends a raw UTF-8 payload straight to the board on the configured channel (bypassing the frame
+     * codec), so a board's LoRa transmission can be confirmed from the other end (`meshtastic --noproto`)
+     * without the whole mesh. Requires the plane enabled and the board Ready.
+     */
+    private suspend fun handleLoraTx(intent: Intent): JSONObject {
+        val text = intent.getStringExtra(EXTRA_TEXT) ?: return reply("error", "missing --es text")
+        val channel = settings.loraChannelIndex.first()
+        val result = loraLink.send(text.encodeToByteArray(), channel)
+        return reply("ok", "sent").put("result", result::class.simpleName).put("channel", channel)
+    }
+
     private fun reply(
         status: String,
         message: String,
@@ -1027,8 +1085,11 @@ class DebugBridgeReceiver :
         const val ACTION_MODEL = "app.getknit.knit.debug.MODEL"
         const val ACTION_SPOOL = "app.getknit.knit.debug.SPOOL"
         const val ACTION_RATCHET = "app.getknit.knit.debug.RATCHET"
+        const val ACTION_LORA = "app.getknit.knit.debug.LORA"
+        const val ACTION_LORATX = "app.getknit.knit.debug.LORATX"
 
         const val EXTRA_TEXT = "text"
+        const val EXTRA_ADDRESS = "address"
         const val EXTRA_CONV = "conv"
         const val EXTRA_TO = "to"
         const val EXTRA_REPLY_TO = "replyTo"

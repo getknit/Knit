@@ -8,14 +8,19 @@ behind each lives in `context/mesh-transport.md`, `context/wire-format.md`, and
 
 - Nothing outside `mesh/wifiaware/` may import `android.net.wifi.aware.*` (or
   `ConnectivityManager`/`NetworkRequest` for the NAN data path).
-- Nothing outside `mesh/bluetooth/` may import `android.bluetooth.*`.
+- Nothing outside `mesh/bluetooth/` may import `android.bluetooth.*` (the Meshtastic GATT client lives at
+  `mesh/bluetooth/meshtastic/MeshtasticGatt` under that boundary; its pure session/codec sit in `mesh/lora/`,
+  which imports no Android at all — ADR 038).
 - Nothing outside `mesh/spool/OkHttpSpoolDialer.kt` may import `okhttp3.*`. The Internet plane's socket
   sits behind the `SpoolLink`/`SpoolSocket` seam for the same reason the radios sit behind
   `MeshTransport`: everything protocol-shaped above it (`SpoolConnection`, `ScopeSync`) stays pure and
   runs against an in-process fake spool in unit tests.
 - Everything above the transport talks only to the `MeshTransport` interface; `CompositeMeshTransport`
-  runs both radios at once behind that seam (Bluetooth preferred, Wi-Fi Aware second), so orchestration
-  (`MeshManager`/`MeshRouter`) is unchanged and another sibling transport drops in the same way. The socket
+  runs every radio at once behind that seam (Bluetooth preferred, Wi-Fi Aware second, LoRa last), so
+  orchestration (`MeshManager`/`MeshRouter`) is unchanged and another sibling transport drops in the same
+  way — the LoRa plane (ADR 038) is a fast-plane-only child, `neighbors` always empty, that carries only the
+  broadcast subset. `MeshTransport.shortRange` (LoRa = false) tells the composite a sighting doesn't imply
+  proximity, so it's excluded from the foreign-reachable union and from `shortRangeReachable`. The socket
   record codec (`mesh/link/LinkFraming`) is transport-neutral and shared by the NAN NDP socket and the BLE
   L2CAP socket.
 - After changing the `MeshTransport` interface, run `:app:testDebugUnitTest` — a test double

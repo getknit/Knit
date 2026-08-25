@@ -71,6 +71,31 @@ class CompositeMeshTransport(
                 .stateIn(scope, SharingStarted.Eagerly, emptySet())
         }
 
+    /**
+     * The merged [reachable] set restricted to **short-range** children (BLE/NAN) — used where a sighting
+     * must mean physical proximity, i.e. [app.getknit.knit.mesh.spool.AttachmentDeferPolicy]: a LoRa-only
+     * sighting can't carry an image and must not defer its upload. Falls back to the full [reachable] when
+     * every child is short-range (the common two-radio case), so nothing changes for a LoRa-less build.
+     */
+    val shortRangeReachable: StateFlow<Set<Peer>> =
+        run {
+            val shortRangeChildren = children.filter { it.shortRange }
+            when {
+                shortRangeChildren.isEmpty() -> {
+                    MutableStateFlow(emptySet())
+                }
+
+                shortRangeChildren.size == children.size -> {
+                    reachable
+                }
+
+                else -> {
+                    combine(shortRangeChildren.map { it.reachable }) { sets -> mergePeers(sets) }
+                        .stateIn(scope, SharingStarted.Eagerly, emptySet())
+                }
+            }
+        }
+
     override val health: StateFlow<TransportHealth> =
         if (children.isEmpty()) {
             MutableStateFlow(TransportHealth.Degraded)
@@ -163,7 +188,9 @@ class CompositeMeshTransport(
                 combine(children.map { it.reachable }) { it }.collect { sets ->
                     for (i in children.indices) {
                         val foreign = HashSet<String>()
-                        for (j in children.indices) if (j != i) sets[j].forEach { foreign.add(it.nodeId) }
+                        // Only SHORT-RANGE siblings' sightings imply real proximity; a LoRa sighting (a peer
+                        // kilometres away) must not make BLE chase it or corroborate NAN's wedge self-kill.
+                        for (j in children.indices) if (j != i && children[j].shortRange) sets[j].forEach { foreign.add(it.nodeId) }
                         children[i].onForeignReachable(foreign)
                     }
                 }

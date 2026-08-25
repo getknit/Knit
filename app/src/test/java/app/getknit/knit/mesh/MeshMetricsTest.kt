@@ -107,4 +107,30 @@ class MeshMetricsTest {
         assertEquals(2L, snap.filesSentNan)
         assertEquals(1L, snap.filesSentBt)
     }
+
+    @Test
+    fun `lora counters surface in the snapshot`() {
+        val metrics = MeshMetrics()
+        metrics.onLoraSessionUp()
+        repeat(3) { metrics.onLoraSent() }
+        metrics.onLoraFragSent()
+        repeat(2) { metrics.onLoraReceived() }
+        metrics.onLoraReassembled()
+        metrics.onLoraTooBig()
+        metrics.onLoraDroppedQueue()
+        metrics.onLoraSuppressed()
+        metrics.onLoraNak()
+        metrics.onFileSent(TransportKind.LoRa) // no-op: LoRa carries no files
+
+        val snap = metrics.snapshot()
+        assertEquals(1L, snap.loraSessionUps)
+        assertEquals(3L, snap.loraSent)
+        assertEquals(1L, snap.loraFragSent)
+        assertEquals(2L, snap.loraReceived)
+        assertEquals(1L, snap.loraReassembled)
+        assertEquals(1L, snap.loraTooBig)
+        assertEquals(1L, snap.loraDroppedQueue)
+        assertEquals(1L, snap.loraSuppressed)
+        assertEquals(1L, snap.loraNak)
+    }
 }

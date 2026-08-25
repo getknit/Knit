@@ -27,6 +27,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/** The LoRa plane, as the Profile row summarises it before handing off to its own screen. */
+data class LoraSummary(
+    val enabled: Boolean = false,
+    val boardName: String? = null,
+)
+
 /** The Internet-relay plane, as the Profile row summarises it before handing off to its own screen. */
 data class RelaySummary(
     val enabled: Boolean = false,
@@ -99,6 +105,11 @@ class ProfileViewModel(
         relayFacts
             .map { RelaySummary(it.enabled, it.configured, it.connected) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RelaySummary())
+
+    /** Summary of the LoRa plane for the Profile row that navigates to its own screen (settings-only). */
+    val loraSummary: StateFlow<LoraSummary> =
+        combine(settings.loraEnabled, settings.loraDeviceName) { enabled, name -> LoraSummary(enabled, name) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LoraSummary())
 
     init {
         viewModelScope.launch {

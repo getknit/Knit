@@ -415,6 +415,25 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
                 }
             }
         }
+        // The LoRa (Meshtastic) plane, shown only once it has carried anything — it is off by default and
+        // needs a paired board. `received`/`reassembled` are the payoff (a frame that crossed kilometres of
+        // LoRa with no radio in range); `tooBig` counts posts too long to fragment into <= 3 packets.
+        if (metrics.loraSent > 0 || metrics.loraReceived > 0) {
+            MetricRow(stringResource(R.string.diagnostics_metric_lora_sent), metrics.loraSent.toString())
+            MetricRow(stringResource(R.string.diagnostics_metric_lora_received), metrics.loraReceived.toString())
+            if (metrics.loraReassembled > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_lora_reassembled), metrics.loraReassembled.toString())
+            }
+            if (metrics.loraTooBig > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_lora_too_big), metrics.loraTooBig.toString())
+            }
+            if (metrics.loraDroppedQueue > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_lora_dropped), metrics.loraDroppedQueue.toString())
+            }
+            if (metrics.loraNak > 0) {
+                MetricRow(stringResource(R.string.diagnostics_metric_lora_nak), metrics.loraNak.toString())
+            }
+        }
         // Bluetooth connect failures: shown only once any occur, with a per-reason breakdown, so an
         // intermittent "can link one peer but not the second" is visible and attributable (RADIO vs other).
         if (metrics.btConnectFails > 0) {
@@ -497,6 +516,7 @@ private fun transportName(kind: TransportKind): String =
         when (kind) {
             TransportKind.Bluetooth -> R.string.diagnostics_transport_bluetooth
             TransportKind.WifiAware -> R.string.diagnostics_transport_wifi_aware
+            TransportKind.LoRa -> R.string.diagnostics_transport_lora
             TransportKind.Other -> R.string.diagnostics_transport_other
         },
     )
@@ -506,10 +526,12 @@ private fun transportName(kind: TransportKind): String =
 private fun transportTag(transports: Set<TransportKind>): String? {
     val ble = stringResource(R.string.diagnostics_tag_ble)
     val nan = stringResource(R.string.diagnostics_tag_nan)
+    val lora = stringResource(R.string.diagnostics_tag_lora)
     val parts =
         buildList {
             if (TransportKind.Bluetooth in transports) add(ble)
             if (TransportKind.WifiAware in transports) add(nan)
+            if (TransportKind.LoRa in transports) add(lora)
         }
     return parts.joinToString("·").ifEmpty { null }
 }

@@ -39,7 +39,7 @@ enum class TransportHealth { Healthy, Degraded, Unavailable }
  * each child so the Diagnostics screen can attribute a peer/count to Bluetooth vs Wi-Fi Aware. [Other] is the
  * default for fakes / the demo transport, which have no real radio.
  */
-enum class TransportKind { Bluetooth, WifiAware, Other }
+enum class TransportKind { Bluetooth, WifiAware, LoRa, Other }
 
 /**
  * A per-radio status line for the Diagnostics screen, produced by [CompositeMeshTransport.statuses]. [linked]
@@ -171,6 +171,17 @@ interface MeshTransport {
      * distinct from [kind] (which is diagnostics-only). Default false; only Wi-Fi Aware overrides it.
      */
     val highThroughput: Boolean get() = false
+
+    /**
+     * Whether a sighting on this transport implies the peer is **physically near** (BLE/NAN range), so a
+     * sibling plane may act on its [reachable] set — the Bluetooth scan-boost chase, the Wi-Fi Aware wedge
+     * watchdog's "owed peer genuinely nearby" corroboration, and the attachment-upload deferral all read it.
+     * A long-range plane (LoRa, whose peer may be kilometres away) overrides this to false so those siblings
+     * ignore its sightings; [CompositeMeshTransport] excludes non-short-range children from every foreign set
+     * and from [CompositeMeshTransport.shortRangeReachable]. A routing/semantics flag, deliberately distinct
+     * from [kind] (diagnostics-only). Default true — only a long-range transport overrides it.
+     */
+    val shortRange: Boolean get() = true
 
     /**
      * Whether this transport currently believes its radio is contended by another user of the same radio —

@@ -36,6 +36,7 @@ class CompositeMeshTransportTest {
         override val hasFastPlane: Boolean = false,
         override val kind: TransportKind = TransportKind.Other,
         override val highThroughput: Boolean = false,
+        override val shortRange: Boolean = true,
     ) : MeshTransport {
         /** What [expectBulkTransfer] reports — i.e. whether this plane "armed" its on-demand link. */
         var armBulk = false
@@ -574,6 +575,51 @@ class CompositeMeshTransportTest {
             bt.setReachable(Peer("y"))
             advanceUntilIdle()
             assertEquals("NAN learns what BT can see", setOf("y"), nan.foreignCalls.last())
+        }
+
+    @Test
+    fun foreignReachableExcludesLongRangeChildren() =
+        runTest(UnconfinedTestDispatcher()) {
+            val bt = FakeChild(kind = TransportKind.Bluetooth)
+            val nan = FakeChild(hasFastPlane = true, kind = TransportKind.WifiAware)
+            val lora = FakeChild(hasFastPlane = true, kind = TransportKind.LoRa, shortRange = false)
+            CompositeMeshTransport(listOf(bt, nan, lora), backgroundScope)
+            // A peer only LoRa can see must NOT be pushed to BLE/NAN as foreign-reachable (no scan chase, no
+            // wedge-watchdog corroboration for a peer kilometres away).
+            lora.setReachable(Peer("far"))
+            nan.setReachable(Peer("near"))
+            advanceUntilIdle()
+            assertTrue("BT never learns the LoRa-only peer as foreign", bt.foreignCalls.all { "far" !in it })
+            assertTrue("NAN never learns the LoRa-only peer as foreign", nan.foreignCalls.all { "far" !in it })
+            assertTrue("the short-range NAN sighting still propagates to BT", bt.foreignCalls.any { "near" in it })
+        }
+
+    @Test
+    fun shortRangeReachableExcludesTheLongRangeChild() =
+        runTest(UnconfinedTestDispatcher()) {
+            val bt = FakeChild(kind = TransportKind.Bluetooth)
+            val lora = FakeChild(hasFastPlane = true, kind = TransportKind.LoRa, shortRange = false)
+            val composite = CompositeMeshTransport(listOf(bt, lora), backgroundScope)
+            bt.setReachable(Peer("near"))
+            lora.setReachable(Peer("far"))
+            advanceUntilIdle()
+            assertEquals(
+                "only the short-range peer counts as short-range-reachable",
+                setOf(
+                    "near",
+                ),
+                composite.shortRangeReachable.value
+                    .map {
+                        it.nodeId
+                    }.toSet(),
+            )
+            assertEquals(
+                "but both are in the merged reachable set",
+                setOf("near", "far"),
+                composite.reachable.value
+                    .map { it.nodeId }
+                    .toSet(),
+            )
         }
 
     @Test

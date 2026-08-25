@@ -129,7 +129,8 @@ class MeshManager(
     // sentAt) are deterministic under test. Defaults to the real clock, so production wiring (the Koin
     // module) is unchanged; mirrors the house convention — ForwardSync(clock = …), AckSync, KeyExchange.
     private val clock: () -> Long = { System.currentTimeMillis() },
-) : MeshController {
+) : MeshController,
+    ProfileFrameSource {
     // Per-session scope for the collectors + metrics loop + router; cancelled in stop() so they don't
     // accumulate across start/stop cycles (e.g. a Diagnostics-triggered restart()).
     private var sessionScope: CoroutineScope? = null
@@ -261,7 +262,12 @@ class MeshManager(
      */
     private val attachmentDefer =
         AttachmentDeferPolicy(
-            reachable = { transport.reachable.value.mapTo(mutableSetOf()) { peer -> peer.nodeId } },
+            // shortRangeReachable, not reachable: a LoRa-only sighting can't carry the bytes, so it must not
+            // defer a spool upload (H5). Falls back to reachable on a LoRa-less (all-short-range) build.
+            reachable = {
+                val presence = (transport as? CompositeMeshTransport)?.shortRangeReachable ?: transport.reachable
+                presence.value.mapTo(mutableSetOf()) { peer -> peer.nodeId }
+            },
             ackedBySender = { aHash -> messages.attachmentAcked(aHash, identity.nodeId()) },
             custodyTtlMs = ForwardRepository.DEFAULT_TTL_MS,
             clock = clock,
@@ -1850,6 +1856,14 @@ class MeshManager(
         val signed = WireCodec.encodeEnvelope(env)
         return WireEnvelope(relay = relay, sig = messageCrypto.signRaw(signed), signed = signed)
     }
+
+    /**
+     * [ProfileFrameSource]: the current signed cleartext profile frame for the LoRa plane's key-bootstrap
+     * beacon. Builds and signs the same self-certifying frame the radio paths flood, WITHOUT originating or
+     * custodying it — the stable `profile-<me>-<publishedAt>` id makes re-hearing it a SeenSet no-op, so a
+     * beacon never floods the mesh a second time.
+     */
+    override suspend fun signedProfile(): WireEnvelope = sign(currentProfileEnvelope())
 
     /**
      * Whether [text] is non-blank and the on-device moderator flags it as abusive. Always runs — not

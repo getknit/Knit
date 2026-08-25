@@ -9,6 +9,7 @@ import app.getknit.knit.ui.contacts.ContactsViewModel
 import app.getknit.knit.ui.diagnostics.CrashLogViewModel
 import app.getknit.knit.ui.diagnostics.DiagnosticsViewModel
 import app.getknit.knit.ui.group.GroupDetailsViewModel
+import app.getknit.knit.ui.lora.LoraRadioViewModel
 import app.getknit.knit.ui.profile.ProfileDetailsViewModel
 import app.getknit.knit.ui.profile.ProfileViewModel
 import app.getknit.knit.ui.relay.InternetRelayViewModel
@@ -62,4 +63,5 @@ val uiModule =
         viewModel { MessageRequestsViewModel(get(), get(), get(), get(), get(), androidContext()) }
         viewModel { VerifyContactViewModel(get(), get()) }
         viewModel { InternetRelayViewModel(get(), get()) }
+        viewModel { LoraRadioViewModel(get(), get(), get()) }
     }

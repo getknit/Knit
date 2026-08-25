@@ -86,6 +86,7 @@ internal data class ProfileFormState(
     val avatarHash: String?,
     val contentFilteringEnabled: Boolean,
     val relay: RelaySummary,
+    val lora: LoraSummary,
     val isDirty: Boolean,
 )
 
@@ -93,6 +94,7 @@ internal data class ProfileFormState(
 fun ProfileScreen(
     onBack: () -> Unit,
     onOpenRelays: () -> Unit = {},
+    onOpenLora: () -> Unit = {},
     viewModel: ProfileViewModel = koinViewModel(),
 ) {
     val name by viewModel.displayName.collectAsStateWithLifecycle()
@@ -103,6 +105,7 @@ fun ProfileScreen(
     val cropTarget by viewModel.cropTarget.collectAsStateWithLifecycle()
     val contentFilteringEnabled by viewModel.contentFilteringEnabled.collectAsStateWithLifecycle()
     val relay by viewModel.relaySummary.collectAsStateWithLifecycle()
+    val lora by viewModel.loraSummary.collectAsStateWithLifecycle()
     val isDirty by viewModel.isDirty.collectAsStateWithLifecycle()
 
     // Navigate back only once Save has finished persisting (the write outlives this composition because
@@ -136,6 +139,7 @@ fun ProfileScreen(
                 avatarHash = avatarHash,
                 contentFilteringEnabled = contentFilteringEnabled,
                 relay = relay,
+                lora = lora,
                 isDirty = isDirty,
             ),
         batteryExempt = rememberBatteryExempt(),
@@ -146,6 +150,7 @@ fun ProfileScreen(
         onStatusCommit = viewModel::commitStatus,
         onToggleContentFiltering = viewModel::setContentFilteringEnabled,
         onOpenRelays = onOpenRelays,
+        onOpenLora = onOpenLora,
         onPickPhoto = {
             picker.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -169,9 +174,12 @@ internal fun ProfileScreenContent(
     onStatusCommit: () -> Unit,
     onToggleContentFiltering: (Boolean) -> Unit,
     onOpenRelays: () -> Unit,
+    onOpenLora: () -> Unit = {},
     // Whether the Internet-relay plane is introduced at all in this build. A parameter rather than a
     // bare BuildConfig read so the hidden case is previewable and testable; see app/build.gradle.kts.
     showInternetRelays: Boolean = BuildConfig.INTERNET_PLANE,
+    // Same, for the LoRa plane.
+    showLoraRadio: Boolean = BuildConfig.LORA_PLANE,
     onPickPhoto: () -> Unit,
     onClearPhoto: () -> Unit,
     onAllowBattery: () -> Unit,
@@ -255,6 +263,8 @@ internal fun ProfileScreenContent(
             )
 
             if (showInternetRelays) InternetRelayRow(summary = form.relay, onClick = onOpenRelays)
+
+            if (showLoraRadio) LoraRadioRow(summary = form.lora, onClick = onOpenLora)
 
             BatteryOptimizationRow(exempt = batteryExempt, onAllow = onAllowBattery)
 
@@ -402,6 +412,47 @@ private fun InternetRelayRow(
     }
 }
 
+/** Entry point to the LoRa radio screen, with its current state as the subtitle. */
+@Composable
+private fun LoraRadioRow(
+    summary: LoraSummary,
+    onClick: () -> Unit,
+) {
+    val subtitle =
+        when {
+            !summary.enabled -> stringResource(R.string.lora_summary_off)
+            summary.boardName != null -> stringResource(R.string.lora_summary_on, summary.boardName)
+            else -> stringResource(R.string.lora_summary_connecting)
+        }
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick, role = Role.Button)
+                .padding(top = 8.dp)
+                .testTag("profile_lora"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.lora_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /**
  * Whether the app is currently exempt from battery optimization, refreshed on every screen resume.
  * Lives in the stateful wrapper (not [BatteryOptimizationRow]) because the `PowerManager` read is not
@@ -499,6 +550,7 @@ fun ProfileScreenPreview() =
                     avatarHash = null,
                     contentFilteringEnabled = true,
                     relay = RelaySummary(),
+                    lora = LoraSummary(),
                     isDirty = true,
                 ),
             batteryExempt = false,
@@ -531,6 +583,7 @@ fun ProfileScreenNewUserPreview() =
                     avatarHash = null,
                     contentFilteringEnabled = true,
                     relay = RelaySummary(),
+                    lora = LoraSummary(),
                     isDirty = false,
                 ),
             batteryExempt = true,

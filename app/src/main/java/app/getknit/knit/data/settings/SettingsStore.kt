@@ -170,6 +170,24 @@ class SettingsStore(
      */
     val spoolConsented: Flow<Boolean> = dataStore.data.map { it[KEY_SPOOL_CONSENTED] ?: false }
 
+    /**
+     * Whether the LoRa (Meshtastic-over-BLE) plane may run — **default off**, and gated behind
+     * `BuildConfig.LORA_PLANE` the same way [spoolEnabled] is gated behind the Internet-plane flag, so a
+     * shipped build reads false no matter what is stored until the feature is introduced. With it off, or
+     * with no board configured ([loraDeviceAddress] null), the LoRa transport opens no board session.
+     */
+    val loraEnabled: Flow<Boolean> =
+        dataStore.data.map { BuildConfig.LORA_PLANE && (it[KEY_LORA_ENABLED] ?: false) }
+
+    /** The bonded Meshtastic board's MAC address the LoRa plane binds to, or null if none is chosen. */
+    val loraDeviceAddress: Flow<String?> = dataStore.data.map { it[KEY_LORA_ADDRESS] }
+
+    /** The chosen board's display name, for the settings row (the picker records it alongside the address). */
+    val loraDeviceName: Flow<String?> = dataStore.data.map { it[KEY_LORA_NAME] }
+
+    /** Which of the board's channels to transmit Knit frames on (default 0 = the primary channel). */
+    val loraChannelIndex: Flow<Int> = dataStore.data.map { it[KEY_LORA_CHANNEL] ?: 0 }
+
     suspend fun setDisplayName(value: String) = dataStore.edit { it[KEY_NAME] = value }
 
     suspend fun setStatus(value: String) = dataStore.edit { it[KEY_STATUS] = value }
@@ -248,6 +266,27 @@ class SettingsStore(
         }
 
     suspend fun setSpoolEnabled(value: Boolean) = dataStore.edit { it[KEY_SPOOL_ENABLED] = value }
+
+    suspend fun setLoraEnabled(value: Boolean) = dataStore.edit { it[KEY_LORA_ENABLED] = value }
+
+    /** Records the chosen board's address + name in one write so the row can never show a name without an address. */
+    suspend fun setLoraDevice(
+        address: String,
+        name: String,
+    ) = dataStore.edit {
+        it[KEY_LORA_ADDRESS] = address
+        it[KEY_LORA_NAME] = name
+    }
+
+    /** Forgets the chosen board (and disables the plane, since it has nothing to bind to). */
+    suspend fun clearLoraDevice() =
+        dataStore.edit {
+            it.remove(KEY_LORA_ADDRESS)
+            it.remove(KEY_LORA_NAME)
+            it[KEY_LORA_ENABLED] = false
+        }
+
+    suspend fun setLoraChannelIndex(index: Int) = dataStore.edit { it[KEY_LORA_CHANNEL] = index }
 
     /**
      * Records consent and enables the plane in **one** write, so the two can never disagree: a crash
@@ -344,5 +383,9 @@ class SettingsStore(
         val KEY_SPOOL_URLS = stringSetPreferencesKey("spool_urls")
         val KEY_SPOOL_SEEDED = booleanPreferencesKey("spool_defaults_seeded")
         val KEY_SPOOL_CONSENTED = booleanPreferencesKey("spool_consented")
+        val KEY_LORA_ENABLED = booleanPreferencesKey("lora_enabled")
+        val KEY_LORA_ADDRESS = stringPreferencesKey("lora_device_address")
+        val KEY_LORA_NAME = stringPreferencesKey("lora_device_name")
+        val KEY_LORA_CHANNEL = intPreferencesKey("lora_channel_index")
     }
 }

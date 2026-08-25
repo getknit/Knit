@@ -59,6 +59,15 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   is correct rather than divergence; and `lastError` is the spool's most recent `err` code, which is
   the only thing distinguishing "connected and idle" from "connected and refusing us" (`quota`,
   `pow` and `rate` all otherwise present as a scope that simply never converges).
+- `…debug.LORA` — configures and inspects the **LoRa (Meshtastic-over-BLE) plane** (ADR 038,
+  `context/lora-bridge.md`), off by default and needing a paired board, so this is how you drive it on a
+  locked lab device. `--es address <MAC>` (+ `--es name <n>`) binds a bonded board, `--ei channel <idx>`
+  sets the channel index, `--ez on <true|false>` flips the switch; no extras dumps
+  `state/boardNodeNum/snr/rssi/queueFree/heard/counters`. The counters (`loraSent`/`loraReceived`/
+  `loraReassembled`/`loraNak`/`loraTooBig`) are the two-board range oracle. `…debug.LORATX --es text <s>`
+  sends a raw payload straight to the board (bypassing the frame codec) to confirm the board transmits via
+  `meshtastic --noproto`. Both need the plane enabled and the board Ready. (New action = add to BOTH the
+  `when` and the debug manifest `<intent-filter>`.)
 - `…debug.RATCHET` — dumps the **DM ratchet's per-peer state** and, with `--es reset <peerNodeId>`, forces a
   session reset past the heuristic that guards it. Exists because every gate in the recovery path returns
   *silently*: a peer we hold no prekey for (`peerPrekeyPinned:false` — a reset from this side is impossible

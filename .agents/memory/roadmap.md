@@ -33,6 +33,20 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **The LoRa (Meshtastic-over-BLE) plane is hidden in shipped builds** (2026-08-24, ADR 038) —
+  `BuildConfig.LORA_PLANE` true in debug, false in release/staging, `-PloraPlane=true|false` overrides.
+  It gates the LoRa child in `CompositeMeshTransport`, the `lora` settings route + Profile row, and
+  `SettingsStore.loraEnabled`. The code is **not** stripped (R8 prunes the `if (LORA_PLANE)` branches).
+  MVP shipped: `mesh/lora/` (pure, JVM-tested end-to-end over a fake board/air) + `mesh/bluetooth/meshtastic/`
+  (the GATT client, device-verified only). Carries only the Nearby-room broadcast subset (chat, reaction,
+  ✓✓ tick, profile); DM/group/typing/files refused. **Still owed:** the **two-phone device trial** (pair
+  both boards, verify a Nearby post + ✓✓ + reaction cross when the phones are out of BLE/NAN range) — the
+  GATT layer has no host test. Deferred by design: a **Knit-provisioned channel** (today the user sets a PSK
+  channel in the Meshtastic app and Knit picks the index), **DM-over-LoRa**, a **periodic self-profile
+  beacon**, **multi-board-per-clique dedup** (one board per clique for now), and a **long-post UI hint**
+  (posts over ~500 chars are LoRa-invisible, counted `loraTooBig`, with no bubble marker). See
+  `context/lora-bridge.md`.
+
 - **The spool plane is hidden in shipped builds** (2026-08-22, ADR 031) — `BuildConfig.INTERNET_PLANE`
   is true in debug, false in release/staging, `-PinternetPlane=true|false` overrides. It gates
   `SettingsStore.spoolEnabled` (which parks `ScopeSync`, group-root minting and every derived indicator

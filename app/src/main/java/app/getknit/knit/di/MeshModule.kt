@@ -1,6 +1,8 @@
 package app.getknit.knit.di
 
 import android.os.Build
+import android.os.SystemClock
+import android.util.Log
 import androidx.room.withTransaction
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.KnitDatabase
@@ -12,12 +14,22 @@ import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshManager
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.MeshTransport
+import app.getknit.knit.mesh.ProfileFrameSource
 import app.getknit.knit.mesh.StoreDigest
+import app.getknit.knit.mesh.bluetooth.BleConnectArbiter
 import app.getknit.knit.mesh.bluetooth.BluetoothMeshTransport
+import app.getknit.knit.mesh.bluetooth.meshtastic.BondedBoardDirectory
+import app.getknit.knit.mesh.bluetooth.meshtastic.MeshtasticGatt
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.SessionTransactor
+import app.getknit.knit.mesh.lora.BoardDirectory
+import app.getknit.knit.mesh.lora.LoraConfig
+import app.getknit.knit.mesh.lora.LoraMeshTransport
+import app.getknit.knit.mesh.lora.MeshtasticGattDialer
+import app.getknit.knit.mesh.lora.MeshtasticLink
+import app.getknit.knit.mesh.lora.MeshtasticSession
 import app.getknit.knit.mesh.meshExceptionHandler
 import app.getknit.knit.mesh.power.PowerMonitor
 import app.getknit.knit.mesh.power.PowerStateSource
@@ -27,6 +39,7 @@ import app.getknit.knit.mesh.wifiaware.WifiAwareTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.sync.Mutex
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.qualifier.named
@@ -48,6 +61,8 @@ val meshModule =
         single { StoreDigest() }
         // Tracks screen/charge/battery state and feeds it to the transport's discovery duty cycle.
         single { PowerStateSource() }
+        // Lets the Meshtastic board GATT dial pause the mesh BLE scan for its connect window (shared singleton).
+        single { BleConnectArbiter() }
         single { PowerMonitor(androidContext(), get()) }
         // Bridges the mesh blob-exchange to the encrypted DB; materializes transfer temp files under cacheDir.
         single { MeshBlobStore(get(), get(), get(), File(androidContext().cacheDir, "blobtx")) }
@@ -64,7 +79,7 @@ val meshModule =
                     buildList {
                         // Descending send-preference: Bluetooth (persistent links) first, then Wi-Fi Aware (ephemeral).
                         if (BluetoothMeshTransport.isSupported(ctx)) {
-                            add(BluetoothMeshTransport(ctx, get(), get(), get(), get(), get()))
+                            add(BluetoothMeshTransport(ctx, get(), get(), get(), get(), get(), get()))
                         }
                         // WifiAwareTransport is @RequiresApi(31) (its NDP accept-any responder is API 31). The
                         // explicit SDK_INT guard — redundant with isSupported()'s own — is what lint reads to
@@ -72,6 +87,9 @@ val meshModule =
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && WifiAwareTransport.isSupported(ctx)) {
                             add(WifiAwareTransport(ctx, get(), get(), get(), get(), get()))
                         }
+                        // The LoRa (Meshtastic) plane rides LAST — lowest send-preference, fast-plane only.
+                        // Gated on the flag; the classes stay in the APK but are never resolved when off.
+                        if (BuildConfig.LORA_PLANE) add(get<LoraMeshTransport>())
                     }
                 CompositeMeshTransport(children, get(), get()) { msg ->
                     android.util.Log.d("CompositeMeshTransport", msg)
@@ -110,6 +128,32 @@ val meshModule =
         }
         // The group sender-key session service (crypto scheme v2's group form, docs/GROUP_FORWARD_SECRECY.md).
         single { GroupRatchetSessions(store = get(), mutex = get(ratchetMutex), transact = get()) }
+        // The LoRa (Meshtastic-over-BLE) plane. The GATT dialer is the only android.bluetooth importer for
+        // the feature; the session is pure over it, and the transport is a fast-plane-only composite child.
+        // All lazy — resolved only when BuildConfig.LORA_PLANE adds the child, so release never instantiates them.
+        single<MeshtasticGattDialer> { MeshtasticGatt(androidContext(), get()) }
+        single<MeshtasticLink> {
+            MeshtasticSession(dialer = get(), scope = get(), now = SystemClock::elapsedRealtime, log = { Log.d("MeshtasticLink", it) })
+        }
+        single<BoardDirectory> { BondedBoardDirectory(androidContext()) }
+        // MeshManager supplies the signed profile frame for the LoRa key-bootstrap beacon (a third alias).
+        single<ProfileFrameSource> { get<MeshManager>() }
+        single {
+            val settings = get<app.getknit.knit.data.settings.SettingsStore>()
+            LoraMeshTransport(
+                selfId = { get<app.getknit.knit.identity.Identity>().nodeId() },
+                link = get(),
+                config =
+                    combine(settings.loraEnabled, settings.loraDeviceAddress, settings.loraChannelIndex) { on, addr, ch ->
+                        if (on && addr != null) LoraConfig(addr, ch) else null
+                    },
+                selfProfile = { get<ProfileFrameSource>().signedProfile() },
+                scope = get(),
+                metrics = get(),
+                clock = SystemClock::elapsedRealtime,
+                log = { Log.d("LoraMeshTransport", it) },
+            )
+        }
         // The Internet (spool) plane's socket factory. Cleartext `ws://` is a debug-build affordance for a
         // LAN daemon (which terminates no TLS of its own); release and staging accept `wss://` only, so a
         // shipped build cannot be pointed at a plaintext relay. The plane itself stays dark until the user

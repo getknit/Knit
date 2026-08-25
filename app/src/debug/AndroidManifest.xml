@@ -34,6 +34,8 @@
                 <action android:name="app.getknit.knit.debug.MODEL" />
                 <action android:name="app.getknit.knit.debug.SPOOL" />
                 <action android:name="app.getknit.knit.debug.RATCHET" />
+                <action android:name="app.getknit.knit.debug.LORA" />
+                <action android:name="app.getknit.knit.debug.LORATX" />
             </intent-filter>
         </receiver>
     </application>

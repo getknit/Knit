@@ -84,6 +84,9 @@ class BluetoothMeshTransport(
     private val metrics: MeshMetrics,
     private val powerState: PowerStateSource,
     private val storeDigest: StoreDigest,
+    // Lets the Meshtastic board dial (a GATT connect on this same controller) pause our scan for its short
+    // connect window, exactly as our own in-flight L2CAP connects do. Shared Koin singleton.
+    private val arbiter: BleConnectArbiter = BleConnectArbiter(),
 ) : MeshTransport {
     private val appContext = context.applicationContext
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
@@ -174,6 +177,7 @@ class BluetoothMeshTransport(
     private var powerJob: Job? = null
     private var diagJob: Job? = null
     private var audioJob: Job? = null
+    private var arbiterJob: Job? = null
 
     // Forwards a live link's decoded records into our flows and its teardown into [teardownLink].
     private val linkCallbacks =
@@ -229,6 +233,8 @@ class BluetoothMeshTransport(
             // A2DP forces the scan to its floor (audio contends the radio); wake the scan loop on any change so
             // the falling edge (audio stopped) resumes the normal cadence promptly instead of after the floor gap.
             audioJob = scope.launch { audioMonitor.contended.drop(1).collect { wakeScan() } }
+            // The board dial holds an arbiter slot; wake the scan on release so it resumes without waiting out the gap.
+            arbiterJob = scope.launch { arbiter.busy.drop(1).collect { wakeScan() } }
         }
     }
 
@@ -239,6 +245,7 @@ class BluetoothMeshTransport(
         powerJob?.cancel()
         diagJob?.cancel()
         audioJob?.cancel()
+        arbiterJob?.cancel()
         unregisterAvailability()
         audioMonitor.stop()
         tearDownRadio()
@@ -342,11 +349,11 @@ class BluetoothMeshTransport(
     private suspend fun scanLoop() {
         while (scope.isActive) {
             val inflight = inFlightSnapshot()
-            val canScan = adapter?.isEnabled == true && inflight.isEmpty()
+            val canScan = adapter?.isEnabled == true && inflight.isEmpty() && !arbiter.busy.value
             if (!canScan) {
                 // A connect is in flight (radio contention) or the adapter is off — wait, don't scan. Log the
                 // pause so a scanning gap (which starves presence for the whole mesh) is attributable.
-                if (adapter?.isEnabled == true) Log.d(TAG, "scan paused: connect in flight $inflight")
+                if (adapter?.isEnabled == true) Log.d(TAG, "scan paused: connect in flight $inflight arbiter=${arbiter.busy.value}")
                 withTimeoutOrNull(CONNECT_QUIET_MS) { scanWake.receive() }
                 continue
             }

@@ -35,6 +35,7 @@ class ProfileScreenContentTest {
         avatarHash = null,
         contentFilteringEnabled = true,
         relay = relay,
+        lora = LoraSummary(),
         isDirty = isDirty,
     )
 

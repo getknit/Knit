@@ -31,7 +31,7 @@ complexity:
     allowedFunctionParameters: 8       # the 6-arg Notifier functions are fine
   TooManyFunctions:
     ignoreAnnotatedFunctions: ['Composable', 'Preview']  # Compose screen files are many small composables
-    allowedFunctionsPerClass: 52       # MeshManager 31 (+ content-moderation gate), MeshMetrics 49 (one fn per counter)
+    allowedFunctionsPerClass: 64       # MeshManager 31 (+ content-moderation gate), MeshMetrics 59 (one fn per counter, +LoRa)
     allowedFunctionsPerFile: 20
     allowedFunctionsPerObject: 15
 

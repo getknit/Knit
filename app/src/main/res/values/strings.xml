@@ -341,6 +341,12 @@
     <string name="diagnostics_metric_bt_connect_fails">BT connect failures</string>
     <string name="diagnostics_spools">Internet relays</string>
     <string name="diagnostics_metric_spool_pushed">Messages sent to Internet relays</string>
+    <string name="diagnostics_metric_lora_sent">LoRa frames sent</string>
+    <string name="diagnostics_metric_lora_received">LoRa frames received</string>
+    <string name="diagnostics_metric_lora_reassembled">LoRa frames reassembled</string>
+    <string name="diagnostics_metric_lora_too_big">LoRa frames too large</string>
+    <string name="diagnostics_metric_lora_dropped">LoRa frames dropped (queue full)</string>
+    <string name="diagnostics_metric_lora_nak">LoRa NAKs</string>
     <string name="diagnostics_metric_spool_bridged">Messages received via Internet relays</string>
     <string name="diagnostics_metric_spool_invalid">Relay blobs quarantined</string>
     <string name="diagnostics_metric_spool_errors">Relay errors</string>
@@ -362,9 +368,11 @@
     <string name="diagnostics_transport_bluetooth">Bluetooth</string>
     <string name="diagnostics_transport_wifi_aware">Wi-Fi Aware</string>
     <string name="diagnostics_transport_other">Other</string>
+    <string name="diagnostics_transport_lora">LoRa</string>
     <string name="diagnostics_transport_counts">%1$d nearby · %2$d linked</string>
     <string name="diagnostics_tag_ble">BLE</string>
     <string name="diagnostics_tag_nan">NAN</string>
+    <string name="diagnostics_tag_lora">LoRa</string>
     <string name="diagnostics_transport_audio">audio</string>
 
     <!-- Crash log — a manual, opt-in report the user reads and hands over themselves. Reached from
@@ -451,6 +459,26 @@
     <string name="relays_status_connected">Connected</string>
     <string name="relays_status_connecting">Connecting…</string>
     <string name="relays_status_off">Not in use</string>
+    <!-- LoRa (Meshtastic-over-BLE) radio settings -->
+    <string name="lora_title">LoRa radio</string>
+    <string name="settings_lora_title">Use a LoRa radio</string>
+    <string name="settings_lora_subtitle">Extend the reach of the Nearby room over long-range LoRa by pairing a Meshtastic board over Bluetooth. Only broadcast (Nearby) messages travel over LoRa.</string>
+    <string name="lora_off_note">Turning this off closes the board connection. Direct messages and groups never travel over LoRa.</string>
+    <string name="lora_board_section">Board</string>
+    <string name="lora_board_none">No paired Meshtastic boards found. Pair one in Bluetooth settings first (the board shows a PIN on its screen).</string>
+    <string name="lora_open_settings">Open Bluetooth settings</string>
+    <string name="lora_forget">Forget this board</string>
+    <string name="lora_channel_label">Channel index: %1$d</string>
+    <string name="lora_status_connected">Connected</string>
+    <string name="lora_status_connecting">Connecting…</string>
+    <string name="lora_status_reconnecting">Reconnecting…</string>
+    <string name="lora_status_needs_pairing">Pairing needed — re-pair the board in Bluetooth settings</string>
+    <string name="lora_status_bt_off">Bluetooth off or board unavailable</string>
+    <string name="lora_status_off">Not in use</string>
+    <string name="lora_signal">Signal: SNR %1$.1f dB · RSSI %2$d dBm</string>
+    <string name="lora_summary_off">Off</string>
+    <string name="lora_summary_on">On · %1$s</string>
+    <string name="lora_summary_connecting">On · connecting…</string>
     <plurals name="relays_scope_count">
         <item quantity="one">%d conversation</item>
         <item quantity="other">%d conversations</item>

@@ -190,6 +190,15 @@ class MeshMetrics {
     private val spoolAttachPushed = AtomicLong()
     private val spoolAttachPulled = AtomicLong()
     private val spoolAttachDeferred = AtomicLong()
+    private val loraSent = AtomicLong()
+    private val loraFragSent = AtomicLong()
+    private val loraReceived = AtomicLong()
+    private val loraReassembled = AtomicLong()
+    private val loraTooBig = AtomicLong()
+    private val loraDroppedQueue = AtomicLong()
+    private val loraSuppressed = AtomicLong()
+    private val loraNak = AtomicLong()
+    private val loraSessionUps = AtomicLong()
 
     /** A frame this device authored and injected into the mesh. */
     fun onOriginated() {
@@ -400,7 +409,12 @@ class MeshMetrics {
     fun onFileSent(transport: TransportKind) {
         when (transport) {
             TransportKind.WifiAware -> filesSentNan.incrementAndGet()
+
             TransportKind.Bluetooth -> filesSentBt.incrementAndGet()
+
+            TransportKind.LoRa -> Unit
+
+            // the LoRa plane carries no files
             TransportKind.Other -> Unit
         }
     }
@@ -455,6 +469,52 @@ class MeshMetrics {
         spoolAttachDeferred.incrementAndGet()
     }
 
+    /** One frame sent over the LoRa plane (a whole frame, however many fragments it split into). */
+    fun onLoraSent() {
+        loraSent.incrementAndGet()
+    }
+
+    /** A LoRa frame that had to be split across fragments (dwarfed by [onLoraSent] is healthy). */
+    fun onLoraFragSent() {
+        loraFragSent.incrementAndGet()
+    }
+
+    /** A frame received over the LoRa plane (after reassembly + decode). */
+    fun onLoraReceived() {
+        loraReceived.incrementAndGet()
+    }
+
+    /** A fragmented LoRa frame reassembled completely on receive. */
+    fun onLoraReassembled() {
+        loraReassembled.incrementAndGet()
+    }
+
+    /** A frame no LoRa encoding could carry (> ~687 B compact); it rides the radios/custody instead. */
+    fun onLoraTooBig() {
+        loraTooBig.incrementAndGet()
+    }
+
+    /** A queued LoRa frame evicted because the outbound pace queue was full (oldest-whole-frame drop). */
+    fun onLoraDroppedQueue() {
+        loraDroppedQueue.incrementAndGet()
+    }
+
+    /** A LoRa send suppressed because we already sent/received that frame over LoRa within the dedup window. */
+    fun onLoraSuppressed() {
+        loraSuppressed.incrementAndGet()
+    }
+
+    /** A routing NAK from the board (rate/duty-cycle/no-channel/too-large); a rising count means airtime pressure. */
+    fun onLoraNak() {
+        loraNak.incrementAndGet()
+    }
+
+    /** The LoRa board session reached Ready — context for the received/sent counts (how often it links). */
+    fun onLoraSessionUp() {
+        loraSessionUps.incrementAndGet()
+    }
+
+    @Suppress("LongMethod") // a flat field-by-field copy — one line per counter; splitting it would only scatter it
     fun snapshot(): Snapshot {
         val byReason = drops.mapValues { it.value.get() }
         val connectByReason = connectFails.mapValues { it.value.get() }
@@ -511,6 +571,15 @@ class MeshMetrics {
             spoolAttachPushed = spoolAttachPushed.get(),
             spoolAttachPulled = spoolAttachPulled.get(),
             spoolAttachDeferred = spoolAttachDeferred.get(),
+            loraSent = loraSent.get(),
+            loraFragSent = loraFragSent.get(),
+            loraReceived = loraReceived.get(),
+            loraReassembled = loraReassembled.get(),
+            loraTooBig = loraTooBig.get(),
+            loraDroppedQueue = loraDroppedQueue.get(),
+            loraSuppressed = loraSuppressed.get(),
+            loraNak = loraNak.get(),
+            loraSessionUps = loraSessionUps.get(),
         )
     }
 
@@ -567,5 +636,14 @@ class MeshMetrics {
         val spoolAttachPushed: Long = 0,
         val spoolAttachPulled: Long = 0,
         val spoolAttachDeferred: Long = 0,
+        val loraSent: Long = 0,
+        val loraFragSent: Long = 0,
+        val loraReceived: Long = 0,
+        val loraReassembled: Long = 0,
+        val loraTooBig: Long = 0,
+        val loraDroppedQueue: Long = 0,
+        val loraSuppressed: Long = 0,
+        val loraNak: Long = 0,
+        val loraSessionUps: Long = 0,
     )
 }

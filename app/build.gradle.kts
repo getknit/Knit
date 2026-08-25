@@ -69,6 +69,12 @@ val nativeSymbols = (project.findProperty("knit.nativeSymbols") as? String)?.toB
 // fields below for what the flag actually gates.
 val internetPlane = (project.findProperty("internetPlane") as? String)?.toBoolean()
 
+// LoRa (Meshtastic-over-BLE) plane — same visibility switch as the Internet plane: ON in debug, OFF in
+// release/staging, overridable with `-PloraPlane=true|false`. It gates the LoRa child in the composite
+// transport, the settings screen + its route, and SettingsStore.loraEnabled. Not a code strip (R8 prunes
+// the `if (LORA_PLANE)` branches); the default lives in source so F-Droid's -P-free rebuild stays identical.
+val loraPlane = (project.findProperty("loraPlane") as? String)?.toBoolean()
+
 // ABIs packaged into the **debug** APK. Debug is unminified and carries both tflite models, so it is
 // ~150 MB before native libs; the four-ABI default adds ~28 MB more, of which the two 32-bit slices are
 // dead weight — every lab Pixel is arm64-v8a and every Gradle-managed emulator image is x86_64, so
@@ -176,6 +182,7 @@ android {
         // rather than in gradle.properties or CI, so F-Droid's rebuild — which passes no `-P` — resolves
         // the same OFF we shipped and stays byte-identical.
         buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: true).toString())
+        buildConfigField("boolean", "LORA_PLANE", (loraPlane ?: true).toString())
         // Fault injection for the model poison-pill's acceptance test (ADR 037):
         // `-PmodelFaultOnLoad=segv` raises SIGSEGV, `=kill` sends SIGKILL, inside ModelLoadGuard right
         // after the in-flight marker is durably written. They test opposite things: only `segv` produces
@@ -258,6 +265,7 @@ android {
             // Hide the Internet-relay plane in every shipped artifact (staging inherits this via
             // initWith). `-PinternetPlane=true` re-lights it for a lab reflash of a release-shaped build.
             buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: false).toString())
+            buildConfigField("boolean", "LORA_PLANE", (loraPlane ?: false).toString())
             // Never ship a fault injector, whatever `-PmodelFaultOnLoad` said.
             buildConfigField("String", "MODEL_FAULT_ON_LOAD", "\"\"")
             // Unsigned when no keystore.properties / KNIT_UPLOAD_* creds are present (see signingConfigs).

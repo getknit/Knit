@@ -6,10 +6,12 @@ package app.getknit.knit.mesh.lora
  * ~1 kbps shared medium — a 233-B packet is ~2.5 s on air and the board floods each one three hops — so
  * unpaced sends would swamp it and draw duty-cycle refusals.
  *
- * The queue drops the **oldest whole frame** when full (never a lone fragment, which would strand a
- * half-delivered message), and a rate/duty-cycle NAK widens the gap for a cool-down window. A profile
- * frame — the key bootstrap — is never dropped for pacing reasons by the transport; the pacer itself is
- * frame-agnostic. Tested on the JVM ([app.getknit.knit.mesh.lora.LoraPacePolicyTest]).
+ * The queue sheds by **class** when full ([FrameClass]): from the lowest class present — the newcomer
+ * included, so a frame that is alone at the bottom yields instead of evicting anything — and the **oldest
+ * whole frame** within it (never a lone fragment, which would strand a half-delivered message). So a room
+ * post never evicts a DM, and nothing evicts the profile bootstrap. A rate/duty-cycle NAK widens the gap for
+ * a cool-down window. Dequeue is FIFO regardless of class. Tested on the JVM
+ * ([app.getknit.knit.mesh.lora.LoraPacePolicyTest]).
  */
 internal class LoraPacePolicy(
     private val minGapMs: Long = MIN_GAP_MS,
@@ -21,16 +23,27 @@ internal class LoraPacePolicy(
     private var boardFree: Int? = null
     private var nakUntil = 0L
 
-    /** How a frame was admitted — [DROPPED_OLDEST] means the queue was full and its oldest frame was evicted. */
-    enum class Admission { ACCEPTED, DROPPED_OLDEST }
+    /**
+     * How a frame was admitted: [DROPPED_OLDEST] means the queue was full and the oldest frame of the lowest
+     * class present was evicted to make room; [REFUSED] means the newcomer itself was that lowest class, alone,
+     * and was dropped instead (everything queued outranks it).
+     */
+    enum class Admission { ACCEPTED, DROPPED_OLDEST, REFUSED }
 
     val pending: Int get() = queue.size
 
     fun enqueue(frame: OutboundFrame): Admission {
-        val dropped = queue.size >= queueCap
-        if (dropped) queue.removeFirst()
+        if (queue.size < queueCap) {
+            queue.addLast(frame)
+            return Admission.ACCEPTED
+        }
+        // Full: shed from the lowest class present, newcomer included (enum order = priority, highest first).
+        val shed = maxOf(queue.maxOf { it.klass }, frame.klass)
+        val victim = queue.indexOfFirst { it.klass == shed }
+        if (victim < 0) return Admission.REFUSED // the newcomer alone is the lowest class: it yields
+        queue.removeAt(victim)
         queue.addLast(frame)
-        return if (dropped) Admission.DROPPED_OLDEST else Admission.ACCEPTED
+        return Admission.DROPPED_OLDEST
     }
 
     /** The earliest time the next frame may go out (min gap since the last send, and any NAK cool-down). */

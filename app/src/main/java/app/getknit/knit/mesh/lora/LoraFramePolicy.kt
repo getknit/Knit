@@ -42,6 +42,23 @@ internal object LoraFramePolicy {
     /** DM-form chat: addressed to one recipient, no group — a DM, or any sealed ctl frame riding as one. */
     fun isDmForm(env: RelayEnvelope): Boolean = env.type == FrameType.CHAT && env.recipientId != null && env.group == null
 
+    /**
+     * Whether [env] is recent enough for a live plane at wall-clock [now]: a `chat` or `reaction` older than
+     * [maxAgeMs] is a custody re-serve (the router's SeenSet lapses at 10 min, so a fresh flood never looks this
+     * old) and stays custody's business — fanning it would spend a newcomer's whole backfill on the air. Every
+     * other type is exempt: a `profile`'s `sentAt` is its publish stamp (up to 12 h old, and the key bootstrap
+     * must never be refused), a `receipt` is one packet. A peer whose clock lags by more than the window has
+     * its fresh frames kept off this plane only — they still ride the radios and custody.
+     */
+    fun isFresh(
+        env: RelayEnvelope,
+        now: Long,
+        maxAgeMs: Long = FRESH_MS,
+    ): Boolean = (env.type != FrameType.CHAT && env.type != FrameType.REACTION) || now - env.sentAt <= maxAgeMs
+
+    /** How old a chat/reaction may be and still ride the fan-out path: past the 10-min SeenSet, with skew slack. */
+    const val FRESH_MS = 15 * 60_000L
+
     /** The Nearby room: a chat or reaction with no DM recipient and no group. */
     private fun isBroadcastRoom(env: RelayEnvelope): Boolean =
         (env.type == FrameType.CHAT || env.type == FrameType.REACTION) &&

@@ -48,9 +48,11 @@ import java.util.concurrent.atomic.AtomicLong
  * - [shortRange] is false: a LoRa sighting doesn't imply proximity, so siblings ignore its `reachable` set.
  *
  * Key bootstrap over LoRa (the far side has never seen the author's profile) rides two paths: the mesh's
- * existing `watchReachable` reflood, plus a floored self-profile beacon this transport sends on session-up
- * and on first hearing a peer ([beaconProfile]). Pure/Android-free — the only `android.bluetooth.*` sits
- * behind the [MeshtasticLink]/[MeshtasticGattDialer] seam.
+ * existing `watchReachable` reflood, plus a self-profile beacon this transport sends on session-up (under a
+ * 5-min floor) and on first hearing a peer (under a 60-s gap, so a two-sided bootstrap completes without a
+ * periodic beacon — [beaconProfile]). [clock] is monotonic (pacing, dedup, linger); [wallClock] is the
+ * epoch clock a frame's `sentAt` is stamped in, read only by the freshness gate. Pure/Android-free — the
+ * only `android.bluetooth.*` sits behind the [MeshtasticLink]/[MeshtasticGattDialer] seam.
  */
 @Suppress("TooManyFunctions", "LongParameterList")
 internal class LoraMeshTransport(
@@ -61,6 +63,7 @@ internal class LoraMeshTransport(
     private val scope: CoroutineScope,
     private val metrics: MeshMetrics,
     private val clock: () -> Long,
+    private val wallClock: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {},
     private val pace: LoraPacePolicy = LoraPacePolicy(),
 ) : MeshTransport {
@@ -176,7 +179,14 @@ internal class LoraMeshTransport(
             return
         }
         if (!LoraFramePolicy.eligible(env, wire, LoraFramePolicy.Path.FANOUT)) return
-        if (!sigSeen.add(sigKey(wire))) return // already sent/received over LoRa within the window
+        if (!LoraFramePolicy.isFresh(env, wallClock())) {
+            metrics.onLoraSuppressed() // a custody re-serve of an old frame — custody's business, not a live plane's
+            return
+        }
+        if (!sigSeen.add(sigKey(wire))) {
+            metrics.onLoraSuppressed() // already sent/received over LoRa within the window
+            return
+        }
         enqueue(wire, "$label:${env.type}", classOf(env))
     }
 
@@ -214,7 +224,7 @@ internal class LoraMeshTransport(
             log("lora too-big $label")
             return
         }
-        if (pace.enqueue(OutboundFrame(parts, label, klass)) == LoraPacePolicy.Admission.DROPPED_OLDEST) {
+        if (pace.enqueue(OutboundFrame(parts, label, klass)) != LoraPacePolicy.Admission.ACCEPTED) {
             metrics.onLoraDroppedQueue()
         }
         wake.trySend(Unit)
@@ -230,21 +240,33 @@ internal class LoraMeshTransport(
 
     // --- the profile beacon (key bootstrap) ---
 
-    private fun sendSelfProfile(wire: WireEnvelope) {
-        if (!profileFloorElapsed(clock())) return
+    private fun sendSelfProfile(
+        wire: WireEnvelope,
+        minGapMs: Long = PROFILE_FLOOR_MS,
+    ) {
+        if (!profileGapElapsed(clock(), minGapMs)) return
         lastSelfProfileAt.set(clock())
         sigSeen.add(sigKey(wire))
         enqueue(wire, "profile-self", FrameClass.BOOTSTRAP)
     }
 
-    private suspend fun beaconProfile() {
-        if (!profileFloorElapsed(clock())) return // check before the (potentially costly) profile build
+    /**
+     * Beacons the signed self profile unless one went out within [minGapMs]. One timestamp, two gaps: session-up
+     * keeps the 5-min floor, while a first hearing needs only a 60-s gap — the peer that just appeared has
+     * demonstrably never heard us, and without a periodic beacon this is the only way a late arrival learns our
+     * key (A beaconed two minutes ago, B just came up: A must speak again or B's parked frames expire).
+     */
+    private suspend fun beaconProfile(minGapMs: Long) {
+        if (!profileGapElapsed(clock(), minGapMs)) return // check before the (potentially costly) profile build
         val wire = selfProfile() ?: return
-        sendSelfProfile(wire)
+        sendSelfProfile(wire, minGapMs)
     }
 
-    /** Whether the profile floor has elapsed; overflow-safe against the [NEVER]-sentinel initial value. */
-    private fun profileFloorElapsed(now: Long): Boolean = lastSelfProfileAt.get().let { it == NEVER || now - it >= PROFILE_FLOOR_MS }
+    /** Whether [minGapMs] has elapsed since the last self-profile; overflow-safe against the [NEVER] sentinel. */
+    private fun profileGapElapsed(
+        now: Long,
+        minGapMs: Long,
+    ): Boolean = lastSelfProfileAt.get().let { it == NEVER || now - it >= minGapMs }
 
     // --- the pacer ---
 
@@ -309,7 +331,7 @@ internal class LoraMeshTransport(
         }
 
     private fun requeue(frame: OutboundFrame) {
-        if (pace.enqueue(frame) == LoraPacePolicy.Admission.DROPPED_OLDEST) metrics.onLoraDroppedQueue()
+        if (pace.enqueue(frame) != LoraPacePolicy.Admission.ACCEPTED) metrics.onLoraDroppedQueue()
     }
 
     private fun onNak(outcome: PacketOutcome) {
@@ -362,7 +384,7 @@ internal class LoraMeshTransport(
         val firstHeard = lastHeardAt.put(peer.nodeId, now) == null
         heardPeers[peer.nodeId] = peer
         recomputeReachable(now)
-        if (firstHeard) scope.launch { beaconProfile() }
+        if (firstHeard) scope.launch { beaconProfile(FIRST_HEARING_GAP_MS) }
     }
 
     private fun recomputeReachable(now: Long) {
@@ -403,7 +425,7 @@ internal class LoraMeshTransport(
             maxPayload = (state.mtu - TORADIO_OVERHEAD).coerceIn(LoraFrameCodec.MIN_PAYLOAD, MeshtasticProto.MAX_PAYLOAD)
             metrics.onLoraSessionUp()
             log("lora ready board=${state.board.myNodeNum} mtu=${state.mtu} maxPayload=$maxPayload")
-            scope.launch { beaconProfile() }
+            scope.launch { beaconProfile(PROFILE_FLOOR_MS) }
         }
         publishStatus()
     }
@@ -437,6 +459,7 @@ internal class LoraMeshTransport(
         const val REACHABLE_LINGER_MS = 45 * 60_000L
         const val LINGER_SWEEP_MS = 60_000L
         const val PROFILE_FLOOR_MS = 5 * 60_000L
+        const val FIRST_HEARING_GAP_MS = 60_000L
         const val NEVER = Long.MIN_VALUE
 
         // Bytes a ToRadio{packet} adds around the Data.payload (3-B ATT header + MeshPacket/Data framing +

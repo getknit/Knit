@@ -496,12 +496,12 @@ class MeshMetrics {
         loraTooBig.incrementAndGet()
     }
 
-    /** A queued LoRa frame evicted because the outbound pace queue was full (oldest-whole-frame drop). */
+    /** A LoRa frame shed because the outbound pace queue was full (oldest whole frame of the lowest class, or the newcomer). */
     fun onLoraDroppedQueue() {
         loraDroppedQueue.incrementAndGet()
     }
 
-    /** A LoRa send suppressed because we already sent/received that frame over LoRa within the dedup window. */
+    /** A LoRa fan-out suppressed: already sent/received over LoRa within the dedup window, or a stale custody re-serve. */
     fun onLoraSuppressed() {
         loraSuppressed.incrementAndGet()
     }

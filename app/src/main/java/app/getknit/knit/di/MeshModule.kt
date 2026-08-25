@@ -151,6 +151,7 @@ val meshModule =
                 scope = get(),
                 metrics = get(),
                 clock = SystemClock::elapsedRealtime,
+                wallClock = System::currentTimeMillis,
                 log = { Log.d("LoraMeshTransport", it) },
             )
         }

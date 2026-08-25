@@ -34,12 +34,14 @@ class LoraMeshTransportTest {
         group: GroupInfo? = null,
         relay: Boolean = true,
         body: String = "hi there",
+        sentAt: Long = 0L,
     ): WireEnvelope {
         val env =
             RelayEnvelope(
                 type = type,
                 id = "id-$sigCounter",
                 senderId = sender,
+                sentAt = sentAt,
                 recipientId = recipientId,
                 group = group,
                 payload = WireCodec.encodePayload(ChatContent(body = body)),
@@ -88,6 +90,7 @@ class LoraMeshTransportTest {
                 scope = scope,
                 metrics = metrics,
                 clock = now,
+                wallClock = now,
                 pace = LoraPacePolicy(minGapMs = 0),
             )
         val received = mutableListOf<InboundFrame>()
@@ -203,6 +206,76 @@ class LoraMeshTransportTest {
             assertEquals("bob does not re-send a LoRa-received DM over LoRa", bSentBefore, b.link.sent.size)
             a.transport.stop()
             b.transport.stop()
+        }
+
+    @Test
+    fun aStaleChatIsNotFannedButAProfileAndAFreshChatAre() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(20 * 60_000) // 20 min into the session
+            val baseline = a.link.sent.size
+
+            // A custody re-serve: a room post / DM stamped 20 min ago re-enters the pipeline and is re-fanned.
+            a.transport.fastFanout(frame(FrameType.CHAT, "carol", body = "old room post", sentAt = 0L))
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "alice", body = "old dm", sentAt = 0L))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("stale chat never rides a live plane", baseline, a.link.sent.size)
+            assertEquals(2L, a.metrics.snapshot().loraSuppressed)
+
+            // A peer's profile carries its publish stamp (hours old) and is the key bootstrap — never refused.
+            a.transport.fastFanout(frame(FrameType.PROFILE, "carol", body = "x".repeat(20), sentAt = 0L))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("an old profile still rides", baseline + 1, a.link.sent.size)
+
+            val now = testScheduler.currentTime
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "alice", body = "fresh dm", sentAt = now))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("a fresh DM rides", baseline + 2, a.link.sent.size)
+            a.transport.stop()
+        }
+
+    @Test
+    fun aFirstHearingBeaconsAfterASixtySecondGapWhileSessionUpKeepsTheFloor() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            assertEquals("session-up beacon", 1, a.link.sent.size)
+
+            // Two minutes later bob comes up and beacons; alice has never heard him, so she beacons again —
+            // her last beacon was inside the 5-min floor but past the 60-s first-hearing gap.
+            advanceTimeBy(2 * 60_000)
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            b.transport.start()
+            runCurrent()
+            assertEquals("alice re-beacons for a newly heard peer", 2, a.link.sent.size)
+            assertEquals("bob's own session-up beacon; alice's reply is inside his gap", 1, b.link.sent.size)
+
+            // Ten seconds later carol comes up: inside everyone's 60-s gap, so nobody re-beacons.
+            advanceTimeBy(10_000)
+            val c = rig(air, 3u, "carol", backgroundScope) { testScheduler.currentTime }
+            c.transport.start()
+            runCurrent()
+            assertEquals(2, a.link.sent.size)
+            assertEquals(1, b.link.sent.size)
+
+            // A reconnect one minute later is a session-up trigger and keeps the 5-min floor.
+            advanceTimeBy(60_000)
+            a.link.drop()
+            runCurrent()
+            a.link.start("AA:1")
+            runCurrent()
+            assertEquals("no session-up beacon inside the 5-min floor", 2, a.link.sent.size)
+            a.transport.stop()
+            b.transport.stop()
+            c.transport.stop()
         }
 
     @Test

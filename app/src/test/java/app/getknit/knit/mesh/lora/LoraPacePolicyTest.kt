@@ -6,7 +6,10 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class LoraPacePolicyTest {
-    private fun frame(label: String) = OutboundFrame(messages = listOf(byteArrayOf(1)), label = label)
+    private fun frame(
+        label: String,
+        klass: FrameClass = FrameClass.ROOM,
+    ) = OutboundFrame(messages = listOf(byteArrayOf(1)), label = label, klass = klass)
 
     @Test
     fun holdsTheMinimumGapBetweenSends() {
@@ -27,6 +30,44 @@ class LoraPacePolicyTest {
         assertEquals(2, pace.pending)
         assertEquals("oldest evicted, b is next", "b", pace.take(10_000)!!.label)
         assertEquals("c", pace.take(20_000)!!.label)
+    }
+
+    @Test
+    fun aFullQueueShedsTheRoomBeforeADmAndNeverTheProfile() {
+        val pace = LoraPacePolicy(queueCap = 3)
+        pace.enqueue(frame("profile", FrameClass.BOOTSTRAP))
+        pace.enqueue(frame("room-1"))
+        pace.enqueue(frame("dm-1", FrameClass.DM))
+        // A second DM evicts the room post (the lowest class present), not the older profile or DM.
+        assertEquals(LoraPacePolicy.Admission.DROPPED_OLDEST, pace.enqueue(frame("dm-2", FrameClass.DM)))
+        assertEquals(listOf("profile", "dm-1", "dm-2"), drain(pace))
+    }
+
+    @Test
+    fun aNewcomerAloneAtTheBottomYieldsInsteadOfEvicting() {
+        val pace = LoraPacePolicy(queueCap = 2)
+        pace.enqueue(frame("profile", FrameClass.BOOTSTRAP))
+        pace.enqueue(frame("dm", FrameClass.DM))
+        assertEquals("a room post cannot displace a DM or the bootstrap", LoraPacePolicy.Admission.REFUSED, pace.enqueue(frame("room")))
+        assertEquals(2, pace.pending)
+        // Within one class the oldest still goes and the newcomer stays (recency wins, as before).
+        assertEquals(LoraPacePolicy.Admission.DROPPED_OLDEST, pace.enqueue(frame("dm-2", FrameClass.DM)))
+        assertEquals(listOf("profile", "dm-2"), drain(pace))
+    }
+
+    @Test
+    fun dequeueStaysFifoAcrossClasses() {
+        val pace = LoraPacePolicy(minGapMs = 0)
+        pace.enqueue(frame("room"))
+        pace.enqueue(frame("dm", FrameClass.DM))
+        pace.enqueue(frame("profile", FrameClass.BOOTSTRAP))
+        assertEquals("class governs shedding, not send order", listOf("room", "dm", "profile"), drain(pace))
+    }
+
+    /** Takes everything queued, advancing the clock past the min gap between takes. */
+    private fun drain(pace: LoraPacePolicy): List<String> {
+        var now = 1_000_000L
+        return generateSequence { pace.take(now).also { now += 10_000 } }.map { it.label }.toList()
     }
 
     @Test

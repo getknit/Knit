@@ -71,6 +71,21 @@ class ContactsViewModelTest {
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.contacts.collect {} }
     }
 
+    /** A contact imported from a link is accepted before any message exists; the picker must list it. */
+    @Test
+    fun anAcceptedPeerWithNoMessagesYetIsAContact() =
+        runTest {
+            val vm = vm()
+            startCollecting(vm)
+            peersFlow.value = listOf(peer("linked", name = "Linked"))
+            acceptedFlow.value = setOf("linked", "g-00112233445566778899aabb")
+            advanceUntilIdle()
+            assertEquals(listOf("linked"), vm.contacts.value.map { it.nodeId })
+            blockedFlow.value = setOf("linked")
+            advanceUntilIdle()
+            assertEquals(emptyList<String>(), vm.contacts.value.map { it.nodeId })
+        }
+
     @Test
     fun verifiedPeerAppearsButAPlainNearbyStrangerDoesNot() =
         runTest {

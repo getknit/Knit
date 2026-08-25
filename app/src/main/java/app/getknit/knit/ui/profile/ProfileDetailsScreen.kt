@@ -46,6 +46,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
+import app.getknit.knit.mesh.IntroState
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.FullscreenImageViewer
 import app.getknit.knit.ui.image.BlobImage
@@ -235,6 +236,24 @@ internal fun ProfileDetailsScreenContent(
                         ),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // A contact added from a link: where the intro handshake stands (docs/CONTACT_CARD.md).
+            state.intro?.let { intro ->
+                Text(
+                    text =
+                        stringResource(
+                            when (intro) {
+                                IntroState.AWAITING_PREKEY -> R.string.intro_status_awaiting_key
+                                IntroState.SENT -> R.string.intro_status_waiting
+                                IntroState.CONNECTED -> R.string.intro_status_connected
+                            },
+                            state.displayName,
+                        ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("profile_intro_status"),
                 )
             }
 

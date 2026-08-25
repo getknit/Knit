@@ -7,6 +7,7 @@ import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.mesh.sha256Hex
+import com.google.crypto.tink.subtle.X25519
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.TestScope
@@ -76,6 +77,10 @@ class ScopeSyncTest {
         groups: List<GroupScopeRoots> = emptyList(),
         blobs: FakeBlobs = FakeBlobs(),
         deferAttachment: suspend (Scope, ScopeAttachments.Ref) -> Boolean = { _, _ -> false },
+        // The confirmed-session roots (a DM scope per entry) and the intro driver's pair-scope inputs
+        // (spec §3.5), both read live so a test can move a peer between them mid-run.
+        roots: () -> List<ScopeRoots> = { listOf(ScopeRoots(peer, pairwiseRoot)) },
+        pairs: () -> List<PairScopeRoots> = { emptyList() },
     ): Member {
         val metrics = MeshMetrics()
         val delivered = mutableListOf<RelayEnvelope>()
@@ -85,8 +90,9 @@ class ScopeSyncTest {
                 registry =
                     ScopeRegistry(
                         selfId = { self },
-                        roots = { listOf(ScopeRoots(peer, pairwiseRoot)) },
+                        roots = { roots() },
                         groupRoots = { groups },
+                        pairs = { pairs() },
                     ),
                 dialer = spool,
                 store = custody,
@@ -200,6 +206,59 @@ class ScopeSyncTest {
             assertTrue("the bridged frame lands in the receiver's custody", receiver.custody.has("m1"))
             assertEquals(1, sender.metrics.snapshot().spoolPushed)
             assertEquals(1, receiver.metrics.snapshot().spoolBridged)
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    /**
+     * The contact-card bootstrap (spec §3.5, ADR 042): two members with NO session share only each other's
+     * identity. Each derives the pair scope from the identity DH agreement; the profiles (the prekeys) and
+     * the sealed intro cross it under the ordinary DM rule; once the intro driver stops naming the peer,
+     * the scope leaves the table and only a DM scope would remain.
+     */
+    @Test
+    fun `two members with no session meet at the pair scope and the intro crosses it`() =
+        runTest {
+            val spool = FakeSpool()
+            val alicePriv = ByteArray(32) { (it + 1).toByte() }
+            val bobPriv = ByteArray(32) { (it + 101).toByte() }
+            val secretAtAlice = ScopeCrypto.pairSecret(alicePriv, X25519.publicFromPrivate(bobPriv))
+            val secretAtBob = ScopeCrypto.pairSecret(bobPriv, X25519.publicFromPrivate(alicePriv))
+            var alicePairs = listOf(PairScopeRoots(bob, secretAtAlice))
+            var bobPairs = listOf(PairScopeRoots(alice, secretAtBob))
+            val sender = member(spool, alice, bob, roots = { emptyList() }, pairs = { alicePairs })
+            val receiver = member(spool, bob, alice, roots = { emptyList() }, pairs = { bobPairs })
+            // Alice custodies her own profile plus the intro — a sealed DM-form ctl to Bob; Bob only his profile.
+            sender.custody.store(profileFrame("pa", from = alice, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            sender.custody.store(dmFrame("intro", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            receiver.custody.store(profileFrame("pb", from = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump()
+
+            val pairHex = hex(ScopeCrypto.pairScopeId(secretAtAlice, alice, bob))
+            assertEquals("both sides derive one pair scope", pairHex, hex(ScopeCrypto.pairScopeId(secretAtBob, bob, alice)))
+            assertEquals(setOf("pb"), sender.delivered.map { it.id }.toSet())
+            assertEquals(setOf("pa", "intro"), receiver.delivered.map { it.id }.toSet())
+            assertEquals(3, spool.liveIds(pairHex).size)
+
+            // Both sessions confirmed: the driver stops naming the peer and the pair scope leaves the table.
+            alicePairs = emptyList()
+            bobPairs = emptyList()
+            pump()
+            assertTrue(
+                sender.sync
+                    .status()
+                    .flatMap { it.scopes }
+                    .none { it.scopeHex == pairHex },
+            )
+            assertTrue(
+                receiver.sync
+                    .status()
+                    .flatMap { it.scopes }
+                    .none { it.scopeHex == pairHex },
+            )
             sender.sync.stop()
             receiver.sync.stop()
         }

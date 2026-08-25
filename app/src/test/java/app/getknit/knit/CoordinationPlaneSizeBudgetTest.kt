@@ -17,6 +17,7 @@ import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
+import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.RatchetHeader
 import app.getknit.knit.mesh.protocol.RatchetInit
@@ -113,6 +114,7 @@ class CoordinationPlaneSizeBudgetTest {
             attachmentHash: String? = null,
             attachmentKey: String? = null,
             replyTo: ReplyRef? = null,
+            pr: ProfilePayload? = null,
         ): RelayEnvelope {
             val aad = MessageCrypto.header(id, party.nodeId, SENT_AT, to.nodeId)
             val plain =
@@ -126,6 +128,7 @@ class CoordinationPlaneSizeBudgetTest {
                     rp = rp,
                     acks = acks,
                     replyTo = replyTo,
+                    pr = pr,
                 ).encode()
             val sealed = checkNotNull(engine.seal(session, plain, aad, toSpk.pub, now = SESSION_AT))
             session = sealed.session
@@ -493,6 +496,29 @@ class CoordinationPlaneSizeBudgetTest {
 
         val huge = alice.sign(sealer.dm(FrameId.new(), body = "c".repeat(TextLimits.MESSAGE)))
         assertEquals("a max-length DM is loraTooBig — it rides the radios and custody instead", null, loraParts(huge))
+    }
+
+    /**
+     * ADR 042: the contact-card intro is a session-initial `CTL_PROFILE` DM — the X3DH init plus a full
+     * presentation payload (a 32-char name, a 64-char status, an avatar hash) — and it must cross the LoRa
+     * hop, since a LoRa-only pair's intro has no other path until the session exists.
+     */
+    @Test
+    fun anIntroFitsTheLoraHop() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        val payload =
+            ProfilePayload(
+                name = "n".repeat(TextLimits.DISPLAY_NAME),
+                status = "s".repeat(TextLimits.STATUS),
+                avatarHash = "ab".repeat(32),
+                version = 1_756_100_000_000L,
+            )
+        val intro = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_PROFILE, pr = payload))
+        report("intro-ctl-profile-init", intro, alice)
+        val parts = checkNotNull(loraParts(intro)) { "a session-initial intro must fit the LoRa hop" }
+        assertTrue("session-initial intro in <= 3 LoRa packets (was $parts)", parts <= FastFrameCodec.MAX_PARTS)
     }
 
     /**

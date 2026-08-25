@@ -232,7 +232,7 @@
     <!-- Direct messages / contacts -->
     <string name="contacts_title">New message</string>
     <string name="contacts_new_message">New message</string>
-    <string name="contacts_empty">No contacts yet.\nSay hi in Nearby, or use Verify contact to add someone by code.</string>
+    <string name="contacts_empty">No contacts yet.\nSay hi in Nearby, scan someone\'s code, or add them from a contact link.</string>
     <string name="contacts_start_chat">Start chat</string>
     <string name="contacts_selected">Selected</string>
     <string name="contacts_not_selected">Not selected</string>
@@ -298,6 +298,34 @@
     <string name="verify_self">That\'s your own code.</string>
     <string name="verify_invalid">That\'s not a Knit contact code.</string>
 
+    <!-- Contact links (docs/CONTACT_CARD.md): the identity QR as a shareable link, for people too far apart to scan. -->
+    <string name="contact_link_share">Share my contact link</string>
+    <string name="contact_link_copy">Copy link</string>
+    <string name="contact_link_caption">Too far apart to scan? Send your link instead — the other person adds you from it, and you add them from theirs.</string>
+    <string name="contact_link_chooser_title">Share your contact link</string>
+    <string name="contact_link_share_text">Add me on Knit: %1$s</string>
+    <string name="contact_link_copied">Link copied</string>
+    <string name="add_contact_title">Add by link</string>
+    <string name="add_contact_caption">Paste a contact link someone sent you, or open it from the message it arrived in.</string>
+    <string name="add_contact_input_label">Contact link</string>
+    <string name="add_contact_input_hint">https://getknit.app/c#…</string>
+    <string name="add_contact_paste">Paste</string>
+    <string name="add_contact_lookup">Continue</string>
+    <string name="add_contact_preview_title">Add %1$s?</string>
+    <string name="add_contact_safety_caption">Compare this number with %1$s over a call to be sure the link really came from them. You can also do that later from their profile.</string>
+    <string name="add_contact_confirm">Add contact</string>
+    <string name="add_contact_confirm_unblock">Unblock and add</string>
+    <string name="add_contact_importing">Adding…</string>
+    <string name="add_contact_already">%1$s is already in your contacts. Adding again just refreshes the connection.</string>
+    <string name="add_contact_blocked">You\'ve blocked this person.</string>
+    <string name="add_contact_relays_off">Internet relays are off, so you\'ll connect when you\'re nearby or over LoRa. Turn relays on in Settings to connect over the Internet.</string>
+    <string name="add_contact_relay_hint">%1$s uses relay %2$s, which you don\'t. To meet over the Internet, add it under Settings › Internet relays.</string>
+    <string name="add_contact_mismatch">This link\'s key doesn\'t match the one you already have for %1$s. Ask them to confirm their safety number.</string>
+    <string name="add_contact_invalid">That\'s not a Knit contact link.</string>
+    <string name="intro_status_awaiting_key">Waiting to reach %1$s — connects once their device is heard nearby, over LoRa, or through a relay.</string>
+    <string name="intro_status_waiting">Waiting for %1$s\'s device to answer.</string>
+    <string name="intro_status_connected">Connected — you can message each other over any path you share.</string>
+
     <!-- QR scanner (camera) -->
     <string name="scan_hint">Point the camera at the other person\'s code.</string>
     <string name="scan_permission_denied">Knit needs camera access to scan a contact\'s code. You can turn it on in Settings.</string>
@@ -330,6 +358,8 @@
     <string name="diagnostics_metric_key_requests">Key requests sent</string>
     <string name="diagnostics_metric_keys_served">Keys served</string>
     <string name="diagnostics_metric_keys_recovered">Keys recovered</string>
+    <string name="diagnostics_metric_intros_sent">Contact intros sent</string>
+    <string name="diagnostics_metric_intros_answered">Contact intros answered</string>
     <string name="diagnostics_metric_frames_held">Frames held for key</string>
     <string name="diagnostics_metric_frames_replayed">Frames replayed</string>
     <string name="diagnostics_metric_receipts_resent">Receipts re-sent</string>

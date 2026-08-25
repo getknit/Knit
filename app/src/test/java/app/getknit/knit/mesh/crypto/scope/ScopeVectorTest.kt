@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.crypto.scope
 
+import com.google.crypto.tink.subtle.X25519
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -35,6 +36,9 @@ class ScopeVectorTest {
 
     private fun sealedChunk() = ScopeCrypto.sealChunk(dmKeys(), dmScopeId(), attachHash, index = 0, total = 1, chunk = bytes(48, 7))
 
+    // The pair scope (§3.5): fixture X25519 scalars stand in for the two identity DH keys.
+    private fun pairSecret() = ScopeCrypto.pairSecret(bytes(32, 3), X25519.publicFromPrivate(bytes(32, 8)))
+
     /** Every pinned value as lowercase hex, in a stable order. */
     private fun vectors(): Map<String, String> {
         val dmKeys = dmKeys()
@@ -55,7 +59,18 @@ class ScopeVectorTest {
             "attachChunkId" to ScopeCrypto.blobId(sealedChunk()).toHex(),
             "digestSet" to ScopeCrypto.digestBytes(ScopeCrypto.scopeDigest(listOf(bytes(32, 11), bytes(32, 12), bytes(32, 13)))).toHex(),
             "powDigest" to SpoolPow.digest(powScopeId, day = POW_DAY, n = POW_N).toHex(),
+            // Appended (§3.5, 2026-08-25) — rows above are frozen; new derivations only ever add rows.
+            "pairSecret" to pairSecret().toHex(),
+            "pairScopeId" to ScopeCrypto.pairScopeId(pairSecret(), NODE_A, NODE_B).toHex(),
+            "pairSealKey" to ScopeCrypto.pairSealKeys(pairSecret(), NODE_A, NODE_B).sealKey.toHex(),
+            "pairNonceKey" to ScopeCrypto.pairSealKeys(pairSecret(), NODE_A, NODE_B).nonceKey.toHex(),
         )
+    }
+
+    @Test
+    fun thePairSecretIsSymmetric() {
+        val theirs = ScopeCrypto.pairSecret(bytes(32, 8), X25519.publicFromPrivate(bytes(32, 3)))
+        assertEquals(pairSecret().toHex(), theirs.toHex())
     }
 
     @Test
@@ -116,6 +131,10 @@ class ScopeVectorTest {
                 "attachChunkId" to "e21f04fd3f95cade1a9a7424f6ab9bb45a9e185c836524c9ae7920a8fdfe0c27",
                 "digestSet" to "834b13d8dc060ce5",
                 "powDigest" to "00b776b91276563998bb57f8f3f73a05e0d8afcd3dce8a2583d6d466aadb620e",
+                "pairSecret" to "536a5e63f420ed78cd6166913a87d57562938cc18d2992f443ded7e7eca0f744",
+                "pairScopeId" to "bf46c96f08e53c8db14c1343c3fac9e5863732addae8baa0de2cf7681ca26855",
+                "pairSealKey" to "a9fc082b054b4e903b304143996471960eb3cd3b075e6537e2dc556f4856de95",
+                "pairNonceKey" to "e560060de754aa7d3759188568cbbb1cc2a7eccdeba81bfb9bdd68bc35b81285",
             )
     }
 }

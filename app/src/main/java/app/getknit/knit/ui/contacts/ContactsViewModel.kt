@@ -159,7 +159,10 @@ class ContactsViewModel(
                     .filterNot { it.left }
                     .flatMap { GroupMembersStore.decode(it.members) }
                     .toSet()
-            val contactIds = (acceptedDmPeers + groupMembers + verifiedIds) - blocked - me
+            // A peer the user explicitly accepted (a contact card imported, or a request accepted) is a
+            // contact even before a single message exists in the thread.
+            val explicitlyAccepted = b.accepted.filterTo(mutableSetOf()) { Conversations.kindFor(it) == ConversationKind.DM }
+            val contactIds = (acceptedDmPeers + explicitlyAccepted + groupMembers + verifiedIds) - blocked - me
             contactIds
                 .map { id ->
                     Contact(

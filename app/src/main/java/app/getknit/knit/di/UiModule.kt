@@ -2,6 +2,7 @@ package app.getknit.knit.di
 
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.mesh.lora.LoraStatusRepository
+import app.getknit.knit.ui.addcontact.AddContactViewModel
 import app.getknit.knit.ui.blocked.BlockedUsersViewModel
 import app.getknit.knit.ui.chat.ChatViewModel
 import app.getknit.knit.ui.chat.MessageDetailsViewModel
@@ -75,7 +76,8 @@ val uiModule =
         }
         viewModel { BlockedUsersViewModel(get(), get()) }
         viewModel { MessageRequestsViewModel(get(), get(), get(), get(), get(), androidContext()) }
-        viewModel { VerifyContactViewModel(get(), get()) }
+        viewModel { VerifyContactViewModel(get(), get(), get()) }
+        viewModel { AddContactViewModel(get(), get()) }
         viewModel { InternetRelayViewModel(get(), get()) }
         viewModel { LoraRadioViewModel(get(), get(), get()) }
     }

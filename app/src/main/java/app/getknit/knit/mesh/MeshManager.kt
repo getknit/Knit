@@ -33,6 +33,7 @@ import app.getknit.knit.mesh.crypto.b64d
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
+import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
@@ -58,6 +59,7 @@ import app.getknit.knit.mesh.spool.AttachmentDeferPolicy
 import app.getknit.knit.mesh.spool.GroupRootPolicy
 import app.getknit.knit.mesh.spool.GroupRootStore
 import app.getknit.knit.mesh.spool.GroupScopeRoots
+import app.getknit.knit.mesh.spool.PairScopeRoots
 import app.getknit.knit.mesh.spool.ScopeBlobs
 import app.getknit.knit.mesh.spool.ScopeRegistry
 import app.getknit.knit.mesh.spool.ScopeRoots
@@ -74,6 +76,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -174,6 +177,32 @@ class MeshManager(
             metrics = metrics,
         )
 
+    // The contact-card intro driver (docs/CONTACT_CARD.md): turns a peer pinned from an out-of-band card
+    // into a confirmed ratchet session by sealing a CTL_PROFILE DM as soon as the peer's prekey is known,
+    // re-sending on a floor while unconfirmed, and answering an unconfirmed peer. Its pending/grace peers
+    // are what the spool plane derives pair scopes for (spec §3.5). State lives in the settings store.
+    private val introSync =
+        IntroSync(
+            store =
+                object : IntroStore {
+                    override suspend fun pending(): Map<String, Long> = decodeStamped(settings.pendingIntros.first())
+
+                    override suspend fun grace(): Map<String, Long> = decodeStamped(settings.introGrace.first())
+
+                    override suspend fun write(
+                        pending: Map<String, Long>,
+                        grace: Map<String, Long>,
+                    ) {
+                        settings.setIntroState(encodeStamped(pending), encodeStamped(grace))
+                    }
+                },
+            canSeal = { peerId -> canSealTickTo(peerId) && ratchetPrekeyOf(peers.find(peerId)) != null },
+            sendIntro = ::sendIntroTo,
+            sessionConfirmed = { peerId -> ratchet.sessionFor(peerId)?.confirmed == true },
+            metrics = metrics,
+            clock = clock,
+        )
+
     // Delay-tolerant "delivered" tick for broadcast/group messages. A live-linked author gets today's
     // unicast, non-custodied tick; an absent-but-sealed-capable author's acks batch per author and, after
     // a short debounce, escalate as ONE originated (`relay = true`) ctl frame — flooded, custodied, and
@@ -249,6 +278,8 @@ class MeshManager(
             replayGroupCustody = ::replayCustodiedGroupFrames,
             adoptGroupRoot = ::adoptGroupRoot,
             onGroupRootCtl = ::onGroupRootCtl,
+            onProfilePinned = { introSync.onProfilePinned(it) },
+            onPeerFrameOpened = { senderId, carriesInit -> introSync.onPeerFrameOpened(senderId, carriesInit) },
         )
 
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
@@ -293,6 +324,7 @@ class MeshManager(
                             }
                         },
                         groupRoots = ::groupScopeRoots,
+                        pairs = ::pairScopeRoots,
                     ),
                 dialer = dialer,
                 store = forwardStore,
@@ -402,6 +434,7 @@ class MeshManager(
         pruneForwardStorePeriodically(session)
         reofferToNeighborsPeriodically(session)
         logMetricsPeriodically(session)
+        session.launch { introSync.prime() }
         scopeSync?.start(session)
     }
 
@@ -421,6 +454,15 @@ class MeshManager(
     }
 
     override fun spoolStatus(): List<SpoolStatus> = scopeSync?.status().orEmpty()
+
+    override suspend fun importContact(peerId: String) {
+        introSync.want(peerId)
+        // The radio half of the bootstrap: ask neighbors for the profile (hop-by-hop), so a pair that shares
+        // a mesh but never exchanged a profile still gets the prekey without waiting for a re-flood.
+        keyExchange.want(peerId)
+    }
+
+    override fun introState(peerId: String): Flow<IntroState?> = introSync.state(peerId)
 
     override suspend fun ratchetState(): List<RatchetPeerState> =
         peers.observePeers().first().map { peer ->
@@ -469,6 +511,7 @@ class MeshManager(
             rotatePrekeyIfDue()
             republishProfileIfStale() // refresh the publish stamp before custody would refuse the frame
             broadcastSealedProfile() // catch sessions that only confirmed after the edit fired
+            introSync.retry() // re-send stale contact-card intros, settle confirmed ones, expire pair-scope grace
             mintGroupRootsIfDue() // mint a group's spool root when it is our turn (spec §3.2)
         }
     }
@@ -1040,6 +1083,21 @@ class MeshManager(
                 prevRootVersion = state.prevVersion,
                 prevRootExpiresAt = state.prevExpiresAt,
             )
+        }
+    }
+
+    /**
+     * The pair scopes (spec §3.5): one per peer the intro driver names, keyed by the identity pair secret
+     * — computable only once the peer's bundle is pinned, which is exactly why a pulled frame from such a
+     * scope always passes the carry gate. A malformed pin is skipped rather than thrown on.
+     */
+    private suspend fun pairScopeRoots(): List<PairScopeRoots> {
+        val wanted = introSync.pairPeers()
+        if (wanted.isEmpty()) return emptyList()
+        val ownPriv = identity.dhIdentityPrivate()
+        return wanted.mapNotNull { peerId ->
+            val bundle = peers.find(peerId)?.pubKey?.let { PublicKeyBundle.decode(it) } ?: return@mapNotNull null
+            runCatching { PairScopeRoots(peerId, ScopeCrypto.pairSecret(ownPriv, bundle.dhPublicKey())) }.getOrNull()
         }
     }
 
@@ -1711,22 +1769,42 @@ class MeshManager(
         if (version <= 0L) return
         val me = identity.nodeId()
         val avatarHash = settings.ownAvatarHash.first()
-        val payload =
-            MessageContent(
-                body = "",
-                ctl = MessageContent.CTL_PROFILE,
-                pr =
-                    ProfilePayload(
-                        name = normalizeSingleLine(settings.displayName.first()).take(TextLimits.DISPLAY_NAME),
-                        status = normalizeSingleLine(settings.status.first()).take(TextLimits.STATUS),
-                        avatarHash = avatarHash,
-                        version = version,
-                    ),
-            )
+        val payload = currentProfilePayload(version, avatarHash)
         ratchet.exportedRoots().forEach { session ->
             if (sentProfileVersions[session.peerId] == version) return@forEach
             if (sendProfileDm(session.peerId, payload, avatarHash, me)) sentProfileVersions[session.peerId] = version
         }
+    }
+
+    /** The sealed presentation payload (`CTL_PROFILE`) for the current profile at [version]. */
+    private suspend fun currentProfilePayload(
+        version: Long,
+        avatarHash: String?,
+    ): MessageContent =
+        MessageContent(
+            body = "",
+            ctl = MessageContent.CTL_PROFILE,
+            pr =
+                ProfilePayload(
+                    name = normalizeSingleLine(settings.displayName.first()).take(TextLimits.DISPLAY_NAME),
+                    status = normalizeSingleLine(settings.status.first()).take(TextLimits.STATUS),
+                    avatarHash = avatarHash,
+                    version = version,
+                ),
+        )
+
+    /**
+     * The contact-card intro to [peerId] (`IntroSync`): one sealed `CTL_PROFILE` DM, exactly the frame
+     * [broadcastSealedProfile] sends to an established contact — here sent to a peer whose session does
+     * not exist yet, so `ratchet.sealDm` runs the X3DH initiation off the pinned prekey and the init rides
+     * the frame. No new wire: every deployed build reads it, and the receiver's ordinary profile-version
+     * gate makes a stale or version-0 payload a harmless no-op while the session still forms. Bypasses
+     * [sentProfileVersions] on purpose — the driver owns its own floors. False when nothing could be sealed.
+     */
+    private suspend fun sendIntroTo(peerId: String): Boolean {
+        val avatarHash = settings.ownAvatarHash.first()
+        val payload = currentProfilePayload(settings.profileVersion.first(), avatarHash)
+        return sendProfileDm(peerId, payload, avatarHash, identity.nodeId())
     }
 
     /**
@@ -2047,3 +2125,15 @@ class MeshManager(
         val EMPTY_PAYLOAD = ByteArray(0)
     }
 }
+
+/** `"<peerId>|<millis>"` entries ↔ a peer→stamp map, the intro driver's two settings sets. */
+private fun decodeStamped(entries: Set<String>): Map<String, Long> =
+    entries
+        .mapNotNull { entry ->
+            val at = entry.lastIndexOf('|')
+            if (at <= 0) return@mapNotNull null
+            val stamp = entry.substring(at + 1).toLongOrNull() ?: return@mapNotNull null
+            entry.substring(0, at) to stamp
+        }.toMap()
+
+private fun encodeStamped(map: Map<String, Long>): Set<String> = map.mapTo(mutableSetOf()) { (peerId, stamp) -> "$peerId|$stamp" }

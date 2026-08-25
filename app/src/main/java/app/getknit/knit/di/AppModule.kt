@@ -4,6 +4,9 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
+import app.getknit.knit.BuildConfig
+import app.getknit.knit.contacts.ContactCards
+import app.getknit.knit.contacts.ContactImporter
 import app.getknit.knit.crash.CrashReports
 import app.getknit.knit.crash.ProcessExitReasons
 import app.getknit.knit.crash.crashStore
@@ -30,6 +33,7 @@ import app.getknit.knit.identity.AndroidDeviceIdSource
 import app.getknit.knit.identity.DeviceIdSource
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.ForwardStore
+import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 import app.getknit.knit.mesh.crypto.ratchet.RatchetStore
 import app.getknit.knit.mesh.spool.GroupRootStore
@@ -37,6 +41,7 @@ import app.getknit.knit.notifications.MessageNotifier
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.review.ReviewPrompter
 import app.getknit.knit.ui.RouteInbox
+import app.getknit.knit.ui.addcontact.ContactCardInbox
 import app.getknit.knit.ui.review.ReviewPromptInbox
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.voice.VoicePlayer
@@ -71,6 +76,10 @@ val appModule =
         single { DemoComposer() }
         // Single-shot handoff for a notification-tap deep-link route (drained by KnitApp).
         single { RouteInbox() }
+        // Contact cards (docs/CONTACT_CARD.md): the minter, the importer, and the link handoff inbox.
+        single { ContactCardInbox() }
+        single { ContactCards(get(), get(), get<MessageCrypto>()::signRaw) }
+        single { ContactImporter(get(), get(), get(), get(), BuildConfig.INTERNET_PLANE) }
         // Single-shot signal that the rate/review prompt should show (drained by KnitApp).
         single { ReviewPromptInbox() }
         // Decides when to ask for an app rating and where to route it (installer-aware); no-op in demo builds.

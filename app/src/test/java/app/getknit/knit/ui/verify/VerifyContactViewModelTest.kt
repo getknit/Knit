@@ -1,5 +1,6 @@
 package app.getknit.knit.ui.verify
 
+import app.getknit.knit.contacts.ContactCards
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
@@ -29,6 +30,7 @@ import org.junit.Test
 class VerifyContactViewModelTest {
     private val peers = mockk<PeerRepository>(relaxed = true)
     private val identity = mockk<Identity>(relaxed = true)
+    private val cards = mockk<ContactCards>(relaxed = true)
 
     // A self-consistent local identity: the node id derives from the bundle, so a "scan my own code" case
     // (encode(myId, myBundle)) passes the self-certifying check and hits the SELF branch.
@@ -51,7 +53,7 @@ class VerifyContactViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = VerifyContactViewModel(peers, identity)
+    private fun vm() = VerifyContactViewModel(peers, identity, cards)
 
     @Test
     fun scanningANewPeerPinsAndVerifiesItWithoutClobberingLwwOrder() =

@@ -9,6 +9,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.core.content.IntentCompat
 import app.getknit.knit.ui.KnitApp
 import app.getknit.knit.ui.RouteInbox
+import app.getknit.knit.ui.addcontact.ContactCardInbox
+import app.getknit.knit.ui.addcontact.contactLinkFrom
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.SharedContent
 import app.getknit.knit.ui.theme.KnitTheme
@@ -21,6 +23,9 @@ class MainActivity : ComponentActivity() {
     // Single-shot holder for a notification-tap deep-link route (e.g. "chat/<id>"); KnitApp drains it.
     private val routeInbox: RouteInbox by inject()
 
+    // Single-shot holder for a contact link (a tapped getknit.app/c link, or a shared text carrying one).
+    private val contactCardInbox: ContactCardInbox by inject()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -28,6 +33,8 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
         // A cold-start notification tap: stage its deep-link route so KnitApp navigates to that thread.
         handleRouteIntent(intent)
+        // A cold-start contact link: stage it so KnitApp opens the Add-contact screen.
+        handleContactLinkIntent(intent)
         // Debug builds honor a deep-link route extra so screenshots (demo builds) and automation agents
         // (any debug build, over the real mesh) can jump straight to a screen, e.g.
         // `adb shell am start -n app.getknit.knit/.MainActivity --es demo_route chat/nearby`. Gated to
@@ -53,6 +60,13 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
         // A notification tap on an already-running instance: stage the deep-link route; KnitApp navigates.
         handleRouteIntent(intent)
+        handleContactLinkIntent(intent)
+    }
+
+    /** Stage a contact link (a VIEW of a card link, or a SEND whose text carries one) into the [ContactCardInbox]. */
+    private fun handleContactLinkIntent(intent: Intent?) {
+        val link = contactLinkFrom(intent?.action, intent?.dataString, intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString())
+        if (link != null) contactCardInbox.offer(link)
     }
 
     /** Stage a notification deep-link route ([EXTRA_ROUTE], e.g. "chat/<id>") into the [RouteInbox]. */
@@ -64,6 +78,9 @@ class MainActivity : ComponentActivity() {
     private fun handleShareIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND) return
         val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+        // A shared text that IS a contact link is an import, not a message draft — the Android-idiomatic
+        // route for a link on 12+, where an unverified https link opens in the browser rather than here.
+        if (contactLinkFrom(intent.action, null, text) != null) return
         // EXTRA_STREAM is only meaningful (and read-granted) for the image/* filter we declare.
         val imageUri =
             if (intent.type?.startsWith("image/") == true) {

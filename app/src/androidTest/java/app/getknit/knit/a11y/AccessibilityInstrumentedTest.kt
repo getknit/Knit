@@ -118,6 +118,10 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
     // screen — dense monospace trace and the error-tinted destructive action — not the empty state.
     @Test fun crashLog() = audit(route = "crash") { awaitTag("screen_crash_log") }
 
+    @Test fun verifyContact() = audit(route = "verify") { awaitTag("screen_verify") }
+
+    @Test fun addContact() = audit(route = "addContact") { awaitTag("screen_add_contact") }
+
     /**
      * Launches [route], waits for its seeded content via [awaitContent], then audits the whole screen. A
      * failing ATF ERROR throws `AccessibilityViewCheckException`, whose message enumerates each violation

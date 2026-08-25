@@ -95,6 +95,33 @@
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="image/*" />
             </intent-filter>
+            <!-- Contact links (docs/CONTACT_CARD.md): https://getknit.app/c#<card> — the card rides the
+                 fragment, which never reaches the server. autoVerify needs getknit.app to publish
+                 /.well-known/assetlinks.json listing BOTH signing certificates (Play App Signing and the
+                 distribution key F-Droid/GitHub/offline-share installs carry — see
+                 .agents/context/distribution.md); until it does, Android 12+ opens the link in the browser,
+                 whose landing page offers the knit:// form below. singleTask re-delivers to onNewIntent. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="getknit.app"
+                    android:path="/c"
+                    android:scheme="https" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="c"
+                    android:scheme="knit" />
+            </intent-filter>
         </activity>
 
         <service

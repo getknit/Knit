@@ -2,7 +2,9 @@ package app.getknit.knit.ui.contacts
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,12 +21,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -59,6 +63,7 @@ import org.koin.androidx.compose.koinViewModel
 fun ContactsScreen(
     onBack: () -> Unit,
     onPick: (conversationId: String) -> Unit,
+    onAddContact: () -> Unit = {},
     viewModel: ContactsViewModel = koinViewModel(),
 ) {
     val contacts by viewModel.contacts.collectAsStateWithLifecycle()
@@ -77,6 +82,7 @@ fun ContactsScreen(
         onPickSingle = onPick,
         onCreateGroup = viewModel::createGroup,
         onGroupFull = { Toast.makeText(context, groupFullMessage, Toast.LENGTH_SHORT).show() },
+        onAddContact = onAddContact,
     )
 }
 
@@ -88,6 +94,7 @@ internal fun ContactsScreenContent(
     onPickSingle: (nodeId: String) -> Unit,
     onCreateGroup: (memberIds: List<String>) -> Unit,
     onGroupFull: () -> Unit,
+    onAddContact: () -> Unit = {},
 ) {
     val selected = remember { mutableStateListOf<String>() }
 
@@ -113,6 +120,11 @@ internal fun ContactsScreenContent(
                     }
                 },
                 title = { Text(stringResource(R.string.contacts_title)) },
+                actions = {
+                    IconButton(onClick = onAddContact, modifier = Modifier.size(48.dp).testTag("contacts_add")) {
+                        Icon(Icons.Filled.PersonAdd, contentDescription = stringResource(R.string.add_contact_title))
+                    }
+                },
             )
         },
         floatingActionButton = {
@@ -140,11 +152,18 @@ internal fun ContactsScreenContent(
                 modifier = Modifier.fillMaxSize().padding(padding).padding(32.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = stringResource(R.string.contacts_empty),
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(
+                        text = stringResource(R.string.contacts_empty),
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = onAddContact, modifier = Modifier.testTag("contacts_add_empty")) {
+                        Icon(Icons.Filled.PersonAdd, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.add_contact_title))
+                    }
+                }
             }
         } else {
             LazyColumn(

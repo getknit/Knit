@@ -341,6 +341,21 @@ attachment at all, the `FileHeaderWire.mime` on the blob transfer itself (out of
 and unavoidable in a staged rollout — the fingerprint that `attachmentHash` without `attachmentMime` is a
 patched build.
 
+**Precedent — a third whole feature with no mesh-wire change (contacts at a distance, ADR 042).** Two
+people who can only pass each other a short string out of band now pin each other's key and become
+contacts, and — with the Internet plane on — end up with a working DM scope, and the mesh wire did not
+move: no field, no `type`, no ctl value, no capability bit, no `EncEnvelope.v`, no DB migration. The
+handshake is the existing sealed `CTL_PROFILE` DM (ADR 020) sent to a peer whose session does not exist
+yet, so `ratchet.sealDm` runs the X3DH initiation off the card-pinned prekey and every deployed build
+reads the frame. The new surface is (a) a **contact card** — the `knit-id:v1` QR payload as a signed,
+versioned link with its own additive rules and golden vectors (`docs/CONTACT_CARD.md`, `ContactCardTest`)
+— and (b) one new label family on the **spool** plane, `knit/scope/v1/pair/id` (SPOOL_PROTOCOL §3.5),
+which added four `ScopeVectorTest` rows and moved none; `GoldenVectorTest` and `SpoolRecordsTest` are
+untouched, and `knit-spool` needs no change. *Metadata cost:* on the mesh, none (a `CTL_PROFILE` is
+wire-indistinguishable from any sealed DM); on the Internet plane, a pair scope's id is stable per pair
+rather than per session era, bounded by the pending-plus-grace subscription window (§10.1), and the
+identity-file compromise row in §10.3 narrows to *conversation* scopes.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
 `MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean

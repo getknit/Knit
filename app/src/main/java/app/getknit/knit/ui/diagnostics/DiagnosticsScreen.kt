@@ -339,6 +339,10 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
             MetricRow(stringResource(R.string.diagnostics_metric_key_requests), metrics.keyRequestsSent.toString())
             MetricRow(stringResource(R.string.diagnostics_metric_keys_served), metrics.keysServed.toString())
             MetricRow(stringResource(R.string.diagnostics_metric_keys_recovered), metrics.keysRecovered.toString())
+        }
+        if (metrics.introsSent > 0 || metrics.introsAnswered > 0) {
+            MetricRow(stringResource(R.string.diagnostics_metric_intros_sent), metrics.introsSent.toString())
+            MetricRow(stringResource(R.string.diagnostics_metric_intros_answered), metrics.introsAnswered.toString())
             MetricRow(stringResource(R.string.diagnostics_metric_frames_held), metrics.framesHeld.toString())
             MetricRow(stringResource(R.string.diagnostics_metric_frames_replayed), metrics.framesReplayed.toString())
         }

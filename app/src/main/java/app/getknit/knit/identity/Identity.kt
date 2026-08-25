@@ -34,6 +34,13 @@ class Identity(
     /** This device's soft block-continuity tag (null when the platform reports no stable device id). */
     fun deviceTag(): String? = cachedDeviceTag ?: DeviceTag.derive(deviceIdSource.rawDeviceId()).also { cachedDeviceTag = it }
 
+    /**
+     * The raw X25519 identity private scalar — the input of the spool plane's **pair secret**
+     * (`ScopeCrypto.pairSecret`, spec §3.5), the one scope input derived from the identity rather than a
+     * session. Read on demand, never cached here, so the key stays behind the store's keystore wrap.
+     */
+    fun dhIdentityPrivate(): ByteArray = keyStore.dhIdentityPrivate()
+
     /** The current ratchet signed prekey to publish in the profile (v2 DM bootstrap), minting on first use. */
     fun currentPrekey(now: Long): SignedPrekey = keyStore.currentPrekey(now)
 

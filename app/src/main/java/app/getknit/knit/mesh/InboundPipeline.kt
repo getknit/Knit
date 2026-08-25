@@ -144,6 +144,14 @@ class InboundPipeline(
     // or correct a sender whose gossip proves it is behind ours. Fired for every CTL_GROUP_KEY, not only
     // adoptions — a stale gossip is the ONLY evidence that an earlier one to that member was lost.
     private val onGroupRootCtl: suspend (senderId: String, gk: GroupKeyPayload, adopted: Boolean) -> Unit = { _, _, _ -> },
+    // A cleartext profile just pinned (or refreshed) this sender's key/prekey — the intro driver's cue to
+    // seal a pending contact-card intro (MeshManager → IntroSync.onProfilePinned), lambda-mediated like
+    // the rest so the pipeline stays free of the driver. Fires for every plane the profile arrives on.
+    private val onProfilePinned: suspend (senderId: String) -> Unit = {},
+    // A v2 DM from this sender opened and committed; `carriesInit` says its ratchet header still carried the
+    // X3DH init, i.e. the sender has not yet seen a frame of ours (IntroSync.onPeerFrameOpened). Runs
+    // post-commit, outside the ratchet lock, since the answer it may trigger seals a frame of its own.
+    private val onPeerFrameOpened: suspend (senderId: String, carriesInit: Boolean) -> Unit = { _, _ -> },
 ) {
     // nodeId -> avatar hash a non-direct peer advertised but whose bytes we're still pulling, so a blob
     // arriving via the multi-hop BlobExchange can be attributed back to the peer that advertised it.
@@ -677,9 +685,13 @@ class InboundPipeline(
             return
         }
         val commit: suspend (suspend () -> Unit) -> Boolean = { onOpened ->
-            db.withTransaction {
-                ratchet.commitOpen(me, env.senderId, peerIkPub, wireHeader, enc.nonce, enc.ct, aad, now, onOpened)
-            }
+            val committed =
+                db.withTransaction {
+                    ratchet.commitOpen(me, env.senderId, peerIkPub, wireHeader, enc.nonce, enc.ct, aad, now, onOpened)
+                }
+            // After the transaction and outside the session lock: the hook may seal an answer of its own.
+            if (committed) onPeerFrameOpened(env.senderId, wireHeader.init != null)
+            committed
         }
         if (plain.ctl != null) {
             handleCtlDm(env, plain, me, now, plane, commit)
@@ -2089,6 +2101,8 @@ class InboundPipeline(
         // Cache this peer's verbatim signed profile so we can re-serve its key to a neighbor that asks, and
         // resolve any key request we (or a node we're relaying for) had outstanding for it.
         keyExchange.onProfilePinned(env.senderId, wire)
+        // A pending contact-card intro to this sender can be sealed now that its prekey is pinned.
+        onProfilePinned(env.senderId)
         // Replay any frames we parked from this sender while we couldn't verify them. Must run last: the
         // key is now pinned (so the replayed verifyInbound passes instead of re-parking) and any deviceTag
         // block has been applied (so a blocked sender is dropped on replay, not delivered). Replay bypasses

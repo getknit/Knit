@@ -144,6 +144,8 @@ class MeshMetrics {
     private val framesDeduped = AtomicLong()
     private val bytesSent = AtomicLong()
     private val keyRequestsSent = AtomicLong()
+    private val introsSent = AtomicLong()
+    private val introsAnswered = AtomicLong()
     private val keysServed = AtomicLong()
     private val keysRecovered = AtomicLong()
     private val framesHeld = AtomicLong()
@@ -236,6 +238,16 @@ class MeshMetrics {
     /** An inbound frame we wanted was dropped for [reason] (not a policy drop — see [DropReason]). */
     fun onDropped(reason: DropReason) {
         drops.getValue(reason).incrementAndGet()
+    }
+
+    /** A contact-card intro we originated to a pending peer (see [IntroSync]) — a sealed `CTL_PROFILE` DM. */
+    fun onIntroSent() {
+        introsSent.incrementAndGet()
+    }
+
+    /** A sealed frame we sent to confirm a still-unconfirmed peer's session (the intro driver's answer). */
+    fun onIntroAnswered() {
+        introsAnswered.incrementAndGet()
     }
 
     /** A key-request frame we sent to recover a peer's missing profile/key (see [KeyExchange]). */
@@ -549,6 +561,8 @@ class MeshMetrics {
             framesDropped = byReason.values.sum(),
             dropsByReason = byReason.filterValues { it > 0 },
             keyRequestsSent = keyRequestsSent.get(),
+            introsSent = introsSent.get(),
+            introsAnswered = introsAnswered.get(),
             keysServed = keysServed.get(),
             keysRecovered = keysRecovered.get(),
             framesHeld = framesHeld.get(),
@@ -617,6 +631,8 @@ class MeshMetrics {
         val framesDropped: Long = 0,
         val dropsByReason: Map<DropReason, Long> = emptyMap(),
         val keyRequestsSent: Long = 0,
+        val introsSent: Long = 0,
+        val introsAnswered: Long = 0,
         val keysServed: Long = 0,
         val keysRecovered: Long = 0,
         val framesHeld: Long = 0,

@@ -2,14 +2,18 @@ package app.getknit.knit.ui.verify
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.getknit.knit.contacts.ContactCards
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.crypto.ContactCard
 import app.getknit.knit.mesh.crypto.VerifyPayload
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
@@ -41,9 +45,34 @@ enum class VerifyResult {
 class VerifyContactViewModel(
     private val peers: PeerRepository,
     private val identity: Identity,
+    private val cards: ContactCards,
 ) : ViewModel() {
     private val _myQrPayload = MutableStateFlow<String?>(null)
     val myQrPayload: StateFlow<String?> = _myQrPayload.asStateFlow()
+
+    /** A minted contact link to hand to the share sheet or the clipboard (docs/CONTACT_CARD.md). */
+    sealed interface LinkEvent {
+        data class Share(
+            val url: String,
+        ) : LinkEvent
+
+        data class Copy(
+            val url: String,
+        ) : LinkEvent
+    }
+
+    private val _linkEvents = MutableSharedFlow<LinkEvent>(extraBufferCapacity = 1)
+    val linkEvents: SharedFlow<LinkEvent> = _linkEvents.asSharedFlow()
+
+    /** Mints this device's contact link for the share sheet — the QR's job at a distance. */
+    fun shareLink() {
+        viewModelScope.launch { _linkEvents.tryEmit(LinkEvent.Share(cards.mint().url)) }
+    }
+
+    /** Mints this device's contact link for the clipboard. */
+    fun copyLink() {
+        viewModelScope.launch { _linkEvents.tryEmit(LinkEvent.Copy(cards.mint().url)) }
+    }
 
     private val _scanResult = MutableStateFlow<VerifyResult?>(null)
     val scanResult: StateFlow<VerifyResult?> = _scanResult.asStateFlow()
@@ -59,14 +88,15 @@ class VerifyContactViewModel(
      * the outcome for a one-shot snackbar (cleared via [consumeScanResult]).
      */
     fun onScanned(payload: String) {
-        val parsed = VerifyPayload.parse(payload)
-        // Self-certifying identity: reject a code whose key doesn't derive back to its claimed node id
-        // (the same check handleProfile applies to an advertised key), so a forged code can't pin a key
-        // for a node id whose keypair the sender doesn't actually hold.
-        if (parsed == null || NodeId.fromPublicKeyBundle(parsed.bundle) != parsed.nodeId) {
+        // The codec applies the self-certifying check (a code whose key doesn't derive back to its claimed
+        // node id is refused, the same check handleProfile applies to an advertised key) and accepts both
+        // the legacy `knit-id:v1` code and a contact-link QR (docs/CONTACT_CARD.md).
+        val parsed = ContactCard.parse(payload) as? ContactCard.Parsed.Card
+        if (parsed == null) {
             _scanResult.value = VerifyResult.INVALID
             return
         }
+        val bundle = parsed.bundle
         viewModelScope.launch {
             if (parsed.nodeId == identity.nodeId()) {
                 _scanResult.value = VerifyResult.SELF
@@ -82,7 +112,7 @@ class VerifyContactViewModel(
                     null -> {
                         peers.upsert(
                             (existing ?: PeerEntity(parsed.nodeId)).copy(
-                                pubKey = parsed.bundle,
+                                pubKey = bundle,
                                 verified = true,
                             ),
                         )
@@ -90,7 +120,7 @@ class VerifyContactViewModel(
                     }
 
                     // Same pinned key: just record the out-of-band verification.
-                    parsed.bundle -> {
+                    bundle -> {
                         peers.setVerified(parsed.nodeId, true)
                         VerifyResult.VERIFIED
                     }

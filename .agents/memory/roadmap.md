@@ -133,6 +133,23 @@ doc). **Don't start a deferred item without explicit direction.**
   cleartext `profile` frame keeps first contact permanently — it is self-certifying and cannot be
   encrypted — so ADR 018's "last cleartext flooded metadata" goal is advanced, not finished.
 
+- **Contacts at a distance SHIPPED 2026-08-25** (ADR 042, `docs/CONTACT_CARD.md`): a signed contact
+  link (share/copy on the Verify screen; import by tapping it, sharing it to Knit, or pasting it on the
+  Add-by-link screen), the `CTL_PROFILE` intro driven by `IntroSync`, and the identity-derived **pair
+  scope** (spec §3.5) so a pair that has only exchanged cards meets at a spool before a session exists.
+  **Still owed:** the two-device trial (both import, out of radio range, one shared spool — expect
+  `introsSent ≥ 1` both sides within ~2 heal rounds, `confirmed: true` in `…debug.RATCHET`, the same DM
+  scope id in `…debug.SPOOL`, the pair scope gone ≤ 48 h later; then the LoRa variant), the
+  `getknit.app` assetlinks + `/c` landing page (out of repo — until then Android 12+ opens the https link
+  in the browser; `knit://` and share-to-Knit work regardless). **Deferred, by design:** the **one-sided
+  invite** (a *profile-only* token-derived rendezvous plus a contact-request inbox — needs per-token
+  caps, revoke, expiry, and the "other link holders can see who requested" caveat); a **prekey in the
+  card** gated on `iat < 7 d` (seal at import, reach a LoRa listen-only peer; a stale prekey wedges
+  silently at `EPOCH_GONE`); **node-id-only import** over the radios via `KeyExchange.want`; **session
+  recovery over the pair scope** for existing contacts (needs a probing strategy — no `unsub` record,
+  `maxScopes` pressure); a chat-thread intro notice (the profile status line covers it; the pair scope
+  already reads as relay-covered).
+
 - **Audio moderation** — voice notes (ADR 034) ship **unscreened**: no on-device model classifies speech
   and the app has no cloud option, so `MODERATION_NONE` is the honest verdict and both screening hooks skip
   audio by MIME. Mitigated rather than solved: the mic is not offered in the Nearby room (the one surface

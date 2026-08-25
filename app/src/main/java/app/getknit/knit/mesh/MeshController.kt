@@ -5,7 +5,9 @@ import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.spool.SpoolStatus
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * The app-facing surface of the mesh: the reads (nearby presence, radio health, typing) plus the
@@ -78,6 +80,17 @@ interface MeshController {
      * remedies. Empty when the mesh is not running.
      */
     suspend fun ratchetState(): List<RatchetPeerState> = emptyList()
+
+    /**
+     * A contact card for [peerId] was imported and its key pinned: register the intro handshake
+     * (`IntroSync.want`) and ask the radio mesh for the peer's profile (`KeyExchange.want`), so the sealed
+     * intro goes out the moment the peer's prekey is known — from a flood, a LoRa beacon, or the spool pair
+     * scope. Idempotent; a no-op for a peer whose session is already confirmed.
+     */
+    suspend fun importContact(peerId: String) {}
+
+    /** Where the contact-card intro with [peerId] stands, or null when none is pending or recently confirmed. */
+    fun introState(peerId: String): Flow<IntroState?> = flowOf(null)
 
     /**
      * Seals and floods a session reset to [peerId] with **no** heuristic in front of it — no distinct-frame

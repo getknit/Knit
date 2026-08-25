@@ -1,6 +1,7 @@
 package app.getknit.knit.mesh.crypto.scope
 
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
+import com.google.crypto.tink.subtle.X25519
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -60,6 +61,29 @@ class ScopeCryptoTest {
                 ScopeCrypto.groupSealKeys(root, GROUP_ID, rootVersion = 2).sealKey,
             ),
         )
+    }
+
+    @Test
+    fun pairScopeIdIsSymmetricMatchesTheReferenceAndNeverCoincidesWithTheDmScope() {
+        val alicePriv = deterministicBytes(6)
+        val bobPriv = deterministicBytes(7)
+        val alicePub = X25519.publicFromPrivate(alicePriv)
+        val bobPub = X25519.publicFromPrivate(bobPriv)
+
+        val aliceSecret = ScopeCrypto.pairSecret(alicePriv, bobPub)
+        val bobSecret = ScopeCrypto.pairSecret(bobPriv, alicePub)
+        assertArrayEquals("both parties agree on the pair secret", aliceSecret, bobSecret)
+
+        val id = ScopeCrypto.pairScopeId(aliceSecret, NODE_A, NODE_B)
+        val info = "knit/scope/v1/pair/id".toByteArray() + "$NODE_A|$NODE_B|".toByteArray()
+        assertArrayEquals(referenceHkdf(aliceSecret, ByteArray(32), info, 32), id)
+        assertArrayEquals(id, ScopeCrypto.pairScopeId(bobSecret, NODE_B, NODE_A))
+        // Same context as the DM scope, different ikm and label: the two scopes of a pair never coincide.
+        assertFalse(id.contentEquals(ScopeCrypto.dmScopeId(aliceSecret, NODE_A, NODE_B)))
+        val keys = ScopeCrypto.pairSealKeys(aliceSecret, NODE_A, NODE_B)
+        val sealInfo = "knit/scope/v1/seal".toByteArray() + "$NODE_A|$NODE_B|".toByteArray()
+        assertArrayEquals(referenceHkdf(aliceSecret, ByteArray(32), sealInfo, 64).copyOfRange(0, 32), keys.sealKey)
+        assertFalse(keys.sealKey.contentEquals(ScopeCrypto.dmSealKeys(deterministicBytes(1), NODE_A, NODE_B).sealKey))
     }
 
     @Test

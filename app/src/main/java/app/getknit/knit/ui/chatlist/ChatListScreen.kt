@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -120,6 +121,7 @@ fun ChatListScreen(
     onOpenMessageRequests: () -> Unit,
     onOpenDonate: () -> Unit,
     onOpenVerify: () -> Unit,
+    onOpenAddContact: () -> Unit = {},
     viewModel: ChatListViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -144,6 +146,7 @@ fun ChatListScreen(
         onOpenMessageRequests = onOpenMessageRequests,
         onOpenDonate = onOpenDonate,
         onOpenVerify = onOpenVerify,
+        onOpenAddContact = onOpenAddContact,
         onShareApp = { showShareApp = true },
         onOpenRadioSettings = { warning -> openRadioSettings(context, warning) },
         onDismissRadioWarning = viewModel::dismissRadioWarning,
@@ -208,6 +211,7 @@ internal fun ChatListScreenContent(
     onOpenDonate: () -> Unit,
     onOpenVerify: () -> Unit,
     onShareApp: () -> Unit,
+    onOpenAddContact: () -> Unit = {},
     onOpenRadioSettings: (RadioWarning) -> Unit,
     onDismissRadioWarning: () -> Unit,
     onDeleteConversation: (conversationId: String) -> Unit,
@@ -270,6 +274,14 @@ internal fun ChatListScreenContent(
                                 onClick = {
                                     menuOpen = false
                                     onOpenVerify()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.add_contact_title)) },
+                                leadingIcon = { Icon(Icons.Filled.PersonAdd, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onOpenAddContact()
                                 },
                             )
                             DropdownMenuItem(

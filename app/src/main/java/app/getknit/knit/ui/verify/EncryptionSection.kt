@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -27,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -67,6 +70,9 @@ fun EncryptionSection(
     modifier: Modifier = Modifier,
     onMarkVerified: () -> Unit = {},
     onClearVerification: () -> Unit = {},
+    // Standalone mode only: mint + hand out this device's contact link (docs/CONTACT_CARD.md).
+    onShareLink: (() -> Unit)? = null,
+    onCopyLink: (() -> Unit)? = null,
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -164,6 +170,29 @@ fun EncryptionSection(
             Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.verify_scan))
+        }
+
+        // The contact link: the QR's job at a distance, offered only where there is no bound peer (a
+        // peer's profile shows OUR code for them to scan; a link would be the wrong thing to hand out there).
+        if (peer == null && onShareLink != null && onCopyLink != null) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onShareLink, modifier = Modifier.weight(1f).testTag("verify_share_link")) {
+                    Icon(Icons.Filled.Share, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.contact_link_share))
+                }
+                OutlinedButton(onClick = onCopyLink, modifier = Modifier.weight(1f).testTag("verify_copy_link")) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.contact_link_copy))
+                }
+            }
+            Text(
+                text = stringResource(R.string.contact_link_caption),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
         }
 
         // Verify actions are peer-bound: only shown on a specific contact's profile, not standalone.

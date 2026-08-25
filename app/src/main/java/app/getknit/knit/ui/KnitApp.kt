@@ -25,6 +25,8 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshService
 import app.getknit.knit.review.ReviewPrompter
+import app.getknit.knit.ui.addcontact.AddContactScreen
+import app.getknit.knit.ui.addcontact.ContactCardInbox
 import app.getknit.knit.ui.blocked.BlockedUsersScreen
 import app.getknit.knit.ui.chat.ChatScreen
 import app.getknit.knit.ui.chat.MessageDetailsScreen
@@ -58,6 +60,7 @@ private object Routes {
     const val MESSAGE_REQUESTS = "requests"
     const val DONATE = "donate"
     const val VERIFY = "verify"
+    const val ADD_CONTACT = "addContact"
     const val INTERNET_RELAYS = "relays"
     const val LORA_RADIO = "lora"
     const val SHARE = "share"
@@ -93,6 +96,8 @@ fun KnitApp(startRoute: String? = null) {
     val pendingShare by shareInbox.pending.collectAsStateWithLifecycle()
     val routeInbox = koinInject<RouteInbox>()
     val pendingRoute by routeInbox.pending.collectAsStateWithLifecycle()
+    val contactCardInbox = koinInject<ContactCardInbox>()
+    val pendingCard by contactCardInbox.pending.collectAsStateWithLifecycle()
     val reviewPrompter = koinInject<ReviewPrompter>()
     val reviewInbox = koinInject<ReviewPromptInbox>()
     val showReviewPrompt by reviewInbox.pending.collectAsStateWithLifecycle()
@@ -155,6 +160,15 @@ fun KnitApp(startRoute: String? = null) {
         routeInbox.consume()
     }
 
+    // A contact link arrived (a tapped getknit.app/c link, or a shared text carrying one). Unlike a share or a
+    // notification route, a card that lands before onboarding is KEPT: a fresh install opened from a friend's
+    // link is the primary way one arrives, so it waits for the permission gate and the effect re-fires once
+    // `onboarded` flips. The Add-contact screen consumes it from the inbox itself.
+    LaunchedEffect(pendingCard != null, onboarded) {
+        if (pendingCard == null || !onboarded) return@LaunchedEffect
+        navController.navigate(Routes.ADD_CONTACT) { launchSingleTop = true }
+    }
+
     NavHost(
         navController = navController,
         startDestination = start,
@@ -187,11 +201,13 @@ fun KnitApp(startRoute: String? = null) {
                 onOpenMessageRequests = { navController.navigate(Routes.MESSAGE_REQUESTS) },
                 onOpenDonate = { navController.navigate(Routes.DONATE) },
                 onOpenVerify = { navController.navigate(Routes.VERIFY) },
+                onOpenAddContact = { navController.navigate(Routes.ADD_CONTACT) },
             )
         }
         composable(Routes.CONTACTS) {
             ContactsScreen(
                 onBack = { navController.popBackStack() },
+                onAddContact = { navController.navigate(Routes.ADD_CONTACT) },
                 // Open the chosen conversation (a peer's node id for a DM, or a freshly created group's
                 // id) and drop the picker from the back stack, so Back from the chat returns to the list.
                 onPick = { conversationId ->
@@ -345,6 +361,18 @@ fun KnitApp(startRoute: String? = null) {
         }
         composable(Routes.VERIFY) {
             VerifyContactScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.ADD_CONTACT) {
+            AddContactScreen(
+                onBack = { navController.popBackStack() },
+                // Land on the new contact's profile — it shows the intro's progress and the Message button —
+                // and drop this screen, so Back returns to wherever the user came from.
+                onImported = { id ->
+                    navController.navigate(Routes.profileDetails(id)) {
+                        popUpTo(Routes.ADD_CONTACT) { inclusive = true }
+                    }
+                },
+            )
         }
     }
 

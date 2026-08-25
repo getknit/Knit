@@ -53,6 +53,9 @@ class PublicKeyBundle private constructor(
      */
     fun dhPublicKey(): ByteArray = hpkePubBytes.copyOf()
 
+    /** The raw 32-byte Ed25519 public key — the other half of the wire form, for the contact card's `pk`. */
+    fun sigPublicKey(): ByteArray = sigPubBytes.copyOf()
+
     /** A primitive that verifies signatures made by this peer's signing key. */
     fun verifier(): PublicKeyVerify =
         keysetOf(Ed25519PublicKey.create(Ed25519Parameters.Variant.NO_PREFIX, Bytes.copyFrom(sigPubBytes), null))
@@ -101,6 +104,24 @@ class PublicKeyBundle private constructor(
             val sigPub = (sigPrivate.publicKeysetHandle.primary.key as Ed25519PublicKey).publicKeyBytes.toByteArray()
             return build(hpkePub, sigPub)
         }
+
+        /**
+         * Rebuilds a bundle from the two raw 32-byte public keys (the contact card carries them bare, in
+         * `sigPub ‖ hpkePub` order). Re-encodes through the same CBOR proto as [fromPrivate], so
+         * `fromRaw(b.sigPublicKey(), b.dhPublicKey()).encoded == b.encoded` — the pinned string stays
+         * byte-identical to what the peer's own `ProfileContent.pubKey` carries. Null on a wrong length.
+         */
+        fun fromRaw(
+            sigPub: ByteArray,
+            hpkePub: ByteArray,
+        ): PublicKeyBundle? {
+            if (sigPub.size != RAW_KEY_BYTES || hpkePub.size != RAW_KEY_BYTES) return null
+            TinkInit.ensure()
+            return build(hpkePub.copyOf(), sigPub.copyOf())
+        }
+
+        /** Both raw public keys are 32 bytes (RFC 8032 Ed25519, RFC 7748 X25519). */
+        const val RAW_KEY_BYTES = 32
 
         /** Parses a wire/stored [encoded] bundle; null if it is malformed. */
         @OptIn(ExperimentalSerializationApi::class)

@@ -75,6 +75,14 @@ free). Two invariants that are easy to break:
   frame puts in its envelope `sentAt`, stored as `PeerEntity.updatedAt`) — never on the carrying
   frame's own `sentAt`, or a re-sent ctl outranks a genuinely newer profile. The sealed path never
   touches the pinned key, the prekey, the device tag or the capabilities, and never inserts a peer row.
+- **A pair scope is the DM rule with a different secret, and it is temporary** (`ScopeRegistry.pairs`,
+  spec §3.5, ADR 042). It is derived from `ScopeCrypto.pairSecret` — the one identity-keyed scope input —
+  and named only while `IntroSync` holds the peer pending or in its 48 h grace. Never widen its frame
+  set beyond `eligibleForDm`, never derive it from anything a card holder or a node-id holder could
+  compute, and never keep it subscribed past the grace: its id is stable per pair, so its subscription
+  window is the whole bound on spool-side linkability. Intro-store writes stay outside the ratchet
+  mutex (they run post-commit, in `InboundPipeline`'s `onPeerFrameOpened`/`onProfilePinned` hooks); if one
+  ever moves into the ratchet commit it goes through `SessionTransactor`.
 - **Group-root minting is damped; group-root adoption is not** (`GroupRootPolicy`, spec §3.2). Several
   members minting version 1 at once is normal and self-healing — `(version, minter)` collapses the
   lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping

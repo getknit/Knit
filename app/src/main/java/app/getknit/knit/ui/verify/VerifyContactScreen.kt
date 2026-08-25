@@ -1,5 +1,7 @@
 package app.getknit.knit.ui.verify
 
+import android.content.ClipData
+import android.os.Build
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -24,6 +26,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
@@ -32,6 +37,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.scan.QrScanner
+import app.getknit.knit.ui.shareText
 import org.koin.androidx.compose.koinViewModel
 
 /**
@@ -50,6 +56,28 @@ fun VerifyContactScreen(
     val myQrPayload by viewModel.myQrPayload.collectAsStateWithLifecycle()
     val scanResult by viewModel.scanResult.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val clipboard = LocalClipboard.current
+
+    // Share / copy of the contact link (docs/CONTACT_CARD.md). Android 13+ shows its own copy
+    // confirmation, so the snackbar only fires below it (the CrashLogScreen idiom).
+    val shareText = stringResource(R.string.contact_link_share_text)
+    val shareTitle = stringResource(R.string.contact_link_chooser_title)
+    val copiedMessage = stringResource(R.string.contact_link_copied)
+    LaunchedEffect(Unit) {
+        viewModel.linkEvents.collect { event ->
+            when (event) {
+                is VerifyContactViewModel.LinkEvent.Share -> {
+                    shareText(context, shareText.format(event.url), shareTitle)
+                }
+
+                is VerifyContactViewModel.LinkEvent.Copy -> {
+                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Knit contact link", event.url)))
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) snackbarHostState.showSnackbar(copiedMessage)
+                }
+            }
+        }
+    }
 
     val addedMessage = stringResource(R.string.verify_added)
     val mismatchMessage = stringResource(R.string.verify_mismatch)
@@ -82,6 +110,8 @@ fun VerifyContactScreen(
             snackbarHostState = snackbarHostState,
             onBack = onBack,
             onScan = { scanning = true },
+            onShareLink = viewModel::shareLink,
+            onCopyLink = viewModel::copyLink,
         )
     }
 }
@@ -93,6 +123,8 @@ internal fun VerifyContactScreenContent(
     snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
     onScan: () -> Unit,
+    onShareLink: () -> Unit = {},
+    onCopyLink: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag("screen_verify"),
@@ -124,6 +156,8 @@ internal fun VerifyContactScreenContent(
                 myQrPayload = myQrPayload,
                 peer = null,
                 onScan = onScan,
+                onShareLink = onShareLink,
+                onCopyLink = onCopyLink,
             )
         }
     }

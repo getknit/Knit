@@ -20,11 +20,16 @@ moderation.
 ## Architecture in one screen
 
 ```
-ui/            Compose screens (onboarding, chatlist, chat, contacts, profile, group, diagnostics,
-               blocked, share, donate) + ViewModels (Koin koinViewModel()) · KnitApp (Navigation Compose)
+ui/            Compose screens (onboarding, chatlist, chat, contacts, addcontact, verify, profile, group,
+               diagnostics, blocked, share, donate) + ViewModels (Koin koinViewModel()) · KnitApp (Navigation
+               Compose; the `getknit.app/c` / `knit://c` contact-link deep links land in ui/addcontact)
+contacts/      ContactCards (mints this device's signed contact link) · ContactImporter (the import rules:
+               pin + accept, never verify; relay hints shown, never applied) — docs/CONTACT_CARD.md
 mesh/          MeshTransport (interface) · CompositeMeshTransport (runs the radios below simultaneously)
                · MeshRouter (dedup + jittered/suppressed flood) · MeshManager (orchestrator)
                · MeshService (foreground service) · MeshMetrics · BlobExchange/BlobStore
+               · IntroSync (the contact-card intro driver: sends the sealed CTL_PROFILE handshake, names
+               the peers the spool plane derives pair scopes for — ADR 042)
                (content-addressed pull) · ForwardSync/ForwardStore (store-and-forward DM + group +
                broadcast custody) · KeyExchange (keyreq) + PendingInbound (park-until-key) · AckSync
                (delay-tolerant broadcast/group delivery tick) · StoreDigest

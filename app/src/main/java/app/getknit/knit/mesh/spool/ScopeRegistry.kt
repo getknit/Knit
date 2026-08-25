@@ -19,6 +19,19 @@ class ScopeRoots(
 )
 
 /**
+ * The inputs of one **pair scope** (`docs/SPOOL_PROTOCOL.md` §3.5): the peer an intro is pending with (or
+ * in its post-confirmation grace) and the identity-derived [pairSecret] (`ScopeCrypto.pairSecret`) the
+ * scope's id and seal keys come from. The one scope input that is not a session or group secret — it is
+ * what lets two contacts who have only ever exchanged a contact card find each other at a spool before a
+ * ratchet session exists. Computed by the caller from the pinned bundle so this layer stays free of the
+ * identity store.
+ */
+class PairScopeRoots(
+    val peerId: String,
+    val pairSecret: ByteArray,
+)
+
+/**
  * One group's scope inputs: the shared root (`docs/SPOOL_PROTOCOL.md` §3.2) with the [rootVersion] that
  * doubles as the scope epoch, the **founding** roster the frame-set rule vets senders against, and the
  * rotated-away lineage while its drain window is open.
@@ -51,6 +64,13 @@ class GroupScopeRoots(
  * the bound that matters here — it costs a completed X3DH, which no stranger reaches unsolicited — and
  * `RatchetSessions.exportedRoots` already applies it.
  *
+ * **Pair scopes** (spec §3.5) are the third source: one per peer an intro is pending with, keyed by the
+ * identity-derived pair secret rather than a session root. They are ordinary DM-form scopes — same
+ * frame-set rule, same `peerId` discriminator — so everything downstream (the seal, the push half, the
+ * attachment pass, the relay indicator) treats them exactly like the DM scope that supersedes them once the
+ * session confirms. The [pairs] seam is what bounds their lifetime: `IntroSync` names a peer only while its
+ * intro is pending or inside the post-confirmation grace, and the scope vanishes with the name.
+ *
  * Bounds are constants here rather than per-conversation state because the signed scope-config ctl
  * (`CTL_SCOPE_CONFIG`, spec §5) is not on the wire yet; when it lands, [bounds] becomes a per-scope
  * lookup and these defaults become the fallback. They are the spec's §12 defaults so a stock spool
@@ -60,13 +80,26 @@ class ScopeRegistry(
     private val selfId: suspend () -> String,
     private val roots: suspend () -> List<ScopeRoots>,
     private val groupRoots: suspend () -> List<GroupScopeRoots> = { emptyList() },
+    private val pairs: suspend () -> List<PairScopeRoots> = { emptyList() },
     private val bounds: ScopeBounds = DEFAULT_BOUNDS,
 ) {
     /** Every scope this device participates in at [now], newest-secret first, de-duplicated by id. */
     suspend fun scopes(now: Long): List<Scope> {
         val me = selfId()
-        return (dmScopes(me, now) + groupScopes(now)).distinctBy { it.idHex }
+        return (dmScopes(me, now) + groupScopes(now) + pairScopes(me)).distinctBy { it.idHex }
     }
+
+    /** The pair scope for every pending-intro peer: a DM-form scope whose secret is the identity pair secret. */
+    private suspend fun pairScopes(me: String): List<Scope> =
+        pairs().map { entry ->
+            Scope(
+                id = ScopeCrypto.pairScopeId(entry.pairSecret, me, entry.peerId),
+                keys = ScopeCrypto.pairSealKeys(entry.pairSecret, me, entry.peerId),
+                bounds = bounds,
+                retiring = false,
+                peerId = entry.peerId,
+            )
+        }
 
     private suspend fun dmScopes(
         me: String,

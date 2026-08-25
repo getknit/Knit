@@ -35,6 +35,16 @@ class PublicKeyBundleTest {
         assertEquals(bundle.hashCode(), reparsed.hashCode())
     }
 
+    /** The contact card carries the two raw keys; rebuilding from them must reproduce the pinned string byte-for-byte. */
+    @Test
+    fun rawRoundTripReproducesTheEncodedBundle() {
+        val bundle = newBundle()
+        val rebuilt = PublicKeyBundle.fromRaw(bundle.sigPublicKey(), bundle.dhPublicKey())!!
+        assertEquals(bundle.encoded, rebuilt.encoded)
+        assertEquals(bundle, rebuilt)
+        assertEquals(null, PublicKeyBundle.fromRaw(ByteArray(31), bundle.dhPublicKey()))
+    }
+
     @Test
     fun bundlesForDifferentKeysAreNotEqual() {
         assertNotEquals(newBundle(), newBundle())

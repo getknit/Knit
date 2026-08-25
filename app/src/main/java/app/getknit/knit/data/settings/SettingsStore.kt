@@ -254,6 +254,23 @@ class SettingsStore(
     /** Accepts [conversationId] out of the message-request queue (a DM peer id or a "g-…" group id). */
     suspend fun accept(conversationId: String) = dataStore.edit { it[KEY_ACCEPTED] = (it[KEY_ACCEPTED] ?: emptySet()) + conversationId }
 
+    /**
+     * The intro driver's durable state (`IntroSync`): the peers an intro is pending with, and the
+     * post-confirmation grace windows as `"<peerId>|<untilMillis>"` entries. Two small sets in the same
+     * store as the accepted set — the ADR 028/037 posture for state that is a handful of ids, not rows.
+     */
+    val pendingIntros: Flow<Set<String>> = dataStore.data.map { it[KEY_PENDING_INTROS] ?: emptySet() }
+    val introGrace: Flow<Set<String>> = dataStore.data.map { it[KEY_INTRO_GRACE] ?: emptySet() }
+
+    /** Replaces both intro sets in one write, so a driver transition can never leave them disagreeing. */
+    suspend fun setIntroState(
+        pending: Set<String>,
+        grace: Set<String>,
+    ) = dataStore.edit {
+        it[KEY_PENDING_INTROS] = pending
+        it[KEY_INTRO_GRACE] = grace
+    }
+
     suspend fun setContentFilteringEnabled(value: Boolean) = dataStore.edit { it[KEY_CONTENT_FILTERING] = value }
 
     suspend fun setMeshEnabled(value: Boolean) = dataStore.edit { it[KEY_MESH_ENABLED] = value }
@@ -386,6 +403,8 @@ class SettingsStore(
         val KEY_BLOCKED = stringSetPreferencesKey("blocked_node_ids")
         val KEY_BLOCKED_TAGS = stringSetPreferencesKey("blocked_device_tags")
         val KEY_ACCEPTED = stringSetPreferencesKey("accepted_conversations")
+        val KEY_PENDING_INTROS = stringSetPreferencesKey("pending_intros")
+        val KEY_INTRO_GRACE = stringSetPreferencesKey("intro_grace")
         val KEY_CONTENT_FILTERING = booleanPreferencesKey("content_filtering_enabled")
         val KEY_MESH_ENABLED = booleanPreferencesKey("mesh_enabled")
         val KEY_REVIEW_ENGAGEMENT_STARTED_AT = longPreferencesKey("review_engagement_started_at")

@@ -46,6 +46,12 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   across devices to find the stranded frame(s): `… STORE | sed -n 's/.*data="//;s/"$//p' | jq -r '.allIds[]'
   | sort` per device, then `comm`/`diff` the files. **`liveFingerprint` matching across devices = converged**
   (`allFingerprint` is NOT fleet-comparable at a TTL boundary — soak oracles must compare `liveFingerprint`).
+- `…debug.INTRO` — drives the **contact-card** flow (ADR 042, `docs/CONTACT_CARD.md`) on a locked lab
+  device: `--ez card true` mints and prints this device's link (`url` / `schemeUrl`), `--es import '<link>'`
+  previews + imports one (single-quote it — the shell splits on spaces), no extras dumps the intro driver's
+  `pending` / `grace` sets (`"<peerId>|<millis>"`) and the counters (`introsSent`, `introsAnswered`). The
+  two-device recipe: `card` on each, `import` the other's on each, then `…debug.RATCHET` for `confirmed`
+  and `…debug.SPOOL` for the shared DM scope id.
 - `…debug.SPOOL` — configures and inspects the **Internet (spool) plane**, which has no UI beyond a
   debug-only on/off switch, so this is the only way to drive it on a locked lab device. `--es url
   <ws(s)://host:port/spool/v1[?k=token]>` adds a spool, `--es drop <url>` removes one, `--ez on

@@ -1,6 +1,7 @@
 package app.getknit.knit.mesh.crypto.scope
 
 import com.google.crypto.tink.subtle.Hkdf
+import com.google.crypto.tink.subtle.X25519
 import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -80,6 +81,7 @@ object ScopeCrypto {
     const val SEALED_CHUNK_BYTES = 1 + NONCE_BYTES + ATTACH_HEADER_BYTES + ATTACH_CHUNK_BYTES + TAG_BITS / 8
 
     private val LABEL_DM_ID = "knit/scope/v1/dm/id".toByteArray()
+    private val LABEL_PAIR_ID = "knit/scope/v1/pair/id".toByteArray()
     private val LABEL_GROUP_ID = "knit/scope/v1/group/id".toByteArray()
     private val LABEL_SEAL = "knit/scope/v1/seal".toByteArray()
     private val LABEL_NONCE = "knit/scope/v1/nonce".toByteArray()
@@ -134,6 +136,37 @@ object ScopeCrypto {
         nodeIdA: String,
         nodeIdB: String,
     ): SealKeys = sealKeysInternal(pairwiseRoot, dmContext(nodeIdA, nodeIdB))
+
+    /**
+     * The pair secret behind a **pair scope** (spec §3.5): the static-static X25519 agreement between the
+     * two members' *identity* DH keys — the `hpkePub` half of each [app.getknit.knit.mesh.crypto.PublicKeyBundle]
+     * against our own identity private scalar. Symmetric, computable by exactly the two parties from a
+     * pinned bundle alone, and used nowhere else (X3DH has no identity-identity term, HPKE pairs the
+     * identity key with an ephemeral), so it is the one input that exists *before* any session does. Throws
+     * on an invalid public key, like `RatchetCrypto.dh`.
+     */
+    fun pairSecret(
+        ownIkPriv: ByteArray,
+        peerIkPub: ByteArray,
+    ): ByteArray = X25519.computeSharedSecret(ownIkPriv, peerIkPub)
+
+    /**
+     * A pair scope's id (spec §3.5): keyed by [pairSecret] under its own label, with the same sorted-id
+     * context a DM scope uses. Both members derive the same id; a spool, a node-id holder or a contact-card
+     * holder cannot. Distinct from the pair's DM scope by ikm, so the two never coincide.
+     */
+    fun pairScopeId(
+        pairSecret: ByteArray,
+        nodeIdA: String,
+        nodeIdB: String,
+    ): ByteArray = Hkdf.computeHkdf(MAC, pairSecret, ZERO_SALT, LABEL_PAIR_ID + dmContext(nodeIdA, nodeIdB), SCOPE_ID_BYTES)
+
+    /** A pair scope's sealing secret, derived beside [pairScopeId] from the same secret and context. */
+    fun pairSealKeys(
+        pairSecret: ByteArray,
+        nodeIdA: String,
+        nodeIdB: String,
+    ): SealKeys = sealKeysInternal(pairSecret, dmContext(nodeIdA, nodeIdB))
 
     /**
      * A group's scope id: keyed by the shared group root, with the group id and root version as

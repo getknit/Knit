@@ -6,7 +6,9 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
+import app.getknit.knit.mesh.IntroState
 import app.getknit.knit.mesh.MeshController
+import app.getknit.knit.mesh.crypto.ContactCard
 import app.getknit.knit.mesh.crypto.SafetyNumber
 import app.getknit.knit.mesh.crypto.VerifyPayload
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +43,8 @@ data class ProfileDetailsUiState(
     val verified: Boolean = false,
     val safetyNumber: String? = null,
     val myQrPayload: String? = null,
+    // Where a contact-card intro with this peer stands (null when none is pending or recently confirmed).
+    val intro: IntroState? = null,
 )
 
 /**
@@ -82,7 +86,8 @@ class ProfileDetailsViewModel(
             meshManager.neighbors,
             settings.blockedNodeIds,
             me,
-        ) { peerList, neighbors, blocked, myId ->
+            meshManager.introState(nodeId),
+        ) { peerList, neighbors, blocked, myId, intro ->
             val peer = peerList.firstOrNull { it.nodeId == nodeId }
             peerBundle = peer?.pubKey
             peerDeviceTag = peer?.deviceTag
@@ -103,6 +108,7 @@ class ProfileDetailsViewModel(
                 verified = peer?.verified == true,
                 safetyNumber = safety,
                 myQrPayload = myId?.let { VerifyPayload.encode(it.nodeId, it.bundle) },
+                intro = intro,
             )
         }.stateIn(
             viewModelScope,
@@ -154,9 +160,13 @@ class ProfileDetailsViewModel(
     }
 
     private fun scannedMatchesPinned(payload: String): Boolean {
-        val parsed = VerifyPayload.parse(payload) ?: return false
         val pinned = peerBundle ?: return false
-        return parsed.nodeId == nodeId && parsed.bundle == pinned
+        // Compare-only, so the legacy code needs no self-certification here: the pinned key was
+        // self-certified when it was pinned, and an exact (id, bundle) match is the whole check. A
+        // contact-link QR (docs/CONTACT_CARD.md) goes through the codec, which verifies it fully.
+        VerifyPayload.parse(payload)?.let { return it.nodeId == nodeId && it.bundle == pinned }
+        val card = ContactCard.parse(payload) as? ContactCard.Parsed.Card ?: return false
+        return card.nodeId == nodeId && card.bundle == pinned
     }
 
     fun consumeScanResult() {

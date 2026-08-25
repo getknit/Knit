@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-24T05:56:14Z
+  updated: 2026-08-25T22:30:00Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -24,6 +24,12 @@ document:
 
 ### Added
 
+- Add a contact from a link. Too far apart to scan each other's code? Share your contact link (Verify
+  contact › Share my contact link) over any messenger, and add someone from theirs — tap it, share it to
+  Knit, or paste it under Add by link. Each of you ends up with the other's key pinned and in Contacts, no
+  message needed; with Internet relays on, the two of you also meet at a relay before you have ever
+  exchanged a message. A link is not a scan: compare safety numbers over a call if it matters who is on
+  the other end.
 - Voice notes. Hold the microphone in a chat to record, slide up to keep recording hands-free, and slide
   away to cancel. You hear the recording back before deciding to send it, and can add text to it like any
   other attachment. Voice notes travel exactly the way photos do — encrypted end to end, carried by nearby

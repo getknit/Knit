@@ -19,10 +19,12 @@ class ScopeRegistryTest {
     private fun registry(
         roots: List<ScopeRoots> = emptyList(),
         groups: List<GroupScopeRoots> = emptyList(),
+        pairs: List<PairScopeRoots> = emptyList(),
     ) = ScopeRegistry(
         selfId = { me },
         roots = { roots },
         groupRoots = { groups },
+        pairs = { pairs },
     )
 
     private fun root(seed: Byte) = ByteArray(32) { seed }
@@ -159,6 +161,43 @@ class ScopeRegistryTest {
                     groupRoots = { listOf(GroupScopeRoots(groupId, roster, root(7), 1)) },
                 ).scopes(0L).single()
             assertEquals(mine.idHex, theirs.idHex)
+        }
+
+    /** Spec §3.5: a pending intro yields a DM-form scope keyed by the identity pair secret, not a session. */
+    @Test
+    fun `a pending-intro peer gets a pair scope shaped exactly like a DM scope`() =
+        runTest {
+            val scope = registry(pairs = listOf(PairScopeRoots(bob, root(5)))).scopes(0L).single()
+            assertArrayEquals(ScopeCrypto.pairScopeId(root(5), me, bob), scope.id)
+            assertArrayEquals(ScopeCrypto.pairSealKeys(root(5), me, bob).sealKey, scope.keys.sealKey)
+            assertEquals(bob, scope.peerId)
+            assertEquals(null, scope.groupId)
+            assertFalse("a pair scope is pushed into, never merely drained", scope.retiring)
+        }
+
+    @Test
+    fun `both parties derive the same pair scope id from the shared pair secret`() =
+        runTest {
+            val mine = registry(pairs = listOf(PairScopeRoots(bob, root(5)))).scopes(0L).single()
+            val theirs =
+                ScopeRegistry(
+                    selfId = { bob },
+                    roots = { emptyList() },
+                    pairs = { listOf(PairScopeRoots(me, root(5))) },
+                ).scopes(0L).single()
+            assertEquals(mine.idHex, theirs.idHex)
+        }
+
+    @Test
+    fun `a peer's pair scope and DM scope coexist under distinct ids until the pair scope is dropped`() =
+        runTest {
+            val both = registry(roots = listOf(ScopeRoots(bob, root(1))), pairs = listOf(PairScopeRoots(bob, root(5)))).scopes(0L)
+            assertEquals(listOf(bob, bob), both.map { it.peerId })
+            assertTrue(both[0].idHex != both[1].idHex)
+            // The driver stops naming the peer (confirmed + grace elapsed) → only the DM scope remains.
+            val after = registry(roots = listOf(ScopeRoots(bob, root(1)))).scopes(0L)
+            assertEquals(1, after.size)
+            assertArrayEquals(ScopeCrypto.dmScopeId(root(1), me, bob), after[0].id)
         }
 
     @Test

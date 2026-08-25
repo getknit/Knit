@@ -34,6 +34,11 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   DMs** over LoRa as a fast-plane-only `MeshTransport` child, off by default behind `BuildConfig.LORA_PLANE`
   (ADR 038 + 039). `mesh/lora/` is pure/JVM-tested; the only `android.bluetooth.*` importer is
   `mesh/bluetooth/meshtastic/MeshtasticGatt`.
+- **When touching contact cards, the Add-by-link / share-link flow, deep links (`getknit.app/c`,
+  `knit://`), or `mesh/IntroSync`:** READ `docs/CONTACT_CARD.md` (the card layout + golden vectors, the
+  intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);
+  decision record ADR 042. The card is versioned by `v` and additive under the WIRE_COMPAT rules; import
+  never sets `verified`.
 - **When touching `mesh/crypto/scope/`, `mesh/spool/`, or the spool/internet-relay plane:** READ
   `docs/SPOOL_PROTOCOL.md` (the normative public spec; its §13 vectors are pinned by
   `ScopeVectorTest`/`SpoolRecordsTest` — change them only together), then the `ScopeSync` invariants in

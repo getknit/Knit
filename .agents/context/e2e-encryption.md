@@ -101,6 +101,19 @@ damped by a preferred-minter-plus-grace rule, not restricted to the creator (spe
 amendment). Roots are adopted and re-gossiped even with the Internet plane switched off; only minting
 checks the switch.
 
+**Contacts at a distance (ADR 042, `docs/CONTACT_CARD.md`).** A **contact card** is the `knit-id:v1` QR
+payload as a signed link (`mesh/crypto/ContactCard`): body `{v, id, pk, name?, sp?, iat}`, Ed25519 over
+`"knit/card/v1" ‖ body`, never re-encoded to verify. Import pins + accepts, never verifies. The intro
+handshake is the existing sealed `CTL_PROFILE` DM sent to a peer with no session (`MeshManager.sendIntroTo`
+→ `sendProfileDm` → `ratchet.sealDm` initiates X3DH off the card-pinned prekey), driven by the pure
+`mesh/IntroSync` (send when sealable, re-send every 20 h while unconfirmed, answer an init-bearing peer
+hourly, 48 h grace after confirmation). On the spool plane the pair meets at a **pair scope** before any
+session exists: `ScopeCrypto.pairSecret(IK_self, IK_peer)` (static-static X25519 over the identity DH keys,
+used nowhere else) → `pairScopeId`/`pairSealKeys` with the DM context — an ordinary DM-form scope the
+registry derives from `ScopeRegistry.pairs` while the intro is pending or in grace. The one
+identity-derived scope: a stolen identity file plus the peer's bundle yields its id and outer seal
+(bootstrap-era routing metadata), never content, never a DM/group scope (spec §3.5, §10.3).
+
 The seal is **deterministic** (SIV-style keyed nonce), which is load-bearing beyond dedup: it makes a
 frame's blob id a pure function of (scope, frame), so `ScopeSync` derives its held-set on demand
 instead of persisting one. Anything that made sealing non-deterministic would break spool convergence

@@ -6,8 +6,8 @@
 |--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Protocol version   | 1                                                                                                                                                                       |
 | Status             | Normative. Implemented and shipping (see Appendix A)                                                                                                                    |
-| This revision      | 2026-08-17                                                                                                                                                              |
-| Decision record    | ADR 019 (+ M4/M5/M6 amendments, ADR 020, ADR 021)                                                                                                                       |
+| This revision      | 2026-08-25                                                                                                                                                              |
+| Decision record    | ADR 019 (+ M4/M5/M6 amendments, ADR 020, ADR 021, ADR 042)                                                                                                              |
 | Client reference   | `mesh/crypto/scope/` (`ScopeCrypto`, `SpoolPow`), `mesh/spool/` (`SpoolRecords`, `ScopeFrames`, `ScopeAttachments`, `GroupRootPolicy`, `ScopeRegistry`, `ScopeSync`)    |
 | Spool reference    | [`knit-spool`](https://github.com/getknit/knit-spool) (AGPL-3.0, separate repository) + its conformance suite                                                           |
 | Executable anchors | `ScopeCryptoTest`, `ScopeVectorTest`, `SpoolPowTest`, `SpoolRecordsTest`, `ScopeAttachmentsTest`, `ScopeFramesTest`, `GroupRootPolicyTest`, `AttachmentDeferPolicyTest` |
@@ -55,8 +55,10 @@ a spool never decrypts anything, so the entire key schedule is `[Client]`.
 Knit is an offline mesh messenger, and radio proximity is the product. This protocol extends
 *existing*
 conversations across the Internet when no radio path exists. It is a continuity layer for contacts
-already made over the mesh or by QR. It is not a discovery network, not an account system and not a
-server in the sense that word usually implies.
+already made over the mesh, by QR, or by exchanging a **contact card** out of band (§3.5 — two people
+who hold each other's card can meet at a spool before any session exists). It is not a discovery
+network, not an account system and not a server in the sense that word usually implies: nothing here
+finds a stranger, and nothing here is registered.
 
 ### 1.2 The moving parts
 
@@ -110,7 +112,8 @@ nothing a member cannot refill.
 ### 1.4 Non-goals in v1
 
 - Carrying the plaintext Nearby broadcast room (proximity semantic, spam surface).
-- Contact discovery, or any server-side identity.
+- Contact discovery, or any server-side identity. (A pair that already holds each other's identity —
+  from a card exchanged out of band — may rendezvous, §3.5; a spool still learns no identity from it.)
 - Spool-to-spool federation.
 - Resistance to a global passive network observer. Tor optionally covers the IP edge; padding is
   future
@@ -332,6 +335,52 @@ sealOkm  = HKDF(ikm = groupRoot, info = "knit/scope/v1/seal"     ‖ ctx, L = 64
 | DM `scopeId`, `sealKey`, `nonceKey`    | pairwiseRoot            | session replacement (wipe/reset)    | the two members                                  |
 | group `scopeId`, `sealKey`, `nonceKey` | groupRoot + rootVersion | departure re-mint                   | current members, plus departed until the re-mint |
 | groupRoot                              | minted at random        | never in place; replaced by re-mint | same                                             |
+| pair `scopeId`, `sealKey`, `nonceKey`  | pairSecret (§3.5)       | never (identity-bound); dropped     | the two members                                  |
+
+### 3.5 Pair scopes
+
+A DM scope needs a confirmed session, a session needs the peer's prekey, and the prekey travels only on
+a `profile` frame inside a scope the pair already shares — so two people who have only ever exchanged a
+**contact card** (their identity bundle as a signed link, `docs/CONTACT_CARD.md`) have no scope to meet
+at. The **pair scope** is that meeting point: a scope both can derive from the two identities alone.
+
+```
+pairSecret = X25519(IK_self, IK_peer)                    // the identity DH keys — the hpkePub half of each bundle
+ctx        = UTF8(idLow ‖ "|" ‖ idHigh ‖ "|")             // the §3.1 context, verbatim
+scopeId    = HKDF(ikm = pairSecret, info = "knit/scope/v1/pair/id" ‖ ctx, L = 32)
+sealOkm    = HKDF(ikm = pairSecret, info = "knit/scope/v1/seal"    ‖ ctx, L = 64)  → sealKey ‖ nonceKey
+```
+
+| ID          | Requirement                                                                                                                                                                                  |
+|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **C-3.5-1** | A member MUST subscribe a pair scope only while an intro with that peer is pending, or for a bounded grace (`pairGrace`, §12) after its own session with the peer confirms — then drop it.       |
+| **C-3.5-2** | A pair scope carries exactly the §4.4 DM frame set, with the pending peer as the counterpart. It has no rule of its own.                                                                      |
+| **C-3.5-3** | A pair scope exists to establish the session. Once the DM scope (§3.1) exists it supersedes the pair scope; a member MUST NOT rely on a pair scope for anything else.                        |
+| **C-3.5-4** | A member SHOULD hold at most `maxPairScopes` (§12) pair scopes at once.                                                                                                                       |
+| **C-3.5-5** | The pair secret is a static-static agreement used for nothing else; every derivation from it is labeled under `knit/scope/v1/…` (B-2-8) and never mixes with the ratchet's `knit/dm/v2/…`. |
+
+> **Why the identity keys.** They are the one input both parties hold *before* a session: the card is
+> self-certifying (the node id is the hash of the bundle it carries), so a pinned card is exactly the
+> same key the peer's own `profile` frame would deliver. X3DH has no identity-identity term and HPKE
+> pairs the identity key with an ephemeral, so the static-static agreement is fresh material, and the
+> HKDF labels keep it disjoint from both.
+>
+> **Why the grace.** The responder's session confirms on the initiator's first frame; the initiator's
+> only on the responder's answer. The answer must reach a peer that holds no DM scope yet, and the pair
+> scope is the only scope it holds — so the pair scope stays pushed into until the answer had time to
+> land (the spool's own retention, 48 h), then goes away.
+>
+> **What it costs, stated honestly.** §10.3's "identity file only → no scope key" narrows to
+> *conversation* scopes: a stolen identity file plus the peer's public bundle yields this one scope's
+> id and outer seal, exposing the routing metadata of bootstrap-era frames (profiles and the first sealed
+> ctl frames) while the scope is subscribed — never content, which is inner-sealed, and never a DM or
+> group scope. And unlike a DM scope the id is stable per pair across eras, so a spool could link two
+> bootstraps of the same pair; the subscription window (pending + grace) is what bounds that. A spool, a
+> node-id holder and a card holder still cannot compute it.
+>
+> **Why no new frame or ctl.** The intro is an ordinary sealed `CTL_PROFILE` DM (ADR 020): its X3DH init
+> rides every copy until confirmed, every deployed build reads it, and the pair scope carries it under
+> the DM rule unchanged. The whole feature is a derivation and a driver; no spool changes.
 
 ## 4. Sealing [Client]
 
@@ -1081,6 +1130,9 @@ a relay.
   conversation exchanged some frames" is not. That is the price of carrying bytes at all, and it is
   why
   the byte quota is per scope.
+- For a **pair scope** (§3.5), an id that is stable per pair rather than per session era — two
+  bootstraps of the same pair, years apart, share it. Bounded by the subscription window: pending plus
+  `pairGrace`, after which the scope is gone and the pair lives on its rotating DM scope.
 - Where a member defers the §9.5 push half, a **proximity** signal on top of that: an upload that
   only
   happens once the radios stopped carrying the bytes tells a spool roughly when a conversation's
@@ -1109,7 +1161,7 @@ a relay.
 |---------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Content**                                                                                 | Inner v2 ratchet ciphertext with its own epoch-granularity forward secrecy. Seize-the-disk-then-compromise-a-key-later yields no message bodies beyond what the inner schemes already concede. Untouched by this layer                                                                                                                                                                                                                             |
 | **Routing metadata** (the `RelayEnvelope`: ids, sender/recipient/roster, send times, types) | The scope-static outer seal (§4.2) gives it a **scope-generation** horizon. A member-device compromise plus a harvested spool disk reveals that era's envelope metadata, including frames the device itself no longer holds. A member-device compromise reveals the conversation and roster anyway, so the marginal exposure is the metadata of aged-out frames. `sealv = 2` (§11) is the reserved upgrade if that margin ever warrants epoch keys |
-| **Identity file only**                                                                      | No scope key. Every scope input is a database-tier session secret, not an identity key                                                                                                                                                                                                                                                                                                                                                             |
+| **Identity file only**                                                                      | No *conversation*-scope key: every DM and group scope input is a database-tier session secret. The one identity-derived scope is the pair scope (§3.5): with the peer's public bundle it yields that scope's id and outer seal — the routing metadata of bootstrap-era frames while the scope is subscribed, never content, never a DM or group scope                                                                                             |
 | **Device wipe**                                                                             | Scopes are unrecoverable (§3.1). Continuity is a property of live sessions, never of any server                                                                                                                                                                                                                                                                                                                                                    |
 
 ### 10.4 Insider threats
@@ -1179,6 +1231,9 @@ Deliberately open, additively reachable, in no particular order.
 | max attachment / `total`                 | 8 MiB / ≤ 171 chunks                                    | The app's own attachment cap. Bounds every allocation sized by a peer-supplied `total` (C-4.5-8)                        |
 | default per-scope `maxAttachBytes`       | 16 MiB                                                  | §6.5 — 2× one maximal attachment, so a scope holds a little history without becoming storage                            |
 | suggested `maxAget`                      | 32                                                      | ≈1.5 MiB per batch. HELLO-advertised, spool-tunable                                                                     |
+| `pairGrace`                              | 48 h                                                    | §3.5 — a pair scope outlives our own confirmation by the spool's default retention, so the answer can still be pulled |
+| `maxPairScopes`                          | 8                                                       | §3.5 — headroom under `maxScopes`                                                                                       |
+| intro re-send / answer floors            | 20 h / 1 h                                              | §3.5 client policy: re-send an unconfirmed intro under the 24 h custody TTL; answer an init-bearing peer at most hourly |
 
 ## 13. Test vectors [Both]
 
@@ -1210,6 +1265,17 @@ groupScopeId v1 = c5c544c7c4cb09c72557075ea90adc26b9b8bfa2676d227ef41a581f8c30f5
 groupScopeId v2 = 8ea040bce4597fb6d08dabd50ddc2342fb79775134f7b81de97125847589fef1   // rotation pin
 groupSealKey v1 = b7a89432dc831b4035b8bb4709932e696cfe635b26ace09b448b4c600748eb4d
 groupNonceKey v1= a35ac015c70ba45bdbb88b23d48d7ea60933fd311605daf7f75f1540c15f28ce
+```
+
+Pair scope (§3.5; appended 2026-08-25 — the rows above did not move). `IK_A` is the X25519 scalar
+`fixture(32, 3)`, `IK_B` the scalar `fixture(32, 8)`; the secret is `X25519(IK_A, pub(IK_B))`, and the
+context is the DM context of `nodeIdA`/`nodeIdB`:
+
+```
+pairSecret      = 536a5e63f420ed78cd6166913a87d57562938cc18d2992f443ded7e7eca0f744
+pairScopeId     = bf46c96f08e53c8db14c1343c3fac9e5863732addae8baa0de2cf7681ca26855
+pairSealKey     = a9fc082b054b4e903b304143996471960eb3cd3b075e6537e2dc556f4856de95
+pairNonceKey    = e560060de754aa7d3759188568cbbb1cc2a7eccdeba81bfb9bdd68bc35b81285
 ```
 
 Seal (§4; keys and scopeId are the DM values above; deterministic, so sealing twice is
@@ -1338,6 +1404,7 @@ wire.
 | §2 encodings, §6.3 digest                       | Shipped both sides                                                                                                                         | `ScopeCrypto`, `SpoolCodec`, `knit-spool`                        |
 | §3.1 DM scopes                                  | Shipped                                                                                                                                    | `ScopeCrypto`, `ScopeRegistry`                                   |
 | §3.2 group root, §3.3 group scopes              | Shipped                                                                                                                                    | `GroupRootPolicy`, `GroupRootStore`, `GroupKeyPayload.gr`, DB v3 |
+| §3.5 pair scopes                                | Shipped                                                                                                                                    | `ScopeCrypto.pairSecret`, `ScopeRegistry.pairs`, `IntroSync`      |
 | §4.1–§4.4 sealing and frame rules               | Shipped                                                                                                                                    | `ScopeCrypto`, `ScopeFrames`                                     |
 | §4.5 attachments                                | Shipped                                                                                                                                    | `ScopeCrypto.sealChunk`, `ScopeAttachments`                      |
 | §5 scope config ctl                             | **Reserved, not shipped.** `ctl = 7` is named and never recycled; the spool list is a device setting and bounds are §12 defaults meanwhile | `MessageContent`, `ScopeRegistry`, `SettingsStore.spoolUrls`     |
@@ -1372,3 +1439,4 @@ the plane itself was unaffected either time, since a spool never decodes a frame
 | 2026-08-19 | **Profiles cross the plane (ADR 022).** §4.4 admits `type = profile` into both scope forms — matched on sender alone in the DM half (C-4.4-5…7), on the founding roster in the group half (C-4.4-13). It is the only carrier of `ProfileContent.prekey`, so without it an Internet-only peer could never learn a rotated prekey, re-establish a broken DM session, or receive the group sender-key seeds that ride as ctl DMs                                                                                   | None for spools. Clients: profile blobs now fold into the scope digest, so a member on an older build quarantines them (C-9.3-1) and reports itself unconverged for that scope until it is updated |
 | 2026-08-23 | **The attachment MIME leaves the mesh frame (ADR 035).** §9.5's reference table drops `attachmentMime` from the `chat` row; C-9.5-1 generalises to "a frame need not name a mime"; new C-9.5-10 says where a fetcher gets one instead. Client-side only — §4.3 seals the whole frame, so a spool never observed the field                                                                                                                                                                        | None for spools, and no record, derivation or §13 vector changed. Clients: tolerate a reference with no mime (already required for `groupupdate`) and resolve the type locally                     |
 | 2026-08-24 | **Capacity refusal (§7.1).** New S-7.1-10 and C-7.1-11 write down what a spool at its connection cap does — refuse the upgrade `503` with `Retry-After`, never a close code — and what a client does about it                                                                                                                                                                                                   | **Spools:** optional; a spool with no cap is unaffected. **Clients:** a refused upgrade is not a close code, so a client that reports only close codes shows a full spool as an unexplained transport error                     |
+| 2026-08-25 | **Pair scopes (ADR 042).** New §3.5: a scope both members derive from their *identity* DH keys, so a pair that has only exchanged a contact card out of band (`docs/CONTACT_CARD.md`) can meet at a spool before a session exists. Carries the §4.4 DM frame set unchanged; subscribed only while an intro is pending plus a 48 h grace. §1.1/§1.4 wording, §3.4 row, §10.1 bullet, §10.3's identity-file row narrowed to *conversation* scopes, §12 constants, four §13 rows appended                                                                                                                                                                                              | None for spools: one more opaque id. Clients: a new label family under `knit/scope/v1/pair/…`; no record, no existing vector moved                                                                                                |

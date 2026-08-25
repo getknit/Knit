@@ -116,7 +116,7 @@ radio-less build (`-PseedDemo=true`); `SeededUiAutomatorTest` shares `SeededUiTe
 - **Coverage today:** the seeded core flows + DM send (`SeededFlowsUiAutomatorTest`), process lifecycle
   (`LifecycleUiAutomatorTest`), the notification-shade→requests flow (`MessageRequestNotificationUiAutomatorTest`),
   overflow-menu navigation to the untagged screens (`OverflowNavigationUiAutomatorTest`), contacts→DM/group
-  creation (`ContactsFlowUiAutomatorTest` — note the picker lists only *established* contacts: accepted-DM ∪
+  creation (`ContactsFlowUiAutomatorTest` — note the picker lists only *established* contacts: explicitly-accepted (a card import or an accepted request) ∪ accepted-DM ∪
   group co-member ∪ verified, so Nearby-only strangers never appear), group rename/leave
   (`GroupManagementUiAutomatorTest`), the in-app requests badge + block path (`RequestsInboxUiAutomatorTest`),
   and the received-flagged tap-to-reveal (`ModerationRevealUiAutomatorTest`, via the `FLAGMSG` debug seam).

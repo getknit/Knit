@@ -141,6 +141,8 @@ class DebugBridgeReceiver :
     private val metrics: MeshMetrics by inject()
     private val identity: Identity by inject()
     private val settings: SettingsStore by inject()
+    private val contactCards: app.getknit.knit.contacts.ContactCards by inject()
+    private val contactImporter: app.getknit.knit.contacts.ContactImporter by inject()
     private val forwardDao: ForwardDao by inject()
     private val digest: StoreDigest by inject()
     private val reviewPrompter: ReviewPrompter by inject()
@@ -225,6 +227,10 @@ class DebugBridgeReceiver :
 
                         ACTION_SPOOL -> {
                             handleSpool(intent)
+                        }
+
+                        ACTION_INTRO -> {
+                            handleIntro(intent)
                         }
 
                         ACTION_RATCHET -> {
@@ -938,6 +944,35 @@ class DebugBridgeReceiver :
     }
 
     /**
+     * Drives the contact-card flow (docs/CONTACT_CARD.md) on a locked lab device: `--ez card true` mints
+     * and prints this device's link, `--es import '<link>'` previews + imports one (single-quoted — the
+     * shell splits on spaces), and no extras dumps the intro driver's pending/grace sets plus counters.
+     */
+    private suspend fun handleIntro(intent: Intent): JSONObject {
+        val result = JSONObject().put("status", "ok")
+        if (intent.getBooleanExtra(EXTRA_CARD, false)) {
+            val minted = contactCards.mint()
+            result.put("url", minted.url).put("schemeUrl", minted.schemeUrl)
+        }
+        intent.getStringExtra(EXTRA_IMPORT)?.takeIf { it.isNotBlank() }?.let { text ->
+            val preview =
+                contactImporter.preview(
+                    app.getknit.knit.mesh.crypto.ContactCard
+                        .parse(text),
+                )
+            result.put("preview", preview.toString())
+            if (preview is app.getknit.knit.contacts.ContactImporter.Preview.Ready) {
+                contactImporter.import(preview, unblock = false)
+                result.put("imported", preview.nodeId)
+            }
+        }
+        return result
+            .put("pending", JSONArray(settings.pendingIntros.first().toList()))
+            .put("grace", JSONArray(settings.introGrace.first().toList()))
+            .put("counters", metricsJson(metrics.snapshot()))
+    }
+
+    /**
      * Configures and inspects the Internet (spool) plane — the only way to drive it on a locked lab
      * device, since there is no spool-list editor in the UI yet. With no extras it just dumps state.
      *
@@ -1113,6 +1148,7 @@ class DebugBridgeReceiver :
         const val ACTION_REVIEW = "app.getknit.knit.debug.REVIEW"
         const val ACTION_MODEL = "app.getknit.knit.debug.MODEL"
         const val ACTION_SPOOL = "app.getknit.knit.debug.SPOOL"
+        const val ACTION_INTRO = "app.getknit.knit.debug.INTRO"
         const val ACTION_RATCHET = "app.getknit.knit.debug.RATCHET"
         const val ACTION_LORA = "app.getknit.knit.debug.LORA"
         const val ACTION_LORATX = "app.getknit.knit.debug.LORATX"
@@ -1133,6 +1169,8 @@ class DebugBridgeReceiver :
         const val EXTRA_RESET = "reset"
         const val EXTRA_ARM = "arm"
         const val EXTRA_URL = "url"
+        const val EXTRA_CARD = "card"
+        const val EXTRA_IMPORT = "import"
         const val EXTRA_ON = "on"
         const val EXTRA_DROP = "drop"
         const val EXTRA_RESET_PEER = "reset"

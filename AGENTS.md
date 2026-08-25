@@ -26,7 +26,9 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
 - **When touching `mesh/`, `protocol/`, or `data/`:** obey `.agents/rules/mesh.md`, then READ the
   relevant reference — `.agents/context/mesh-transport.md` (radios / NAN / BLE),
   `.agents/context/wire-format.md` (CBOR wire), `.agents/context/store-and-forward.md` (custody /
-  convergence), `.agents/context/e2e-encryption.md` (crypto).
+  convergence), `.agents/context/e2e-encryption.md` (crypto). If a change can only be made by *breaking*
+  the wire, don't — park it in `docs/NEXT_WIRE_BREAK.md` (the staging list, so a future break carries them
+  all at once) and find the additive route per `docs/WIRE_COMPAT.md`.
 - **When touching `mesh/lora/` or `mesh/bluetooth/meshtastic/` (the LoRa/Meshtastic bridge):** READ
   `.agents/context/lora-bridge.md` — a Meshtastic board over BLE GATT extends the **Nearby room and 1:1
   DMs** over LoRa as a fast-plane-only `MeshTransport` child, off by default behind `BuildConfig.LORA_PLANE`

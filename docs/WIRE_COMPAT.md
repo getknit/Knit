@@ -81,6 +81,10 @@ derivation, or a discovery marker; or makes `RelayEnvelope.type` polymorphic.
 **Additive** (safe) if it only adds a nullable/defaulted field to a content/envelope type, a new `type`
 string with its own content class, or a new capability bit — and rule 4 holds.
 
+A change that genuinely needs a break does **not** get to schedule one. Park it in
+`docs/NEXT_WIRE_BREAK.md` — the staging list of everything waiting on the next coordinated break, so that
+if one ever happens they all ride it together and no single item has to justify the partition alone.
+
 > **Coordination-plane message tags (transport-local, not the wire).** The Wi-Fi Aware fast path frames
 > its `sendMessage` payloads with a leading tag byte; the registry is **append-only** like capability
 > bits: `0x01` legacy tagged-CBOR frame (kept forever), `0x02` burned, `0x03` compact frame / `0x04`

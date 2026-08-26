@@ -233,28 +233,43 @@ coordination. `provisionKnitChannel(ProvisionMode.Setup)` — the "Set up this b
    `rebroadcast_mode = LOCAL_ONLY` so the board keeps relaying its own channels — all ADR 044's bridge needs —
    and stops spending its battery repeating the rest of the band. The GPS itself is not touched: silencing
    what the board *broadcasts* is Knit's business, powering down the user's hardware is not.
+4. `set_owner` renaming the board **`Knit abcd`** / short name **`Knit`** (`BoardName`, ADR 049) — the suffix
+   is the low two bytes of its node number, the same shape the firmware's own `Meshtastic abcd` default uses,
+   so two boards in one pocket stay distinguishable. Read first (`get_owner_request`, **before** the
+   transaction, like the configs) and spliced with `spliceStringFields`: `handleSetOwner` merges non-empty
+   strings, but `is_licensed` is a presence-less bool whose absence clears `override_duty_cycle`, so only the
+   two names may be written. Deliberately **not** the user's display name — a `NodeInfo` is cleartext on the
+   public frequency.
 
-The settings the board had first come back as `ProvisionResult.Provisioned.previous` and are persisted per
-board (`SettingsStore.loraBoardSetup`); **Restore** writes them back and disables every Knit channel. It
+The settings **and the name** the board had first come back as `ProvisionResult.Provisioned.previous` and are
+persisted per board (`SettingsStore.loraBoardSetup`); **Restore** writes them back and disables every Knit
+channel. With no name recorded, the restore writes the one the firmware itself would have chosen
+(`BoardName.stock`) rather than leave a restored board saying Knit. It
 leaves **no** Knit channel, so the caller switches the plane off with it — otherwise the next fan-out would go
 out over whatever channel remains — and restoring a board that carries none is refused, since there is nothing
 to undo and the config writes would push somebody's board to values it never had. Re-running the setup on a
-board that already has the channel is a reported no-op, so the recorded settings are never overwritten with
-the quieted ones.
+board that already has the channel is a reported no-op **except for the rename**: a board set up before ADR
+049 gets one `set_owner` and nothing else, carrying the caller's existing record forward with the old name
+filled in, so the recorded settings are never overwritten with the quieted ones. The screen offers exactly that as a
+**rename button** (`lora_rename`, no confirmation — one reversible field) whenever `LoraRadioUiState.needsRename`:
+the board carries the Knit channel and `BoardInfo.owner` — its own `NodeInfo.user`, decoded off the same
+handshake ADR 041's battery comes from — is a name other than `BoardName.forNode`'s. A board whose firmware
+never sends its own `NodeInfo` reports no name and is left alone.
 
 A board whose bound slot is **not** the Knit channel never transmits (`LoraMeshTransport.boundSlotIsKnit`,
 counted as `loraSuppressed`): after a restore, or before a setup, sending would put Knit's cleartext frames
 onto whatever channel the board is on — most likely the public one. A board that reports no channel table at
 all is given the benefit of the doubt, since going mute on unreadable firmware is the worse failure.
 
-**The cost, which the confirmation states out loud:** the board stops broadcasting its position and node
-info, and stops relaying other radios' traffic. Its own main channel is left alone and it stays on the public
+**The cost, which the confirmation states out loud:** the board is renamed for Knit, stops broadcasting its
+position and node info, and stops relaying other radios' traffic. Its own main channel is left alone and it stays on the public
 frequency, so nothing else about its place in the Meshtastic network changes.
 
 Admin wire (pinned by `MeshtasticProtoTest`): `AdminMessage{ get_channel_request=1, get_channel_response=2,
-get_config_request=5, get_config_response=6, get_module_config_request=7, get_module_config_response=8,
-set_channel=33, set_config=34, set_module_config=35, begin_edit_settings=64, commit_edit_settings=65,
-session_passkey=101 }`; `Channel{ index=1, settings=2, role=3 }` (Role SECONDARY=2, DISABLED=0);
+get_owner_request=3, get_owner_response=4, get_config_request=5, get_config_response=6,
+get_module_config_request=7, get_module_config_response=8, set_owner=32, set_channel=33, set_config=34,
+set_module_config=35, begin_edit_settings=64, commit_edit_settings=65, session_passkey=101 }`;
+`User{ long_name=2, short_name=3 }`; `Channel{ index=1, settings=2, role=3 }` (Role SECONDARY=2, DISABLED=0);
 `ChannelSettings{ psk=2, name=3, module_settings=7 }` with `ModuleSettings{ position_precision=1 }`;
 `Config{ device=1, position=2 }` / `ModuleConfig{ telemetry=6 }` (the request enums number differently:
 `ConfigType{ DEVICE=0, POSITION=1 }`, `ModuleConfigType{ TELEMETRY=5 }`);

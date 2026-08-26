@@ -38,6 +38,7 @@ import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.StoreDigest
+import app.getknit.knit.mesh.lora.BoardOwner
 import app.getknit.knit.mesh.lora.BoardSettings
 import app.getknit.knit.mesh.lora.ProvisionMode
 import app.getknit.knit.mesh.protocol.ReplyRef
@@ -1126,6 +1127,12 @@ class DebugBridgeReceiver :
                         smartPosition = it.smartPosition,
                         telemetrySecs = it.telemetrySecs,
                         rebroadcastMode = it.rebroadcastMode,
+                        owner =
+                            if (it.longName.isEmpty() && it.shortName.isEmpty()) {
+                                null
+                            } else {
+                                BoardOwner(it.longName, it.shortName)
+                            },
                     )
                 },
             )
@@ -1143,6 +1150,8 @@ class DebugBridgeReceiver :
                             smartPosition = previous.smartPosition,
                             telemetrySecs = previous.telemetrySecs,
                             rebroadcastMode = previous.rebroadcastMode,
+                            longName = previous.owner?.longName.orEmpty(),
+                            shortName = previous.owner?.shortName.orEmpty(),
                         ),
                     )
                 }

@@ -7,6 +7,8 @@ package app.getknit.knit.data.settings
  * The values here are the board's own as they stood *before* the setup, kept so restoring can put those back
  * instead of guessing at the firmware's. A zero interval means the value was never recorded, which the
  * restore writes as "let the firmware substitute its default"; [rebroadcastMode] 0 is a real value (ALL).
+ * An empty [longName] / [shortName] likewise means no name was recorded, which the restore answers with the
+ * one the firmware itself would have given the board.
  *
  * Primitive by design: [SettingsStore] is a data-layer class and stays free of `mesh/` types; the LoRa
  * ViewModel maps this onto `mesh.lora.BoardSettings` at the seam.
@@ -18,4 +20,8 @@ data class KnitBoardSetup(
     val smartPosition: Boolean,
     val telemetrySecs: Int,
     val rebroadcastMode: Int,
+    /** The board's own `User.long_name` before the setup renamed it for Knit (ADR 049); empty if unrecorded. */
+    val longName: String = "",
+    /** The board's own `User.short_name`, likewise. */
+    val shortName: String = "",
 )

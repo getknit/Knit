@@ -139,10 +139,17 @@ internal object BoardBytes {
         num: UInt,
         batteryLevel: Int? = null,
         voltage: Float? = null,
+        owner: BoardOwner? = null,
     ): ByteArray =
         ProtoWriter()
             .message(4) {
                 uint32(1, num)
+                if (owner != null) {
+                    message(2) {
+                        string(MeshtasticProto.USER_LONG_NAME, owner.longName)
+                        string(MeshtasticProto.USER_SHORT_NAME, owner.shortName)
+                    }
+                }
                 if (batteryLevel != null || voltage != null) {
                     message(6) {
                         if (batteryLevel != null) varint(1, batteryLevel)
@@ -398,6 +405,45 @@ internal object BoardBytes {
                             message(2) { string(3, name) }
                             varint(3, role)
                         }
+                        bytes(101, passkey)
+                    }.toByteArray(),
+            requestId = requestId,
+        )
+
+    /** An admin `get_owner_request` (its payload leads with field 3 → tag 0x18). */
+    fun isAdminGetOwner(toRadio: ByteArray): Boolean =
+        outboundData(toRadio)?.let { it.portnum == MeshtasticProto.PORT_ADMIN && it.payload.firstOrNull() == 0x18.toByte() } ?: false
+
+    /** An admin `set_owner` (its payload leads with field 32 → tag bytes 0x82 0x02). */
+    fun isAdminSetOwner(toRadio: ByteArray): Boolean =
+        outboundData(toRadio)?.let {
+            it.portnum == MeshtasticProto.PORT_ADMIN && it.payload.size >= 2 && it.payload[0] == 0x82.toByte() &&
+                it.payload[1] == 0x02.toByte()
+        } ?: false
+
+    /** The raw `User` bytes an admin `set_owner` carries, for asserting what a rename actually wrote. */
+    fun adminSetOwnerRaw(toRadio: ByteArray): ByteArray? {
+        val payload = outboundData(toRadio)?.takeIf { isAdminSetOwner(toRadio) }?.payload ?: return null
+        val reader = ProtoReader(payload)
+        reader.readTag()
+        return reader.readBytes()
+    }
+
+    /** A board→phone `AdminMessage { get_owner_response = User { … }, session_passkey }`. */
+    fun adminGetOwnerResponse(
+        from: UInt,
+        requestId: UInt,
+        passkey: ByteArray,
+        user: ByteArray,
+    ): ByteArray =
+        packet(
+            from = from,
+            channel = 0,
+            portnum = MeshtasticProto.PORT_ADMIN,
+            payload =
+                ProtoWriter()
+                    .apply {
+                        bytes(4, user, emitEmpty = true)
                         bytes(101, passkey)
                     }.toByteArray(),
             requestId = requestId,

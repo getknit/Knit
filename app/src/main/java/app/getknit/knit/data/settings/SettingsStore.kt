@@ -225,6 +225,8 @@ class SettingsStore(
                     smartPosition = prefs[KEY_LORA_PRIOR_SMART] ?: false,
                     telemetrySecs = prefs[KEY_LORA_PRIOR_TELEMETRY] ?: 0,
                     rebroadcastMode = prefs[KEY_LORA_PRIOR_REBROADCAST] ?: 0,
+                    longName = prefs[KEY_LORA_PRIOR_LONG_NAME].orEmpty(),
+                    shortName = prefs[KEY_LORA_PRIOR_SHORT_NAME].orEmpty(),
                 )
             }
         }
@@ -354,6 +356,8 @@ class SettingsStore(
             it.remove(KEY_LORA_PRIOR_SMART)
             it.remove(KEY_LORA_PRIOR_TELEMETRY)
             it.remove(KEY_LORA_PRIOR_REBROADCAST)
+            it.remove(KEY_LORA_PRIOR_LONG_NAME)
+            it.remove(KEY_LORA_PRIOR_SHORT_NAME)
         }
 
     suspend fun setLoraChannelIndex(index: Int) = dataStore.edit { it[KEY_LORA_CHANNEL] = index }
@@ -367,6 +371,8 @@ class SettingsStore(
             it[KEY_LORA_PRIOR_SMART] = board.smartPosition
             it[KEY_LORA_PRIOR_TELEMETRY] = board.telemetrySecs
             it[KEY_LORA_PRIOR_REBROADCAST] = board.rebroadcastMode
+            it[KEY_LORA_PRIOR_LONG_NAME] = board.longName
+            it[KEY_LORA_PRIOR_SHORT_NAME] = board.shortName
         }
 
     /** Forgets the setup record — after a restore, or when the board itself is forgotten. */
@@ -378,6 +384,8 @@ class SettingsStore(
             it.remove(KEY_LORA_PRIOR_SMART)
             it.remove(KEY_LORA_PRIOR_TELEMETRY)
             it.remove(KEY_LORA_PRIOR_REBROADCAST)
+            it.remove(KEY_LORA_PRIOR_LONG_NAME)
+            it.remove(KEY_LORA_PRIOR_SHORT_NAME)
         }
 
     /**
@@ -489,5 +497,7 @@ class SettingsStore(
         val KEY_LORA_PRIOR_SMART = booleanPreferencesKey("lora_prior_smart_position")
         val KEY_LORA_PRIOR_TELEMETRY = intPreferencesKey("lora_prior_telemetry_secs")
         val KEY_LORA_PRIOR_REBROADCAST = intPreferencesKey("lora_prior_rebroadcast_mode")
+        val KEY_LORA_PRIOR_LONG_NAME = stringPreferencesKey("lora_prior_long_name")
+        val KEY_LORA_PRIOR_SHORT_NAME = stringPreferencesKey("lora_prior_short_name")
     }
 }

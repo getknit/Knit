@@ -177,6 +177,7 @@ internal fun LoraRadioScreenContent(
             SetupSection(
                 state = state,
                 onAskSetup = onAskSetup,
+                onSetUp = onSetUp,
                 onRestore = onRestore,
                 onDismissProvision = onDismissProvision,
             )
@@ -333,20 +334,32 @@ private fun BoardRow(
 /**
  * The one step between a paired board and messages crossing (ADR 045): set the board up for Knit, or undo
  * that. Deliberately not a spectrum — a board is configured for Knit or it is a stock Meshtastic node — so
- * this is one button whose label is the whole choice.
+ * this is one button whose label is the whole choice. The one exception is a board set up before Knit named
+ * boards (ADR 049): its setup is unfinished, so the action comes back as a rename that goes straight through
+ * — it writes one `set_owner` and nothing else, so there is nothing for a confirmation to warn about.
  */
 @Composable
 private fun SetupSection(
     state: LoraRadioUiState,
     onAskSetup: () -> Unit,
+    onSetUp: () -> Unit,
     onRestore: () -> Unit,
     onDismissProvision: () -> Unit,
 ) {
     if (state.connection != LoraConnState.Ready) return
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(stringResource(R.string.lora_setup_title), style = MaterialTheme.typography.titleMedium)
+        // Once it is set up, say what the board now calls itself: that name is what identifies it on the
+        // board's own screen and in every other radio's node list.
+        val body =
+            when {
+                !state.boardSetUp -> stringResource(R.string.lora_setup_body)
+                state.needsRename && state.meshName != null -> stringResource(R.string.lora_setup_needs_rename, state.meshName)
+                state.meshName != null -> stringResource(R.string.lora_setup_done_named, state.meshName)
+                else -> stringResource(R.string.lora_setup_done)
+            }
         Text(
-            text = stringResource(if (state.boardSetUp) R.string.lora_setup_done else R.string.lora_setup_body),
+            text = body,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("lora_setup_body"),
@@ -362,6 +375,17 @@ private fun SetupSection(
         // Until it is done, this is the emphasized button on the screen; afterwards all that is left is the
         // way back out, which never wants emphasis.
         if (state.boardSetUp) {
+            // A board set up before Knit named boards: the setup is genuinely unfinished, so the action comes
+            // back — but as a rename, which is all it writes, and which the label states in full.
+            if (state.needsRename && state.knitName != null) {
+                Button(
+                    onClick = onSetUp,
+                    enabled = !state.provisioning,
+                    modifier = Modifier.testTag("lora_rename"),
+                ) {
+                    Text(stringResource(R.string.lora_setup_rename_button, state.knitName))
+                }
+            }
             OutlinedButton(
                 onClick = onRestore,
                 enabled = !state.provisioning,

@@ -6,6 +6,7 @@ import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardInfo
+import app.getknit.knit.mesh.lora.BoardOwner
 import app.getknit.knit.mesh.lora.BoardRef
 import app.getknit.knit.mesh.lora.BoardSettings
 import app.getknit.knit.mesh.lora.ChannelInfo
@@ -103,12 +104,14 @@ class LoraRadioViewModelTest {
         return vm
     }
 
-    private fun ready(channels: List<ChannelInfo>) =
-        LinkState.Ready(
-            board = BoardInfo(myNodeNum = 42u, pioEnv = "heltec-v4", firmwareVersion = "2.5.0"),
-            channels = channels,
-            mtu = 512,
-        )
+    private fun ready(
+        channels: List<ChannelInfo>,
+        owner: BoardOwner? = null,
+    ) = LinkState.Ready(
+        board = BoardInfo(myNodeNum = 42u, pioEnv = "heltec-v4", firmwareVersion = "2.5.0", owner = owner),
+        channels = channels,
+        mtu = 512,
+    )
 
     @Test
     fun `the picker hides devices that do not look like boards, and show-all reveals them`() =
@@ -344,6 +347,7 @@ class LoraRadioViewModelTest {
                     smartPosition = true,
                     telemetrySecs = 1_800,
                     rebroadcastMode = 0,
+                    owner = BoardOwner("Meshtastic abcd", "abcd"),
                 )
             provisionResult = ProvisionResult.Provisioned(index = 1, alreadyPresent = false, previous = previous)
             val vm = start()
@@ -365,6 +369,8 @@ class LoraRadioViewModelTest {
                         smartPosition = true,
                         telemetrySecs = 1_800,
                         rebroadcastMode = 0,
+                        longName = "Meshtastic abcd",
+                        shortName = "abcd",
                     ),
                 )
             }
@@ -394,6 +400,8 @@ class LoraRadioViewModelTest {
                     smartPosition = true,
                     telemetrySecs = 1_800,
                     rebroadcastMode = 3,
+                    longName = "Meshtastic abcd",
+                    shortName = "abcd",
                 )
             boardSetup.value = recorded
             provisionResult = ProvisionResult.Restored
@@ -403,7 +411,8 @@ class LoraRadioViewModelTest {
             advanceUntilIdle()
 
             assertEquals(
-                ProvisionMode.Restore to BoardSettings(900, 600, true, 1_800, rebroadcastMode = 3),
+                ProvisionMode.Restore to
+                    BoardSettings(900, 600, true, 1_800, rebroadcastMode = 3, owner = BoardOwner("Meshtastic abcd", "abcd")),
                 provisionCalls.single(),
             )
             assertEquals(LoraProvisionOutcome.Restored, vm.state.value.provisionOutcome)
@@ -411,5 +420,72 @@ class LoraRadioViewModelTest {
             // The board carries no Knit channel afterwards, so leaving the plane on would fan frames out
             // over whatever channel it landed back on.
             io.mockk.coVerify { settings.setLoraEnabled(false) }
+        }
+    // --- the rename a board set up before ADR 049 still needs ---
+
+    @Test
+    fun `a set-up board still under its old name is offered the rename`() =
+        runTest {
+            status.value =
+                LoraStatus(
+                    state =
+                        ready(
+                            listOf(ChannelInfo(0, "LongFast", 1), ChannelInfo(1, "Knit", 2)),
+                            owner = BoardOwner("Meshtastic 002a", "002a"),
+                        ),
+                    boardNodeNum = 42u,
+                )
+            val vm = start()
+
+            assertTrue(vm.state.value.boardSetUp)
+            assertTrue(vm.state.value.needsRename)
+            assertEquals("Meshtastic 002a", vm.state.value.meshName)
+            assertEquals("Knit 002a", vm.state.value.knitName)
+        }
+
+    @Test
+    fun `a board already named for Knit is not offered the rename`() =
+        runTest {
+            status.value =
+                LoraStatus(
+                    state =
+                        ready(
+                            listOf(ChannelInfo(0, "LongFast", 1), ChannelInfo(1, "Knit", 2)),
+                            owner = BoardOwner("Knit 002a", "Knit"),
+                        ),
+                    boardNodeNum = 42u,
+                )
+            val vm = start()
+
+            assertTrue(vm.state.value.boardSetUp)
+            assertFalse(vm.state.value.needsRename)
+            assertEquals("Knit 002a", vm.state.value.meshName)
+        }
+
+    @Test
+    fun `a board whose firmware never says what it is called is left alone`() =
+        runTest {
+            // Going on offering a rename that may already be done is the worse failure, so silence wins.
+            status.value =
+                LoraStatus(state = ready(listOf(ChannelInfo(0, "LongFast", 1), ChannelInfo(1, "Knit", 2))), boardNodeNum = 42u)
+            val vm = start()
+
+            assertTrue(vm.state.value.boardSetUp)
+            assertFalse(vm.state.value.needsRename)
+            assertNull(vm.state.value.meshName)
+        }
+
+    @Test
+    fun `a board that is not set up at all is never offered a bare rename`() =
+        runTest {
+            status.value =
+                LoraStatus(
+                    state = ready(listOf(ChannelInfo(0, "LongFast", 1)), owner = BoardOwner("Meshtastic 002a", "002a")),
+                    boardNodeNum = 42u,
+                )
+            val vm = start()
+
+            assertFalse(vm.state.value.boardSetUp)
+            assertFalse("the full setup is the action there, not a rename", vm.state.value.needsRename)
         }
 }

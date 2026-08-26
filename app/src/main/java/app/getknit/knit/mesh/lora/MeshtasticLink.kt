@@ -60,7 +60,10 @@ internal data class ProvisionSpec(
     val name: String,
     val psk: ByteArray,
     val mode: ProvisionMode = ProvisionMode.Setup,
-    /** [ProvisionMode.Restore] only: the board's own intervals as recorded when it was set up. */
+    /**
+     * The board's own intervals and name as recorded when it was set up. [ProvisionMode.Restore] writes them
+     * back; [ProvisionMode.Setup] carries them forward untouched when all it has left to do is the rename.
+     */
     val previous: BoardSettings? = null,
 )
 
@@ -71,13 +74,13 @@ internal data class ProvisionSpec(
  */
 internal enum class ProvisionMode {
     /**
-     * Set the board up for Knit: Knit becomes the primary channel — which is what moves the radio onto a
-     * Knit-derived RF slot, since the firmware hashes the primary's name into its frequency — and the
-     * board's housekeeping broadcasts are quieted ([BoardQuiet]).
+     * Set the board up for Knit: the Knit channel goes into a free **secondary** slot — the primary, and so
+     * the RF slot the firmware hashes out of its name, is left alone on purpose (ADR 045) — the board is
+     * renamed for Knit ([BoardName], ADR 049), and its housekeeping broadcasts are quieted ([BoardQuiet]).
      */
     Setup,
 
-    /** Undoes [Setup]: the stock Meshtastic primary comes back, along with the board's own intervals. */
+    /** Undoes [Setup]: the Knit channel is disabled, and the board's own intervals and name come back. */
     Restore,
 }
 
@@ -88,9 +91,11 @@ internal sealed interface ProvisionResult {
         val index: Int,
         val alreadyPresent: Boolean,
         /**
-         * The housekeeping intervals the board had *before* the write, for the caller to persist — without
-         * them a restore can only offer the firmware's defaults, not the user's own. Null when nothing was
-         * written ([alreadyPresent]), so a re-run never overwrites the record with the quieted values.
+         * The housekeeping intervals and the name the board had *before* the write, for the caller to
+         * persist — without them a restore can only offer the firmware's defaults, not the user's own. Null
+         * when nothing was written, so a re-run never overwrites the record with the quieted values. A board
+         * that only needed the rename ([alreadyPresent]) reports the caller's own record with the old name
+         * filled in, since that is the one moment the old name is still knowable.
          */
         val previous: BoardSettings? = null,
     ) : ProvisionResult
@@ -158,6 +163,12 @@ internal data class BoardInfo(
     val myNodeNum: UInt,
     val pioEnv: String?,
     val firmwareVersion: String?,
+    /**
+     * What the board calls itself on the mesh, off its own `NodeInfo` in the handshake — the name on its
+     * screen and in every other radio's node list. Null on firmware that never sends its own entry, which
+     * the setup screen reads as "no reason to think it needs renaming".
+     */
+    val owner: BoardOwner? = null,
 )
 
 /** One inbound packet the board handed the phone. */

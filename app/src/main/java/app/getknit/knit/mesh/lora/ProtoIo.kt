@@ -286,6 +286,23 @@ internal class ProtoReader(
 internal fun spliceVarintFields(
     raw: ByteArray,
     values: Map<Int, Long>,
+): ByteArray? = spliceFields(raw, values.keys) { values.forEach { (field, value) -> varint(field, value) } }
+
+/**
+ * [spliceVarintFields] for `string` fields — how the board's own `User` keeps its key, its hardware model
+ * and its licensed flag while only the two names Knit renames ([BoardName]) are replaced. An empty string
+ * is a proto3 default and is written by omission, which clears the field.
+ */
+internal fun spliceStringFields(
+    raw: ByteArray,
+    values: Map<Int, String>,
+): ByteArray? = spliceFields(raw, values.keys) { values.forEach { (field, value) -> string(field, value) } }
+
+/** Copies [raw] verbatim minus every field in [replaced], then appends what [append] writes in their place. */
+private inline fun spliceFields(
+    raw: ByteArray,
+    replaced: Set<Int>,
+    append: ProtoWriter.() -> Unit,
 ): ByteArray? =
     runCatching {
         val out = ByteArrayOutputStream()
@@ -294,11 +311,9 @@ internal fun spliceVarintFields(
             val start = reader.position
             val tag = reader.readTag()
             reader.skip(tag and WireType.MASK)
-            if ((tag ushr WireType.FIELD_SHIFT) !in values) out.write(raw, start, reader.position - start)
+            if ((tag ushr WireType.FIELD_SHIFT) !in replaced) out.write(raw, start, reader.position - start)
         }
-        val appended = ProtoWriter()
-        values.forEach { (field, value) -> appended.varint(field, value) }
-        out.write(appended.toByteArray())
+        out.write(ProtoWriter().apply(append).toByteArray())
         out.toByteArray()
     }.getOrNull()
 
@@ -315,6 +330,26 @@ internal fun readVarintField(
             val wire = tag and WireType.MASK
             if (tag ushr WireType.FIELD_SHIFT == field && wire == WireType.VARINT) {
                 found = reader.readVarint64()
+            } else {
+                reader.skip(wire)
+            }
+        }
+        found
+    }.getOrNull()
+
+/** The string value of [field] in [raw], or null when absent or malformed. The last occurrence wins. */
+internal fun readStringField(
+    raw: ByteArray,
+    field: Int,
+): String? =
+    runCatching {
+        val reader = ProtoReader(raw)
+        var found: String? = null
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            val wire = tag and WireType.MASK
+            if (tag ushr WireType.FIELD_SHIFT == field && wire == WireType.LEN) {
+                found = reader.readString()
             } else {
                 reader.skip(wire)
             }

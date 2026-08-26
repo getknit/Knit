@@ -517,13 +517,16 @@
     <string name="lora_open_settings">Open Bluetooth settings</string>
     <string name="lora_forget">Forget this board</string>
     <string name="lora_setup_title">Set up this board for Knit</string>
-    <string name="lora_setup_body">Adds the Knit channel, stops the board broadcasting its position and node info, and stops it relaying other radios\' traffic. It stays on the public Meshtastic frequency, so other radios can still pass Knit messages along.</string>
+    <string name="lora_setup_body">Adds the Knit channel, renames the board so you can spot it on the mesh, stops it broadcasting its position and node info, and stops it relaying other radios\' traffic. It stays on the public Meshtastic frequency, so other radios can still pass Knit messages along.</string>
     <string name="lora_setup_button">Set up this board for Knit</string>
     <string name="lora_setup_done">Set up for Knit — sharing the public Meshtastic frequency, with its own broadcasts quieted.</string>
+    <string name="lora_setup_done_named">Set up for Knit as \u201C%1$s\u201D — sharing the public Meshtastic frequency, with its own broadcasts quieted.</string>
     <string name="lora_setup_restore_button">Undo setup and restore the board\'s settings</string>
+    <string name="lora_setup_rename_button">Rename this board \u201C%1$s\u201D</string>
+    <string name="lora_setup_needs_rename">Set up for Knit, but still called \u201C%1$s\u201D on the mesh. Rename it and the board\'s own screen will say so too.</string>
     <string name="lora_custom_primary_warning">This board\'s main channel has been renamed, which puts its radio on a different frequency. Other Knit boards won\'t hear it. Set the main channel back to the default in the Meshtastic app.</string>
     <string name="lora_setup_confirm_title">Set this board up for Knit?</string>
-    <string name="lora_setup_confirm_body">This adds the Knit channel to your board and changes a few of its settings: it stops broadcasting its position and node info, and stops relaying other radios\' traffic to save battery.\n\nYour board\'s own main channel is left alone and it stays on the public Meshtastic frequency, so other radios can still pass your messages along.\n\nYou can undo this at any time.</string>
+    <string name="lora_setup_confirm_body">This adds the Knit channel to your board and changes a few of its settings: it renames the board \u201CKnit\u201D so you can pick it out on the mesh, stops broadcasting its position and node info, and stops relaying other radios\' traffic to save battery.\n\nYour board\'s own main channel is left alone and it stays on the public Meshtastic frequency, so other radios can still pass your messages along.\n\nYou can undo this at any time.</string>
     <string name="lora_setup_confirm_action">Set up</string>
     <string name="lora_provision_running">Configuring board…</string>
     <string name="lora_provisioned">Board set up for Knit. It may reboot to apply this — it will reconnect on its own.</string>
@@ -531,7 +534,7 @@
     <string name="lora_provision_no_slot">No free channel slot on the board. Free one in the Meshtastic app, then try again.</string>
     <string name="lora_provision_failed">Couldn\'t configure the board. Make sure it\'s connected and try again.</string>
     <string name="lora_provision_not_ready">Connect to the board first, then set it up.</string>
-    <string name="lora_restored">Board restored to its own settings. LoRa is switched off until you set a board up again.</string>
+    <string name="lora_restored">Board restored to its own name and settings. LoRa is switched off until you set a board up again.</string>
     <string name="lora_status_connected">Connected</string>
     <string name="lora_status_connecting">Connecting…</string>
     <string name="lora_status_reconnecting">Reconnecting…</string>

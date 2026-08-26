@@ -58,6 +58,15 @@ internal object MeshtasticProto {
     /** `ModuleConfig.TelemetryConfig.device_update_interval` — the *mesh* broadcast, not the phone-only feed. */
     const val TELEMETRY_DEVICE_UPDATE_INTERVAL = 1
 
+    // The two `User` fields the setup renames (ADR 049). Public for the same reason as the intervals above:
+    // [BoardName] owns the *names*, the field numbers stay here with the rest of the pinned wire.
+
+    /** `User.long_name` — up to 39 characters; what a node list and the Meshtastic app show. */
+    const val USER_LONG_NAME = 2
+
+    /** `User.short_name` — up to **4** characters (`char[5]`); what the small on-board screens have room for. */
+    const val USER_SHORT_NAME = 3
+
     // --- ToRadio (phone → board) ---
 
     /** `ToRadio { want_config_id = nonce }` — opens the config handshake; the board replies until `config_complete_id`. */
@@ -97,6 +106,26 @@ internal object MeshtasticProto {
      * the field doubles as a presence flag, so index 0 is requested as 1.)
      */
     fun encodeAdminGetChannel(index: Int): ByteArray = ProtoWriter().varint(ADMIN_GET_CHANNEL_REQUEST, index + 1).toByteArray()
+
+    /**
+     * `AdminMessage { get_owner_request = true }` — the **read** half of the rename. Its response carries the
+     * board's whole `User`, which is the base [encodeAdminSetOwner] splices into, and a fresh passkey.
+     */
+    fun encodeAdminGetOwner(): ByteArray = ProtoWriter().bool(ADMIN_GET_OWNER_REQUEST, true).toByteArray()
+
+    /**
+     * `AdminMessage { set_owner = User { … } }`. [raw] is the board's own `User` as `get_owner_request`
+     * returned it, with only [USER_LONG_NAME] / [USER_SHORT_NAME] spliced ([spliceStringFields]).
+     *
+     * The firmware merges rather than assigns here — `handleSetOwner` copies each *non-empty* string — but
+     * `is_licensed` is a plain proto3 bool with no presence, so a `User` built from scratch would read as
+     * `false` and clear it, and with it `config.lora.override_duty_cycle`. Splicing the board's own bytes
+     * keeps that, the public key, and everything else this codec does not model.
+     */
+    fun encodeAdminSetOwner(
+        raw: ByteArray,
+        passkey: ByteArray?,
+    ): ByteArray = admin(passkey) { bytes(ADMIN_SET_OWNER, raw, emitEmpty = true) }
 
     /**
      * `AdminMessage { begin_edit_settings = true }` — opens a transaction so the board defers its implicit
@@ -170,24 +199,27 @@ internal object MeshtasticProto {
                 if (passkey != null && passkey.isNotEmpty()) bytes(ADMIN_SESSION_PASSKEY, passkey)
             }.toByteArray()
 
-    /** Decodes an inbound `AdminMessage` down to the two fields provisioning reads: the passkey and a channel. */
+    /** Decodes an inbound `AdminMessage` down to the fields provisioning reads: the passkey, a channel, a
+     * sub-config and the board's `User`. */
     fun decodeAdmin(payload: ByteArray): AdminReply? =
         runCatching {
             val reader = ProtoReader(payload)
             var passkey: ByteArray? = null
             var channel: ChannelInfo? = null
             var config: BoardConfigRaw? = null
+            var owner: BoardOwnerRaw? = null
             while (reader.hasMore) {
                 val tag = reader.readTag()
                 when (tag ushr WireType.FIELD_SHIFT) {
                     ADMIN_GET_CHANNEL_RESPONSE -> channel = decodeChannelInfo(reader.sub())
+                    ADMIN_GET_OWNER_RESPONSE -> owner = BoardOwnerRaw(reader.readBytes())
                     ADMIN_GET_CONFIG_RESPONSE -> config = decodeConfigRaw(reader.readBytes(), module = false)
                     ADMIN_GET_MODULE_CONFIG_RESPONSE -> config = decodeConfigRaw(reader.readBytes(), module = true)
                     ADMIN_SESSION_PASSKEY -> passkey = reader.readBytes()
                     else -> reader.skip(tag and WireType.MASK)
                 }
             }
-            AdminReply(passkey, channel, config)
+            AdminReply(passkey, channel, config, owner)
         }.getOrNull()
 
     // --- FromRadio (board → phone) ---
@@ -354,19 +386,21 @@ internal object MeshtasticProto {
         return FromRadio.MyInfo(myNodeNum, pioEnv)
     }
 
-    /** `NodeInfo { num, device_metrics }` — the board's own entry is where its battery first shows up. */
+    /** `NodeInfo { num, user, device_metrics }` — the board's own entry carries its name and its battery. */
     private fun decodeNodeInfo(reader: ProtoReader): FromRadio.NodeInfo {
         var num: UInt = 0u
         var metrics: DeviceMetrics? = null
+        var owner: BoardOwner? = null
         while (reader.hasMore) {
             val tag = reader.readTag()
             when (tag ushr WireType.FIELD_SHIFT) {
                 NODEINFO_NUM -> num = reader.readVarint32().toUInt()
+                NODEINFO_USER -> owner = BoardOwnerRaw(reader.readBytes()).owner
                 NODEINFO_DEVICE_METRICS -> metrics = decodeDeviceMetrics(reader.sub())
                 else -> reader.skip(tag and WireType.MASK)
             }
         }
-        return FromRadio.NodeInfo(num, metrics)
+        return FromRadio.NodeInfo(num, metrics, owner)
     }
 
     /** `DeviceMetrics { battery_level, voltage }` — both proto3-`optional`, so an absent field stays null. */
@@ -544,10 +578,13 @@ internal object MeshtasticProto {
     // AdminMessage field numbers (a `oneof`, so at most one of these per message) + its session key.
     private const val ADMIN_GET_CHANNEL_REQUEST = 1
     private const val ADMIN_GET_CHANNEL_RESPONSE = 2
+    private const val ADMIN_GET_OWNER_REQUEST = 3
+    private const val ADMIN_GET_OWNER_RESPONSE = 4
     private const val ADMIN_GET_CONFIG_REQUEST = 5
     private const val ADMIN_GET_CONFIG_RESPONSE = 6
     private const val ADMIN_GET_MODULE_CONFIG_REQUEST = 7
     private const val ADMIN_GET_MODULE_CONFIG_RESPONSE = 8
+    private const val ADMIN_SET_OWNER = 32
     private const val ADMIN_SET_CHANNEL = 33
     private const val ADMIN_SET_CONFIG = 34
     private const val ADMIN_SET_MODULE_CONFIG = 35
@@ -584,6 +621,7 @@ internal object MeshtasticProto {
 
     // NodeInfo / Telemetry / DeviceMetrics field numbers (the battery path).
     private const val NODEINFO_NUM = 1
+    private const val NODEINFO_USER = 2
     private const val NODEINFO_DEVICE_METRICS = 6
     private const val TELEMETRY_DEVICE_METRICS = 2
     private const val DM_BATTERY_LEVEL = 1
@@ -612,12 +650,14 @@ internal data class ChannelWrite(
     val positionPrecision: Int? = null,
 )
 
-/** The two fields provisioning reads out of an inbound `AdminMessage`: the [passkey] and any [channel] returned. */
+/** What provisioning reads out of an inbound `AdminMessage`: the [passkey] and whatever the read returned. */
 internal data class AdminReply(
     val passkey: ByteArray?,
     val channel: ChannelInfo?,
     /** The sub-config a `get_config` / `get_module_config` returned, kept as raw bytes for splicing. */
     val config: BoardConfigRaw? = null,
+    /** The `User` a `get_owner_request` returned, likewise kept raw. */
+    val owner: BoardOwnerRaw? = null,
 )
 
 /**
@@ -649,6 +689,20 @@ internal class BoardConfigRaw(
     val config: BoardConfig,
     val raw: ByteArray,
 )
+
+/**
+ * The board's `User` exactly as it sent it — the base the rename splices into — alongside the two names
+ * decoded out of it, which are what a setup records so a restore can put them back.
+ */
+internal class BoardOwnerRaw(
+    val raw: ByteArray,
+) {
+    val owner: BoardOwner =
+        BoardOwner(
+            longName = readStringField(raw, MeshtasticProto.USER_LONG_NAME).orEmpty(),
+            shortName = readStringField(raw, MeshtasticProto.USER_SHORT_NAME).orEmpty(),
+        )
+}
 
 /** A decoded inbound `MeshPacket`. [decoded] is null when the packet arrived [encrypted] (a foreign channel). */
 internal class MeshPacket(
@@ -708,6 +762,8 @@ internal sealed interface FromRadio {
     data class NodeInfo(
         val num: UInt,
         val metrics: DeviceMetrics?,
+        /** `NodeInfo.user` — for the board's own entry, what it calls itself on the mesh. */
+        val owner: BoardOwner? = null,
     ) : FromRadio
 
     data class Channel(

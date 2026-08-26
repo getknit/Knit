@@ -11,6 +11,11 @@ internal data class BoardSettings(
     val telemetrySecs: Int,
     /** `Config.DeviceConfig.RebroadcastMode`; 0 is the firmware default, ALL. */
     val rebroadcastMode: Int,
+    /**
+     * The board's own name before the setup renamed it ([BoardName]); null when no setup ever recorded one,
+     * which a restore answers with the name the firmware itself would have given the board.
+     */
+    val owner: BoardOwner? = null,
 )
 
 /**
@@ -43,8 +48,11 @@ internal object BoardQuiet {
     const val DEFAULT_POSITION_SECS = 900
     const val DEFAULT_TELEMETRY_SECS = 1_800
 
-    /** The board's current settings, read out of the three raw sub-configs the admin reads returned. */
-    fun recorded(configs: Map<BoardConfig, ByteArray>): BoardSettings {
+    /** The board's current settings, read out of the three raw sub-configs and the `User` the admin reads returned. */
+    fun recorded(
+        configs: Map<BoardConfig, ByteArray>,
+        owner: BoardOwner? = null,
+    ): BoardSettings {
         val device = configs[BoardConfig.DEVICE]
         val position = configs[BoardConfig.POSITION]
         val telemetry = configs[BoardConfig.TELEMETRY]
@@ -56,6 +64,7 @@ internal object BoardQuiet {
             telemetrySecs = telemetry.secs(MeshtasticProto.TELEMETRY_DEVICE_UPDATE_INTERVAL, DEFAULT_TELEMETRY_SECS),
             // 0 is a real value here (RebroadcastMode.ALL, the firmware default), not "unset".
             rebroadcastMode = device?.let { readVarintField(it, MeshtasticProto.DEVICE_REBROADCAST_MODE)?.toInt() } ?: 0,
+            owner = owner,
         )
     }
 

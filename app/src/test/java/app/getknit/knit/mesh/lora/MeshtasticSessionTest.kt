@@ -19,6 +19,7 @@ import org.junit.Test
  * heartbeat ticker would spin forever).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // cohesive single-SUT suite over one shared FakeGattChannel/scriptBoard harness
 class MeshtasticSessionTest {
     private val nonce = 0x11u
 
@@ -339,7 +340,37 @@ class MeshtasticSessionTest {
 
     private val provisionSpec = ProvisionSpec(name = "Knit", psk = byteArrayOf(1, 2, 3, 4))
 
-    /** What [boardConfigs] says the board was set to, in the shape a setup reports back. */
+    /** [BoardBytes.myInfo] hands the session node 0xABCD, so this is what Knit renames that board to. */
+    private val knitOwner = BoardOwner("Knit abcd", "Knit")
+
+    /** The stock name the same board arrives with — what a setup records and a restore puts back. */
+    private val stockOwner = BoardOwner("Meshtastic abcd", "abcd")
+
+    /**
+     * The board's own `User`, as a real one reports it: the two names Knit rewrites, plus fields it must
+     * carry through untouched — above all `is_licensed`, a presence-less bool a from-scratch `User` would
+     * clear, taking the firmware's `override_duty_cycle` with it.
+     */
+    private val boardUser =
+        ProtoWriter()
+            .string(1, "!0000abcd")
+            .string(MeshtasticProto.USER_LONG_NAME, stockOwner.longName)
+            .string(MeshtasticProto.USER_SHORT_NAME, stockOwner.shortName)
+            .varint(5, 9) // hw_model
+            .varint(6, 1) // is_licensed
+            .toByteArray()
+
+    /** The same board once Knit has renamed it — the starting point for a re-run of the setup. */
+    private val knitUser =
+        spliceStringFields(
+            boardUser,
+            mapOf(
+                MeshtasticProto.USER_LONG_NAME to knitOwner.longName,
+                MeshtasticProto.USER_SHORT_NAME to knitOwner.shortName,
+            ),
+        )!!
+
+    /** What [boardConfigs] and [boardUser] say the board was set to, in the shape a setup reports back. */
     private val boardIntervals =
         BoardSettings(
             nodeInfoSecs = 900,
@@ -347,6 +378,7 @@ class MeshtasticSessionTest {
             smartPosition = true,
             telemetrySecs = 1_800,
             rebroadcastMode = 0,
+            owner = stockOwner,
         )
 
     /**
@@ -383,6 +415,7 @@ class MeshtasticSessionTest {
         nakFirstSet: Int = 0,
         nakReason: RoutingError = RoutingError.ADMIN_BAD_SESSION_KEY,
         configs: Map<BoardConfig, ByteArray>? = null,
+        user: ByteArray? = boardUser,
     ) {
         var sets = 0
         ch.onWrite = { bytes ->
@@ -405,6 +438,20 @@ class MeshtasticSessionTest {
                                 passkey = byteArrayOf(0x0A, 0x0B),
                                 config = config,
                                 raw = raw,
+                            ),
+                        )
+                    }
+                }
+
+                BoardBytes.isAdminGetOwner(bytes) -> {
+                    // A board that never answers is the abort case here too: nothing may be written.
+                    if (user != null) {
+                        ch.enqueueRead(
+                            BoardBytes.adminGetOwnerResponse(
+                                from = 0xABCDu,
+                                requestId = BoardBytes.packetId(bytes),
+                                passkey = byteArrayOf(0x0A, 0x0B),
+                                user = user,
                             ),
                         )
                     }
@@ -450,6 +497,44 @@ class MeshtasticSessionTest {
         }
 
     @Test
+    fun provisionRenamesTheBoardForKnitAndKeepsTheRestOfItsUser() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            async { session.provisionChannel(provisionSpec) }.await()
+            val user = ch.writes.mapNotNull { BoardBytes.adminSetOwnerRaw(it) }.single()
+            assertEquals(knitOwner.longName, readStringField(user, MeshtasticProto.USER_LONG_NAME))
+            assertEquals(knitOwner.shortName, readStringField(user, MeshtasticProto.USER_SHORT_NAME))
+            assertEquals("the node id survived the read-modify-write", "!0000abcd", readStringField(user, 1))
+            assertEquals("hw_model survived", 9L, readVarintField(user, 5))
+            // A `User` built from scratch would read is_licensed = false and clear override_duty_cycle with it.
+            assertEquals("is_licensed survived", 1L, readVarintField(user, 6))
+            session.stop()
+        }
+
+    @Test
+    fun provisionAbortsWithoutWritingWhenTheBoardWillNotReturnItsName() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs, user = null)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val result = async { session.provisionChannel(provisionSpec) }.await()
+            assertTrue("got $result", result is ProvisionResult.Failed)
+            assertTrue(
+                "nothing written",
+                ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) || BoardBytes.isAdminSetOwner(it) },
+            )
+            session.stop()
+        }
+
+    @Test
     fun provisionReportsNoFreeSlotWhenEverySecondaryIsTaken() =
         runTest {
             val ch = FakeGattChannel()
@@ -467,7 +552,7 @@ class MeshtasticSessionTest {
     fun provisionOnAnAlreadySetUpBoardKeepsTheRecordedIntervals() =
         runTest {
             val ch = FakeGattChannel()
-            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(2, "Knit", 2)), configs = boardConfigs)
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(2, "Knit", 2)), configs = boardConfigs, user = knitUser)
             val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
             session.start("AA")
             runCurrent()
@@ -475,7 +560,36 @@ class MeshtasticSessionTest {
             val result = async { session.provisionChannel(provisionSpec) }.await()
             // `previous` stays null so the caller keeps the intervals it stored the first time round.
             assertEquals(ProvisionResult.Provisioned(2, alreadyPresent = true), result)
-            assertTrue("nothing rewritten", ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) })
+            assertTrue(
+                "nothing rewritten",
+                ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) || BoardBytes.isAdminSetOwner(it) },
+            )
+            session.stop()
+        }
+
+    @Test
+    fun provisionOnABoardSetUpBeforeKnitNamedBoardsRenamesItAndNothingElse() =
+        runTest {
+            val ch = FakeGattChannel()
+            // Set up (it carries the Knit channel) but still stock-named — every board provisioned before ADR 049.
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(2, "Knit", 2)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val stored = BoardSettings(900, 600, true, 1_800, rebroadcastMode = 0)
+            val result = async { session.provisionChannel(provisionSpec.copy(previous = stored)) }.await()
+            // The caller's own record is carried forward with the old name filled in — re-recording the
+            // intervals here would write back the *quieted* ones and destroy the only copy of the board's.
+            assertEquals(
+                ProvisionResult.Provisioned(2, alreadyPresent = true, previous = stored.copy(owner = stockOwner)),
+                result,
+            )
+            assertEquals(1, ch.writes.count { BoardBytes.isAdminSetOwner(it) })
+            assertTrue(
+                "neither the channel table nor the intervals are rewritten",
+                ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) },
+            )
             session.stop()
         }
 
@@ -547,7 +661,12 @@ class MeshtasticSessionTest {
     fun restoreDisablesEveryKnitChannelAndNeverTouchesThePrimary() =
         runTest {
             val ch = FakeGattChannel()
-            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(1, "Knit", 2), Triple(3, "Knit", 2)), configs = quietedConfigs)
+            scriptBoard(
+                ch,
+                channels = listOf(Triple(0, "", 1), Triple(1, "Knit", 2), Triple(3, "Knit", 2)),
+                configs = quietedConfigs,
+                user = knitUser,
+            )
             val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
             session.start("AA")
             runCurrent()
@@ -581,7 +700,7 @@ class MeshtasticSessionTest {
     fun restorePutsTheBoardsOwnIntervalsBackNotTheFirmwareDefaults() =
         runTest {
             val ch = FakeGattChannel()
-            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(1, "Knit", 2)), configs = quietedConfigs)
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(1, "Knit", 2)), configs = quietedConfigs, user = knitUser)
             val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
             session.start("AA")
             runCurrent()
@@ -589,7 +708,7 @@ class MeshtasticSessionTest {
             val spec =
                 provisionSpec.copy(
                     mode = ProvisionMode.Restore,
-                    previous = BoardSettings(1_111, 2_222, true, 3_333, rebroadcastMode = 3),
+                    previous = BoardSettings(1_111, 2_222, true, 3_333, rebroadcastMode = 3, owner = stockOwner),
                 )
             async { session.provisionChannel(spec) }.await()
             val written = ch.writes.mapNotNull { BoardBytes.adminSetConfigRaw(it) }
@@ -599,6 +718,28 @@ class MeshtasticSessionTest {
             assertEquals(1L, readVarintField(written[1], MeshtasticProto.POSITION_BROADCAST_SMART))
             assertEquals(3_333L, readVarintField(written[2], MeshtasticProto.TELEMETRY_DEVICE_UPDATE_INTERVAL))
             assertEquals(3L, readVarintField(written[0], MeshtasticProto.DEVICE_REBROADCAST_MODE))
+            val user = ch.writes.mapNotNull { BoardBytes.adminSetOwnerRaw(it) }.single()
+            assertEquals(stockOwner.longName, readStringField(user, MeshtasticProto.USER_LONG_NAME))
+            assertEquals(stockOwner.shortName, readStringField(user, MeshtasticProto.USER_SHORT_NAME))
+            session.stop()
+        }
+
+    @Test
+    fun restoreWithNoRecordedNameWritesTheOneTheFirmwareWouldHaveGivenTheBoard() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(1, "Knit", 2)), configs = quietedConfigs, user = knitUser)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            // Nothing recorded (an older install, or a board set up on another phone): leaving it saying
+            // "Knit" would be the one visible trace of a restore that is supposed to leave none.
+            val spec = provisionSpec.copy(mode = ProvisionMode.Restore)
+            assertEquals(ProvisionResult.Restored, async { session.provisionChannel(spec) }.await())
+            val user = ch.writes.mapNotNull { BoardBytes.adminSetOwnerRaw(it) }.single()
+            assertEquals("Meshtastic abcd", readStringField(user, MeshtasticProto.USER_LONG_NAME))
+            assertEquals("abcd", readStringField(user, MeshtasticProto.USER_SHORT_NAME))
             session.stop()
         }
 
@@ -638,6 +779,39 @@ class MeshtasticSessionTest {
             assertEquals(BoardBattery(percent = 78, voltage = 3.92f, powered = false), session.battery.value)
             session.stop()
             assertNull("a reading never outlives its link", session.battery.value)
+        }
+
+    @Test
+    fun theHandshakeReadsTheBoardsOwnNameAndIgnoresOtherNodes() =
+        runTest {
+            val ch = FakeGattChannel()
+            ch.onWrite = { bytes ->
+                if (BoardBytes.isWantConfig(bytes)) {
+                    ch.enqueueRead(BoardBytes.myInfo(0xABCDu, "heltec-v4"))
+                    ch.enqueueRead(BoardBytes.nodeInfo(0xABCDu, owner = stockOwner))
+                    ch.enqueueRead(BoardBytes.nodeInfo(0x9999u, owner = BoardOwner("Someone else", "else"))) // a neighbour's
+                    ch.enqueueRead(BoardBytes.configComplete(nonce))
+                }
+            }
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            // This is what tells the setup screen a board still carries its old name (ADR 049).
+            assertEquals(stockOwner, (session.state.value as LinkState.Ready).board.owner)
+            session.stop()
+        }
+
+    @Test
+    fun aBoardThatNeverSendsItsOwnNodeInfoHasNoName() =
+        runTest {
+            val ch = FakeGattChannel().also(::scriptHandshake)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            assertNull((session.state.value as LinkState.Ready).board.owner)
+            session.stop()
         }
 
     @Test

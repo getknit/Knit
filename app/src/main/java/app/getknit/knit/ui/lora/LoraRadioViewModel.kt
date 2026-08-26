@@ -8,6 +8,8 @@ import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardFilter
+import app.getknit.knit.mesh.lora.BoardName
+import app.getknit.knit.mesh.lora.BoardOwner
 import app.getknit.knit.mesh.lora.BoardRef
 import app.getknit.knit.mesh.lora.BoardSettings
 import app.getknit.knit.mesh.lora.KnitChannel
@@ -66,10 +68,19 @@ data class LoraRadioUiState(
     /** The name the connected board gives the selected [channel] slot; null while not connected or when unnamed. */
     val channelName: String? = null,
     /**
-     * The board is set up for Knit: it carries Knit as its *primary*, so its radio sits on a Knit slot and
+     * The board is set up for Knit: it carries the Knit channel in a secondary slot, it is named for Knit and
      * its housekeeping is quiet. The only other state is "a stock Meshtastic board" — there is no middle one.
      */
     val boardSetUp: Boolean = false,
+    /** What the board currently calls itself on the mesh — the name on its own screen; null on firmware that never says. */
+    val meshName: String? = null,
+    /** What Knit names a board ([BoardName]); the label of the rename button, and null until the board is known. */
+    val knitName: String? = null,
+    /**
+     * The board carries the Knit channel but is still under its old name — every board set up before ADR 049,
+     * and the only case where a set-up board is offered the setup action again (a rename, and nothing else).
+     */
+    val needsRename: Boolean = false,
     /** The setup confirmation is open — it changes settings on the user's hardware, so the tap is never the action. */
     val confirmSetup: Boolean = false,
     /**
@@ -135,6 +146,8 @@ internal class LoraRadioViewModel(
                     ?.firstOrNull { it.index == channel }
                     ?.name
                     ?.takeIf { it.isNotEmpty() }
+            val setUp = ready?.channels?.any { it.name == KnitChannel.NAME } == true
+            val wanted = status.boardNodeNum?.let { BoardName.forNode(it) }
             LoraRadioUiState(
                 enabled = enabled,
                 dmEnabled = dmEnabled,
@@ -154,7 +167,12 @@ internal class LoraRadioViewModel(
                 airtimePercent = ready?.let { status.airtime?.let(::airtimePercent) },
                 radioConfig = ready?.radio?.let { "${it.region} ${it.modemPreset}" },
                 channelName = channelName,
-                boardSetUp = ready?.channels?.any { it.name == KnitChannel.NAME } == true,
+                boardSetUp = setUp,
+                meshName = ready?.board?.owner?.longName,
+                knitName = wanted?.longName,
+                // Only a *known* stock name asks for a rename: firmware that never sends its own NodeInfo
+                // gets the benefit of the doubt, exactly as an unreadable channel table does.
+                needsRename = setUp && wanted != null && ready?.board?.owner?.let { it != wanted } == true,
                 customPrimary = ready?.let { isCustomPrimary(it) } == true,
                 confirmSetup = provision.confirm,
                 boards =
@@ -233,10 +251,10 @@ internal class LoraRadioViewModel(
     }
 
     /**
-     * Sets the connected board up for Knit over the Meshtastic admin API (ADR 045): Knit becomes its primary
-     * channel — which moves the radio onto a Knit-derived RF slot — and its housekeeping broadcasts are
-     * stretched. The intervals the board had before come back in the result and are persisted here; they are
-     * the only way a restore can put back what was actually there.
+     * Sets the connected board up for Knit over the Meshtastic admin API (ADR 045): the Knit channel goes
+     * into a free secondary slot, the board is renamed for Knit (ADR 049) and its housekeeping broadcasts are
+     * stretched. The intervals and the name the board had before come back in the result and are persisted
+     * here; they are the only way a restore can put back what was actually there.
      */
     fun setUpBoard() {
         provision(ProvisionMode.Setup)
@@ -276,7 +294,7 @@ internal class LoraRadioViewModel(
     }
 
     /**
-     * Records the setup against the bound board's address. Skipped when the board was already set up
+     * Records the setup against the bound board's address. Skipped when nothing was written
      * ([ProvisionResult.Provisioned.previous] is null then) — overwriting the stored intervals with nothing
      * would throw away the only copy of what the board looked like before Knit took it over.
      */
@@ -291,6 +309,8 @@ internal class LoraRadioViewModel(
                 smartPosition = previous.smartPosition,
                 telemetrySecs = previous.telemetrySecs,
                 rebroadcastMode = previous.rebroadcastMode,
+                longName = previous.owner?.longName.orEmpty(),
+                shortName = previous.owner?.shortName.orEmpty(),
             ),
         )
     }
@@ -302,6 +322,8 @@ internal class LoraRadioViewModel(
             smartPosition = smartPosition,
             telemetrySecs = telemetrySecs,
             rebroadcastMode = rebroadcastMode,
+            // Both empty means no name was ever recorded — the restore then writes the firmware's own.
+            owner = if (longName.isEmpty() && shortName.isEmpty()) null else BoardOwner(longName, shortName),
         )
 
     /** Dismisses the last provisioning outcome banner. */

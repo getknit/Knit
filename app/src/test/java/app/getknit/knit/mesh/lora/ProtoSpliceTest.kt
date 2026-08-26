@@ -81,4 +81,44 @@ class ProtoSpliceTest {
         }
         assertEquals(listOf("Europe/Berlin", "DEADBEEF"), kept)
     }
+
+    @Test
+    fun spliceStringFieldsReplacesTheNamesAndCopiesEverythingElseVerbatim() {
+        // A `User` as a board sends it: id, long_name, short_name, hw_model, is_licensed.
+        val user =
+            ProtoWriter()
+                .string(1, "!0000abcd")
+                .string(2, "Meshtastic abcd")
+                .string(3, "abcd")
+                .varint(5, 9)
+                .varint(6, 1)
+                .toByteArray()
+        val spliced = spliceStringFields(user, mapOf(2 to "Knit abcd", 3 to "Knit"))!!
+        assertEquals("Knit abcd", readStringField(spliced, 2))
+        assertEquals("Knit", readStringField(spliced, 3))
+        assertEquals("!0000abcd", readStringField(spliced, 1))
+        assertEquals(9L, readVarintField(spliced, 5))
+        // The whole point: a presence-less bool a from-scratch message would have silently cleared.
+        assertEquals(1L, readVarintField(spliced, 6))
+    }
+
+    @Test
+    fun spliceStringFieldsAddsAFieldTheMessageNeverCarried() {
+        val spliced = spliceStringFields(ProtoWriter().string(1, "id").toByteArray(), mapOf(2 to "Knit abcd"))!!
+        assertEquals("Knit abcd", readStringField(spliced, 2))
+        assertEquals("id", readStringField(spliced, 1))
+    }
+
+    @Test
+    fun spliceStringFieldsIsNullOnGarbage() {
+        assertNull(spliceStringFields(byteArrayOf(0xFF.toByte(), 0xFF.toByte()), mapOf(2 to "Knit")))
+    }
+
+    @Test
+    fun readStringFieldIsNullWhenAbsentOrTheWrongWireType() {
+        val raw = ProtoWriter().string(2, "Knit").varint(5, 9).toByteArray()
+        assertEquals("Knit", readStringField(raw, 2))
+        assertNull(readStringField(raw, 3))
+        assertNull("a varint is not a string", readStringField(raw, 5))
+    }
 }

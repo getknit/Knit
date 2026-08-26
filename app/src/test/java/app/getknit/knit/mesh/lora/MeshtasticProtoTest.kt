@@ -150,6 +150,29 @@ class MeshtasticProtoTest {
     }
 
     @Test
+    fun encodeAdminGetOwner() {
+        // AdminMessage.get_owner_request = 3 → tag 0x18, a bool.
+        assertEquals("18 01", MeshtasticProto.encodeAdminGetOwner().hex())
+    }
+
+    @Test
+    fun encodeAdminSetOwnerWrapsTheRawUser() {
+        // AdminMessage.set_owner = 32 → tag 0x82 0x02; the payload is the board's own `User`, spliced.
+        val user = hex("12 04 4B 6E 69 74") // User { long_name = "Knit" }
+        assertEquals("82 02 06 12 04 4B 6E 69 74", MeshtasticProto.encodeAdminSetOwner(user, null).hex())
+        assertEquals(
+            "82 02 06 12 04 4B 6E 69 74 AA 06 03 AA BB CC",
+            MeshtasticProto.encodeAdminSetOwner(user, hex("AA BB CC")).hex(),
+        )
+    }
+
+    @Test
+    fun encodeAdminSetOwnerKeepsAnEmptyUserPresent() {
+        // Presence is the oneof selector: an omitted `set_owner` would read as no request at all.
+        assertEquals("82 02 00", MeshtasticProto.encodeAdminSetOwner(ByteArray(0), null).hex())
+    }
+
+    @Test
     fun encodeAdminGetConfigIsAOneofMemberEvenAtZero() {
         // get_config_request(5) = DEVICE_CONFIG(0) — a oneof member must appear on the wire at its default.
         assertEquals("28 00", MeshtasticProto.encodeAdminGetConfig(BoardConfig.DEVICE).hex())
@@ -184,6 +207,34 @@ class MeshtasticProtoTest {
         val reply = MeshtasticProto.decodeAdmin(hex("12 0C 08 02 12 06 1A 04 6B 6E 69 74 18 02 AA 06 03 AA BB CC"))!!
         assertEquals(ChannelInfo(index = 2, name = "knit", role = 2), reply.channel)
         assertEquals("AA BB CC", reply.passkey!!.hex())
+    }
+
+    @Test
+    fun decodeNodeInfoReadsTheBoardsOwnName() {
+        // FromRadio { node_info = NodeInfo { num = 0xABCD, user = User { long_name, short_name } } }
+        val fr = MeshtasticProto.decodeFromRadio(hex("22 17 08 CD D7 02 12 11 12 09 4B 6E 69 74 20 61 62 63 64 1A 04 4B 6E 69 74"))
+        val info = fr as FromRadio.NodeInfo
+        assertEquals(0xABCDu, info.num)
+        assertEquals(BoardOwner("Knit abcd", "Knit"), info.owner)
+    }
+
+    @Test
+    fun decodeNodeInfoWithoutAUserLeavesTheNameNull() {
+        assertNull((MeshtasticProto.decodeFromRadio(hex("22 04 08 CD D7 02")) as FromRadio.NodeInfo).owner)
+    }
+
+    @Test
+    fun decodeAdminReadsTheOwnerRawAndItsTwoNames() {
+        // AdminMessage { get_owner_response = User { long_name = "Knit abcd", short_name = "Knit" } }
+        val reply = MeshtasticProto.decodeAdmin(hex("22 11 12 09 4B 6E 69 74 20 61 62 63 64 1A 04 4B 6E 69 74"))!!
+        assertEquals(BoardOwner("Knit abcd", "Knit"), reply.owner!!.owner)
+        assertEquals("the raw User is kept for splicing", 17, reply.owner!!.raw.size)
+    }
+
+    @Test
+    fun decodeAdminReadsAnEmptyOwnerAsEmptyNames() {
+        // A board that has never been named: the fields are proto3 defaults, so they are simply absent.
+        assertEquals(BoardOwner("", ""), MeshtasticProto.decodeAdmin(hex("22 00"))!!.owner!!.owner)
     }
 
     @Test

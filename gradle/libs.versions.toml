@@ -139,6 +139,12 @@ androidxTestServices = "1.6.0"
 # adds a new Kotlin DSL alongside the classic UiDevice/By/Until API this suite uses (unchanged); its AAR is
 # minCompileSdk=34, well under our 36.1. androidTest-only, no APK/runtime impact on the app.
 uiautomator = "2.4.0"
+# Macrobenchmark, used ONLY by the :baselineprofile module to generate app/src/main/baseline-prof.txt.
+# It never enters :app's dependency graph, never appears in app/gradle.lockfile, and never ships — the
+# module is only in the build under `-Pknit.baselineProfile=true`. An -rc is therefore acceptable here in a
+# way it would not be on a shipping path: 1.4.1 is the newest stable, but 1.5.x is the line that knows
+# about AGP 9.
+benchmark = "1.5.0-rc02"
 # androidx ExifInterface — reads the orientation tag off user-picked photos (ImageDecode). Preferred over
 # the platform android.media.ExifInterface (which AndroidLintExifInterface flags): the androidx one carries
 # the format support and bug fixes the platform class only gains with each OS release, which matters on
@@ -192,6 +198,7 @@ androidx-test-services = { group = "androidx.test.services", name = "test-servic
 androidx-test-services-storage = { group = "androidx.test.services", name = "storage", version.ref = "androidxTestServices" }
 # UIAutomator black-box driver (androidTest-only; app.getknit.knit.uiauto suite). See the version note above.
 androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
+androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmark" }
 
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 

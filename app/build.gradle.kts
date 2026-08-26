@@ -91,6 +91,15 @@ val loraPlane = (project.findProperty("loraPlane") as? String)?.toBoolean()
 // (`abiFilters` needs no NDK installed, unlike `ndk { debugSymbolLevel }`), but release-APK bytes are
 // byte-compared by F-Droid — so release and staging keep every ABI and are untouched by this.
 // See `.agents/context/distribution.md`.
+// Maintainer-only: adds the release-shaped, UNMINIFIED variant the baseline-profile generator runs
+// against. Off unless asked for, so an ordinary build resolves exactly the configurations
+// app/gradle.lockfile records and F-Droid's rebuild sees a build script with three build types, as it
+// always has. Profiles have to be collected unminified because the rules name classes and methods in
+// source form — R8 rewrites them into the shipped profile itself (`minifyReleaseWithR8` emits its own
+// art profile), so collecting from an already-obfuscated build would map names twice and yield nothing.
+// See .agents/context/baseline-profile.md.
+val baselineProfileGen = (project.findProperty("knit.baselineProfile") as? String)?.toBoolean() == true
+
 val debugAbis =
     ((project.findProperty("knit.debugAbis") as? String) ?: "arm64-v8a,x86_64")
         .split(",")
@@ -287,6 +296,21 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += "release"
         }
+        // Release-shaped but unminified, and profileable so macrobenchmark can read ART's profile back out.
+        // Exists only under `-Pknit.baselineProfile=true`; see the flag's comment above the android block.
+        if (baselineProfileGen) {
+            create("nonMinifiedRelease") {
+                initWith(getByName("release"))
+                isMinifyEnabled = false
+                isShrinkResources = false
+                // Not debuggable — a debuggable app is never ahead-of-time compiled, so ART would collect a
+                // profile that does not describe how the shipped app actually runs. `profileable` is the
+                // release-safe half of that: it opens the profile to the shell and nothing else.
+                isProfileable = true
+                signingConfig = signingConfigs.getByName("debug")
+                matchingFallbacks += "release"
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -382,6 +406,14 @@ android {
         // seams (seedDemoIfEnabled / demoTransportOrNull) — staging must not demo-seed, exactly like release.
         getByName("staging") {
             kotlin.directories.add("src/release/java")
+        }
+        // Same reason as staging: no src/nonMinifiedRelease, so take release's no-op DemoWiring stub. The
+        // profile is deliberately collected against the real, un-seeded app — the demo seams live in
+        // src/debug and would put code in the profile that the shipped APK does not contain.
+        if (baselineProfileGen) {
+            getByName("nonMinifiedRelease") {
+                kotlin.directories.add("src/release/java")
+            }
         }
     }
 }

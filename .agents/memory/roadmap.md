@@ -182,6 +182,11 @@ doc). **Don't start a deferred item without explicit direction.**
 - **Voice notes in the Nearby room** — deliberately not built, for the reason above. Reversing it is one
   flag (`MessageInput`'s `voiceEnabled`), and should not be reversed without an answer to "what screens it".
 
+- **Startup profile (`app/src/main/startup-prof.txt`)** — the baseline profile landed (ADR 048) but the
+  startup-profile half did not. It reorders dex so startup code sits together, which is a real additional
+  win on cold launch, and it is the same collection run (`includeInStartupProfile = true`). Deferred only
+  because it changes dex layout and so needs its own pass against F-Droid's byte-comparison before shipping.
+
 - **BLE promotion gate on A2DP audio** — the adaptive scan throttle now drops the **scan** to its floor
   while streaming (`ScanDemandPolicy` / the demand-gated `scanLoop`), but **connects** are still not gated
   on `contended` (it remains diagnostic-only for the connect path). **Note before building it:** since

@@ -30,3 +30,13 @@ dependencyResolutionManagement {
 
 rootProject.name = "Knit"
 include(":app")
+
+// The baseline-profile generator is maintainer-only: a `com.android.test` module that drives the app on a
+// device to produce `app/src/main/baseline-prof.txt`, which is what actually ships. Nothing in the module
+// itself ever reaches an artifact, so it is included only when asked for. That is deliberate rather than
+// tidy — an ordinary build, and F-Droid's byte-compared rebuild in particular, then never configures it,
+// never resolves androidx.benchmark, and never materializes the extra build type it needs. See
+// .agents/context/baseline-profile.md.
+if (providers.gradleProperty("knit.baselineProfile").orNull.toBoolean()) {
+    include(":baselineprofile")
+}

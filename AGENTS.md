@@ -18,6 +18,10 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   plugins) are deliberate; don't "fix" them.
 - **Before / after running Gradle:** obey `.agents/rules/build-and-test.md` (which task when, JDK 21,
   lockfile regen). Command list: `.agents/context/commands.md`.
+- **Before touching `app/src/main/baseline-prof.txt`, the `:baselineprofile` module, or the
+  `nonMinifiedRelease` build type:** READ `.agents/context/baseline-profile.md` — the generator is quarantined
+  behind `-Pknit.baselineProfile=true` on purpose, so that the release build consumes a committed text file
+  and stays byte-reproducible for F-Droid. Don't wire the plugin into `:app`.
 - **Before touching release signing, `packaging`/`ndk` config, `.gitattributes`, or anything else that
   changes release-APK bytes:** READ `.agents/context/distribution.md` — Play and F-Droid ship different
   artifacts under different keys, and F-Droid byte-compares its own rebuild against ours, so the release

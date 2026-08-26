@@ -16,6 +16,8 @@ plugins), see `context/toolchain.md`.
 ./gradlew :app:connectedDebugAndroidTest -PseedDemo=true  # seeded UI instrumentation suite on ALL attached adb devices (Orchestrator)
 ./gradlew :app:pixel7api33DebugAndroidTest -PseedDemo=true # same suite on a Gradle-managed emulator ONLY (Pixel 7 @ API 33; ignores adb)
 # Firebase Test Lab (physical-device) runs live in the maintainer .private/ overlay — absent in public clones
+# Regenerate app/src/main/baseline-prof.txt (needs a device/emulator; see context/baseline-profile.md):
+./gradlew -Pknit.baselineProfile=true :baselineprofile:connectedNonMinifiedReleaseAndroidTest
 bash scripts/ide-diagnostics.sh --list          # changed .kt/.kts/.java files — what to iterate for IDE inspections
 bash scripts/ide-diagnostics.sh <file>          # ...focus one in the RUNNING Studio, then read it via getDiagnostics
 # Accessibility (ATF) suite — same checks as the Play pre-launch report; needs API 34+ (@SdkSuppress skips below):

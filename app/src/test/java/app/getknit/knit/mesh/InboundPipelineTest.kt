@@ -978,6 +978,57 @@ class InboundPipelineTest {
         }
 
     @Test
+    fun anInboundMessageIsStampedWithOurClockNotTheSenders() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.nowMs = 9_000L
+            val env = rig.dmChat(alice, rig.self, id = "dm-arrived", body = "hi dm")
+
+            rig.deliver(alice, env)
+
+            val row = rig.msgMap.getValue("dm-arrived")
+            // sentAt is Alice's clock off the frame; arrivedAt is ours. The gap between them is the
+            // store-and-forward latency, which is the whole reason the column exists.
+            assertEquals(5L, row.sentAt)
+            assertEquals(9_000L, row.arrivedAt)
+        }
+
+    @Test
+    fun aReServedRoomPostKeepsTheArrivalTimeOfItsFirstCrossing() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val post = rig.broadcastChat(alice, id = "room-arrived", body = "hello valley")
+
+            rig.nowMs = 1_000L
+            rig.deliver(alice, post)
+            // The plaintext room path deliberately skips the pre-decrypt exists-gate and runs deliverChat on
+            // every re-serve, so first-write-wins rests entirely on saveIfAbsent — hours later, same frame.
+            rig.nowMs = 5_000_000L
+            rig.deliver(alice, post)
+
+            assertEquals(1_000L, rig.msgMap.getValue("room-arrived").arrivedAt)
+        }
+
+    @Test
+    fun ourOwnRoomPostLoopingBackAfterRetentionIsNeverStampedAsArrived() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            // Our own post, re-served by a peer after the retention sweep took our row: deliverChat writes it
+            // afresh, but we did not receive this message — we sent it — so it must carry no arrival time.
+            val post = rig.broadcastChat(rig.self, id = "mine-arrived", body = "my own post")
+
+            rig.deliver(rig.self, post)
+
+            val row = rig.msgMap.getValue("mine-arrived")
+            assertEquals(rig.self.nodeId, row.senderId)
+            assertNull(row.arrivedAt)
+        }
+
+    @Test
     fun ourOwnRoomPostReServedByAPeerNeverResetsItsTick() =
         runTest {
             val rig = Rig(backgroundScope)

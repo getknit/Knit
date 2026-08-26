@@ -66,7 +66,11 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     //     "delivered to / waiting on" split for a group send). Local bookkeeping only: the acker was always
     //     on the wire as the receipt's authenticated senderId, the tick's "≥1 recipient" semantic is
     //     unchanged, and no digest folds over it; migrated by KnitMigrations.MIGRATION_5_6.
-    version = 6,
+    // v7: one `messages.arrivedAt` column — OUR clock when an inbound message was first persisted, so the
+    //     message-details screen can say when it got here and not only when its author says they sent it.
+    //     Local observation, no wire change; null on every message we authored and on every pre-upgrade row
+    //     (deliberately un-backfilled); migrated by KnitMigrations.MIGRATION_6_7.
+    version = 7,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without

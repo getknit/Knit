@@ -176,6 +176,26 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v7 — local arrival time: one `messages.arrivedAt` column holding **our** clock at the moment an inbound
+     * message was first persisted, so the message-details screen can answer "when did this get here" and not
+     * only "when does its author say they sent it". The gap between it and the frame-global `sentAt` is the
+     * store-and-forward latency, which nothing else records. Purely local observation — no wire field, no ctl
+     * value, no capability bit, and no content digest folds over it, so a node that never learns the value
+     * simply shows nothing. Existing rows get null and are deliberately **not** backfilled, the same argument
+     * MIGRATION_5_6 makes for un-acked receipts: we never observed when those messages landed, and inventing
+     * a plausible number is worse than saying nothing. Null is also the honest value for every message we
+     * authored — only the inbound path stamps it. Additive only; the SQL must stay byte-equivalent to what
+     * Room generates for `app/schemas/**/7.json`.
+     */
+    val MIGRATION_6_7 =
+        object : Migration(6, 7) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE `messages` ADD COLUMN `arrivedAt` INTEGER DEFAULT NULL")
+            }
+        }
+
     /** All migrations, applied by Room in order. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+    val ALL: Array<Migration> =
+        arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
 }

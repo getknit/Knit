@@ -365,6 +365,7 @@ class MeshManagerTest {
             assertNull("the broadcast room has no addressed recipient", saved.recipientId)
             assertFalse("plaintext room message is never pending-key", saved.pendingKey)
             assertEquals(rig.now, saved.sentAt)
+            assertNull("a message we authored never arrived anywhere — only the inbound path stamps that", saved.arrivedAt)
 
             val frame = rig.sentChatFrames().single()
             assertEquals(rig.me.nodeId, frame.senderId)
@@ -395,6 +396,7 @@ class MeshManagerTest {
             assertEquals("the sender keeps a local plaintext copy", "meet at 8", saved.body)
             assertEquals(rig.bob.nodeId, saved.recipientId)
             assertFalse("the key is known, so it is not deferred", saved.pendingKey)
+            assertNull("a message we authored never arrived anywhere — only the inbound path stamps that", saved.arrivedAt)
 
             val frame = rig.sentChatFrames().single()
             val content = WireCodec.decodePayload<ChatContent>(frame.payload)!!

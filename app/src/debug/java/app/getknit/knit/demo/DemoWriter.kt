@@ -140,6 +140,10 @@ class DemoWriter(
                 conversationId = conversationId,
                 body = m.body,
                 sentAt = now - m.minsAgo * 60_000L,
+                // Seeded rather than observed, for the same reason the voice metadata below is: a seeded row
+                // never arrives, so write what the real inbound path would have written. Half a minute after
+                // the send — a plausible one-hop lag that can't land in the future for any minsAgo >= 1.
+                arrivedAt = if (fromMe) null else now - m.minsAgo * 60_000L + 30_000L,
                 received = fromMe,
                 mentions =
                     MentionStore.encode(

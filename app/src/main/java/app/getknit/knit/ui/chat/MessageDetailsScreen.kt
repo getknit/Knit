@@ -1,5 +1,6 @@
 package app.getknit.knit.ui.chat
 
+import android.content.Context
 import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -205,17 +206,35 @@ private fun MessageSummary(state: MessageDetailsUiState) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            // Absolute, unlike the bubble's relative "5m" — the exact time is the point of this screen.
-            text =
-                DateUtils.formatDateTime(
-                    context,
-                    state.sentAt,
-                    DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_SHOW_YEAR,
-                ),
+            text = absoluteTime(context, state.sentAt),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("message_details_sent_at"),
         )
+        // When it got here, on OUR clock — the line above is the author's. Deliberately unclamped against it:
+        // sentAt is a peer's wall clock (bounded only by Protocol.MAX_FUTURE_SKEW_MS), so "sent 19:29, arrived
+        // 19:24" is a thing a skewed sender can produce, and a details screen is where an odd clock should be
+        // visible rather than papered over. Absent on a message we sent, and on one stored before DB v7.
+        if (!state.mine) {
+            state.arrivedAt?.let { arrivedAt ->
+                Text(
+                    text = stringResource(R.string.message_details_arrived_at, absoluteTime(context, arrivedAt)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("message_details_arrived_at"),
+                )
+            }
+        }
+        // The DM half of the same question: when their receipt reached us. A group/room post answers "who has
+        // it" with the roster below instead, so this is only ever set for a DM (see MessageDetailsViewModel).
+        state.deliveredAt?.let { deliveredAt ->
+            Text(
+                text = stringResource(R.string.message_details_delivered_at, absoluteTime(context, deliveredAt)),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("message_details_delivered_at"),
+            )
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -288,6 +307,23 @@ private fun LazyListScope.recipientSections(
     }
 }
 
+/**
+ * Absolute, unlike the bubble's relative "5m" — the exact time is the point of this screen. Its own function
+ * so the four timestamps here can't drift apart. [showYear] is off for the recipient rows, which sit under a
+ * summary that already carries the year.
+ */
+private fun absoluteTime(
+    context: Context,
+    millis: Long,
+    showYear: Boolean = true,
+): String =
+    DateUtils.formatDateTime(
+        context,
+        millis,
+        DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or
+            (if (showYear) DateUtils.FORMAT_SHOW_YEAR else 0),
+    )
+
 /** A list-section label. Its own composable so the two delivery headers can't drift apart. */
 @Composable
 private fun SectionHeader(
@@ -317,10 +353,7 @@ private fun RecipientListRow(
     onOpen: (nodeId: String) -> Unit,
 ) {
     val context = LocalContext.current
-    val delivered =
-        recipient.deliveredAt?.let {
-            DateUtils.formatDateTime(context, it, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME)
-        }
+    val delivered = recipient.deliveredAt?.let { absoluteTime(context, it, showYear = false) }
     val description =
         if (delivered != null) {
             stringResource(R.string.message_details_recipient_delivered, recipient.displayName, delivered)
@@ -480,6 +513,8 @@ fun MessageDetailsScreenEmptyPreview() =
                     senderName = "Sam Rivera",
                     senderNodeId = "samr1v00",
                     sentAt = PREVIEW_NOW - 60 * 60_000L,
+                    // Inbound, so it carries an arrival stamp; the four-minute gap is a custody hop.
+                    arrivedAt = PREVIEW_NOW - 56 * 60_000L,
                     plane = DeliveryPlane.Nearby,
                 ),
         )

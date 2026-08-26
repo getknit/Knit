@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-25T22:30:00Z
+  updated: 2026-08-26T19:38:04Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -115,6 +115,11 @@ document:
 - Long-pressing a message offers "Message info": who sent it, when, whether it has been delivered and
   how it travelled, and the full list of who reacted with each emoji, which the reaction tally on the
   bubble does not show.
+- Message info also says *when* a message reached you, on your own phone's clock, beside the time its
+  author says they sent it. The gap between the two is how long the mesh took to carry it — sometimes
+  seconds, sometimes hours if it came the long way round through someone else's phone. A direct message
+  you sent shows the moment it landed on theirs. Messages already on your phone have no arrival time and
+  never will: Knit wasn't watching for it then, and would rather say nothing than guess.
 - Knit records its own crashes on the device. A Diagnostics row shows the report, with identifiers,
   file paths and contact names stripped out of it, and you decide what happens next — copy it, share
   it, or open a prefilled bug report. Nothing is uploaded, and there is no code in Knit that could

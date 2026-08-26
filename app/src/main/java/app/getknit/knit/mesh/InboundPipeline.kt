@@ -1744,6 +1744,12 @@ class InboundPipeline(
                 // the top of the conversation forever (the local-display complement of ForwardRepository's custody
                 // guard). Honest clock skew within the window is kept as-is.
                 sentAt = minOf(env.sentAt, System.currentTimeMillis() + Protocol.MAX_FUTURE_SKEW_MS),
+                // Our own clock, unlike the sender's sentAt just above: the one honest answer to "when did
+                // this get here", and the gap between the two is the store-and-forward latency. Null when the
+                // frame is one of OUR room posts looping back after the SeenSet lapsed — we did not receive
+                // that, we sent it. Stamped once: the default persist below is exists-gated, so a re-serve
+                // keeps the first crossing, exactly like receivedVia's plane.
+                arrivedAt = if (env.senderId != me) clock() else null,
                 received = false,
                 receivedVia = plane.code,
                 mentions = MentionStore.encode(content.mentions),

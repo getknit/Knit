@@ -96,13 +96,22 @@ class MessageDaoTest : RoomDbTest() {
         runTest {
             // The inbound write: a re-served frame is the same signed bytes, so the first row for an id is
             // the only one that ever should be — its arrival plane, its tick, and what was added since.
-            dao.upsert(msg("m1", received = true).copy(receivedVia = DeliveryPlane.LoRa.code, voiceDurationMs = 1_500))
+            dao.upsert(
+                msg("m1", received = true).copy(
+                    receivedVia = DeliveryPlane.LoRa.code,
+                    arrivedAt = 111L,
+                    voiceDurationMs = 1_500,
+                ),
+            )
 
-            assertEquals(-1L, dao.insertIfAbsent(msg("m1", received = false)))
+            assertEquals(-1L, dao.insertIfAbsent(msg("m1", received = false).copy(arrivedAt = 999L)))
 
             val row = dao.observeAll().first().single { it.id == "m1" }
             assertTrue(row.received)
             assertEquals(DeliveryPlane.LoRa, row.receivedPlane)
+            // The first crossing is the one that describes when the message actually got here; a re-serve
+            // hours later must not restamp it, which is the whole reason this write is IGNORE and not upsert.
+            assertEquals(111L, row.arrivedAt)
             assertEquals(1_500, row.voiceDurationMs)
         }
 

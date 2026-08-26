@@ -21,6 +21,17 @@ import kotlinx.serialization.json.Json
  * duplicate re-served later on another plane never rewrites it, so the mark keeps describing the delivery
  * that actually happened).
  *
+ * [arrivedAt] is **our own** clock when this row was first persisted — "when it got here" — and is the local
+ * complement of [sentAt], which is the *author's* clock off the wire frame. The gap between the two is the
+ * store-and-forward latency, the one part of a message's journey nothing else records. Deliberately not the
+ * peer's clock, for the reason [app.getknit.knit.data.receipt.MessageReceiptEntity.notedAt] gives one table
+ * over: mesh devices have no time sync, so a peer-clock value can render an arrival *earlier* than the send
+ * it belongs to. Null in three honest cases — a message **we** authored (only the inbound path stamps it), a
+ * row that predates the column (never backfilled: we did not observe when those landed and must not invent
+ * it), and a room post of ours looping back to us. Stamped once and never rewritten, so a custody re-serve
+ * keeps the first crossing; the UI renders its absence rather than a zero. Display only — [sentAt] remains
+ * the retention comparator.
+ *
  * [mentions] is a JSON-encoded `List<Mention>` ("[]" when none); kept as a string so Room stays a
  * plain TEXT column and (de)serialization lives with the [Mention] type via [MentionStore].
  *
@@ -71,6 +82,7 @@ data class MessageEntity(
     val sentAt: Long,
     val received: Boolean = false,
     val receivedVia: Int = DeliveryPlane.Unknown.code,
+    val arrivedAt: Long? = null,
     val mentions: String = "[]",
     val attachmentHash: String? = null,
     val attachmentMime: String? = null,

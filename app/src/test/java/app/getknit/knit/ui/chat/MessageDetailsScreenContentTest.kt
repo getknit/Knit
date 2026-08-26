@@ -171,6 +171,43 @@ class MessageDetailsScreenContentTest {
         compose.onNodeWithTag("message_details_waiting_header").assertDoesNotExist()
     }
 
+    @Test
+    fun `an inbound message shows when it arrived, beside the sender's own sent time`() {
+        render(populated().copy(mine = false, senderName = "Sam Rivera", arrivedAt = 1_700_000_300_000L))
+
+        compose.onNodeWithTag("message_details_sent_at").assertIsDisplayed()
+        compose.onNodeWithTag("message_details_arrived_at").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a message we sent shows no arrival time — we did not receive it`() {
+        // Belt and braces: `mine` alone suppresses the line, and the column is null on our sends anyway.
+        render(populated().copy(arrivedAt = 1_700_000_300_000L))
+
+        compose.onNodeWithTag("message_details_arrived_at").assertDoesNotExist()
+    }
+
+    @Test
+    fun `an inbound message stored before the column shows no arrival line rather than a zero`() {
+        render(populated().copy(mine = false, senderName = "Sam Rivera", arrivedAt = null))
+
+        compose.onNodeWithTag("message_details_arrived_at").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a DM we sent shows when it was delivered`() {
+        render(populated().copy(deliveredAt = 1_700_000_060_000L))
+
+        compose.onNodeWithTag("message_details_delivered_at").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a message with no delivery time shows no delivered line`() {
+        render(populated())
+
+        compose.onNodeWithTag("message_details_delivered_at").assertDoesNotExist()
+    }
+
     private fun withRecipients() =
         populated().copy(
             showRecipients = true,

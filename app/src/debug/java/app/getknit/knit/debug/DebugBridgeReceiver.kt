@@ -776,6 +776,8 @@ class DebugBridgeReceiver :
                     conversationId = nodeId,
                     body = "Hey! Mind if I join the hike?",
                     sentAt = now - i * 1_000L,
+                    // Inbound, so it carries the arrival stamp the real pipeline would have written.
+                    arrivedAt = now - i * 1_000L,
                     received = false,
                 ),
             )
@@ -820,6 +822,8 @@ class DebugBridgeReceiver :
                 conversationId = conv,
                 body = body,
                 sentAt = now,
+                // Inbound, so it carries the arrival stamp the real pipeline would have written.
+                arrivedAt = now,
                 received = false,
                 moderation = MessageEntity.MODERATION_TEXT_FLAGGED,
             ),

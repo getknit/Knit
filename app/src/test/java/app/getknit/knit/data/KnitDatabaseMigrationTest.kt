@@ -43,8 +43,8 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v6) creates and opens from the exported JSON`() {
-        val version = 6 // KnitDatabase @Database(version = 6) — bump alongside the DB (its retention is CLASS,
+    fun `the current schema (v7) creates and opens from the exported JSON`() {
+        val version = 7 // KnitDatabase @Database(version = 7) — bump alongside the DB (its retention is CLASS,
         // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
         helper.createDatabase(version).close()
     }
@@ -208,6 +208,45 @@ class KnitDatabaseMigrationTest {
                 assertTrue(s.step())
                 assertEquals(9L, s.getLong(0))
                 assertEquals(1L, s.getLong(1))
+            }
+        }
+    }
+
+    @Test
+    fun `migrate 6 to 7 keeps messages and leaves their arrival time null`() {
+        // Arrival time is an observation, and we never made it for a row already on disk: the frame that
+        // carried it was persisted before the column existed, and sentAt is the *author's* clock, so there
+        // is nothing here to derive it from. Null is the honest value, and the details screen renders the
+        // absence rather than a zero. Two rows to pin that it stays null on both directions — one we
+        // received and one we sent, whose arrival time is meaningless by construction.
+        helper.createDatabase(6).use { c ->
+            c.execSQL(
+                "INSERT INTO messages (id, senderId, recipientId, conversationId, body, sentAt, received, " +
+                    "receivedVia, mentions, replyToHasAttachment, moderation, pendingKey, kind) " +
+                    "VALUES ('m1','bob','me','bob','hello',1,0,1,'[]',0,0,0,0)",
+            )
+            c.execSQL(
+                "INSERT INTO messages (id, senderId, recipientId, conversationId, body, sentAt, received, " +
+                    "receivedVia, mentions, replyToHasAttachment, moderation, pendingKey, kind) " +
+                    "VALUES ('m2','me','bob','bob','hi back',2,1,1,'[]',0,0,0,0)",
+            )
+        }
+        helper.runMigrationsAndValidate(7, listOf(KnitMigrations.MIGRATION_6_7)).use { c ->
+            c.prepare("SELECT id, body, arrivedAt FROM messages ORDER BY sentAt ASC").use { s ->
+                assertTrue(s.step())
+                assertEquals("m1", s.getText(0))
+                assertEquals("hello", s.getText(1))
+                assertTrue(s.isNull(2))
+                assertTrue(s.step())
+                assertEquals("m2", s.getText(0))
+                assertEquals("hi back", s.getText(1))
+                assertTrue(s.isNull(2))
+            }
+            // The column is writable straight away, so the next inbound message can be stamped.
+            c.execSQL("UPDATE messages SET arrivedAt = 42 WHERE id = 'm1'")
+            c.prepare("SELECT arrivedAt FROM messages WHERE id = 'm1'").use { s ->
+                assertTrue(s.step())
+                assertEquals(42L, s.getLong(0))
             }
         }
     }

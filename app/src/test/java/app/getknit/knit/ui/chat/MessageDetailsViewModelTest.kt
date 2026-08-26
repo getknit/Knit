@@ -35,6 +35,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -151,16 +152,29 @@ class MessageDetailsViewModelTest {
         runTest {
             messageFlow.value =
                 msg(senderId = "sam", sentAt = 4_242L, received = true, id = MSG)
-                    .copy(receivedVia = DeliveryPlane.Internet.code)
+                    .copy(receivedVia = DeliveryPlane.Internet.code, arrivedAt = 4_900L)
             peersFlow.value = listOf(peer("sam", name = "Sam Rivera"))
 
             val state = collect(viewModel())
 
             assertEquals("Sam Rivera", state.senderName)
             assertEquals(4_242L, state.sentAt)
+            // Sam's clock and ours, side by side — the gap is what the screen exists to show.
+            assertEquals(4_900L, state.arrivedAt)
             assertFalse(state.mine)
             assertEquals(DeliveryStatus.Delivered, state.delivery)
             assertEquals(DeliveryPlane.Internet, state.plane)
+        }
+
+    @Test
+    fun `a message we sent has no arrival time, and one stored before the column has none either`() =
+        runTest {
+            messageFlow.value = msg(senderId = "me", conversationId = Conversations.NEARBY, id = MSG)
+
+            val state = collect(viewModel())
+
+            assertTrue(state.mine)
+            assertNull(state.arrivedAt)
         }
 
     @Test
@@ -261,6 +275,48 @@ class MessageDetailsViewModelTest {
             receiptsFlow.value = listOf(ack("bob", notedAt = 5L))
 
             assertFalse(collect(viewModel()).showRecipients)
+        }
+
+    @Test
+    fun `a DM still reports when it was delivered, off the recipient's own receipt`() =
+        runTest {
+            messageFlow.value = msg(senderId = "me", recipientId = "bob", conversationId = "bob", id = MSG)
+            receiptsFlow.value = listOf(ack("bob", notedAt = 5L))
+
+            val state = collect(viewModel())
+
+            // No roster (ADR 036 rule 3 stands) — but the receipt that flipped the tick knows the time.
+            assertFalse(state.showRecipients)
+            assertEquals(5L, state.deliveredAt)
+        }
+
+    @Test
+    fun `a DM with no receipt yet reports no delivery time`() =
+        runTest {
+            messageFlow.value = msg(senderId = "me", recipientId = "bob", conversationId = "bob", id = MSG)
+
+            assertNull(collect(viewModel()).deliveredAt)
+        }
+
+    @Test
+    fun `a DM's delivery time comes from the addressed recipient, never a stray row`() =
+        runTest {
+            messageFlow.value = msg(senderId = "me", recipientId = "bob", conversationId = "bob", id = MSG)
+            receiptsFlow.value = listOf(ack("mallory", notedAt = 5L))
+
+            assertNull(collect(viewModel()).deliveredAt)
+        }
+
+    @Test
+    fun `a group and a room post report no single delivery time — the roster answers instead`() =
+        runTest {
+            messageFlow.value = msg(senderId = "me", conversationId = GROUP, received = true, id = MSG)
+            inGroup("me", "sam")
+            receiptsFlow.value = listOf(ack("sam", notedAt = 5L))
+            assertNull(collect(viewModel()).deliveredAt)
+
+            messageFlow.value = msg(senderId = "me", conversationId = Conversations.NEARBY, received = true, id = MSG)
+            assertNull(collect(viewModel()).deliveredAt)
         }
 
     @Test

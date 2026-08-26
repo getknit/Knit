@@ -10,6 +10,7 @@ import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
@@ -86,6 +87,12 @@ data class MessageDetailsUiState(
     val senderName: String = "",
     val senderNodeId: String = "",
     val sentAt: Long = 0L,
+    // Our clock when an inbound message was first persisted (`messages.arrivedAt`) — null for a message we
+    // sent, and for one stored before the column existed. The screen renders the absence, never a zero.
+    val arrivedAt: Long? = null,
+    // Our clock when a DM we sent was acked (`message_receipts.notedAt`) — null until their receipt lands,
+    // and never set for a group or room post, whose "who has it" question the roster below answers instead.
+    val deliveredAt: Long? = null,
     val delivery: DeliveryStatus = DeliveryStatus.Sent,
     val plane: DeliveryPlane = DeliveryPlane.Unknown,
     val reactors: List<ReactorRow> = emptyList(),
@@ -123,7 +130,8 @@ data class MessageDetailsUiState(
  *   the table, so the split is hidden rather than claiming everyone missed it.
  * - **Broadcast room** — an open "received by" list with no denominator: the room has no roster, so
  *   there is nobody to be waiting on. Hidden until at least one ack lands.
- * - **DM** — never: the single ✓✓ already names the only recipient there is.
+ * - **DM** — never: the single ✓✓ already names the only recipient there is. The screen still reads that
+ *   recipient's receipt for its `notedAt`, so a DM says *when* it was delivered without listing *who* to.
  */
 class MessageDetailsViewModel(
     private val messageId: String,
@@ -197,6 +205,7 @@ class MessageDetailsViewModel(
                         senderName = displayNameFor(peersByNode[message.senderId]?.name, message.senderId),
                         senderNodeId = message.senderId,
                         sentAt = message.sentAt,
+                        arrivedAt = message.arrivedAt,
                         delivery = DeliveryStatus.of(message),
                         plane = message.receivedPlane,
                         reactors = rows,
@@ -268,7 +277,13 @@ class MessageDetailsViewModel(
                 )
             }
 
-            // A DM's single ✓✓ already names its only recipient.
+            // A DM's single ✓✓ already names its only recipient, so it still shows no split. But the
+            // receipt that flipped that tick recorded *when* it reached us, and that is worth a line —
+            // matched on the addressed recipient so an orphan row can never supply the stamp.
+            Conversations.kindFor(message.conversationId) == ConversationKind.DM -> {
+                base.state.copy(deliveredAt = acks.firstOrNull { it.ackerNodeId == message.recipientId }?.notedAt)
+            }
+
             else -> {
                 base.state
             }

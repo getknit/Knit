@@ -501,7 +501,10 @@ that budget is a purely local knob that can differ per node without breaking cue
   The schema JSON is exported to `app/schemas/` and checked in per version. Seven tables:
   - `messages`: `id` (PK, wire id), `senderId`, `recipientId?`, `conversationId` (default `NEARBY`,
     indexed), `body` (the **decrypted plaintext**, held only inside the encrypted DB), `sentAt`,
-    `received`, `mentions` (JSON, default `"[]"`), `attachmentHash?`, `attachmentMime?`,
+    `received`, `arrivedAt?` (**our** clock when an inbound row was first persisted — the local
+    complement of the author's `sentAt`, so the details screen can show the store-and-forward latency;
+    null on our own sends and on every row older than DB v7, never rewritten by a custody re-serve),
+    `mentions` (JSON, default `"[]"`), `attachmentHash?`, `attachmentMime?`,
     `attachmentKey?` (base64 AES key for an E2E attachment; null for plaintext/broadcast attachments),
     `moderation` (on-device content verdict), `pendingKey` (composed before the recipient's key was
     known; not yet flooded — §14), `kind` (normal vs. a member-left system row). DAO exposes

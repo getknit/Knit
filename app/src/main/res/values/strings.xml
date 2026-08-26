@@ -615,6 +615,10 @@
     <!-- Message details ("Message info", from a message's long-press menu) -->
     <string name="message_details_title">Message info</string>
     <string name="message_details_sent_by">Sent by %1$s</string>
+    <!-- Local-clock stamps, beside the sender's own sent time: when a message we received landed here, and
+         when a DM we sent reached them. Labelled in words because the line above them is a bare timestamp. -->
+    <string name="message_details_arrived_at">Arrived %1$s</string>
+    <string name="message_details_delivered_at">Delivered %1$s</string>
     <string name="message_details_attachment">📷 Photo</string>
     <string name="message_details_voice">🎤 Voice message</string>
     <string name="message_details_hidden_body">Message hidden by content filtering</string>

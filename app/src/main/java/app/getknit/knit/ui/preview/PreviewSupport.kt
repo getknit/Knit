@@ -15,8 +15,9 @@ const val PREVIEW_NOW: Long = 1_700_000_000_000L
  * coral brand palette and typography instead of bare Material defaults) and a [Surface] (so the
  * preview gets a themed background rather than a transparent one).
  *
- * `KnitTheme` uses `dynamicColor = false`, so a preview needs no `Context` — the static
- * light/dark color schemes apply directly. Preview functions across the UI package are declared
+ * `KnitTheme` uses `dynamicColor = false`, so the static light/dark color schemes apply without a real
+ * `Context`; its one other `Context` read — the reduce-motion setting — short-circuits on
+ * `LocalInspectionMode`, so previews render with motion as it ships. Preview functions across the UI package are declared
  * top-level and non-private (never `private`) so detekt's default `UnusedPrivateMember` rule doesn't
  * flag them as unused — the preview renderer invokes them reflectively, never from code.
  */

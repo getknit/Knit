@@ -5,12 +5,18 @@ import android.content.Intent
 import android.provider.Settings
 import android.text.format.DateUtils
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -105,6 +111,7 @@ import app.getknit.knit.ui.invite.launchApkShareChooser
 import app.getknit.knit.ui.invite.prepareKnitApk
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
+import app.getknit.knit.ui.theme.KnitMotion
 import app.getknit.knit.ui.util.compactTimeAgo
 import app.getknit.knit.ui.util.rememberCurrentTimeMillis
 import coil3.compose.AsyncImage
@@ -234,8 +241,16 @@ internal fun ChatListScreenContent(
                     }
                 },
                 actions = {
-                    // Signal-style: the requests inbox affordance appears only when something is pending.
-                    if (state.requestCount > 0) {
+                    // Signal-style: the requests inbox affordance appears only when something is pending,
+                    // so it pops in the moment a request lands rather than materialising between frames.
+                    // The horizontal expand is added on top of the shared pop for this one call site: the
+                    // button is 48.dp of top-bar width, and without it the overflow button beside it would
+                    // jump the whole distance in a single frame while this one was still fading in.
+                    AnimatedVisibility(
+                        visible = state.requestCount > 0,
+                        enter = KnitMotion.enterPop() + expandHorizontally(KnitMotion.spatial()),
+                        exit = KnitMotion.exitPop() + shrinkHorizontally(KnitMotion.spatial()),
+                    ) {
                         // Anchor the badge to the 24dp icon (not the 48dp button) so it sits at the
                         // glyph's top-right corner per the M3 badge spec, not out at the touch-target edge.
                         IconButton(
@@ -335,31 +350,51 @@ internal fun ChatListScreenContent(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             // Pinned above the list (not a scrolling item) so a connectivity warning never scrolls away.
-            state.radioWarning?.let { warning ->
-                RadioWarningBanner(
-                    warning = warning,
-                    onOpenSettings = { onOpenRadioSettings(warning) },
-                    // The critical "all radios off" banner is not dismissible.
-                    onDismiss = if (warning == RadioWarning.AllRadiosOff) null else onDismissRadioWarning,
-                )
+            // animateContentSize on the band it occupies (rather than AnimatedVisibility on the banner)
+            // lets the list below slide down and back instead of jumping the banner's height in one frame,
+            // and needs no retained copy of a dismissed warning to draw while it collapses.
+            Column(modifier = Modifier.animateContentSize(KnitMotion.spatial())) {
+                state.radioWarning?.let { warning ->
+                    RadioWarningBanner(
+                        warning = warning,
+                        onOpenSettings = { onOpenRadioSettings(warning) },
+                        // The critical "all radios off" banner is not dismissible.
+                        onDismiss = if (warning == RadioWarning.AllRadiosOff) null else onDismissRadioWarning,
+                    )
+                }
             }
-            if (state.isLoading) {
-                // Cold start: the state is a combine of Room + DataStore + mesh flows that emits nothing
-                // until all have first-emitted (~1s). Show a skeleton so the screen reads as "loading",
-                // not as an empty chat list.
-                ChatListSkeleton(modifier = Modifier.fillMaxSize())
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 4.dp),
-                ) {
-                    items(state.conversations, key = { it.id }) { row ->
-                        ConversationListItem(
-                            row = row,
-                            now = now,
-                            onClick = { onOpenConversation(row.id) },
-                            onDelete = onDeleteConversation,
-                        )
+            // Cold start: the state is a combine of Room + DataStore + mesh flows that emits nothing until
+            // all have first-emitted (~1s). Show a skeleton so the screen reads as "loading", not as an
+            // empty chat list — then cross-fade to the real rows, which land in the same shape and used to
+            // replace the placeholders in a single frame.
+            val listEnter = KnitMotion.enterFade()
+            val listExit = KnitMotion.exitFade()
+            AnimatedContent(
+                targetState = state.isLoading,
+                transitionSpec = { listEnter togetherWith listExit },
+                label = "chatListLoading",
+                modifier = Modifier.fillMaxSize(),
+            ) { loading ->
+                if (loading) {
+                    ChatListSkeleton(modifier = Modifier.fillMaxSize())
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 4.dp),
+                    ) {
+                        items(state.conversations, key = { it.id }) { row ->
+                            ConversationListItem(
+                                row = row,
+                                now = now,
+                                onClick = { onOpenConversation(row.id) },
+                                onDelete = onDeleteConversation,
+                                // Unlike the message list, placement IS animated here: the ViewModel sorts
+                                // by lastMessageAt, so a thread that receives a message genuinely travels up
+                                // the list, and watching it move is the clearest signal in the app that
+                                // something just arrived.
+                                modifier = Modifier.animateItem(placementSpec = KnitMotion.spatial()),
+                            )
+                        }
                     }
                 }
             }
@@ -462,6 +497,7 @@ internal fun ConversationListItem(
     row: ConversationRow,
     now: Long,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     onDelete: (conversationId: String) -> Unit = {},
 ) {
     // The Nearby broadcast room can't be deleted, so it gets a plain tap with no long-press menu.
@@ -499,7 +535,7 @@ internal fun ConversationListItem(
         listOfNotNull(row.title, preview, spokenTime, spokenStatus, spokenUnread).joinToString(", ")
     val deleteLabel = stringResource(R.string.chat_list_delete_action)
 
-    Box {
+    Box(modifier = modifier) {
         Row(
             modifier =
                 Modifier
@@ -556,14 +592,29 @@ internal fun ConversationListItem(
                     // timestamp — one check sent, two acked, a clock while it's still waiting for the
                     // recipient's key. Ahead of the time rather than after it (where the chat bubble puts
                     // it) so every row's timestamp stays flush right whether or not there's a tick.
+                    // The tick crosses clock → ✓ → ✓✓ as the newest message progresses. Everything in this
+                    // row sits under the clearAndSetSemantics above, so animating it adds no semantics nodes
+                    // at all — the spoken description is unchanged and unaffected.
+                    //
+                    // Kept inside the `let` rather than given a nullable targetState: an AnimatedContent
+                    // always emits a child, and a zero-width one still earns its 3.dp from spacedBy above.
+                    // A row whose newest message is not ours has no tick and must have no gap either.
                     row.lastStatus?.let { status ->
-                        Icon(
-                            imageVector = deliveryIcon(status),
-                            // Decorative here: the row folds the spoken label into its own description.
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp),
-                        )
+                        val tickEnter = KnitMotion.enterPop()
+                        val tickExit = KnitMotion.exitPop()
+                        AnimatedContent(
+                            targetState = status,
+                            transitionSpec = { tickEnter togetherWith tickExit },
+                            label = "chatListTick",
+                        ) { current ->
+                            Icon(
+                                imageVector = deliveryIcon(current),
+                                // Decorative here: the row folds the spoken label into its own description.
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
                     }
                     row.lastMessageAt?.let { sentAt ->
                         Text(
@@ -573,13 +624,24 @@ internal fun ConversationListItem(
                         )
                     }
                 }
-                if (row.unreadCount > 0) {
-                    Spacer(Modifier.height(4.dp))
-                    Badge(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ) {
-                        Text(row.unreadCount.toString())
+                AnimatedVisibility(
+                    visible = row.unreadCount > 0,
+                    enter = KnitMotion.enterPop(),
+                    exit = KnitMotion.exitPop(),
+                ) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Spacer(Modifier.height(4.dp))
+                        Badge(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ) {
+                            // A count that ticks up while the thread is on screen should read as the same
+                            // badge counting, not as a badge being replaced.
+                            Text(
+                                text = row.unreadCount.toString(),
+                                modifier = Modifier.animateContentSize(KnitMotion.fastSpatial()),
+                            )
+                        }
                     }
                 }
             }

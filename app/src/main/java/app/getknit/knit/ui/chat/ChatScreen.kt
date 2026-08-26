@@ -8,8 +8,13 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -119,6 +124,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
@@ -126,6 +132,7 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.pluralStringResource
@@ -188,6 +195,8 @@ import app.getknit.knit.ui.openUrl
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
 import app.getknit.knit.ui.share.ShareInbox
+import app.getknit.knit.ui.theme.KnitMotion
+import app.getknit.knit.ui.theme.rememberPressScale
 import app.getknit.knit.ui.util.rememberCurrentTimeMillis
 import app.getknit.knit.ui.voice.VoiceNoteBubble
 import app.getknit.knit.ui.voice.VoiceNotePreview
@@ -207,6 +216,9 @@ import org.koin.core.parameter.parametersOf
 // Grace period before the send button shows a spinner, so a fast send never flashes one; it surfaces
 // only for a genuinely slow send (chiefly the first after a cold start — the one-time model load).
 private const val SEND_SPINNER_DELAY_MS = 300L
+
+/** What the composer's trailing button currently is — the three states it crossfades between. */
+private enum class SendAction { Sending, Send, Attach }
 
 // Hold-to-talk gesture slop, in pixels. Generous on purpose: these are one-handed thumb gestures, and an
 // accidental cancel loses a recording the user can't get back, so the thresholds sit well past ordinary
@@ -733,8 +745,14 @@ internal fun ChatScreenContent(
         // Column rather than a list item so the relay notice stays pinned: it states a standing fact
         // about the whole thread, and one that scrolled away would be found only by accident.
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            RelayNotice(reach = state.relayReach, onClick = { showRelayInfo = true })
-            LoraNotice(reach = state.loraReach, onClick = { showLoraInfo = true })
+            // The two pinned notices come and go with the radios. animateContentSize on the band they share
+            // (rather than AnimatedVisibility on each) means the thread below slides down and back rather
+            // than jumping a notice's height in one frame — and it needs no retained copy of a notice's text
+            // to draw while it collapses, which is the whole reason each notice can keep its early return.
+            Column(modifier = Modifier.animateContentSize(KnitMotion.spatial())) {
+                RelayNotice(reach = state.relayReach, onClick = { showRelayInfo = true })
+                LoraNotice(reach = state.loraReach, onClick = { showLoraInfo = true })
+            }
             // weight(1f), not fillMaxSize(): the notice above is an unweighted sibling, so the list must
             // take the space that is left rather than ask for the whole column.
             if (state.rows.isEmpty() && state.typingPeers.isEmpty()) {
@@ -757,15 +775,40 @@ internal fun ChatScreenContent(
                     // directly above the input and below the newest message (Signal-style, scrolls with content).
                     if (state.typingPeers.isNotEmpty()) {
                         item(key = "typing_indicator") {
-                            TypingIndicatorRow(peers = state.typingPeers)
+                            // Fades with the same spec as a message bubble: the indicator arriving and
+                            // leaving is a state change like any other, and it used to blink.
+                            TypingIndicatorRow(
+                                peers = state.typingPeers,
+                                modifier =
+                                    Modifier.animateItem(
+                                        placementSpec = null,
+                                        fadeInSpec = KnitMotion.fastEffects(),
+                                        fadeOutSpec = KnitMotion.fastEffects(),
+                                    ),
+                            )
                         }
                     }
                     items(state.rows.asReversed(), key = { it.id }) { row ->
+                        // Fade only, no placement animation (`placementSpec = null`): the three
+                        // LaunchedEffects above already drive animateScrollToItem(0) when a message or a
+                        // typing peer arrives, and a placement animation would be sliding rows in one
+                        // direction while the scroll slides the viewport in the other. A new bubble
+                        // appears; nothing travels.
+                        val itemMotion =
+                            Modifier.animateItem(
+                                placementSpec = null,
+                                fadeInSpec = KnitMotion.fastEffects(),
+                                fadeOutSpec = KnitMotion.fastEffects(),
+                            )
                         if (row.kind == MessageEntity.KIND_MEMBER_LEFT) {
-                            SystemNotice(stringResource(R.string.chat_group_member_left, row.senderName))
+                            SystemNotice(
+                                text = stringResource(R.string.chat_group_member_left, row.senderName),
+                                modifier = itemMotion,
+                            )
                         } else {
                             MessageBubble(
                                 row,
+                                modifier = itemMotion,
                                 now = now,
                                 // In a 1:1 DM the peer's name is in the top bar, so don't repeat it on every
                                 // received bubble; show it only where multiple people can speak.
@@ -1066,6 +1109,7 @@ private fun MessageBubble(
     row: ChatRow,
     now: Long,
     showSenderName: Boolean,
+    modifier: Modifier = Modifier,
     // myNodeId drives the quote's viewer-relative "You" swap; defaulted for the @Preview call sites.
     myNodeId: String = "",
     // Hash-keyed aspect-ratio cache shared across the list so a re-entering image reserves its height
@@ -1112,7 +1156,7 @@ private fun MessageBubble(
         label = "quoteHighlight",
     )
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = if (row.mine) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom,
     ) {
@@ -1278,44 +1322,75 @@ private fun MessageBubble(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            // Our own messages show a delivery tick: one check sent, two checks acked. A
-                            // plane glyph ahead of the ✓✓ (a globe for the Internet, the radio-waves mark
-                            // for LoRa) says the receipt came back over that plane rather than a nearby
-                            // radio — how it got there, on the one line that already says whether it did.
-                            // It sits before the tick so the tick keeps the same trailing position on
-                            // every row, and only once acked: an un-acked send has no plane to show.
+                            // Our own messages show a delivery tick: one check sent, two checks acked.
                             if (row.mine) {
-                                val glyph = if (row.received) planeGlyph(row.deliveredVia) else null
-                                if (glyph != null) {
-                                    Icon(
-                                        imageVector = glyph,
-                                        // Decorative: the tick's own description below already says
-                                        // "Delivered over the Internet", and announcing both repeats it.
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(12.dp).testTag("chat_tick_${planeTag(row.deliveredVia)}"),
-                                    )
+                                val tickDescription =
+                                    deliveryLabel(
+                                        status =
+                                            if (row.received) {
+                                                DeliveryStatus.Delivered
+                                            } else {
+                                                DeliveryStatus.Sent
+                                            },
+                                        plane = row.deliveredVia,
+                                        mine = true,
+                                        // On a group send the glyph alone says only "at least one
+                                        // member has it"; these make the description say which many.
+                                        delivered = row.deliveredCount,
+                                        total = row.recipientTotal,
+                                    ).resolve()
+                                // A receipt landing is the one moment a mesh messenger actually earns its
+                                // keep, and until now it passed silently. The glyph and the tick cross
+                                // together as one unit, so the pair reads as a single event rather than as
+                                // two icons independently changing their minds.
+                                //
+                                // The description sits on the AnimatedContent rather than on the Icons so
+                                // there is exactly one labelled node at every instant: mid-transition both
+                                // the outgoing ✓ and the incoming ✓✓ are composed, and two Icons carrying
+                                // two different delivery sentences is precisely the sort of thing the ATF
+                                // audit is there to catch. Spoken output is unchanged.
+                                //
+                                // (transitionSpec is not a @Composable lambda, so the transitions are read
+                                // from the theme out here and captured.)
+                                val tickEnter = KnitMotion.enterPop()
+                                val tickExit = KnitMotion.exitPop()
+                                AnimatedContent(
+                                    targetState = row.received,
+                                    transitionSpec = { tickEnter togetherWith tickExit },
+                                    label = "deliveryTick",
+                                    modifier = Modifier.semantics { contentDescription = tickDescription },
+                                ) { received ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                    ) {
+                                        // A plane glyph ahead of the ✓✓ (a globe for the Internet, the
+                                        // radio-waves mark for LoRa) says the receipt came back over that
+                                        // plane rather than a nearby radio. It sits before the tick so the
+                                        // tick keeps the same trailing position on every row, and only once
+                                        // acked: an un-acked send has no plane to show.
+                                        val glyph = if (received) planeGlyph(row.deliveredVia) else null
+                                        if (glyph != null) {
+                                            Icon(
+                                                imageVector = glyph,
+                                                // Decorative: the description above already says
+                                                // "Delivered over the Internet"; announcing both repeats it.
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier =
+                                                    Modifier
+                                                        .size(12.dp)
+                                                        .testTag("chat_tick_${planeTag(row.deliveredVia)}"),
+                                            )
+                                        }
+                                        Icon(
+                                            imageVector = if (received) Icons.Filled.DoneAll else Icons.Filled.Done,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
                                 }
-                                Icon(
-                                    imageVector = if (row.received) Icons.Filled.DoneAll else Icons.Filled.Done,
-                                    contentDescription =
-                                        deliveryLabel(
-                                            status =
-                                                if (row.received) {
-                                                    DeliveryStatus.Delivered
-                                                } else {
-                                                    DeliveryStatus.Sent
-                                                },
-                                            plane = row.deliveredVia,
-                                            mine = true,
-                                            // On a group send the glyph alone says only "at least one
-                                            // member has it"; these make the description say which many.
-                                            delivered = row.deliveredCount,
-                                            total = row.recipientTotal,
-                                        ).resolve(),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp),
-                                )
                             }
                             // A received message has no tick — delivery is not ours to report — but the
                             // same glyph still says it reached this phone over the Internet or LoRa rather
@@ -1640,7 +1715,8 @@ private fun ReactionRow(
     modifier: Modifier = Modifier,
 ) {
     FlowRow(
-        modifier = modifier,
+        // Chips arriving and leaving change the bubble's footprint; reflow rather than snap.
+        modifier = modifier.animateContentSize(KnitMotion.spatial()),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -1663,25 +1739,48 @@ private fun ReactionChip(
             reaction.count,
             reaction.emoji,
         )
-    Surface(
-        shape = shape,
-        color =
+    // Toggling my own reaction repaints the pill; ease it so the tap reads as the same chip changing state
+    // rather than as one chip being swapped for another.
+    val container by animateColorAsState(
+        targetValue =
             if (reaction.mine) {
                 MaterialTheme.colorScheme.primaryContainer
             } else {
                 MaterialTheme.colorScheme.surfaceVariant
             },
-        contentColor =
+        animationSpec = KnitMotion.effects(),
+        label = "reactionContainer",
+    )
+    val onContainer by animateColorAsState(
+        targetValue =
             if (reaction.mine) {
                 MaterialTheme.colorScheme.onPrimaryContainer
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+        animationSpec = KnitMotion.effects(),
+        label = "reactionOnContainer",
+    )
+    val haptics = LocalHapticFeedback.current
+    Surface(
+        shape = shape,
+        color = container,
+        contentColor = onContainer,
         border = if (reaction.mine) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
         modifier =
             Modifier
                 .clip(shape)
-                .clickable(role = Role.Button, onClick = onClick)
+                .clickable(
+                    role = Role.Button,
+                    // A tap gets no haptic for free the way a long-press does, and this chip is small
+                    // enough that a fingertip can cover the state change it just caused.
+                    onClick = {
+                        haptics.performHapticFeedback(
+                            if (reaction.mine) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                        )
+                        onClick()
+                    },
+                )
                 // Deliberately no minimumInteractiveComponentSize(): the 48.dp min-touch box padded each
                 // pill out with invisible margin, spreading the chips far apart. Sizing to the visible pill
                 // packs them tightly like Signal. Toggling an existing reaction is a secondary action (the
@@ -1995,11 +2094,20 @@ private fun relativeTime(
 @Composable
 private fun EmptyState(modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        Text(
-            text = stringResource(R.string.chat_empty),
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // Fade in rather than paint on arrival. ChatUiState seeds with no rows, so *every* thread shows
+        // this for the frame or two before Room answers — and a hard flash of "no messages yet" on a
+        // conversation that has hundreds is the worst thing this screen does. Starting at zero alpha means
+        // a thread with content replaces it while it is still barely visible, and a genuinely empty one
+        // gets an arrival rather than a snap.
+        var shown by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { shown = true }
+        AnimatedVisibility(visible = shown, enter = KnitMotion.enterFade(), exit = KnitMotion.exitFade()) {
+            Text(
+                text = stringResource(R.string.chat_empty),
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -2010,7 +2118,10 @@ private fun EmptyState(modifier: Modifier = Modifier) {
  * feeds it a TTL'd, ephemeral list, so this simply disappears when the list empties.
  */
 @Composable
-private fun TypingIndicatorRow(peers: List<TypingPeer>) {
+private fun TypingIndicatorRow(
+    peers: List<TypingPeer>,
+    modifier: Modifier = Modifier,
+) {
     if (peers.isEmpty()) return
     val description =
         if (peers.size == 1) {
@@ -2019,7 +2130,7 @@ private fun TypingIndicatorRow(peers: List<TypingPeer>) {
             stringResource(R.string.chat_typing_multiple, peers.first().name)
         }
     Row(
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = description },
+        modifier = modifier.fillMaxWidth().semantics { contentDescription = description },
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Bottom,
     ) {
@@ -2042,10 +2153,13 @@ private fun TypingIndicatorRow(peers: List<TypingPeer>) {
 
 /** A centered, muted status line in the thread (e.g. "Alice left the chat"); not a sender bubble. */
 @Composable
-private fun SystemNotice(text: String) {
+private fun SystemNotice(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
     Text(
         text = text,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 16.dp),
+        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 16.dp),
         textAlign = TextAlign.Center,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2116,6 +2230,7 @@ private fun MessageInput(
     // flips false before the delay elapses the effect restarts and cancels the pending delay, so the
     // flag never trips.
     var showSending by remember { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
     LaunchedEffect(isSending) {
         if (isSending) {
             delay(SEND_SPINNER_DELAY_MS)
@@ -2371,6 +2486,22 @@ private fun MessageInput(
                 // modifier we pass and consumes the gesture, so an outer long-press never fires.
                 // The colours and shape below are FilledIconButton's own defaults, so it looks the same.
                 val takePhotoLabel = stringResource(R.string.action_take_photo)
+                // The button dips under the finger. graphicsLayer scales the *drawing* only, so the 48.dp
+                // touch target the ATF audit checks for is unaffected.
+                val sendInteraction = remember { MutableInteractionSource() }
+                val sendScale = rememberPressScale(sendInteraction)
+                val action =
+                    when {
+                        showSending -> SendAction.Sending
+                        canSend -> SendAction.Send
+                        else -> SendAction.Attach
+                    }
+                val actionDescription =
+                    when (action) {
+                        SendAction.Sending -> stringResource(R.string.chat_sending)
+                        SendAction.Send -> stringResource(R.string.action_send)
+                        SendAction.Attach -> stringResource(R.string.action_attach_photo)
+                    }
                 Surface(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary,
@@ -2379,15 +2510,23 @@ private fun MessageInput(
                         Modifier
                             .size(48.dp)
                             .align(Alignment.CenterVertically)
-                            .testTag("chat_send")
+                            .graphicsLayer {
+                                scaleX = sendScale.value
+                                scaleY = sendScale.value
+                            }.testTag("chat_send")
                             .combinedClickable(
                                 role = Role.Button,
+                                interactionSource = sendInteraction,
                                 // Swallow taps while a send is in flight (the ViewModel guard also drops
                                 // re-entrant sends, but suppressing the click keeps the button from
                                 // feeling dead-but-pressable).
                                 onClick = {
                                     if (!showSending) {
                                         if (canSend) {
+                                            // The send itself is the only confirmation the composer gives:
+                                            // the field clears and the bubble is already at the bottom of a
+                                            // list the user may not be looking at.
+                                            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                                             onSend()
                                         } else {
                                             onAttachClick()
@@ -2406,34 +2545,45 @@ private fun MessageInput(
                             ),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        if (showSending) {
-                            val sendingLabel = stringResource(R.string.chat_sending)
-                            CircularProgressIndicator(
-                                modifier =
-                                    Modifier
-                                        .size(24.dp)
-                                        .semantics { contentDescription = sendingLabel },
-                                strokeWidth = 2.dp,
-                                // LocalContentColor is the Surface's onPrimary content colour, so the
-                                // spinner reads against the filled container.
-                                color = LocalContentColor.current,
-                            )
-                        } else {
-                            Icon(
-                                imageVector =
-                                    if (canSend) {
-                                        Icons.AutoMirrored.Filled.Send
-                                    } else {
-                                        Icons.Filled.AddPhotoAlternate
-                                    },
-                                contentDescription =
-                                    if (canSend) {
-                                        stringResource(R.string.action_send)
-                                    } else {
-                                        stringResource(R.string.action_attach_photo)
-                                    },
-                                modifier = Modifier.size(24.dp),
-                            )
+                        // Send / attach / spinner used to hard-swap. As with the delivery tick, the single
+                        // description rides on the AnimatedContent: `combinedClickable` merges descendants
+                        // into the button node, so two labelled children mid-transition would have the
+                        // button announce both.
+                        val actionEnter = KnitMotion.enterPop()
+                        val actionExit = KnitMotion.exitPop()
+                        AnimatedContent(
+                            targetState = action,
+                            transitionSpec = { actionEnter togetherWith actionExit },
+                            label = "sendAction",
+                            modifier = Modifier.semantics { contentDescription = actionDescription },
+                        ) { current ->
+                            when (current) {
+                                SendAction.Sending -> {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.dp,
+                                        // LocalContentColor is the Surface's onPrimary content colour, so
+                                        // the spinner reads against the filled container.
+                                        color = LocalContentColor.current,
+                                    )
+                                }
+
+                                SendAction.Send -> {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Send,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                }
+
+                                SendAction.Attach -> {
+                                    Icon(
+                                        imageVector = Icons.Filled.AddPhotoAlternate,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -2478,6 +2628,10 @@ private fun MicButton(
 
     val holdLabel = stringResource(R.string.chat_voice_record)
     val tapLabel = stringResource(R.string.chat_voice_record_start)
+    // Lock and cancel are crossed by sliding, with the finger over the very control that changed — the two
+    // moments in the app a user is least able to *see* the state they just entered. `combinedClickable`'s
+    // free long-press haptic never applies here: this is a raw pointerInput, not a click.
+    val haptics = LocalHapticFeedback.current
     Box(
         modifier =
             modifier
@@ -2516,10 +2670,12 @@ private fun MicButton(
                                 val dy = change.position.y - down.position.y
                                 if (!locked && dy < -LOCK_SLOP_PX) {
                                     locked = true
+                                    haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
                                     onLock()
                                 }
                                 if (!locked && dx < -CANCEL_SLOP_PX) {
                                     cancelled = true
+                                    haptics.performHapticFeedback(HapticFeedbackType.Reject)
                                     onCancel()
                                     break
                                 }
@@ -2535,6 +2691,7 @@ private fun MicButton(
                             if (cancelled) {
                                 waitForUpOrCancellation()
                             } else if (!locked) {
+                                haptics.performHapticFeedback(HapticFeedbackType.GestureEnd)
                                 onStop()
                             }
                         }

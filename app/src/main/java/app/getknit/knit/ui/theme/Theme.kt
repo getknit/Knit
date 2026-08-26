@@ -8,6 +8,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
 
 private val LightColorScheme =
@@ -84,9 +85,15 @@ fun KnitTheme(
             }
         }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content,
-    )
+    // LocalReduceMotion is provided here rather than at each animation: KnitMotion reads it, so honoring the
+    // platform's "Remove animations" setting is a property of being inside the theme, not something a call
+    // site can forget. MaterialTheme's motionScheme is left at its default (standard, not expressive) — see
+    // KnitMotion for why.
+    CompositionLocalProvider(LocalReduceMotion provides rememberReduceMotion()) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content,
+        )
+    }
 }

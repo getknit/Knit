@@ -1,5 +1,11 @@
 package app.getknit.knit.ui
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -10,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.unit.IntOffset
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -46,8 +53,14 @@ import app.getknit.knit.ui.review.RateReviewDialog
 import app.getknit.knit.ui.review.ReviewPromptInbox
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.ShareTargetScreen
+import app.getknit.knit.ui.theme.KnitMotion
+import app.getknit.knit.ui.theme.LocalReduceMotion
 import app.getknit.knit.ui.verify.VerifyContactScreen
 import org.koin.compose.koinInject
+
+// How far a screen slides as it fades: a twenty-fourth of the width. Enough to give the fade a direction
+// (forward goes left, Back comes from the left), far too little to read as a page turn.
+private const val NAV_SLIDE_DIVISOR = 24
 
 private object Routes {
     const val ONBOARDING = "onboarding"
@@ -179,6 +192,38 @@ fun KnitApp(startRoute: String? = null) {
         navController.navigate(Routes.ADD_CONTACT) { launchSingleTop = true }
     }
 
+    // One transition for the whole graph rather than per-destination overrides: every route here is a peer
+    // of the others (a list, a thread, a settings page), so a screen arriving should look the same wherever
+    // it arrived from. A fade carrying a small horizontal offset — a twenty-fourth of the width, not a
+    // full-width page slide — reads as depth rather than as travel, which is what keeps it from getting
+    // tiring on a screen the user opens dozens of times a day.
+    val reduceMotion = LocalReduceMotion.current
+    val fade = KnitMotion.effects<Float>()
+    val slide = KnitMotion.spatial<IntOffset>()
+    val enter =
+        if (reduceMotion) {
+            EnterTransition.None
+        } else {
+            fadeIn(animationSpec = fade) + slideInHorizontally(animationSpec = slide) { it / NAV_SLIDE_DIVISOR }
+        }
+    val exit =
+        if (reduceMotion) {
+            ExitTransition.None
+        } else {
+            fadeOut(animationSpec = fade) + slideOutHorizontally(animationSpec = slide) { -it / NAV_SLIDE_DIVISOR }
+        }
+    val popEnter =
+        if (reduceMotion) {
+            EnterTransition.None
+        } else {
+            fadeIn(animationSpec = fade) + slideInHorizontally(animationSpec = slide) { -it / NAV_SLIDE_DIVISOR }
+        }
+    val popExit =
+        if (reduceMotion) {
+            ExitTransition.None
+        } else {
+            fadeOut(animationSpec = fade) + slideOutHorizontally(animationSpec = slide) { it / NAV_SLIDE_DIVISOR }
+        }
     NavHost(
         navController = navController,
         startDestination = start,
@@ -186,6 +231,10 @@ fun KnitApp(startRoute: String? = null) {
         // automation agent can locate elements (send button, message input, conversation rows) by a
         // stable id instead of pixel bounds. Set once at the root; the whole subtree inherits it.
         modifier = Modifier.semantics { testTagsAsResourceId = true },
+        enterTransition = { enter },
+        exitTransition = { exit },
+        popEnterTransition = { popEnter },
+        popExitTransition = { popExit },
     ) {
         composable(Routes.ONBOARDING) {
             OnboardingScreen(

@@ -1,6 +1,9 @@
 package app.getknit.knit.ui.components
 
 import android.provider.Settings
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -24,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -36,6 +40,7 @@ import app.getknit.knit.data.relay.RelayPlane
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.theme.KnitMotion
 import kotlinx.coroutines.delay
 
 /**
@@ -70,7 +75,7 @@ fun ConnectionStatusRow(
 ) {
     val plane = settled(relay, live = RelayPlane.Live, down = RelayPlane.Down, graceMs = RELAY_DOWN_GRACE_MS)
     val board = settled(lora, live = LoraPlane.Live, down = LoraPlane.Down, graceMs = LORA_DOWN_GRACE_MS)
-    val dotColor =
+    val dotTarget =
         when (health) {
             // Radios off is user-actionable, not a fault — a muted dot, not an alarming red one.
             TransportHealth.Unavailable -> {
@@ -85,6 +90,11 @@ fun ConnectionStatusRow(
                 if (neighborCount > 0) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
             }
         }
+    // The dot changes meaning whenever a peer appears or the radios go dark. Crossfading it is what turns
+    // "the header is different now" into "something just happened" — the change is easy to miss otherwise,
+    // because nothing else on the row moves. `settled()` above already absorbs relay flap, so this only ever
+    // animates a change that is real.
+    val dotColor by animateColorAsState(targetValue = dotTarget, animationSpec = KnitMotion.effects(), label = "meshDot")
     val label = connectionLabel(neighborCount, health, plane)
     val planeDescription =
         when (plane) {
@@ -116,44 +126,67 @@ fun ConnectionStatusRow(
                     .background(color = dotColor, shape = CircleShape),
         )
         Spacer(Modifier.width(6.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // "3 people nearby" → "2 people nearby" is a one-word edit that the eye reads as a glitch when it
+        // happens between frames. The row is clearAndSetSemantics above, so none of the animation here adds
+        // a semantics node or changes a syllable of what TalkBack says.
+        val labelEnter = KnitMotion.enterFade()
+        val labelExit = KnitMotion.exitFade()
+        AnimatedContent(
+            targetState = label,
+            transitionSpec = { labelEnter togetherWith labelExit },
+            label = "connectionLabel",
+        ) { current ->
+            Text(
+                text = current,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // A glyph appearing at all is a settings change (the plane being armed or a board bound), which
+        // happens on another screen — so it is deliberately NOT an AnimatedVisibility. Animating it would
+        // also mean the glyph flipping to its struck-through form as it faded away. What DOES change while
+        // this row is on screen is the tint, and that is what PlaneGlyph eases.
         if (plane != RelayPlane.Off) {
             Spacer(Modifier.width(6.dp))
             // Struck-through glyph for Down rather than only a paler tint: at 14dp a tint change alone is
             // the kind of distinction that disappears for a color-blind reader, and this row has no room
             // to spell the state out in words.
-            Icon(
+            PlaneGlyph(
                 imageVector = if (plane == RelayPlane.Live) Icons.Outlined.Cloud else Icons.Outlined.CloudOff,
-                contentDescription = null,
-                tint =
-                    if (plane == RelayPlane.Live) {
-                        MaterialTheme.colorScheme.tertiary
-                    } else {
-                        MaterialTheme.colorScheme.outline
-                    },
-                modifier = Modifier.size(14.dp),
+                live = plane == RelayPlane.Live,
             )
         }
         if (board != LoraPlane.Off) {
             Spacer(Modifier.width(6.dp))
             // The board, after the Internet: same tint rule, same struck-through Down glyph.
-            Icon(
+            PlaneGlyph(
                 imageVector = if (board == LoraPlane.Live) Icons.Outlined.Sensors else Icons.Outlined.SensorsOff,
-                contentDescription = null,
-                tint =
-                    if (board == LoraPlane.Live) {
-                        MaterialTheme.colorScheme.tertiary
-                    } else {
-                        MaterialTheme.colorScheme.outline
-                    },
-                modifier = Modifier.size(14.dp),
+                live = board == LoraPlane.Live,
             )
         }
     }
+}
+
+/**
+ * One armed plane's 14dp glyph. Decorative — [ConnectionStatusRow] speaks for the whole row — with its
+ * live/down tint eased so a plane recovering reads as the same glyph brightening rather than as a new one.
+ */
+@Composable
+private fun PlaneGlyph(
+    imageVector: ImageVector,
+    live: Boolean,
+) {
+    val tint by animateColorAsState(
+        targetValue = if (live) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline,
+        animationSpec = KnitMotion.effects(),
+        label = "planeTint",
+    )
+    Icon(
+        imageVector = imageVector,
+        contentDescription = null,
+        tint = tint,
+        modifier = Modifier.size(14.dp),
+    )
 }
 
 @Composable

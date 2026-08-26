@@ -1,5 +1,7 @@
 package app.getknit.knit.ui.voice
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -29,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import app.getknit.knit.R
 import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.theme.KnitMotion
 
 /*
  * The voice-note surfaces: the waveform, the bubble a received/sent note renders as, and the review row the
@@ -77,6 +81,15 @@ fun VoiceWaveform(
     onSeek: ((Float) -> Unit)? = null,
 ) {
     val bars = peaks ?: FLAT_WAVEFORM
+    // Playback position arrives on a poll, so the fill used to advance a whole bar at a time. Easing it
+    // makes the same positions read as a note playing rather than as a progress bar being written to. A
+    // seek animates too, which is the right answer: the jump is deliberate, and seeing it travel is how the
+    // user knows where they came from.
+    val filled by animateFloatAsState(
+        targetValue = progress.coerceIn(0f, 1f),
+        animationSpec = KnitMotion.fastEffects(),
+        label = "voiceProgress",
+    )
     Canvas(
         modifier =
             modifier
@@ -96,7 +109,7 @@ fun VoiceWaveform(
         val count = bars.size
         val slot = size.width / count
         val barWidth = (slot * BAR_WIDTH_FRACTION).coerceAtLeast(1f)
-        val playedBars = (progress.coerceIn(0f, 1f) * count)
+        val playedBars = filled * count
         for (i in 0 until count) {
             val height = (bars[i].coerceIn(0f, 1f) * size.height).coerceAtLeast(size.height * MIN_BAR_FRACTION)
             val left = i * slot + (slot - barWidth) / 2f
@@ -289,7 +302,14 @@ fun VoiceRecordingBar(
         ) {
             // The dot swells with the input level, so the user can see the mic is actually hearing them —
             // the one thing a static "Recording…" label can't tell them.
-            val dot = (8f + amplitude.coerceIn(0f, 1f) * 6f).dp
+            // Animated, not raw: the amplitude arrives off a ViewModel ticker in visible steps, and a dot
+            // that jumps between sizes reads as a stutter rather than as a level meter. The spring is the
+            // fast spatial one, so it still tracks a shout closely enough to be believed.
+            val dot by animateDpAsState(
+                targetValue = (8f + amplitude.coerceIn(0f, 1f) * 6f).dp,
+                animationSpec = KnitMotion.fastSpatial(),
+                label = "voiceLevel",
+            )
             val recordingLabel = stringResource(R.string.chat_voice_recording)
             Box(
                 modifier = Modifier.size(16.dp).semantics { contentDescription = recordingLabel },

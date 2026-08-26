@@ -1,7 +1,9 @@
 package app.getknit.knit.ui.components
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -19,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -28,6 +31,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.theme.rememberPressScale
 import coil3.compose.AsyncImage
 
 /**
@@ -49,16 +53,37 @@ fun GroupAvatar(
     onClick: (() -> Unit)? = null,
     onClickLabel: String? = null,
 ) {
+    // An avatar is a tap target with no container of its own, so a ripple alone is easy to miss on a
+    // photo. Giving it a little under the finger is the confirmation the image can't provide.
+    val interaction = remember { MutableInteractionSource() }
+    // Only a tappable avatar has a press to react to; a decorative one never starts the collector.
+    val press =
+        if (onClick != null) {
+            val scale = rememberPressScale(interaction)
+            Modifier.graphicsLayer {
+                scaleX = scale.value
+                scaleY = scale.value
+            }
+        } else {
+            Modifier
+        }
     Box(
         modifier =
             modifier
                 .then(if (onClick != null) Modifier.minimumInteractiveComponentSize() else Modifier)
+                .then(press)
                 .size(size)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.secondaryContainer)
                 .then(
                     if (onClick != null) {
-                        Modifier.clickable(onClickLabel = onClickLabel, role = Role.Button, onClick = onClick)
+                        Modifier.clickable(
+                            interactionSource = interaction,
+                            indication = LocalIndication.current,
+                            onClickLabel = onClickLabel,
+                            role = Role.Button,
+                            onClick = onClick,
+                        )
                     } else {
                         Modifier
                     },

@@ -12,6 +12,16 @@ Invariants for all Kotlin/Compose/data code. (Mesh-specific invariants are in `r
 
 ## Compose
 
+- **Motion comes from `ui/theme/Motion.kt`.** Reach for `KnitMotion`'s named specs and transitions
+  (`spatial`/`effects`, `enterPop`/`enterReveal`, `rememberPressScale`) rather than writing a `tween`, an
+  easing or a duration at a call site — they carry the reduce-motion gate with them. ADR 047.
+- **Never compose an infinite animation on a screen that has settled.** A live `rememberInfiniteTransition`
+  keeps Compose from going idle, so every `awaitTag`/`waitForIdle` on that screen times out — it hangs the
+  seeded suite and the Robolectric `*ScreenContentTest`s rather than just looking wrong. Tie it to a
+  transient state (typing, loading) as `KnitStitchIndicator` and `ChatListSkeleton` do. Finite animations
+  are fine; the test clock advances them.
+- **Turning a hard swap into an `AnimatedContent` moves the `contentDescription` to the container.** Both
+  children are composed mid-transition, so two labelled children announce twice. ADR 047.
 - **Don't bind a Compose `TextField` directly to a DataStore-backed flow.** The async write→emit
   round-trip lags a keystroke and resets the field (you can only type one character). Hold editable text
   in a local `MutableStateFlow` in the ViewModel and persist to DataStore in the background — see

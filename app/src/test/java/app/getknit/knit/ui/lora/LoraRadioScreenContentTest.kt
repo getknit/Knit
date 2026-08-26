@@ -35,6 +35,9 @@ class LoraRadioScreenContentTest {
         onToggle: (Boolean) -> Unit = {},
         onShowAllBoards: (Boolean) -> Unit = {},
         onToggleBridge: (Boolean) -> Unit = {},
+        onAskDedicate: () -> Unit = {},
+        onDedicate: () -> Unit = {},
+        onRestore: () -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
@@ -44,6 +47,9 @@ class LoraRadioScreenContentTest {
                     onToggle = onToggle,
                     onToggleBridge = onToggleBridge,
                     onShowAllBoards = onShowAllBoards,
+                    onAskDedicate = onAskDedicate,
+                    onDedicate = onDedicate,
+                    onRestore = onRestore,
                 )
             }
         }
@@ -200,5 +206,52 @@ class LoraRadioScreenContentTest {
         render(connected().copy(boardsHeard = 1, heard = 1))
         compose.onNodeWithTag("lora_boards_heard").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_peers_heard").assertDoesNotExist()
+    }
+
+    @Test
+    fun dedicatingIsOfferedOnAProvisionedBoardAndOnlyAsks() {
+        var asked = 0
+        var dedicated = 0
+        render(connected(), onAskDedicate = { asked++ }, onDedicate = { dedicated++ })
+        compose
+            .onNodeWithTag("lora_dedicate")
+            .performScrollTo()
+            .assertIsEnabled()
+            .performClick()
+        assertEquals(1, asked)
+        assertEquals("the button asks; the dialog acts", 0, dedicated)
+        compose.onNodeWithTag("lora_restore").assertDoesNotExist()
+    }
+
+    @Test
+    fun dedicatingWaitsUntilTheKnitChannelIsActuallySetUp() {
+        render(connected(channelName = "LongFast", channelMismatch = true))
+        compose.onNodeWithTag("lora_dedicate").performScrollTo().assertIsNotEnabled()
+    }
+
+    @Test
+    fun theConfirmationSpellsOutTheCostAndIsWhatDedicates() {
+        var dedicated = 0
+        render(connected().copy(confirmDedicate = true), onDedicate = { dedicated++ })
+        compose.onNodeWithText("leave the public Meshtastic channel", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("lora_dedicate_confirm").performClick()
+        assertEquals(1, dedicated)
+    }
+
+    @Test
+    fun aDedicatedBoardSaysSoAndOffersTheWayBack() {
+        var restored = 0
+        render(connected().copy(dedicated = true), onRestore = { restored++ })
+        compose.onNodeWithTag("lora_dedicate").assertDoesNotExist()
+        compose.onNodeWithText("Knit-only frequency", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("lora_restore").performScrollTo().performClick()
+        assertEquals(1, restored)
+    }
+
+    @Test
+    fun anUnconnectedBoardIsNeverOfferedTheDedicateStep() {
+        render(LoraRadioUiState(enabled = true, anyBonded = true))
+        compose.onNodeWithTag("lora_dedicate").assertDoesNotExist()
+        compose.onNodeWithTag("lora_restore").assertDoesNotExist()
     }
 }

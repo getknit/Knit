@@ -19,6 +19,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 
 /**
+ * One write inside a provisioning transaction, built late because the [MeshtasticProto] `session_passkey`
+ * it must echo is only known once the board has issued one — and is re-issued on a fresh-key retry.
+ */
+private typealias AdminStep = (ByteArray?) -> ByteArray
+
+/**
  * The pure state machine that turns a [MeshtasticGattDialer] into a managed [MeshtasticLink]. An actor:
  * a single driver coroutine owns the open [GattChannel] and issues every GATT op sequentially, fed by one
  * inbox [Channel] that merges send commands, GATT events, and heartbeat ticks. It handles the config
@@ -28,7 +34,12 @@ import kotlin.random.Random
  *
  * Android-free by construction (the only `android.bluetooth.*` lives behind the dialer seam), honouring
  * `.agents/rules/mesh.md`.
+ *
+ * `LargeClass` is suppressed because one actor owns the open GATT channel, so every op it serializes —
+ * handshake, sends, heartbeat, admin provisioning — has to live here; splitting it would mean a second
+ * owner of the same channel.
  */
+@Suppress("LargeClass")
 internal class MeshtasticSession(
     private val dialer: MeshtasticGattDialer,
     private val scope: CoroutineScope,
@@ -466,10 +477,10 @@ internal class MeshtasticSession(
     // --- channel provisioning (an AdminMessage to the local node, over portnum ADMIN) ---
 
     /**
-     * Writes [Cmd.Provision.spec] as a **secondary** channel: reuse an existing same-named one, else pick a
-     * free slot, GET a session passkey, then begin→set→commit echoing it. The commit reboots the board to
-     * apply the edit, so on success this ends the session (resetting the backoff) for a fresh handshake that
-     * reloads the channel table. Runs inside the actor, so its GATT ops stay serialized with sends.
+     * Runs one [ProvisionSpec] against the board: GET a session passkey, then begin→writes→commit echoing it.
+     * The commit reboots the board to apply the edit, so on success this ends the session (resetting the
+     * backoff) for a fresh handshake that reloads the channel table. Runs inside the actor, so its GATT ops
+     * stay serialized with sends.
      */
     private suspend fun runProvision(
         channel: GattChannel,
@@ -480,7 +491,22 @@ internal class MeshtasticSession(
             cmd.reply.complete(ProvisionResult.NotReady(_state.value))
             return null
         }
-        channels.firstOrNull { it.name == cmd.spec.name && it.index != PRIMARY_INDEX }?.let { existing ->
+        return when (cmd.spec.mode) {
+            ProvisionMode.Rendezvous -> runRendezvous(channel, myNode, cmd)
+            ProvisionMode.Dedicate -> runDedicate(channel, myNode, cmd)
+            ProvisionMode.Restore -> runRestore(channel, myNode, cmd)
+        }
+    }
+
+    /** The original write: Knit into a free secondary slot, the board's own primary left exactly as it is. */
+    private suspend fun runRendezvous(
+        channel: GattChannel,
+        myNode: UInt,
+        cmd: Cmd.Provision,
+    ): SessionEnd? {
+        // A dedicated board already carries Knit as its primary; writing a second copy would put two
+        // channels with the same name+PSK — and so the same hash — on the air.
+        channels.firstOrNull { it.name == cmd.spec.name }?.let { existing ->
             log("lora provision reuse ch${existing.index} '${cmd.spec.name}'")
             cmd.reply.complete(ProvisionResult.Provisioned(existing.index, alreadyPresent = true))
             return null
@@ -490,8 +516,151 @@ internal class MeshtasticSession(
             cmd.reply.complete(ProvisionResult.NoFreeSlot)
             return null
         }
-        return applyChannel(channel, myNode, ChannelWrite(index = slot, name = cmd.spec.name, psk = cmd.spec.psk), cmd.reply)
+        val write = ChannelWrite(index = slot, name = cmd.spec.name, psk = cmd.spec.psk)
+        return applySteps(
+            channel = channel,
+            myNode = myNode,
+            steps = listOf(channelStep(write)),
+            index = slot,
+            label = "wrote ch$slot '${cmd.spec.name}'",
+            reply = cmd.reply,
+        )
     }
+
+    /**
+     * Hands the whole board to Knit (ADR 045): Knit becomes the **primary**, which is what moves the radio
+     * onto a Knit-derived RF slot, any earlier Knit secondary is disabled so only one channel carries the
+     * name, and the three housekeeping intervals are stretched.
+     *
+     * Every config write is a read-modify-write — the firmware assigns the whole sub-config, so a write
+     * built from scratch would silently reset `role`, `rebroadcast_mode`, `gps_mode` and everything else this
+     * codec does not model. The reads therefore run **before** `begin_edit_settings`, and a read that fails
+     * aborts with nothing written.
+     */
+    private suspend fun runDedicate(
+        channel: GattChannel,
+        myNode: UInt,
+        cmd: Cmd.Provision,
+    ): SessionEnd? {
+        channels.firstOrNull { it.index == PRIMARY_INDEX && it.name == cmd.spec.name }?.let {
+            log("lora provision already dedicated ch$PRIMARY_INDEX '${cmd.spec.name}'")
+            cmd.reply.complete(ProvisionResult.Provisioned(PRIMARY_INDEX, alreadyPresent = true))
+            return null
+        }
+        val raws = readBoardConfigs(channel, myNode)
+        if (raws == null) {
+            cmd.reply.complete(ProvisionResult.Failed("board did not return its config"))
+            return null
+        }
+        val steps =
+            buildList {
+                add(
+                    channelStep(
+                        ChannelWrite(
+                            index = PRIMARY_INDEX,
+                            name = cmd.spec.name,
+                            psk = cmd.spec.psk,
+                            role = MeshtasticProto.ROLE_PRIMARY,
+                            positionPrecision = MeshtasticProto.POSITION_PRECISION_NONE,
+                        ),
+                    ),
+                )
+                channels
+                    .filter { it.index != PRIMARY_INDEX && it.name == cmd.spec.name }
+                    .forEach { add(channelStep(ChannelWrite(it.index, name = "", psk = ByteArray(0), role = ROLE_DISABLED))) }
+                raws.forEach { (config, raw) ->
+                    val spliced = spliceVarintFields(raw, BoardQuiet.quiet(config))
+                    if (spliced == null) {
+                        cmd.reply.complete(ProvisionResult.Failed("board sent a malformed ${config.name} config"))
+                        return null
+                    }
+                    add(configStep(config, spliced))
+                }
+            }
+        return applySteps(
+            channel = channel,
+            myNode = myNode,
+            steps = steps,
+            index = PRIMARY_INDEX,
+            label = "dedicated ch$PRIMARY_INDEX '${cmd.spec.name}'",
+            reply = cmd.reply,
+            previous = BoardQuiet.recorded(raws),
+        )
+    }
+
+    /**
+     * Undoes [runDedicate]: the primary goes back to the stock public channel — an empty name makes the
+     * firmware fall back to the modem-preset name, which is the frequency slot the board shipped on — Knit
+     * moves down to a secondary so the plane keeps working, and the intervals return to
+     * [ProvisionSpec.previous] (the board's own values, recorded at dedicate time).
+     */
+    private suspend fun runRestore(
+        channel: GattChannel,
+        myNode: UInt,
+        cmd: Cmd.Provision,
+    ): SessionEnd? {
+        val raws = readBoardConfigs(channel, myNode)
+        if (raws == null) {
+            cmd.reply.complete(ProvisionResult.Failed("board did not return its config"))
+            return null
+        }
+        val slot = channels.firstOrNull { it.name == cmd.spec.name && it.index != PRIMARY_INDEX }?.index ?: freeSecondarySlot()
+        if (slot == null) {
+            cmd.reply.complete(ProvisionResult.NoFreeSlot)
+            return null
+        }
+        val steps =
+            buildList {
+                add(
+                    channelStep(
+                        ChannelWrite(
+                            index = PRIMARY_INDEX,
+                            name = "",
+                            psk = MeshtasticProto.DEFAULT_PSK,
+                            role = MeshtasticProto.ROLE_PRIMARY,
+                        ),
+                    ),
+                )
+                add(channelStep(ChannelWrite(index = slot, name = cmd.spec.name, psk = cmd.spec.psk)))
+                raws.forEach { (config, raw) ->
+                    val spliced = spliceVarintFields(raw, BoardQuiet.restore(config, cmd.spec.previous))
+                    if (spliced == null) {
+                        cmd.reply.complete(ProvisionResult.Failed("board sent a malformed ${config.name} config"))
+                        return null
+                    }
+                    add(configStep(config, spliced))
+                }
+            }
+        return applySteps(
+            channel = channel,
+            myNode = myNode,
+            steps = steps,
+            index = slot,
+            label = "restored the stock primary, Knit at ch$slot",
+            reply = cmd.reply,
+        )
+    }
+
+    /** Reads every sub-config the quieting touches, as raw bytes; null if the board fails to return one. */
+    private suspend fun readBoardConfigs(
+        channel: GattChannel,
+        myNode: UInt,
+    ): Map<BoardConfig, ByteArray>? {
+        val out = LinkedHashMap<BoardConfig, ByteArray>()
+        for (config in BoardConfig.entries) {
+            val reply = adminRequest(channel, myNode, MeshtasticProto.encodeAdminGetConfig(config)) ?: return null
+            val raw = reply.config?.takeIf { it.config == config }?.raw ?: return null
+            out[config] = raw
+        }
+        return out
+    }
+
+    private fun channelStep(write: ChannelWrite): AdminStep = { passkey -> MeshtasticProto.encodeAdminSetChannel(write, passkey) }
+
+    private fun configStep(
+        config: BoardConfig,
+        raw: ByteArray,
+    ): AdminStep = { passkey -> MeshtasticProto.encodeAdminSetConfig(config, raw, passkey) }
 
     /** The lowest secondary index (1..7) not already holding a live channel, or null when all are taken. */
     private fun freeSecondarySlot(): Int? {
@@ -499,20 +668,23 @@ internal class MeshtasticSession(
         return (FIRST_SECONDARY..LAST_SECONDARY).firstOrNull { it !in used }
     }
 
-    private suspend fun applyChannel(
+    private suspend fun applySteps(
         channel: GattChannel,
         myNode: UInt,
-        write: ChannelWrite,
+        steps: List<AdminStep>,
+        index: Int,
+        label: String,
         reply: CompletableDeferred<ProvisionResult>,
+        previous: BoardIntervals? = null,
     ): SessionEnd? {
-        var outcome = writeChannel(channel, myNode, adminGet(channel, myNode)?.passkey, write)
+        var outcome = writeSteps(channel, myNode, adminGet(channel, myNode)?.passkey, steps)
         if (outcome == AdminOutcome.BadSessionKey) {
-            outcome = writeChannel(channel, myNode, adminGet(channel, myNode)?.passkey, write) // one fresh-key retry
+            outcome = writeSteps(channel, myNode, adminGet(channel, myNode)?.passkey, steps) // one fresh-key retry
         }
         return when (outcome) {
             AdminOutcome.Applied -> {
-                log("lora provision wrote ch${write.index} '${write.name}'")
-                reply.complete(ProvisionResult.Provisioned(write.index, alreadyPresent = false))
+                log("lora provision $label")
+                reply.complete(ProvisionResult.Provisioned(index, alreadyPresent = false, previous = previous))
                 SessionEnd(reason = "provisioned", resetStreak = true) // the commit reboots; reconnect reloads channels
             }
 
@@ -528,17 +700,22 @@ internal class MeshtasticSession(
         }
     }
 
-    /** begin_edit → set_channel → commit_edit, each echoing [passkey]; the transaction saves+reboots at commit. */
-    private suspend fun writeChannel(
+    /**
+     * begin_edit → every [steps] write → commit_edit, each echoing [passkey]. One transaction so the board's
+     * implicit save-and-reboot happens once, at the commit, no matter how many settings the mode rewrites.
+     */
+    private suspend fun writeSteps(
         channel: GattChannel,
         myNode: UInt,
         passkey: ByteArray?,
-        write: ChannelWrite,
+        steps: List<AdminStep>,
     ): AdminOutcome {
         val begin = writeAdmin(channel, myNode, MeshtasticProto.encodeAdminBeginEdit(passkey))
         if (begin == AdminOutcome.BadSessionKey) return begin
-        val set = writeAdmin(channel, myNode, MeshtasticProto.encodeAdminSetChannel(write, passkey))
-        if (set != AdminOutcome.Applied) return set
+        for (step in steps) {
+            val outcome = writeAdmin(channel, myNode, step(passkey))
+            if (outcome != AdminOutcome.Applied) return outcome
+        }
         // commit triggers the implicit save+reboot: the routing reply may never arrive, so don't wait on it.
         writeAdmin(channel, myNode, MeshtasticProto.encodeAdminCommitEdit(passkey), expectReply = false)
         return AdminOutcome.Applied
@@ -548,6 +725,13 @@ internal class MeshtasticSession(
     private suspend fun adminGet(
         channel: GattChannel,
         myNode: UInt,
+    ): AdminReply? = adminRequest(channel, myNode, MeshtasticProto.encodeAdminGetChannel(0))
+
+    /** One admin read addressed to the local node: write it, then wait for the matching admin reply. */
+    private suspend fun adminRequest(
+        channel: GattChannel,
+        myNode: UInt,
+        payload: ByteArray,
     ): AdminReply? {
         val id = ids.next()
         val packet =
@@ -556,7 +740,7 @@ internal class MeshtasticSession(
                 channelIndex = 0,
                 id = id,
                 portnum = MeshtasticProto.PORT_ADMIN,
-                payload = MeshtasticProto.encodeAdminGetChannel(0),
+                payload = payload,
                 wantResponse = true,
             )
         if (channel.writeToRadio(MeshtasticProto.encodePacket(packet), WRITE_TIMEOUT_MS) !is GattResult.Ok) return null
@@ -785,7 +969,8 @@ internal class MeshtasticSession(
         const val ADMIN_TIMEOUT_MS = 8_000L
         const val MAX_STALE_READS = 32
 
-        // Channel provisioning: index 0 is the board's primary; Knit writes into a free secondary (1..7).
+        // Channel provisioning: index 0 is the board's primary. The rendezvous write takes a free secondary
+        // (1..7) and leaves it alone; the dedicate write claims it, which is what moves the RF slot (ADR 045).
         const val PRIMARY_INDEX = 0
         const val FIRST_SECONDARY = 1
         const val LAST_SECONDARY = 7

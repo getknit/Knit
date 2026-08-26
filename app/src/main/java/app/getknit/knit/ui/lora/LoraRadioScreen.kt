@@ -17,6 +17,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,6 +76,10 @@ fun LoraRadioScreen(onBack: () -> Unit) {
         onSetChannel = viewModel::setChannel,
         onProvision = viewModel::provisionChannel,
         onDismissProvision = viewModel::dismissProvisionOutcome,
+        onAskDedicate = viewModel::askDedicate,
+        onDismissDedicate = viewModel::dismissDedicate,
+        onDedicate = viewModel::dedicateBoard,
+        onRestore = viewModel::restoreBoard,
     )
 }
 
@@ -92,6 +97,10 @@ internal fun LoraRadioScreenContent(
     onSetChannel: (Int) -> Unit = {},
     onProvision: () -> Unit = {},
     onDismissProvision: () -> Unit = {},
+    onAskDedicate: () -> Unit = {},
+    onDismissDedicate: () -> Unit = {},
+    onDedicate: () -> Unit = {},
+    onRestore: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Scaffold(
@@ -192,8 +201,17 @@ internal fun LoraRadioScreenContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             ChannelRow(channel = state.channel, onSetChannel = onSetChannel)
+            DedicateSection(
+                state = state,
+                onAskDedicate = onAskDedicate,
+                onRestore = onRestore,
+            )
 
             StatusRow(state = state)
+
+            if (state.confirmDedicate) {
+                DedicateConfirmDialog(onConfirm = onDedicate, onDismiss = onDismissDedicate)
+            }
         }
     }
 }
@@ -406,10 +424,77 @@ private fun ProvisionSection(
     }
 }
 
+/**
+ * The one action that changes the board's *radio* rather than its channel table (ADR 045): dedicating it
+ * moves it onto a Knit-only frequency slot and quiets its own broadcasts.
+ *
+ * It is gated behind a confirmation because both halves of the bargain are irreversible-feeling and easy to
+ * misread — the board leaves the public Meshtastic channel entirely, and a fleet has to be all-or-nothing.
+ * Offered only on a connected board that already carries the Knit channel: dedicating before that would
+ * strand a user who has not got the basics working yet.
+ */
+@Composable
+private fun DedicateSection(
+    state: LoraRadioUiState,
+    onAskDedicate: () -> Unit,
+    onRestore: () -> Unit,
+) {
+    if (state.connection != LoraConnState.Ready) return
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.lora_dedicate_title), style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = stringResource(if (state.dedicated) R.string.lora_dedicated_status else R.string.lora_dedicate_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("lora_dedicate_body"),
+        )
+        if (state.dedicated) {
+            OutlinedButton(
+                onClick = onRestore,
+                enabled = !state.provisioning,
+                modifier = Modifier.testTag("lora_restore"),
+            ) {
+                Text(stringResource(R.string.lora_dedicate_restore_button))
+            }
+        } else {
+            OutlinedButton(
+                onClick = onAskDedicate,
+                enabled = !state.provisioning && !state.channelMismatch,
+                modifier = Modifier.testTag("lora_dedicate"),
+            ) {
+                Text(stringResource(R.string.lora_dedicate_button))
+            }
+        }
+    }
+}
+
+@Composable
+private fun DedicateConfirmDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("lora_dedicate_dialog"),
+        title = { Text(stringResource(R.string.lora_dedicate_confirm_title)) },
+        text = { Text(stringResource(R.string.lora_dedicate_confirm_body)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm, modifier = Modifier.testTag("lora_dedicate_confirm")) {
+                Text(stringResource(R.string.lora_dedicate_confirm_action))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
 private fun LoraProvisionOutcome.messageAndSeverity(): Pair<Int, Boolean> =
     when (this) {
         LoraProvisionOutcome.Provisioned -> R.string.lora_provisioned to false
         LoraProvisionOutcome.AlreadyPresent -> R.string.lora_provision_already to false
+        LoraProvisionOutcome.Dedicated -> R.string.lora_dedicated to false
+        LoraProvisionOutcome.Restored -> R.string.lora_restored to false
         LoraProvisionOutcome.NoFreeSlot -> R.string.lora_provision_no_slot to true
         LoraProvisionOutcome.Failed -> R.string.lora_provision_failed to true
         LoraProvisionOutcome.NotReady -> R.string.lora_provision_not_ready to true

@@ -1,10 +1,12 @@
 package app.getknit.knit.ui.lora
 
+import app.getknit.knit.data.settings.DedicatedBoard
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardInfo
+import app.getknit.knit.mesh.lora.BoardIntervals
 import app.getknit.knit.mesh.lora.BoardRef
 import app.getknit.knit.mesh.lora.ChannelInfo
 import app.getknit.knit.mesh.lora.LinkState
@@ -13,6 +15,7 @@ import app.getknit.knit.mesh.lora.LoraPlaneStatus
 import app.getknit.knit.mesh.lora.LoraRegion
 import app.getknit.knit.mesh.lora.LoraStatus
 import app.getknit.knit.mesh.lora.ModemPreset
+import app.getknit.knit.mesh.lora.ProvisionMode
 import app.getknit.knit.mesh.lora.ProvisionResult
 import io.mockk.every
 import io.mockk.mockk
@@ -43,6 +46,7 @@ class LoraRadioViewModelTest {
     private val bridge = MutableStateFlow(true)
     private val address = MutableStateFlow<String?>("AA:BB:CC:DD:EE:01")
     private val channel = MutableStateFlow(1)
+    private val dedicated = MutableStateFlow<DedicatedBoard?>(null)
     private val settings =
         mockk<SettingsStore>(relaxed = true) {
             every { loraEnabled } returns enabled
@@ -50,13 +54,22 @@ class LoraRadioViewModelTest {
             every { loraBridgeEnabled } returns bridge
             every { loraDeviceAddress } returns address
             every { loraChannelIndex } returns channel
+            every { loraDedicatedBoard } returns dedicated
         }
     private val status = MutableStateFlow(LoraStatus())
+    private val provisionCalls = mutableListOf<Pair<ProvisionMode, BoardIntervals?>>()
+    private var provisionResult: ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
     private val lora =
         object : LoraPlaneStatus {
             override val status: StateFlow<LoraStatus> = this@LoraRadioViewModelTest.status
 
-            override suspend fun provisionKnitChannel(): ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
+            override suspend fun provisionKnitChannel(
+                mode: ProvisionMode,
+                previous: BoardIntervals?,
+            ): ProvisionResult {
+                provisionCalls += mode to previous
+                return provisionResult
+            }
         }
     private var bonded =
         listOf(
@@ -276,5 +289,105 @@ class LoraRadioViewModelTest {
             status.value = LoraStatus(state = LinkState.Disconnected("gatt", retryAtMs = 5_000, streak = 1), battery = battery)
             advanceUntilIdle()
             assertNull(vm.state.value.battery)
+        }
+
+    @Test
+    fun `a board carrying Knit as its primary reads as dedicated`() =
+        runTest {
+            val vm = start()
+            status.value = LoraStatus(state = ready(listOf(ChannelInfo(index = 0, name = "Knit", role = 1))))
+            channel.value = 0
+            advanceUntilIdle()
+
+            assertTrue(vm.state.value.dedicated)
+            assertFalse("slot 0 is the Knit channel, so nothing is mismatched", vm.state.value.channelMismatch)
+        }
+
+    @Test
+    fun `Knit in a secondary slot is provisioned but not dedicated`() =
+        runTest {
+            val vm = start()
+            status.value = LoraStatus(state = ready(listOf(ChannelInfo(0, "", 1), ChannelInfo(1, "Knit", 2))))
+            advanceUntilIdle()
+
+            assertFalse(vm.state.value.dedicated)
+        }
+
+    @Test
+    fun `dedicating asks first, and the tap alone changes nothing`() =
+        runTest {
+            val vm = start()
+
+            vm.askDedicate()
+            advanceUntilIdle()
+            assertTrue(vm.state.value.confirmDedicate)
+            assertTrue("no provision until the user confirms", provisionCalls.isEmpty())
+
+            vm.dismissDedicate()
+            advanceUntilIdle()
+            assertFalse(vm.state.value.confirmDedicate)
+            assertTrue(provisionCalls.isEmpty())
+        }
+
+    @Test
+    fun `a dedicate binds channel zero and records the board's own intervals`() =
+        runTest {
+            val previous = BoardIntervals(nodeInfoSecs = 900, positionSecs = 600, smartPosition = true, telemetrySecs = 1_800)
+            provisionResult = ProvisionResult.Provisioned(index = 0, alreadyPresent = false, previous = previous)
+            val vm = start()
+
+            vm.askDedicate()
+            vm.dedicateBoard()
+            advanceUntilIdle()
+
+            assertEquals(listOf(ProvisionMode.Dedicate to null), provisionCalls)
+            assertFalse("the confirmation closes when the action runs", vm.state.value.confirmDedicate)
+            assertEquals(LoraProvisionOutcome.Dedicated, vm.state.value.provisionOutcome)
+            io.mockk.coVerify { settings.setLoraChannelIndex(0) }
+            io.mockk.coVerify {
+                settings.setLoraDedicatedBoard(
+                    DedicatedBoard(
+                        address = "AA:BB:CC:DD:EE:01",
+                        nodeInfoSecs = 900,
+                        positionSecs = 600,
+                        smartPosition = true,
+                        telemetrySecs = 1_800,
+                    ),
+                )
+            }
+        }
+
+    @Test
+    fun `re-dedicating an already dedicated board never overwrites the recorded intervals`() =
+        runTest {
+            provisionResult = ProvisionResult.Provisioned(index = 0, alreadyPresent = true)
+            val vm = start()
+
+            vm.dedicateBoard()
+            advanceUntilIdle()
+
+            assertEquals(LoraProvisionOutcome.AlreadyPresent, vm.state.value.provisionOutcome)
+            io.mockk.coVerify(exactly = 0) { settings.setLoraDedicatedBoard(any()) }
+        }
+
+    @Test
+    fun `a restore hands the recorded intervals back and forgets the dedication`() =
+        runTest {
+            val recorded =
+                DedicatedBoard("AA:BB:CC:DD:EE:01", nodeInfoSecs = 900, positionSecs = 600, smartPosition = true, telemetrySecs = 1_800)
+            dedicated.value = recorded
+            provisionResult = ProvisionResult.Provisioned(index = 1, alreadyPresent = false)
+            val vm = start()
+
+            vm.restoreBoard()
+            advanceUntilIdle()
+
+            assertEquals(
+                ProvisionMode.Restore to BoardIntervals(900, 600, true, 1_800),
+                provisionCalls.single(),
+            )
+            assertEquals(LoraProvisionOutcome.Restored, vm.state.value.provisionOutcome)
+            io.mockk.coVerify { settings.setLoraChannelIndex(1) }
+            io.mockk.coVerify { settings.clearLoraDedicatedBoard() }
         }
 }

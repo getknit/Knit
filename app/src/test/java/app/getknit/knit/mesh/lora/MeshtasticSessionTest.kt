@@ -339,6 +339,34 @@ class MeshtasticSessionTest {
 
     private val provisionSpec = ProvisionSpec(name = "Knit", psk = byteArrayOf(1, 2, 3, 4))
 
+    /** What [boardConfigs] says the board's housekeeping was set to, in the shape a dedicate reports back. */
+    private val boardIntervals = BoardIntervals(nodeInfoSecs = 900, positionSecs = 900, smartPosition = true, telemetrySecs = 1_800)
+
+    /**
+     * The board's own sub-configs as a real one would report them: values Knit rewrites *and* values it must
+     * leave alone (`role`, `rebroadcast_mode`, `gps_mode`), which is what the read-modify-write is for.
+     */
+    private val boardConfigs =
+        mapOf(
+            BoardConfig.DEVICE to
+                ProtoWriter()
+                    .varint(1, 2)
+                    .varint(6, 2)
+                    .varint(7, 900)
+                    .toByteArray(),
+            BoardConfig.POSITION to
+                ProtoWriter()
+                    .varint(1, 900)
+                    .varint(2, 1)
+                    .varint(13, 1)
+                    .toByteArray(),
+            BoardConfig.TELEMETRY to ProtoWriter().varint(1, 1800).varint(3, 1).toByteArray(),
+        )
+
+    /** The same board after a dedicate — what a restore reads back before putting the old values in. */
+    private val quietedConfigs =
+        boardConfigs.mapValues { (config, raw) -> spliceVarintFields(raw, BoardQuiet.quiet(config))!! }
+
     /**
      * Scripts a board: the config handshake reports [channels] (index, name, role), admin GETs return a
      * passkey, and admin SETs are ACKed — except the first [nakFirstSet] SETs, which NAK with [nakReason].
@@ -348,6 +376,7 @@ class MeshtasticSessionTest {
         channels: List<Triple<Int, String, Int>>,
         nakFirstSet: Int = 0,
         nakReason: RoutingError = RoutingError.ADMIN_BAD_SESSION_KEY,
+        configs: Map<BoardConfig, ByteArray>? = null,
     ) {
         var sets = 0
         ch.onWrite = { bytes ->
@@ -356,6 +385,23 @@ class MeshtasticSessionTest {
                     ch.enqueueRead(BoardBytes.myInfo(0xABCDu, "heltec-v4"))
                     channels.forEach { (i, n, r) -> ch.enqueueRead(BoardBytes.channel(i, n, r)) }
                     ch.enqueueRead(BoardBytes.configComplete(nonce))
+                }
+
+                BoardBytes.isAdminGetConfig(bytes) -> {
+                    val config = BoardBytes.adminGetConfigType(bytes)
+                    val raw = config?.let { configs?.get(it) }
+                    // A board that never answers is the abort case: the flow must write nothing at all.
+                    if (config != null && raw != null) {
+                        ch.enqueueRead(
+                            BoardBytes.adminGetConfigResponse(
+                                from = 0xABCDu,
+                                requestId = BoardBytes.packetId(bytes),
+                                passkey = byteArrayOf(0x0A, 0x0B),
+                                config = config,
+                                raw = raw,
+                            ),
+                        )
+                    }
                 }
 
                 BoardBytes.isAdminGet(bytes) -> {
@@ -439,6 +485,148 @@ class MeshtasticSessionTest {
             val result = call.await()
             assertEquals(ProvisionResult.Provisioned(index = 1, alreadyPresent = false), result)
             assertEquals("first set NAK'd, second succeeded", 2, ch.writes.count { BoardBytes.isAdminSet(it) })
+            session.stop()
+        }
+
+    // --- dedicating the whole board (ADR 045) ---
+
+    private val dedicateSpec = provisionSpec.copy(mode = ProvisionMode.Dedicate)
+
+    @Test
+    fun dedicateWritesKnitAsThePrimaryWithNoPositionSharing() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val result = async { session.provisionChannel(dedicateSpec) }.await()
+            assertEquals(ProvisionResult.Provisioned(0, alreadyPresent = false, previous = boardIntervals), result)
+            val writes = ch.writes.mapNotNull { BoardBytes.adminSetChannel(it) }
+            assertEquals(1, writes.size)
+            assertEquals(0, writes.first().index)
+            assertEquals("Knit", writes.first().name)
+            assertEquals(MeshtasticProto.ROLE_PRIMARY, writes.first().role)
+            assertEquals("position sharing is turned off on the Knit channel", 0, writes.first().positionPrecision)
+            session.stop()
+        }
+
+    @Test
+    fun dedicateQuietsTheIntervalsAndLeavesEverythingElseAlone() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            async { session.provisionChannel(dedicateSpec) }.await()
+            val written = ch.writes.mapNotNull { BoardBytes.adminSetConfigRaw(it) }
+            assertEquals("one write per sub-config", 3, written.size)
+            val device = written.first()
+            assertEquals(BoardQuiet.QUIET_SECS.toLong(), readVarintField(device, MeshtasticProto.DEVICE_NODE_INFO_BROADCAST_SECS))
+            assertEquals("role survived the read-modify-write", 2L, readVarintField(device, 1))
+            assertEquals("rebroadcast_mode survived", 2L, readVarintField(device, 6))
+            val position = written[1]
+            assertEquals(BoardQuiet.QUIET_SECS.toLong(), readVarintField(position, MeshtasticProto.POSITION_BROADCAST_SECS))
+            assertNull("smart broadcast cleared", readVarintField(position, MeshtasticProto.POSITION_BROADCAST_SMART))
+            assertEquals("gps_mode untouched", 1L, readVarintField(position, 13))
+            val telemetry = written[2]
+            assertEquals(BoardQuiet.QUIET_SECS.toLong(), readVarintField(telemetry, MeshtasticProto.TELEMETRY_DEVICE_UPDATE_INTERVAL))
+            assertEquals("the other telemetry switches survived", 1L, readVarintField(telemetry, 3))
+            session.stop()
+        }
+
+    @Test
+    fun dedicateDisablesAnEarlierKnitSecondarySoOnlyOneChannelCarriesTheName() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(2, "Knit", 2)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            async { session.provisionChannel(dedicateSpec) }.await()
+            val writes = ch.writes.mapNotNull { BoardBytes.adminSetChannel(it) }
+            assertEquals(2, writes.size)
+            assertEquals(2, writes[1].index)
+            assertEquals("the old secondary is disabled", 0, writes[1].role)
+            session.stop()
+        }
+
+    @Test
+    fun dedicateAbortsWithoutWritingWhenTheBoardWillNotReturnItsConfig() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = null) // answers no get_config
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val result = async { session.provisionChannel(dedicateSpec) }.await()
+            assertTrue("got $result", result is ProvisionResult.Failed)
+            assertTrue("nothing written", ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) })
+            session.stop()
+        }
+
+    @Test
+    fun dedicateOnAnAlreadyDedicatedBoardKeepsTheRecordedIntervals() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "Knit", 1)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val result = async { session.provisionChannel(dedicateSpec) }.await()
+            // `previous` stays null so the caller keeps the intervals it stored the first time round.
+            assertEquals(ProvisionResult.Provisioned(0, alreadyPresent = true), result)
+            assertTrue("nothing rewritten", ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) })
+            session.stop()
+        }
+
+    @Test
+    fun restorePutsTheStockPrimaryBackWithKnitOnASecondary() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "Knit", 1)), configs = quietedConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val spec = provisionSpec.copy(mode = ProvisionMode.Restore, previous = boardIntervals)
+            val result = async { session.provisionChannel(spec) }.await()
+            assertEquals(ProvisionResult.Provisioned(1, alreadyPresent = false), result)
+            val writes = ch.writes.mapNotNull { BoardBytes.adminSetChannel(it) }
+            assertEquals(2, writes.size)
+            assertEquals(0, writes.first().index)
+            assertEquals("an empty name sends the board back to its preset-derived slot", "", writes.first().name)
+            assertTrue("the stock public key", writes.first().psk.contentEquals(MeshtasticProto.DEFAULT_PSK))
+            assertEquals(MeshtasticProto.ROLE_PRIMARY, writes.first().role)
+            assertEquals(1, writes[1].index)
+            assertEquals("Knit", writes[1].name)
+            assertEquals(MeshtasticProto.ROLE_SECONDARY, writes[1].role)
+            session.stop()
+        }
+
+    @Test
+    fun restorePutsTheBoardsOwnIntervalsBackNotTheFirmwareDefaults() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "Knit", 1)), configs = quietedConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val spec = provisionSpec.copy(mode = ProvisionMode.Restore, previous = BoardIntervals(1_111, 2_222, true, 3_333))
+            async { session.provisionChannel(spec) }.await()
+            val written = ch.writes.mapNotNull { BoardBytes.adminSetConfigRaw(it) }
+            assertEquals(3, written.size)
+            assertEquals(1_111L, readVarintField(written[0], MeshtasticProto.DEVICE_NODE_INFO_BROADCAST_SECS))
+            assertEquals(2_222L, readVarintField(written[1], MeshtasticProto.POSITION_BROADCAST_SECS))
+            assertEquals(1L, readVarintField(written[1], MeshtasticProto.POSITION_BROADCAST_SMART))
+            assertEquals(3_333L, readVarintField(written[2], MeshtasticProto.TELEMETRY_DEVICE_UPDATE_INTERVAL))
             session.stop()
         }
 

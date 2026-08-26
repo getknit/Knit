@@ -15,13 +15,24 @@ internal interface LoraPlaneStatus {
     /** A snapshot of the plane: link state, bound board, last signal reading, peers heard. */
     val status: StateFlow<LoraStatus>
 
-    /** Writes the well-known Knit channel onto the connected board (`LoraMeshTransport.provisionKnitChannel`). */
-    suspend fun provisionKnitChannel(): ProvisionResult
+    /**
+     * Writes the well-known Knit channel onto the connected board (`LoraMeshTransport.provisionKnitChannel`).
+     * [mode] chooses how far it goes: a secondary slot beside the board's own channels, the whole board
+     * dedicated to Knit, or that undone (ADR 045). [previous] carries the intervals a dedicate recorded,
+     * so a restore can put the user's own values back rather than the firmware's defaults.
+     */
+    suspend fun provisionKnitChannel(
+        mode: ProvisionMode = ProvisionMode.Rendezvous,
+        previous: BoardIntervals? = null,
+    ): ProvisionResult
 
     /** The plane in a build that does not ship it: idle forever, and never provisions. */
     object Dark : LoraPlaneStatus {
         override val status: StateFlow<LoraStatus> = MutableStateFlow(LoraStatus())
 
-        override suspend fun provisionKnitChannel(): ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
+        override suspend fun provisionKnitChannel(
+            mode: ProvisionMode,
+            previous: BoardIntervals?,
+        ): ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
     }
 }

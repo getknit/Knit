@@ -251,9 +251,13 @@ internal class LoraMeshTransport(
     /**
      * Writes the well-known [KnitChannel] onto the connected board — the one-tap alternative to setting up a
      * channel by hand in the Meshtastic app. On [ProvisionResult.Provisioned] the settings VM persists the
-     * returned index so this plane binds to it. Requires a Ready link.
+     * returned index so this plane binds to it (and, for a [ProvisionMode.Dedicate], the intervals the board
+     * had before, so the restore can put them back). Requires a Ready link.
      */
-    override suspend fun provisionKnitChannel(): ProvisionResult = link.provisionChannel(ProvisionSpec(KnitChannel.NAME, KnitChannel.PSK))
+    override suspend fun provisionKnitChannel(
+        mode: ProvisionMode,
+        previous: BoardIntervals?,
+    ): ProvisionResult = link.provisionChannel(ProvisionSpec(KnitChannel.NAME, KnitChannel.PSK, mode, previous))
 
     // --- outbound (fast plane only) ---
 

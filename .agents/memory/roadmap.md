@@ -48,9 +48,18 @@ doc). **Don't start a deferred item without explicit direction.**
   with the phones out of BLE/NAN range) — the GATT layer has no host test. **Knit-provisioned channel
   SHIPPED** (2026-08-24): "Set up Knit channel" (or `…debug.LORAPROV`) writes the derived `KnitChannel` as a
   secondary channel over the Meshtastic admin API — the user no longer hand-configures the boards;
-  region/modem-preset still set once at flash. Still deferred: a **user-set/shared private PSK** (the shipped
+  region/modem-preset still set once at flash. **Dedicating a board SHIPPED** (2026-08-25, ADR 045): a
+  secondary channel never moved the radio (the firmware hashes the *primary* channel name into its RF slot),
+  so an opt-in "Dedicate this board to Knit" now writes Knit as the PRIMARY — moving the board onto a
+  Knit-only frequency — and stretches its node-info / position / telemetry broadcasts, all as one
+  read-modify-write admin transaction with a Restore that puts the board's own values back
+  (`BoardQuiet`, `spliceVarintFields`, `SettingsStore.loraDedicatedBoard`, `…debug.LORAPROV --es mode`).
+  **Still owed:** the on-hardware confirmation that the frequency actually moved (`meshtastic --info` on both
+  boards) and that the battery row survives the telemetry stretch — the trial in `context/lora-bridge.md`.
+  Still deferred: a **user-set/shared private PSK** (the shipped
   channel is a public rendezvous; with DMs aboard it is also what would hide their metadata — needs
-  out-of-band PSK sharing, QR/URL), a **periodic self-profile beacon** (a peer that only listens never
+  out-of-band PSK sharing, QR/URL — and, since the name feeds the slot hash, a private deployment would also
+  land on its own frequency), a **periodic self-profile beacon** (a peer that only listens never
   triggers a beacon exchange or a re-offer), **Meshtastic unicast + `want_ack`** for DMs (needs a
   nodeNum↔nodeId map and a Routing `NONE`-is-success branch), **re-offer beyond the heard peer** (a
   board-less recipient behind another board-holder — the "true DM routing" deferral), an **in-app scan + bond flow**

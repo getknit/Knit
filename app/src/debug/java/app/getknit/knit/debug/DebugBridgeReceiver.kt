@@ -29,6 +29,7 @@ import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.settings.DedicatedBoard
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.data.webp.WebpTranscode
 import app.getknit.knit.identity.Identity
@@ -37,6 +38,8 @@ import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.StoreDigest
+import app.getknit.knit.mesh.lora.BoardIntervals
+import app.getknit.knit.mesh.lora.ProvisionMode
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.moderation.ModelLoadGuard
 import app.getknit.knit.moderation.ModelLoadPolicy
@@ -246,7 +249,7 @@ class DebugBridgeReceiver :
                         }
 
                         ACTION_LORAPROV -> {
-                            handleLoraProv()
+                            handleLoraProv(intent)
                         }
 
                         ACTION_HEAL -> {
@@ -1101,16 +1104,61 @@ class DebugBridgeReceiver :
      * Writes the well-known Knit channel onto the connected board over the Meshtastic admin API (the
      * headless equivalent of the settings screen's "Set up Knit channel"), and — on success — binds the
      * plane to the slot it landed in. Requires the board Ready.
+     *
+     * `--es mode dedicate` hands the whole board over instead (ADR 045: Knit becomes the primary, so the
+     * radio moves to a Knit-derived slot, and the housekeeping is quieted) and `--es mode restore` undoes
+     * that; anything else keeps the original secondary-slot write. This is the two-board oracle for the
+     * dedicate trial, so it persists exactly what the settings screen would.
      */
-    private suspend fun handleLoraProv(): JSONObject {
-        val result = lora.provisionKnitChannel()
-        if (result is app.getknit.knit.mesh.lora.ProvisionResult.Provisioned) settings.setLoraChannelIndex(result.index)
+    private suspend fun handleLoraProv(intent: Intent): JSONObject {
+        val mode =
+            when (intent.getStringExtra(EXTRA_MODE)?.lowercase()) {
+                "dedicate" -> ProvisionMode.Dedicate
+                "restore" -> ProvisionMode.Restore
+                else -> ProvisionMode.Rendezvous
+            }
+        val recorded = settings.loraDedicatedBoard.first()
+        val result =
+            lora.provisionKnitChannel(
+                mode,
+                recorded?.let {
+                    BoardIntervals(
+                        nodeInfoSecs = it.nodeInfoSecs,
+                        positionSecs = it.positionSecs,
+                        smartPosition = it.smartPosition,
+                        telemetrySecs = it.telemetrySecs,
+                    )
+                },
+            )
+        if (result is app.getknit.knit.mesh.lora.ProvisionResult.Provisioned) {
+            settings.setLoraChannelIndex(result.index)
+            val previous = result.previous
+            val address = settings.loraDeviceAddress.first()
+            when {
+                mode == ProvisionMode.Restore -> {
+                    settings.clearLoraDedicatedBoard()
+                }
+
+                mode == ProvisionMode.Dedicate && previous != null && address != null -> {
+                    settings.setLoraDedicatedBoard(
+                        DedicatedBoard(
+                            address = address,
+                            nodeInfoSecs = previous.nodeInfoSecs,
+                            positionSecs = previous.positionSecs,
+                            smartPosition = previous.smartPosition,
+                            telemetrySecs = previous.telemetrySecs,
+                        ),
+                    )
+                }
+            }
+        }
         val index =
             when (result) {
                 is app.getknit.knit.mesh.lora.ProvisionResult.Provisioned -> result.index
                 else -> -1
             }
         return reply("ok", "provision requested")
+            .put("mode", mode.name)
             .put("result", result::class.simpleName)
             .put("channel", if (index >= 0) index else JSONObject.NULL)
             .put("state", lora.status.value.state::class.simpleName)
@@ -1199,6 +1247,7 @@ class DebugBridgeReceiver :
         const val EXTRA_CARD = "card"
         const val EXTRA_IMPORT = "import"
         const val EXTRA_ON = "on"
+        const val EXTRA_MODE = "mode"
         const val EXTRA_DROP = "drop"
         const val EXTRA_RESET_PEER = "reset"
 

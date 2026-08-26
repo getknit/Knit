@@ -253,6 +253,130 @@ internal object BoardBytes {
                 it.payload[1] == 0x02.toByte()
         } ?: false
 
+    /** The fields of an admin `set_channel`, for asserting what a provision actually wrote. */
+    data class SetChannel(
+        val index: Int,
+        val name: String,
+        val role: Int,
+        val psk: ByteArray,
+        /** null when no `module_settings` was written at all; 0 when it was written empty (= share nothing). */
+        val positionPrecision: Int?,
+    )
+
+    fun adminSetChannel(toRadio: ByteArray): SetChannel? {
+        val payload = outboundData(toRadio)?.takeIf { isAdminSet(toRadio) }?.payload ?: return null
+        val reader = ProtoReader(payload)
+        reader.readTag()
+        val ch = reader.sub()
+        var index = 0
+        var role = 0
+        var settings = ChannelSettings()
+        while (ch.hasMore) {
+            val tag = ch.readTag()
+            when (tag ushr WireType.FIELD_SHIFT) {
+                1 -> index = ch.readVarint32()
+                2 -> settings = channelSettings(ch.sub())
+                3 -> role = ch.readVarint32()
+                else -> ch.skip(tag and WireType.MASK)
+            }
+        }
+        return SetChannel(index, settings.name, role, settings.psk, settings.positionPrecision)
+    }
+
+    private class ChannelSettings(
+        val name: String = "",
+        val psk: ByteArray = ByteArray(0),
+        val positionPrecision: Int? = null,
+    )
+
+    private fun channelSettings(reader: ProtoReader): ChannelSettings {
+        var name = ""
+        var psk = ByteArray(0)
+        var precision: Int? = null
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            when (tag ushr WireType.FIELD_SHIFT) {
+                2 -> psk = reader.readBytes()
+                3 -> name = reader.readString()
+                7 -> precision = positionPrecision(reader.sub())
+                else -> reader.skip(tag and WireType.MASK)
+            }
+        }
+        return ChannelSettings(name, psk, precision)
+    }
+
+    /** An empty `module_settings` means precision 0 — the encoding that turns position sharing off. */
+    private fun positionPrecision(reader: ProtoReader): Int {
+        var precision = 0
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            if (tag ushr WireType.FIELD_SHIFT == 1) precision = reader.readVarint32() else reader.skip(tag and WireType.MASK)
+        }
+        return precision
+    }
+
+    /** An admin `get_config_request` (field 5 → tag 0x28) or `get_module_config_request` (field 7 → 0x38). */
+    fun isAdminGetConfig(toRadio: ByteArray): Boolean =
+        outboundData(toRadio)?.let {
+            it.portnum == MeshtasticProto.PORT_ADMIN &&
+                (it.payload.firstOrNull() == 0x28.toByte() || it.payload.firstOrNull() == 0x38.toByte())
+        } ?: false
+
+    /** The [BoardConfig] an admin `get_config_request` asked for, or null when [toRadio] isn't one. */
+    fun adminGetConfigType(toRadio: ByteArray): BoardConfig? {
+        val payload = outboundData(toRadio)?.payload ?: return null
+        val reader = ProtoReader(payload)
+        if (!reader.hasMore) return null
+        val tag = reader.readTag()
+        val module = tag ushr WireType.FIELD_SHIFT == 7
+        val type = reader.readVarint32()
+        return BoardConfig.entries.firstOrNull { it.configType == type && it.module == module }
+    }
+
+    /** An admin `set_config` (field 34 → 0x92 0x02) or `set_module_config` (field 35 → 0x9A 0x02). */
+    fun isAdminSetConfig(toRadio: ByteArray): Boolean =
+        outboundData(toRadio)?.let {
+            it.portnum == MeshtasticProto.PORT_ADMIN && it.payload.size >= 2 && it.payload[1] == 0x02.toByte() &&
+                (it.payload[0] == 0x92.toByte() || it.payload[0] == 0x9A.toByte())
+        } ?: false
+
+    /** The raw sub-config bytes carried by an admin `set_config` / `set_module_config`. */
+    fun adminSetConfigRaw(toRadio: ByteArray): ByteArray? {
+        val payload = outboundData(toRadio)?.payload ?: return null
+        val reader = ProtoReader(payload)
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            if (tag ushr WireType.FIELD_SHIFT in setOf(34, 35)) {
+                val inner = reader.sub()
+                inner.readTag()
+                return inner.readBytes()
+            }
+            reader.skip(tag and WireType.MASK)
+        }
+        return null
+    }
+
+    /** A board→phone `AdminMessage { get_config_response = Config { <member> = raw }, session_passkey }`. */
+    fun adminGetConfigResponse(
+        from: UInt,
+        requestId: UInt,
+        passkey: ByteArray,
+        config: BoardConfig,
+        raw: ByteArray,
+    ): ByteArray =
+        packet(
+            from = from,
+            channel = 0,
+            portnum = MeshtasticProto.PORT_ADMIN,
+            payload =
+                ProtoWriter()
+                    .apply {
+                        message(if (config.module) 8 else 6) { bytes(config.member, raw, emitEmpty = true) }
+                        bytes(101, passkey)
+                    }.toByteArray(),
+            requestId = requestId,
+        )
+
     /** A board→phone `AdminMessage { get_channel_response{ index, name, role }, session_passkey }`. */
     fun adminGetResponse(
         from: UInt,

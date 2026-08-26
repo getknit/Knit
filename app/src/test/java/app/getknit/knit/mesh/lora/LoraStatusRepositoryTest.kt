@@ -33,7 +33,10 @@ class LoraStatusRepositoryTest {
         object : LoraPlaneStatus {
             override val status: StateFlow<LoraStatus> = this@LoraStatusRepositoryTest.status
 
-            override suspend fun provisionKnitChannel(): ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
+            override suspend fun provisionKnitChannel(
+                mode: ProvisionMode,
+                previous: BoardIntervals?,
+            ): ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
         }
     private val repo = LoraStatusRepository(settings, lora)
     private val ready =

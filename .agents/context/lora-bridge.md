@@ -195,10 +195,49 @@ the write is accepted. A `Routing.ADMIN_BAD_SESSION_KEY` NAK triggers one fresh-
 **`KnitChannel`** (`mesh/lora/KnitChannel.kt`): name `"Knit"`, 16-byte AES128 PSK **derived** (pinned +
 guarded by `KnitChannelTest`) via `HKDF-SHA256(ikm="nearby", salt=0³², info="knit/lora/channel/psk/v1")`.
 The seed is public, so the PSK is public — deliberately: the Nearby room is cleartext, so this channel is a
-**rendezvous** (keeps Knit off stock LongFast; any two Knit boards converge with zero coordination), not a
-confidentiality boundary. Knit's per-frame Ed25519 signatures remain the integrity boundary. It is written
-as SECONDARY, so the board's primary channel and radio config (region, modem preset) are never touched. A
-confidential per-deployment PSK (shared out-of-band via a channel QR/URL) is deferred — see `roadmap.md`.
+**rendezvous** (any two Knit boards converge with zero coordination), not a confidentiality boundary. Knit's
+per-frame Ed25519 signatures remain the integrity boundary. It is written as SECONDARY, so the board's primary
+channel and radio config (region, modem preset) are never touched. A confidential per-deployment PSK (shared
+out-of-band via a channel QR/URL) is deferred — see `roadmap.md`.
+
+> **A secondary channel does not move the radio.** The firmware derives its RF slot from
+> `hash(primary channel name) % numChannels` whenever `lora.channel_num` is 0 (`RadioInterface::getChannelNum`),
+> so a rendezvous-provisioned board still transmits on **the stock LongFast frequency**, sharing it with every
+> public Meshtastic node in earshot — which also means those nodes repeat our undecryptable packets up to
+> three hops (free range, invisible to `LoraAirtime`). Moving off that slot is what dedicating a board, below,
+> is for. ADR 038 originally claimed this channel kept Knit off LongFast; it does not.
+
+## Dedicating a board (ADR 045)
+
+`provisionKnitChannel(ProvisionMode.Dedicate)` — the "Dedicate this board to Knit" button, or
+`…debug.LORAPROV --es mode dedicate` — hands the whole board over, in one `begin_edit`/`commit_edit`
+transaction after three reads:
+
+1. `get_config(DEVICE)`, `get_config(POSITION)`, `get_module_config(TELEMETRY)` — **before** the transaction.
+   `AdminModule::handleSetConfig` assigns the whole sub-config, so every write is a read-modify-write over the
+   board's own bytes (`spliceVarintFields`, `ProtoIo.kt`): only the intended fields change and everything this
+   codec does not model (`role`, `rebroadcast_mode`, `gps_mode`, `tzdef`, …) is copied through byte-for-byte.
+   A read that fails aborts with nothing written.
+2. `set_channel { index 0, settings { psk, name "Knit", module_settings {} }, role = PRIMARY }` — the slot
+   move. The empty `module_settings` **is** `position_precision = 0`; an absent one reads as "unset" and the
+   firmware defaults to full precision.
+3. `set_channel { index N, role = DISABLED }` for any earlier Knit secondary — two channels sharing a
+   name + PSK share a hash.
+4. `set_config` / `set_module_config` stretching `node_info_broadcast_secs`, `position_broadcast_secs` (smart
+   broadcast cleared) and `telemetry.device_update_interval` to `BoardQuiet.QUIET_SECS` (6 h). The GPS itself
+   is not touched — silencing what the board *broadcasts* is Knit's business, powering down the user's
+   hardware is not.
+
+The intervals the board had first come back as `ProvisionResult.Provisioned.previous` and are persisted per
+board (`SettingsStore.loraDedicatedBoard`); **Restore** writes them back, puts an empty-named primary carrying
+Meshtastic's `0x01` default-key shorthand at index 0 (an empty name falls back to the modem-preset name, which
+is the slot the board shipped on) and moves Knit down to a secondary. Re-dedicating an already-dedicated board
+is a reported no-op, so that record is never overwritten with the quieted values.
+
+**The cost, which the confirmation states out loud:** a dedicated board leaves the public Meshtastic channel
+entirely — it cannot hear stock nodes or be heard by them, and third-party repeaters stop extending its range
+— and a fleet is all-or-nothing, since a dedicated and an undedicated board sit on different frequencies and
+never meet. The button is offered only once the board already carries the Knit channel.
 
 Admin wire (pinned by `MeshtasticProtoTest`): `AdminMessage{ get_channel_request=1, get_channel_response=2,
 set_channel=33, begin_edit_settings=64, commit_edit_settings=65, session_passkey=101 }`;
@@ -258,6 +297,18 @@ Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.me
   `my_info !… pio=heltec-v4` → `config complete` → `ready`.
 - Battery: the status row shows the reading with `ready` (the handshake's `node_info`) and refreshes within a
   minute; unplug USB and "Plugged in" becomes a percentage on the next telemetry, replug and it flips back.
+- Dedicate the boards (ADR 045), once the basics above pass: `…debug.LORAPROV --es mode dedicate` (or the
+  screen's "Dedicate this board to Knit") on **both** phones → log `lora provision dedicated ch0 'Knit'`, the
+  board reboots, the link returns, and settings read channel 0 · Knit. Then, over USB with the Meshtastic app
+  disconnected: (1) `meshtastic --info` on both boards reports a **frequency off the stock LongFast slot, and
+  the same on both** — nothing in-app can see the frequency, so this is the only proof the slot moved;
+  (2) a Nearby post still crosses and `loraNak == 0`; (3) the **battery row still refreshes within a minute**,
+  which is what proves stretching the *mesh* telemetry interval did not silence the phone-only telemetry ADR
+  041 reads (if it did, that interval is the wrong lever); (4) `meshtastic --get device.role`,
+  `--get lora.region`, `--get position.gps_mode` are unchanged from before — the read-modify-write proof;
+  (5) a third, **undedicated** board hears nothing from the pair and they hear nothing from it (expected, and
+  the reason the fleet is all-or-nothing); (6) `…debug.LORAPROV --es mode restore` puts the board back on the
+  public channel with Knit as a secondary and the three intervals at their pre-dedicate values.
 - Provision the channel: tap "Set up Knit channel" (or `…debug.LORAPROV`) on **both** phones → log
   `lora provision wrote chN 'Knit'` (or `reuse`) → the board reboots and the link reconnects → the channel
   index in settings now points at the Knit slot. Both boards must be provisioned before frames cross.
@@ -265,7 +316,8 @@ Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.me
   `--ez on <true|false>`, `--ez bridge <true|false>`; no extras dumps
   `state/boardNodeNum/snr/rssi/queueFree/heard/role/pocketLinks/pocketSightings/gatewaysHeard/radio/airtime/counters`. It is the
   two-board oracle. `…debug.LORATX --es text <s>` sends a raw payload straight to the board (board-side
-  sanity via `meshtastic --noproto`). `…debug.LORAPROV` writes the Knit channel headlessly (reports the slot).
+  sanity via `meshtastic --noproto`). `…debug.LORAPROV` writes the Knit channel headlessly (reports the slot); `--es mode dedicate|restore` runs
+  the ADR 045 hand-over or its undo.
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips
   ✓✓ (sealed tick over LoRa); a reaction crosses. Move B out of BLE/NAN range and repeat. Counters:
   `loraSent/loraReceived/loraReassembled` climb, `loraNak == 0`, `loraDroppedQueue == 0` at chat pace,

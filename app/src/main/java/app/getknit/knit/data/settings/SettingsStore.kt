@@ -210,6 +210,24 @@ class SettingsStore(
     /** Which of the board's channels to transmit Knit frames on (default 0 = the primary channel). */
     val loraChannelIndex: Flow<Int> = dataStore.data.map { it[KEY_LORA_CHANNEL] ?: 0 }
 
+    /**
+     * The board handed over to Knit (ADR 045) and the housekeeping intervals it had *before* — so restoring
+     * puts the user's own values back rather than the firmware's defaults. Null while no board is dedicated;
+     * a zero interval means "never recorded", which the restore reads as "let the firmware decide".
+     */
+    val loraDedicatedBoard: Flow<DedicatedBoard?> =
+        dataStore.data.map { prefs ->
+            prefs[KEY_LORA_DEDICATED]?.let { address ->
+                DedicatedBoard(
+                    address = address,
+                    nodeInfoSecs = prefs[KEY_LORA_PRIOR_NODE_INFO] ?: 0,
+                    positionSecs = prefs[KEY_LORA_PRIOR_POSITION] ?: 0,
+                    smartPosition = prefs[KEY_LORA_PRIOR_SMART] ?: false,
+                    telemetrySecs = prefs[KEY_LORA_PRIOR_TELEMETRY] ?: 0,
+                )
+            }
+        }
+
     suspend fun setDisplayName(value: String) = dataStore.edit { it[KEY_NAME] = value }
 
     suspend fun setStatus(value: String) = dataStore.edit { it[KEY_STATUS] = value }
@@ -327,9 +345,36 @@ class SettingsStore(
             it.remove(KEY_LORA_ADDRESS)
             it.remove(KEY_LORA_NAME)
             it[KEY_LORA_ENABLED] = false
+            // The dedication record is about *that* board; keeping it would offer a restore for hardware
+            // this device no longer knows, and would hand its intervals to whatever board is bound next.
+            it.remove(KEY_LORA_DEDICATED)
+            it.remove(KEY_LORA_PRIOR_NODE_INFO)
+            it.remove(KEY_LORA_PRIOR_POSITION)
+            it.remove(KEY_LORA_PRIOR_SMART)
+            it.remove(KEY_LORA_PRIOR_TELEMETRY)
         }
 
     suspend fun setLoraChannelIndex(index: Int) = dataStore.edit { it[KEY_LORA_CHANNEL] = index }
+
+    /** Records a board as dedicated to Knit, along with the intervals a restore must put back. */
+    suspend fun setLoraDedicatedBoard(board: DedicatedBoard) =
+        dataStore.edit {
+            it[KEY_LORA_DEDICATED] = board.address
+            it[KEY_LORA_PRIOR_NODE_INFO] = board.nodeInfoSecs
+            it[KEY_LORA_PRIOR_POSITION] = board.positionSecs
+            it[KEY_LORA_PRIOR_SMART] = board.smartPosition
+            it[KEY_LORA_PRIOR_TELEMETRY] = board.telemetrySecs
+        }
+
+    /** Forgets the dedication record — after a restore, or when the board itself is forgotten. */
+    suspend fun clearLoraDedicatedBoard() =
+        dataStore.edit {
+            it.remove(KEY_LORA_DEDICATED)
+            it.remove(KEY_LORA_PRIOR_NODE_INFO)
+            it.remove(KEY_LORA_PRIOR_POSITION)
+            it.remove(KEY_LORA_PRIOR_SMART)
+            it.remove(KEY_LORA_PRIOR_TELEMETRY)
+        }
 
     /**
      * Records consent and enables the plane in **one** write, so the two can never disagree: a crash
@@ -434,5 +479,10 @@ class SettingsStore(
         val KEY_LORA_ADDRESS = stringPreferencesKey("lora_device_address")
         val KEY_LORA_NAME = stringPreferencesKey("lora_device_name")
         val KEY_LORA_CHANNEL = intPreferencesKey("lora_channel_index")
+        val KEY_LORA_DEDICATED = stringPreferencesKey("lora_dedicated_address")
+        val KEY_LORA_PRIOR_NODE_INFO = intPreferencesKey("lora_prior_node_info_secs")
+        val KEY_LORA_PRIOR_POSITION = intPreferencesKey("lora_prior_position_secs")
+        val KEY_LORA_PRIOR_SMART = booleanPreferencesKey("lora_prior_smart_position")
+        val KEY_LORA_PRIOR_TELEMETRY = intPreferencesKey("lora_prior_telemetry_secs")
     }
 }

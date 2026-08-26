@@ -528,6 +528,16 @@
     <string name="lora_provision_failed">Couldn\'t configure the board. Make sure it\'s connected and try again.</string>
     <string name="lora_provision_not_ready">Connect to the board first, then set up the channel.</string>
     <string name="lora_channel_manual_hint">Or set the channel index by hand (both boards must use the same channel):</string>
+    <string name="lora_dedicate_title">Dedicate this board to Knit</string>
+    <string name="lora_dedicate_body">Moves the radio to a quiet frequency only Knit boards use, and stops the board broadcasting its position, node info and telemetry. Messages get a clearer channel to travel on.</string>
+    <string name="lora_dedicate_button">Dedicate this board to Knit</string>
+    <string name="lora_dedicate_confirm_title">Dedicate this board?</string>
+    <string name="lora_dedicate_confirm_body">This board will leave the public Meshtastic channel: it won\'t hear other Meshtastic radios, and they won\'t hear it — including any that pass messages along for you.\n\nEvery board you message with must be dedicated too, or they can\'t reach each other.\n\nYou can undo this at any time.</string>
+    <string name="lora_dedicate_confirm_action">Dedicate</string>
+    <string name="lora_dedicated_status">Dedicated to Knit — the radio is on a Knit-only frequency.</string>
+    <string name="lora_dedicate_restore_button">Restore Meshtastic defaults</string>
+    <string name="lora_dedicated">Board dedicated to Knit. It may reboot to apply this — it will reconnect on its own.</string>
+    <string name="lora_restored">Board restored. It\'s back on the public Meshtastic channel, with Knit on a secondary channel.</string>
     <string name="lora_status_connected">Connected</string>
     <string name="lora_status_connecting">Connecting…</string>
     <string name="lora_status_reconnecting">Reconnecting…</string>

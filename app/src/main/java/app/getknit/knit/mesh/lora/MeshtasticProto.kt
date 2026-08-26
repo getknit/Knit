@@ -30,8 +30,39 @@ internal object MeshtasticProto {
     /** `PortNum.TELEMETRY_APP` — the board's own `DeviceMetrics` (its battery) arrive here, addressed from itself. */
     const val PORT_TELEMETRY = 67
 
-    /** `Channel.Role.SECONDARY` — the role Knit writes its channel as, so the board's primary is never touched. */
+    /** `Channel.Role.SECONDARY` — the role the rendezvous provision writes, leaving the board's primary alone. */
     const val ROLE_SECONDARY = 2
+
+    /**
+     * `Channel.Role.PRIMARY` — the role the *dedicate* flow writes Knit as (ADR 045). The firmware derives
+     * the RF slot from `hash(primary channel name)` whenever `lora.channel_num` is 0, so this is what
+     * actually moves the radio off the stock LongFast frequency; a SECONDARY channel never does.
+     */
+    const val ROLE_PRIMARY = 1
+
+    /** `ModuleSettings.position_precision = 0` — "share no position on this channel". */
+    const val POSITION_PRECISION_NONE = 0
+
+    /**
+     * Meshtastic's shorthand for its well-known public key — a single `0x01` byte, which the firmware expands
+     * to the default PSK. Writing it back over the primary is what makes a board a stock public node again.
+     */
+    val DEFAULT_PSK = byteArrayOf(1)
+
+    // The three housekeeping intervals the dedicate flow stretches (ADR 045). Public because [BoardQuiet]
+    // owns the *values*; the field numbers stay here with the rest of the pinned wire, beside their vectors.
+
+    /** `Config.DeviceConfig.node_info_broadcast_secs`. */
+    const val DEVICE_NODE_INFO_BROADCAST_SECS = 7
+
+    /** `Config.PositionConfig.position_broadcast_secs`. */
+    const val POSITION_BROADCAST_SECS = 1
+
+    /** `Config.PositionConfig.position_broadcast_smart_enabled`. */
+    const val POSITION_BROADCAST_SMART = 2
+
+    /** `ModuleConfig.TelemetryConfig.device_update_interval` — the *mesh* broadcast, not the phone-only feed. */
+    const val TELEMETRY_DEVICE_UPDATE_INTERVAL = 1
 
     // --- ToRadio (phone → board) ---
 
@@ -90,8 +121,44 @@ internal object MeshtasticProto {
                 message(CHANNEL_SETTINGS) {
                     bytes(CHANNEL_SETTINGS_PSK, spec.psk)
                     string(CHANNEL_SETTINGS_NAME, spec.name)
+                    // Emitted even when empty: an absent `module_settings` reads as "unset" and the firmware
+                    // falls back to full position precision, which is the opposite of precision 0.
+                    if (spec.positionPrecision != null) {
+                        message(CHANNEL_SETTINGS_MODULE_SETTINGS, emitEmpty = true) {
+                            varint(MODULE_SETTINGS_POSITION_PRECISION, spec.positionPrecision)
+                        }
+                    }
                 }
                 varint(CHANNEL_ROLE, spec.role)
+            }
+        }
+
+    /**
+     * `AdminMessage { get_config_request = <ConfigType> }` (or the module-config variant) — the **read** half
+     * of every config write this app does. The value rides [ProtoWriter.oneofVarint] because `ConfigType`'s
+     * first member is 0 and a `oneof` member must appear on the wire even at its default.
+     */
+    fun encodeAdminGetConfig(config: BoardConfig): ByteArray =
+        ProtoWriter()
+            .oneofVarint(
+                if (config.module) ADMIN_GET_MODULE_CONFIG_REQUEST else ADMIN_GET_CONFIG_REQUEST,
+                config.configType,
+            ).toByteArray()
+
+    /**
+     * `AdminMessage { set_config = Config { <member> = <raw> } }` (or the module-config variant). [raw] is
+     * the board's own sub-config as it came back from [encodeAdminGetConfig], with only the intended fields
+     * spliced ([spliceVarintFields]) — the firmware assigns the whole sub-message, so anything missing here
+     * is anything reset on the board.
+     */
+    fun encodeAdminSetConfig(
+        config: BoardConfig,
+        raw: ByteArray,
+        passkey: ByteArray?,
+    ): ByteArray =
+        admin(passkey) {
+            message(if (config.module) ADMIN_SET_MODULE_CONFIG else ADMIN_SET_CONFIG) {
+                bytes(config.member, raw, emitEmpty = true)
             }
         }
 
@@ -115,15 +182,18 @@ internal object MeshtasticProto {
             val reader = ProtoReader(payload)
             var passkey: ByteArray? = null
             var channel: ChannelInfo? = null
+            var config: BoardConfigRaw? = null
             while (reader.hasMore) {
                 val tag = reader.readTag()
                 when (tag ushr WireType.FIELD_SHIFT) {
                     ADMIN_GET_CHANNEL_RESPONSE -> channel = decodeChannelInfo(reader.sub())
+                    ADMIN_GET_CONFIG_RESPONSE -> config = decodeConfigRaw(reader.readBytes(), module = false)
+                    ADMIN_GET_MODULE_CONFIG_RESPONSE -> config = decodeConfigRaw(reader.readBytes(), module = true)
                     ADMIN_SESSION_PASSKEY -> passkey = reader.readBytes()
                     else -> reader.skip(tag and WireType.MASK)
                 }
             }
-            AdminReply(passkey, channel)
+            AdminReply(passkey, channel, config)
         }.getOrNull()
 
     // --- FromRadio (board → phone) ---
@@ -395,6 +465,28 @@ internal object MeshtasticProto {
         return ChannelInfo(index, name, role)
     }
 
+    /**
+     * Picks the one populated member out of a `Config` / `ModuleConfig` and hands back its bytes **untouched**,
+     * so a read-modify-write can splice them without this codec having to model the sub-config at all. A
+     * member Knit never asks about yields null rather than a wrong [BoardConfig].
+     */
+    private fun decodeConfigRaw(
+        bytes: ByteArray,
+        module: Boolean,
+    ): BoardConfigRaw? {
+        val reader = ProtoReader(bytes)
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            if (tag and WireType.MASK != WireType.LEN) {
+                reader.skip(tag and WireType.MASK)
+                continue
+            }
+            val raw = reader.readBytes()
+            BoardConfig.of(tag ushr WireType.FIELD_SHIFT, module)?.let { return BoardConfigRaw(it, raw) }
+        }
+        return null
+    }
+
     private fun decodeChannelName(reader: ProtoReader): String {
         var name = ""
         while (reader.hasMore) {
@@ -458,13 +550,21 @@ internal object MeshtasticProto {
     // AdminMessage field numbers (a `oneof`, so at most one of these per message) + its session key.
     private const val ADMIN_GET_CHANNEL_REQUEST = 1
     private const val ADMIN_GET_CHANNEL_RESPONSE = 2
+    private const val ADMIN_GET_CONFIG_REQUEST = 5
+    private const val ADMIN_GET_CONFIG_RESPONSE = 6
+    private const val ADMIN_GET_MODULE_CONFIG_REQUEST = 7
+    private const val ADMIN_GET_MODULE_CONFIG_RESPONSE = 8
     private const val ADMIN_SET_CHANNEL = 33
+    private const val ADMIN_SET_CONFIG = 34
+    private const val ADMIN_SET_MODULE_CONFIG = 35
     private const val ADMIN_BEGIN_EDIT = 64
     private const val ADMIN_COMMIT_EDIT = 65
     private const val ADMIN_SESSION_PASSKEY = 101
 
     // ChannelSettings field numbers (psk + name; the rest are left at their proto3 defaults).
     private const val CHANNEL_SETTINGS_PSK = 2
+    private const val CHANNEL_SETTINGS_MODULE_SETTINGS = 7
+    private const val MODULE_SETTINGS_POSITION_PRECISION = 1
 
     // QueueStatus / MyNodeInfo / Channel / DeviceMetadata / Routing field numbers.
     private const val QS_RES = 1
@@ -508,18 +608,52 @@ internal data class OutboundPacket(
     val wantResponse: Boolean = false,
 )
 
-/** One channel Knit writes to the board via `set_channel`: a secondary slot with a name + AES PSK. */
+/** One channel Knit writes to the board via `set_channel`: a slot with a name + AES PSK, at some [role]. */
 internal data class ChannelWrite(
     val index: Int,
     val name: String,
     val psk: ByteArray,
     val role: Int = MeshtasticProto.ROLE_SECONDARY,
+    /** `module_settings.position_precision`; null leaves the board's own value alone (the rendezvous write). */
+    val positionPrecision: Int? = null,
 )
 
 /** The two fields provisioning reads out of an inbound `AdminMessage`: the [passkey] and any [channel] returned. */
 internal data class AdminReply(
     val passkey: ByteArray?,
     val channel: ChannelInfo?,
+    /** The sub-config a `get_config` / `get_module_config` returned, kept as raw bytes for splicing. */
+    val config: BoardConfigRaw? = null,
+)
+
+/**
+ * One board sub-config the dedicate flow rewrites (ADR 045), naming both numbers the Meshtastic admin API
+ * uses for it: [configType] is the `ConfigType` / `ModuleConfigType` enum value a *request* carries, and
+ * [member] is the `Config` / `ModuleConfig` oneof field the *payload* rides in. They differ — LoRa is
+ * `ConfigType.LORA_CONFIG = 5` but `Config.lora = 6` — so they are never interchangeable.
+ */
+internal enum class BoardConfig(
+    val configType: Int,
+    val member: Int,
+    val module: Boolean,
+) {
+    DEVICE(configType = 0, member = 1, module = false),
+    POSITION(configType = 1, member = 2, module = false),
+    TELEMETRY(configType = 5, member = 6, module = true),
+    ;
+
+    companion object {
+        fun of(
+            member: Int,
+            module: Boolean,
+        ): BoardConfig? = entries.firstOrNull { it.member == member && it.module == module }
+    }
+}
+
+/** A sub-config exactly as the board sent it — the base every read-modify-write splices into. */
+internal class BoardConfigRaw(
+    val config: BoardConfig,
+    val raw: ByteArray,
 )
 
 /** A decoded inbound `MeshPacket`. [decoded] is null when the packet arrived [encrypted] (a foreign channel). */

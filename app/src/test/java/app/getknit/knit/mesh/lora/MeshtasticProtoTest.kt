@@ -131,6 +131,51 @@ class MeshtasticProtoTest {
         assertEquals("8A 02 0D 08 01 12 07 12 02 01 02 1A 01 41 18 02", bytes.hex())
     }
 
+    @Test
+    fun encodeAdminSetChannelCarriesPositionPrecision() {
+        val bytes =
+            MeshtasticProto.encodeAdminSetChannel(
+                ChannelWrite(
+                    index = 1,
+                    name = "A",
+                    psk = byteArrayOf(1, 2),
+                    role = MeshtasticProto.ROLE_PRIMARY,
+                    positionPrecision = MeshtasticProto.POSITION_PRECISION_NONE,
+                ),
+                passkey = null,
+            )
+        // ...settings{ psk, name, module_settings{} }: the submessage is *present but empty* (3A 00), which is
+        // how precision 0 reaches the firmware — omitting it would read as "unset" and default to full.
+        assertEquals("8A 02 0F 08 01 12 09 12 02 01 02 1A 01 41 3A 00 18 01", bytes.hex())
+    }
+
+    @Test
+    fun encodeAdminGetConfigIsAOneofMemberEvenAtZero() {
+        // get_config_request(5) = DEVICE_CONFIG(0) — a oneof member must appear on the wire at its default.
+        assertEquals("28 00", MeshtasticProto.encodeAdminGetConfig(BoardConfig.DEVICE).hex())
+        assertEquals("28 01", MeshtasticProto.encodeAdminGetConfig(BoardConfig.POSITION).hex())
+        // The module half is its own request field (7) with its own enum (TELEMETRY_CONFIG = 5).
+        assertEquals("38 05", MeshtasticProto.encodeAdminGetConfig(BoardConfig.TELEMETRY).hex())
+    }
+
+    @Test
+    fun encodeAdminSetConfigWrapsTheRawSubConfig() {
+        val raw = hex("38 84 54")
+        // set_config(34){ Config{ device(1) = raw } }
+        assertEquals("92 02 05 0A 03 38 84 54", MeshtasticProto.encodeAdminSetConfig(BoardConfig.DEVICE, raw, null).hex())
+        // set_module_config(35){ ModuleConfig{ telemetry(6) = raw } } + session_passkey(101)
+        assertEquals(
+            "9A 02 05 32 03 38 84 54 AA 06 03 AA BB CC",
+            MeshtasticProto.encodeAdminSetConfig(BoardConfig.TELEMETRY, raw, hex("AA BB CC")).hex(),
+        )
+    }
+
+    @Test
+    fun encodeAdminSetConfigKeepsAnAllDefaultSubConfigPresent() {
+        // An empty sub-config still has to select the oneof, or the board reads "no config in this message".
+        assertEquals("92 02 02 0A 00", MeshtasticProto.encodeAdminSetConfig(BoardConfig.DEVICE, ByteArray(0), null).hex())
+    }
+
     // --- admin decode vectors ---
 
     @Test
@@ -139,6 +184,30 @@ class MeshtasticProtoTest {
         val reply = MeshtasticProto.decodeAdmin(hex("12 0C 08 02 12 06 1A 04 6B 6E 69 74 18 02 AA 06 03 AA BB CC"))!!
         assertEquals(ChannelInfo(index = 2, name = "knit", role = 2), reply.channel)
         assertEquals("AA BB CC", reply.passkey!!.hex())
+    }
+
+    @Test
+    fun decodeAdminReadsASubConfigAsRawBytes() {
+        // get_config_response(6){ Config{ position(2) = 08 84 07 } } + session_passkey(101)
+        val reply = MeshtasticProto.decodeAdmin(hex("32 05 12 03 08 84 07 AA 06 03 AA BB CC"))!!
+        assertEquals(BoardConfig.POSITION, reply.config!!.config)
+        assertEquals("08 84 07", reply.config!!.raw.hex())
+        assertEquals("AA BB CC", reply.passkey!!.hex())
+    }
+
+    @Test
+    fun decodeAdminReadsAModuleSubConfig() {
+        // get_module_config_response(8){ ModuleConfig{ telemetry(6) = 08 84 07 } }
+        val reply = MeshtasticProto.decodeAdmin(hex("42 05 32 03 08 84 07"))!!
+        assertEquals(BoardConfig.TELEMETRY, reply.config!!.config)
+        assertEquals("08 84 07", reply.config!!.raw.hex())
+    }
+
+    @Test
+    fun decodeAdminIgnoresASubConfigKnitNeverAsksAbout() {
+        // Config{ lora(6) = … }: modelled elsewhere, but never a read-modify-write target, so it stays null
+        // rather than being mistaken for one of the three.
+        assertNull(MeshtasticProto.decodeAdmin(hex("32 05 32 03 08 84 07"))!!.config)
     }
 
     @Test

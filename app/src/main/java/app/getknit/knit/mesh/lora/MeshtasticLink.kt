@@ -43,10 +43,11 @@ internal interface MeshtasticLink {
     ): SendResult
 
     /**
-     * Writes the well-known Knit channel ([spec]) onto the connected board as a **secondary** channel,
-     * picking a free slot (or reusing an existing same-named one), and returns where it landed so the caller
-     * can bind the plane to that index. The board typically reboots to apply the edit; the link rides that
-     * out (it re-handshakes) — the result is returned as soon as the write is accepted, before the reboot.
+     * Writes the well-known Knit channel ([spec]) onto the connected board, and returns where it landed so
+     * the caller can bind the plane to that index. [ProvisionSpec.mode] chooses how far the write goes — a
+     * secondary slot beside the board's own channels, or the whole board dedicated to Knit (ADR 045). The
+     * board typically reboots to apply the edit; the link rides that out (it re-handshakes) — the result is
+     * returned as soon as the write is accepted, before the reboot.
      */
     suspend fun provisionChannel(spec: ProvisionSpec): ProvisionResult
 
@@ -56,11 +57,36 @@ internal interface MeshtasticLink {
     fun stop()
 }
 
-/** The name + PSK to write; the link chooses the secondary index. */
+/** The name + PSK to write, and how far to go; the link chooses the slot. */
 internal data class ProvisionSpec(
     val name: String,
     val psk: ByteArray,
+    val mode: ProvisionMode = ProvisionMode.Rendezvous,
+    /** [ProvisionMode.Restore] only: the board's own intervals as recorded when it was dedicated. */
+    val previous: BoardIntervals? = null,
 )
+
+/**
+ * How much of the board a provision claims (ADR 045).
+ *
+ * The distinction is a radio one, not a bookkeeping one: the firmware derives its RF slot from
+ * `hash(primary channel name)` whenever `lora.channel_num` is 0, so only a write to the **primary** moves
+ * the board off the stock LongFast frequency it otherwise shares with every public Meshtastic node in range.
+ */
+internal enum class ProvisionMode {
+    /** A secondary slot beside the board's own channels. The board stays a public Meshtastic node. */
+    Rendezvous,
+
+    /**
+     * Knit becomes the primary — the radio moves to a Knit-derived slot — and the board's housekeeping
+     * broadcasts are quieted ([BoardQuiet]). The board can no longer hear, or be heard by, stock nodes, so
+     * this is all-boards-or-none for a fleet.
+     */
+    Dedicate,
+
+    /** Undoes [Dedicate]: the stock primary and intervals come back, with Knit demoted to a secondary. */
+    Restore,
+}
 
 /** The outcome of [MeshtasticLink.provisionChannel]. */
 internal sealed interface ProvisionResult {
@@ -68,6 +94,11 @@ internal sealed interface ProvisionResult {
     data class Provisioned(
         val index: Int,
         val alreadyPresent: Boolean,
+        /**
+         * [ProvisionMode.Dedicate] only: the housekeeping intervals the board had *before* the write, for the
+         * caller to persist — without them a restore can only offer the firmware's defaults, not the user's.
+         */
+        val previous: BoardIntervals? = null,
     ) : ProvisionResult
 
     /** Every secondary slot (1..7) is already taken by a different channel; the user must free one. */

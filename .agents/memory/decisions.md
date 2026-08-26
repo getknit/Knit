@@ -2143,3 +2143,60 @@ served frame lost to the air waits for the next round; a passive gateway is dead
 O(1); and the time-on-air figure is an estimate that does not know the board's preamble length or how many
 neighbours repeated us. `KnitChannel`'s derivation is untouched, so `docs/NEXT_WIRE_BREAK.md`'s open question
 about the LoRa rendezvous marker does not come due. Scheme + device bring-up: `context/lora-bridge.md`.
+
+## 045. A dedicated board takes the RF slot with it: Knit as the primary channel, its housekeeping quieted
+
+Status: Accepted (2026-08-25; `mesh/lora/` `BoardQuiet`/`ProvisionMode`, `MeshtasticProto` admin config
+codec, `spliceVarintFields`, `SettingsStore.loraDedicatedBoard`, the LoRa screen's dedicate section)
+
+ADR 038 shipped `KnitChannel` as a **secondary** channel and claimed it "keeps Knit off stock LongFast".
+That was true of the namespace and false of the radio. The Meshtastic firmware derives its RF slot from
+`hash(primary channel name) % numChannels` whenever `lora.channel_num` is 0 (`RadioInterface::getChannelNum`),
+and a secondary channel is only a decryption key — so every Knit board so far has transmitted on the default
+LongFast frequency, contending with every public node in earshot, and (with the stock `rebroadcast_mode =
+ALL`) having its undecryptable packets repeated up to three hops by strangers' radios that `LoraAirtime`
+cannot see. On top of that the board's own node-info, position and telemetry broadcasts cost more air per
+hour than Knit does at chat pace. This adds one opt-in action, "Dedicate this board to Knit", and its undo.
+
+1. **Move the slot by writing the primary, not by pinning `channel_num`.** Writing `KnitChannel` at index 0
+   with `role = PRIMARY` makes the firmware's own hash move the radio, so every Knit board converges on the
+   same slot with zero coordination — the same property the derived PSK already gives the channel. Pinning
+   `lora.channel_num` instead would leave the channel table alone but needs a vendored per-region frequency
+   table (start/end MHz × preset bandwidth) to compute a legal slot, and an out-of-range value is a silent
+   no-transmit. The undo writes `name = ""` with Meshtastic's `0x01` default-key shorthand: an empty primary
+   name falls back to the modem-preset name, which is exactly the slot the board shipped on.
+2. **It is one bargain, so it is one switch.** The dedicate write also stretches `node_info_broadcast_secs`,
+   `position_broadcast_secs` (with smart broadcast cleared) and `telemetry.device_update_interval` to six
+   hours, and writes `position_precision = 0` on the Knit channel itself — which stops being optional once
+   Knit *is* the primary, since that is the channel positions would ride. The GPS is left alone: silencing
+   what the board broadcasts is Knit's business, powering down the user's hardware is not.
+3. **Every config write is a read-modify-write, at the byte level.** `AdminModule::handleSetConfig` assigns
+   the whole sub-config (`config.device = c.payload_variant.device`), so a `Config { device { … } }` built
+   from scratch would reset `role`, `rebroadcast_mode`, `gps_mode` and everything else this codec does not
+   model — including, ironically, the GPS setting decision 2 promises to leave alone. The board's own
+   `get_config` reply is therefore the base and `spliceVarintFields` replaces only the intended fields,
+   copying every other field through byte-for-byte. A read that fails aborts the whole provision **before**
+   `begin_edit_settings`, so a board that will not report its config is never half-written.
+4. **The intervals the board had are the user's, and are recorded.** A dedicate returns them
+   (`ProvisionResult.Provisioned.previous`) and they are persisted per board address
+   (`SettingsStore.loraDedicatedBoard`); restoring writes those back, falling back to the firmware defaults
+   only when nothing was recorded. Re-dedicating an already-dedicated board is a no-op that reports
+   `alreadyPresent` — overwriting the record with the quieted values would destroy the only copy of what the
+   board looked like before. Forgetting the board forgets the record with it.
+5. **The cost is stated before the tap, and it is fleet-wide.** A dedicated board cannot hear, or be heard
+   by, a stock node — that includes third-party repeaters that were extending Knit's range for free — and a
+   fleet must be all-or-nothing, since a dedicated board and an undedicated one are on different frequencies
+   and simply never meet. So the action sits behind a confirmation that says both, is offered only on a board
+   that already carries the Knit channel, and is reversible from the same screen. The PSK is untouched: this
+   is still a rendezvous, not a confidentiality boundary, and the deferred per-deployment private PSK now
+   also buys a *different slot*, since the name feeds the hash.
+
+Wire: none of Knit's. This is the Meshtastic admin API only — `get_config`/`set_config` (34),
+`get_module_config`/`set_module_config` (35), `ChannelSettings.module_settings` (7) — pinned by golden vectors
+in `MeshtasticProtoTest` beside the rest. `WIRE_COMPAT`/`NEXT_WIRE_BREAK` are untouched.
+
+Honest residuals (accepted): the `getChannelNum` behaviour is read off the firmware source and is confirmed
+on hardware only by the frequency the board reports, so the device trial in `context/lora-bridge.md` is what
+closes it; a dedicated fleet loses public repeaters as free hops; the six-hour intervals are a judgement, not
+a measurement; and quieting the *mesh* telemetry interval must not silence the phone-only telemetry ADR 041's
+battery row reads — a separate firmware timer, and the one thing the trial has to watch.

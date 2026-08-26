@@ -59,6 +59,20 @@ internal class ProtoWriter {
         value: UInt,
     ): ProtoWriter = varint(field, value.toLong())
 
+    /**
+     * A varint field emitted **even when zero** — the encoding a `oneof` member needs, since it is its
+     * presence on the wire that selects the case (`AdminMessage.get_config_request = DEVICE_CONFIG(0)`
+     * would otherwise vanish and read as "no request at all").
+     */
+    fun oneofVarint(
+        field: Int,
+        value: Int,
+    ): ProtoWriter {
+        tag(field, WireType.VARINT)
+        writeVarint(value.toLong())
+        return this
+    }
+
     fun bool(
         field: Int,
         value: Boolean,
@@ -146,6 +160,9 @@ internal class ProtoReader(
     }
 
     val hasMore: Boolean get() = pos < end
+
+    /** The absolute read cursor into the backing array — how [spliceVarintFields] copies a field verbatim. */
+    val position: Int get() = pos
 
     /** The next tag (`field << 3 | wireType`); field 0 and oversized tags are malformed. */
     fun readTag(): Int {
@@ -251,3 +268,56 @@ internal class ProtoReader(
         const val FIXED64_BYTES = 8
     }
 }
+
+/**
+ * Rewrites [raw] — the bytes of one protobuf message — with each field in [values] replaced by the given
+ * value, leaving every other field **byte-for-byte** where it was.
+ *
+ * This exists because Meshtastic's `AdminModule::handleSetConfig` assigns the whole sub-config
+ * (`config.device = c.payload_variant.device`), so sending a `Config { device { node_info_broadcast_secs } }`
+ * built from scratch would reset `role`, `rebroadcast_mode` and everything else this codec does not model.
+ * The board's own `get_config` reply is therefore the base, and only the fields we mean to change are
+ * spliced — no field has to be understood to survive the round trip.
+ *
+ * proto3 scalars: a zero is the default and is written by *omission*, which is exactly what [ProtoWriter]
+ * does, so `field to 0L` clears a field. Returns null on malformed input, like every decode here — the
+ * caller must abort rather than write a mangled config to a radio.
+ */
+internal fun spliceVarintFields(
+    raw: ByteArray,
+    values: Map<Int, Long>,
+): ByteArray? =
+    runCatching {
+        val out = ByteArrayOutputStream()
+        val reader = ProtoReader(raw)
+        while (reader.hasMore) {
+            val start = reader.position
+            val tag = reader.readTag()
+            reader.skip(tag and WireType.MASK)
+            if ((tag ushr WireType.FIELD_SHIFT) !in values) out.write(raw, start, reader.position - start)
+        }
+        val appended = ProtoWriter()
+        values.forEach { (field, value) -> appended.varint(field, value) }
+        out.write(appended.toByteArray())
+        out.toByteArray()
+    }.getOrNull()
+
+/** The varint value of [field] in [raw], or null when absent or malformed. The last occurrence wins, as proto3 says. */
+internal fun readVarintField(
+    raw: ByteArray,
+    field: Int,
+): Long? =
+    runCatching {
+        val reader = ProtoReader(raw)
+        var found: Long? = null
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            val wire = tag and WireType.MASK
+            if (tag ushr WireType.FIELD_SHIFT == field && wire == WireType.VARINT) {
+                found = reader.readVarint64()
+            } else {
+                reader.skip(wire)
+            }
+        }
+        found
+    }.getOrNull()

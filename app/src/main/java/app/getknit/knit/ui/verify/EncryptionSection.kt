@@ -4,8 +4,10 @@
 
 package app.getknit.knit.ui.verify
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,9 +28,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -38,6 +44,9 @@ import androidx.compose.ui.unit.dp
 import app.getknit.knit.R
 import app.getknit.knit.ui.image.QrCode
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.theme.KnitMotion
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The peer-specific half of [EncryptionSection]: whether we hold the peer's key yet, whether the user
@@ -148,13 +157,32 @@ fun EncryptionSection(
         }
 
         myQrPayload?.let { payload ->
-            val qr = remember(payload) { QrCode.render(payload, QR_SIZE_PX) }
-            qr?.let {
-                Image(
-                    bitmap = it,
-                    contentDescription = null,
-                    modifier = Modifier.size(200.dp),
-                )
+            // Encoded off the composition thread. This used to be a plain `remember { QrCode.render(...) }`,
+            // so the whole encode ran during the *first* composition of whichever screen shows this — and
+            // ProfileDetailsScreen is reached by a tap that is animating a screen transition at the time.
+            // The encode is much cheaper since QrCode stopped writing pixels one JNI call at a time, but
+            // even the cheap version is half a frame at 120Hz, and none of it needs to block the first frame.
+            val qr by produceState<ImageBitmap?>(initialValue = null, payload) {
+                value = withContext(Dispatchers.Default) { QrCode.render(payload, QR_SIZE_PX) }
+            }
+            // The slot is held at full size from the start so the section doesn't reflow under the reader
+            // when the code lands a frame or two later.
+            val qrAlpha by animateFloatAsState(
+                targetValue = if (qr == null) 0f else 1f,
+                animationSpec = KnitMotion.effects(),
+                label = "qrFade",
+            )
+            Box(modifier = Modifier.size(QR_DISPLAY_SIZE), contentAlignment = Alignment.Center) {
+                qr?.let {
+                    Image(
+                        bitmap = it,
+                        contentDescription = null,
+                        modifier =
+                            Modifier
+                                .size(QR_DISPLAY_SIZE)
+                                .graphicsLayer { alpha = qrAlpha },
+                    )
+                }
             }
             Text(
                 text =
@@ -211,6 +239,10 @@ fun EncryptionSection(
 }
 
 private const val QR_SIZE_PX = 480
+
+// The on-screen size of the code; also the reserved slot, so the section's height never depends on whether
+// the encode has finished.
+private val QR_DISPLAY_SIZE = 200.dp
 
 @Preview(showBackground = true)
 @Composable

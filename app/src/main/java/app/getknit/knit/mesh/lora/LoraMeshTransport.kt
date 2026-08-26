@@ -256,7 +256,7 @@ internal class LoraMeshTransport(
      */
     override suspend fun provisionKnitChannel(
         mode: ProvisionMode,
-        previous: BoardIntervals?,
+        previous: BoardSettings?,
     ): ProvisionResult = link.provisionChannel(ProvisionSpec(KnitChannel.NAME, KnitChannel.PSK, mode, previous))
 
     // --- outbound (fast plane only) ---

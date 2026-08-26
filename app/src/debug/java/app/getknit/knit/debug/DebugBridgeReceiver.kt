@@ -38,7 +38,7 @@ import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.StoreDigest
-import app.getknit.knit.mesh.lora.BoardIntervals
+import app.getknit.knit.mesh.lora.BoardSettings
 import app.getknit.knit.mesh.lora.ProvisionMode
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.moderation.ModelLoadGuard
@@ -1116,11 +1116,12 @@ class DebugBridgeReceiver :
             lora.provisionKnitChannel(
                 mode,
                 recorded?.let {
-                    BoardIntervals(
+                    BoardSettings(
                         nodeInfoSecs = it.nodeInfoSecs,
                         positionSecs = it.positionSecs,
                         smartPosition = it.smartPosition,
                         telemetrySecs = it.telemetrySecs,
+                        rebroadcastMode = it.rebroadcastMode,
                     )
                 },
             )
@@ -1137,6 +1138,7 @@ class DebugBridgeReceiver :
                             positionSecs = previous.positionSecs,
                             smartPosition = previous.smartPosition,
                             telemetrySecs = previous.telemetrySecs,
+                            rebroadcastMode = previous.rebroadcastMode,
                         ),
                     )
                 }

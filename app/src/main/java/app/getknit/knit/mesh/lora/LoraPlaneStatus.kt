@@ -22,7 +22,7 @@ internal interface LoraPlaneStatus {
      */
     suspend fun provisionKnitChannel(
         mode: ProvisionMode = ProvisionMode.Setup,
-        previous: BoardIntervals? = null,
+        previous: BoardSettings? = null,
     ): ProvisionResult
 
     /** The plane in a build that does not ship it: idle forever, and never provisions. */
@@ -31,7 +31,7 @@ internal interface LoraPlaneStatus {
 
         override suspend fun provisionKnitChannel(
             mode: ProvisionMode,
-            previous: BoardIntervals?,
+            previous: BoardSettings?,
         ): ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
     }
 }

@@ -215,7 +215,7 @@ class LoraRadioScreenContentTest {
     fun theConfirmationSpellsOutTheCostAndIsWhatSetsTheBoardUp() {
         var setUp = 0
         render(connected(boardSetUp = false).copy(confirmSetup = true), onSetUp = { setUp++ })
-        compose.onNodeWithText("leave the public Meshtastic network", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("stops relaying other radios' traffic", substring = true).assertIsDisplayed()
         compose.onNodeWithTag("lora_setup_confirm").performClick()
         assertEquals(1, setUp)
     }
@@ -225,7 +225,7 @@ class LoraRadioScreenContentTest {
         var restored = 0
         render(connected(), onRestore = { restored++ })
         compose.onNodeWithTag("lora_setup").assertDoesNotExist()
-        compose.onNodeWithText("Knit-only frequency", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("sharing the public Meshtastic frequency", substring = true).performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_restore").performScrollTo().performClick()
         assertEquals(1, restored)
     }

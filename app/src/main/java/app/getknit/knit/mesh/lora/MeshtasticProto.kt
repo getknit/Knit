@@ -30,30 +30,24 @@ internal object MeshtasticProto {
     /** `PortNum.TELEMETRY_APP` — the board's own `DeviceMetrics` (its battery) arrive here, addressed from itself. */
     const val PORT_TELEMETRY = 67
 
-    /** `Channel.Role.SECONDARY` — the role the rendezvous provision writes, leaving the board's primary alone. */
-    const val ROLE_SECONDARY = 2
-
     /**
-     * `Channel.Role.PRIMARY` — the role the board setup writes Knit as (ADR 045). The firmware derives
-     * the RF slot from `hash(primary channel name)` whenever `lora.channel_num` is 0, so this is what
-     * actually moves the radio off the stock LongFast frequency; a SECONDARY channel never does.
+     * `Channel.Role.SECONDARY` — the only role Knit ever writes. The firmware derives its RF slot from
+     * `hash(primary channel name)`, so leaving the primary alone is what keeps a Knit board on the public
+     * frequency, where stock nodes repeat its packets for free (ADR 045).
      */
-    const val ROLE_PRIMARY = 1
+    const val ROLE_SECONDARY = 2
 
     /** `ModuleSettings.position_precision = 0` — "share no position on this channel". */
     const val POSITION_PRECISION_NONE = 0
-
-    /**
-     * Meshtastic's shorthand for its well-known public key — a single `0x01` byte, which the firmware expands
-     * to the default PSK. Writing it back over the primary is what makes a board a stock public node again.
-     */
-    val DEFAULT_PSK = byteArrayOf(1)
 
     // The three housekeeping intervals the board setup stretches (ADR 045). Public because [BoardQuiet]
     // owns the *values*; the field numbers stay here with the rest of the pinned wire, beside their vectors.
 
     /** `Config.DeviceConfig.node_info_broadcast_secs`. */
     const val DEVICE_NODE_INFO_BROADCAST_SECS = 7
+
+    /** `Config.DeviceConfig.rebroadcast_mode`. */
+    const val DEVICE_REBROADCAST_MODE = 6
 
     /** `Config.PositionConfig.position_broadcast_secs`. */
     const val POSITION_BROADCAST_SECS = 1
@@ -782,16 +776,22 @@ internal enum class ModemPreset(
     val bandwidthHz: Int,
     /** Coding-rate denominator: 5 means 4/5. */
     val codingRate: Int,
+    /**
+     * The name the firmware substitutes for an **empty primary channel name** (`Channels::getName`), and so
+     * the string it hashes into the RF slot. A board whose primary is unnamed or named exactly this is on the
+     * stock frequency for its preset — which is what lets two Knit boards meet without coordinating (ADR 045).
+     */
+    val defaultChannelName: String,
 ) {
-    LONG_FAST(0, 11, 250_000, 5),
-    LONG_SLOW(1, 12, 125_000, 8),
-    VERY_LONG_SLOW(2, 12, 62_500, 8),
-    MEDIUM_SLOW(3, 10, 250_000, 5),
-    MEDIUM_FAST(4, 9, 250_000, 5),
-    SHORT_SLOW(5, 8, 250_000, 5),
-    SHORT_FAST(6, 7, 250_000, 5),
-    LONG_MODERATE(7, 11, 125_000, 8),
-    SHORT_TURBO(8, 7, 500_000, 5),
+    LONG_FAST(0, 11, 250_000, 5, "LongFast"),
+    LONG_SLOW(1, 12, 125_000, 8, "LongSlow"),
+    VERY_LONG_SLOW(2, 12, 62_500, 8, "VeryLongSlow"),
+    MEDIUM_SLOW(3, 10, 250_000, 5, "MediumSlow"),
+    MEDIUM_FAST(4, 9, 250_000, 5, "MediumFast"),
+    SHORT_SLOW(5, 8, 250_000, 5, "ShortSlow"),
+    SHORT_FAST(6, 7, 250_000, 5, "ShortFast"),
+    LONG_MODERATE(7, 11, 125_000, 8, "LongMod"),
+    SHORT_TURBO(8, 7, 500_000, 5, "ShortTurbo"),
     ;
 
     companion object {

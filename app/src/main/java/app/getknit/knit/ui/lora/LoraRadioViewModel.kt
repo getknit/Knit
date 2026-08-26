@@ -8,8 +8,8 @@ import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardFilter
-import app.getknit.knit.mesh.lora.BoardIntervals
 import app.getknit.knit.mesh.lora.BoardRef
+import app.getknit.knit.mesh.lora.BoardSettings
 import app.getknit.knit.mesh.lora.KnitChannel
 import app.getknit.knit.mesh.lora.LinkState
 import app.getknit.knit.mesh.lora.LoraGatewayPolicy
@@ -36,7 +36,7 @@ data class BoardOption(
 enum class LoraConnState { Off, Connecting, Ready, Reconnecting, NeedsPairing, Unavailable }
 
 /** The result of the last provisioning tap, mapped off the internal provision result for the screen. */
-enum class LoraProvisionOutcome { Provisioned, AlreadyPresent, Restored, Failed, NotReady }
+enum class LoraProvisionOutcome { Provisioned, AlreadyPresent, Restored, NoFreeSlot, Failed, NotReady }
 
 data class LoraRadioUiState(
     val enabled: Boolean = false,
@@ -70,8 +70,14 @@ data class LoraRadioUiState(
      * its housekeeping is quiet. The only other state is "a stock Meshtastic board" — there is no middle one.
      */
     val boardSetUp: Boolean = false,
-    /** The setup confirmation is open — it replaces the board's own channel, so the tap is never the action. */
+    /** The setup confirmation is open — it changes settings on the user's hardware, so the tap is never the action. */
     val confirmSetup: Boolean = false,
+    /**
+     * The board's main channel has been renamed, which puts its radio on a different frequency from a stock
+     * board's — so it will not meet other Knit boards however well it is set up. Rare, silent, and total, so
+     * it is the one thing worth saying out loud on this screen.
+     */
+    val customPrimary: Boolean = false,
     val boards: List<BoardOption> = emptyList(),
     /** Bonded devices the picker hides as not board-like (`BoardFilter`); the "show all" toggle reveals them. */
     val hiddenBoards: Int = 0,
@@ -122,8 +128,7 @@ internal class LoraRadioViewModel(
         ) { (enabled, dmEnabled, bridgeEnabled), picker, channel, status, provision ->
             val address = picker.address
             val ready = status.state as? LinkState.Ready
-            // Slot 0 is the board's primary, and a board set up for Knit carries Knit there — so the name of
-            // the bound slot is the whole verdict on whether this board has been set up at all.
+            // The name the board gives the bound slot: "Knit" once the setup has written it there.
             val channelName =
                 ready
                     ?.channels
@@ -149,7 +154,8 @@ internal class LoraRadioViewModel(
                 airtimePercent = ready?.let { status.airtime?.let(::airtimePercent) },
                 radioConfig = ready?.radio?.let { "${it.region} ${it.modemPreset}" },
                 channelName = channelName,
-                boardSetUp = ready?.channels?.any { it.index == PRIMARY_INDEX && it.name == KnitChannel.NAME } == true,
+                boardSetUp = ready?.channels?.any { it.name == KnitChannel.NAME } == true,
+                customPrimary = ready?.let { isCustomPrimary(it) } == true,
                 confirmSetup = provision.confirm,
                 boards =
                     BoardFilter
@@ -162,6 +168,18 @@ internal class LoraRadioViewModel(
                 provisionOutcome = provision.outcome,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LoraRadioUiState())
+
+    /**
+     * Whether the board's primary channel has been renamed away from its preset's default. The firmware hashes
+     * that name into the radio's frequency, so a renamed primary silently parks the board on a slot no stock
+     * board — and so no other Knit board — is listening to. Unknown until the board reports its radio config,
+     * which reads as "fine": a spurious warning is worse than a late one.
+     */
+    private fun isCustomPrimary(ready: LinkState.Ready): Boolean {
+        val preset = ready.radio?.modemPreset ?: return false
+        val primary = ready.channels.firstOrNull { it.index == 0 } ?: return false
+        return primary.name.isNotEmpty() && primary.name != preset.defaultChannelName
+    }
 
     /**
      * Airtime spent this hour as a percentage of what the plane allows itself — the LIVE budget, which is the
@@ -272,16 +290,18 @@ internal class LoraRadioViewModel(
                 positionSecs = previous.positionSecs,
                 smartPosition = previous.smartPosition,
                 telemetrySecs = previous.telemetrySecs,
+                rebroadcastMode = previous.rebroadcastMode,
             ),
         )
     }
 
-    private fun KnitBoardSetup.toIntervals(): BoardIntervals =
-        BoardIntervals(
+    private fun KnitBoardSetup.toIntervals(): BoardSettings =
+        BoardSettings(
             nodeInfoSecs = nodeInfoSecs,
             positionSecs = positionSecs,
             smartPosition = smartPosition,
             telemetrySecs = telemetrySecs,
+            rebroadcastMode = rebroadcastMode,
         )
 
     /** Dismisses the last provisioning outcome banner. */
@@ -293,6 +313,7 @@ internal class LoraRadioViewModel(
         when (this) {
             is ProvisionResult.Provisioned -> if (alreadyPresent) LoraProvisionOutcome.AlreadyPresent else LoraProvisionOutcome.Provisioned
             ProvisionResult.Restored -> LoraProvisionOutcome.Restored
+            ProvisionResult.NoFreeSlot -> LoraProvisionOutcome.NoFreeSlot
             is ProvisionResult.Failed -> LoraProvisionOutcome.Failed
             is ProvisionResult.NotReady -> LoraProvisionOutcome.NotReady
         }
@@ -316,8 +337,6 @@ internal class LoraRadioViewModel(
     private companion object {
         private const val PERCENT = 100L
 
-        /** The board's primary channel slot — where a dedicated board carries Knit. */
-        private const val PRIMARY_INDEX = 0
         const val STOP_TIMEOUT_MS = 5_000L
     }
 }

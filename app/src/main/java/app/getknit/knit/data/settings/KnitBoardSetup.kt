@@ -1,15 +1,15 @@
 package app.getknit.knit.data.settings
 
 /**
- * A Meshtastic board set up for Knit (ADR 045): Knit is its primary channel — which is what moves the radio
- * onto a Knit-derived RF slot — and its housekeeping broadcasts are stretched.
+ * A Meshtastic board set up for Knit (ADR 045): it carries the Knit channel in a secondary slot, its own
+ * broadcasts are stretched, and it no longer repeats strangers' traffic.
  *
- * The four intervals are the board's own values as they stood *before* the setup, kept so restoring can put
- * those back instead of guessing at the firmware's. A zero means the value was never recorded, which the
- * restore writes as "let the firmware substitute its default".
+ * The values here are the board's own as they stood *before* the setup, kept so restoring can put those back
+ * instead of guessing at the firmware's. A zero interval means the value was never recorded, which the
+ * restore writes as "let the firmware substitute its default"; [rebroadcastMode] 0 is a real value (ALL).
  *
  * Primitive by design: [SettingsStore] is a data-layer class and stays free of `mesh/` types; the LoRa
- * ViewModel maps this onto `mesh.lora.BoardIntervals` at the seam.
+ * ViewModel maps this onto `mesh.lora.BoardSettings` at the seam.
  */
 data class KnitBoardSetup(
     val address: String,
@@ -17,4 +17,5 @@ data class KnitBoardSetup(
     val positionSecs: Int,
     val smartPosition: Boolean,
     val telemetrySecs: Int,
+    val rebroadcastMode: Int,
 )

@@ -61,7 +61,7 @@ internal data class ProvisionSpec(
     val psk: ByteArray,
     val mode: ProvisionMode = ProvisionMode.Setup,
     /** [ProvisionMode.Restore] only: the board's own intervals as recorded when it was set up. */
-    val previous: BoardIntervals? = null,
+    val previous: BoardSettings? = null,
 )
 
 /**
@@ -92,8 +92,11 @@ internal sealed interface ProvisionResult {
          * them a restore can only offer the firmware's defaults, not the user's own. Null when nothing was
          * written ([alreadyPresent]), so a re-run never overwrites the record with the quieted values.
          */
-        val previous: BoardIntervals? = null,
+        val previous: BoardSettings? = null,
     ) : ProvisionResult
+
+    /** Every secondary slot (1..7) is already taken by a different channel; the user must free one. */
+    data object NoFreeSlot : ProvisionResult
 
     /** The board is a stock Meshtastic node again; it carries no Knit channel, so the plane has nowhere to send. */
     data object Restored : ProvisionResult

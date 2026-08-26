@@ -224,6 +224,7 @@ class SettingsStore(
                     positionSecs = prefs[KEY_LORA_PRIOR_POSITION] ?: 0,
                     smartPosition = prefs[KEY_LORA_PRIOR_SMART] ?: false,
                     telemetrySecs = prefs[KEY_LORA_PRIOR_TELEMETRY] ?: 0,
+                    rebroadcastMode = prefs[KEY_LORA_PRIOR_REBROADCAST] ?: 0,
                 )
             }
         }
@@ -352,6 +353,7 @@ class SettingsStore(
             it.remove(KEY_LORA_PRIOR_POSITION)
             it.remove(KEY_LORA_PRIOR_SMART)
             it.remove(KEY_LORA_PRIOR_TELEMETRY)
+            it.remove(KEY_LORA_PRIOR_REBROADCAST)
         }
 
     suspend fun setLoraChannelIndex(index: Int) = dataStore.edit { it[KEY_LORA_CHANNEL] = index }
@@ -364,6 +366,7 @@ class SettingsStore(
             it[KEY_LORA_PRIOR_POSITION] = board.positionSecs
             it[KEY_LORA_PRIOR_SMART] = board.smartPosition
             it[KEY_LORA_PRIOR_TELEMETRY] = board.telemetrySecs
+            it[KEY_LORA_PRIOR_REBROADCAST] = board.rebroadcastMode
         }
 
     /** Forgets the setup record — after a restore, or when the board itself is forgotten. */
@@ -374,6 +377,7 @@ class SettingsStore(
             it.remove(KEY_LORA_PRIOR_POSITION)
             it.remove(KEY_LORA_PRIOR_SMART)
             it.remove(KEY_LORA_PRIOR_TELEMETRY)
+            it.remove(KEY_LORA_PRIOR_REBROADCAST)
         }
 
     /**
@@ -484,5 +488,6 @@ class SettingsStore(
         val KEY_LORA_PRIOR_POSITION = intPreferencesKey("lora_prior_position_secs")
         val KEY_LORA_PRIOR_SMART = booleanPreferencesKey("lora_prior_smart_position")
         val KEY_LORA_PRIOR_TELEMETRY = intPreferencesKey("lora_prior_telemetry_secs")
+        val KEY_LORA_PRIOR_REBROADCAST = intPreferencesKey("lora_prior_rebroadcast_mode")
     }
 }

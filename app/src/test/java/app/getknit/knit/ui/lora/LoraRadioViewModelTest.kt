@@ -6,12 +6,13 @@ import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardInfo
-import app.getknit.knit.mesh.lora.BoardIntervals
 import app.getknit.knit.mesh.lora.BoardRef
+import app.getknit.knit.mesh.lora.BoardSettings
 import app.getknit.knit.mesh.lora.ChannelInfo
 import app.getknit.knit.mesh.lora.LinkState
 import app.getknit.knit.mesh.lora.LoraGatewayPolicy
 import app.getknit.knit.mesh.lora.LoraPlaneStatus
+import app.getknit.knit.mesh.lora.LoraRadioConfig
 import app.getknit.knit.mesh.lora.LoraRegion
 import app.getknit.knit.mesh.lora.LoraStatus
 import app.getknit.knit.mesh.lora.ModemPreset
@@ -57,7 +58,7 @@ class LoraRadioViewModelTest {
             every { loraBoardSetup } returns boardSetup
         }
     private val status = MutableStateFlow(LoraStatus())
-    private val provisionCalls = mutableListOf<Pair<ProvisionMode, BoardIntervals?>>()
+    private val provisionCalls = mutableListOf<Pair<ProvisionMode, BoardSettings?>>()
     private var provisionResult: ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
     private val lora =
         object : LoraPlaneStatus {
@@ -65,7 +66,7 @@ class LoraRadioViewModelTest {
 
             override suspend fun provisionKnitChannel(
                 mode: ProvisionMode,
-                previous: BoardIntervals?,
+                previous: BoardSettings?,
             ): ProvisionResult {
                 provisionCalls += mode to previous
                 return provisionResult
@@ -179,8 +180,9 @@ class LoraRadioViewModelTest {
             assertEquals("2.5.0", vm.state.value.firmware)
             assertEquals("people reachable through the mesh", 3, vm.state.value.heard)
             assertEquals("radios actually in range", 1, vm.state.value.boardsHeard)
-            // Knit sitting in a secondary is a board an older build provisioned: not set up, and one tap fixes it.
-            assertFalse(vm.state.value.boardSetUp)
+            // Knit lives in a secondary slot; the board's own primary is left alone, so this board is set up.
+            assertTrue(vm.state.value.boardSetUp)
+            assertFalse(vm.state.value.customPrimary)
 
             // A slot the board has no entry for at all.
             channel.value = 2
@@ -286,11 +288,30 @@ class LoraRadioViewModelTest {
         }
 
     @Test
-    fun `a board carrying Knit as its primary reads as set up`() =
+    fun `a renamed primary channel is flagged, since it parks the radio on its own frequency`() =
         runTest {
             val vm = start()
-            status.value = LoraStatus(state = ready(listOf(ChannelInfo(index = 0, name = "Knit", role = 1))))
-            channel.value = 0
+            val radio = LoraRadioConfig(usePreset = true, ModemPreset.LONG_FAST, LoraRegion.OTHER, hopLimit = 3, overrideDutyCycle = false)
+            status.value =
+                LoraStatus(
+                    state =
+                        ready(listOf(ChannelInfo(0, "MyGroup", 1), ChannelInfo(1, "Knit", 2))).copy(radio = radio),
+                )
+            advanceUntilIdle()
+            assertTrue(vm.state.value.customPrimary)
+
+            // The stock primary is unnamed, and naming it exactly the preset's own name is the same slot.
+            status.value =
+                LoraStatus(state = ready(listOf(ChannelInfo(0, "LongFast", 1), ChannelInfo(1, "Knit", 2))).copy(radio = radio))
+            advanceUntilIdle()
+            assertFalse(vm.state.value.customPrimary)
+        }
+
+    @Test
+    fun `a board carrying Knit in a secondary slot reads as set up`() =
+        runTest {
+            val vm = start()
+            status.value = LoraStatus(state = ready(listOf(ChannelInfo(0, "", 1), ChannelInfo(1, "Knit", 2))))
             advanceUntilIdle()
 
             assertTrue(vm.state.value.boardSetUp)
@@ -314,10 +335,17 @@ class LoraRadioViewModelTest {
         }
 
     @Test
-    fun `a setup binds channel zero and records the board's own intervals`() =
+    fun `a setup binds the slot it landed in and records the board's own settings`() =
         runTest {
-            val previous = BoardIntervals(nodeInfoSecs = 900, positionSecs = 600, smartPosition = true, telemetrySecs = 1_800)
-            provisionResult = ProvisionResult.Provisioned(index = 0, alreadyPresent = false, previous = previous)
+            val previous =
+                BoardSettings(
+                    nodeInfoSecs = 900,
+                    positionSecs = 600,
+                    smartPosition = true,
+                    telemetrySecs = 1_800,
+                    rebroadcastMode = 0,
+                )
+            provisionResult = ProvisionResult.Provisioned(index = 1, alreadyPresent = false, previous = previous)
             val vm = start()
 
             vm.askSetup()
@@ -327,7 +355,7 @@ class LoraRadioViewModelTest {
             assertEquals(listOf(ProvisionMode.Setup to null), provisionCalls)
             assertFalse("the confirmation closes when the action runs", vm.state.value.confirmSetup)
             assertEquals(LoraProvisionOutcome.Provisioned, vm.state.value.provisionOutcome)
-            io.mockk.coVerify { settings.setLoraChannelIndex(0) }
+            io.mockk.coVerify { settings.setLoraChannelIndex(1) }
             io.mockk.coVerify {
                 settings.setLoraBoardSetup(
                     KnitBoardSetup(
@@ -336,6 +364,7 @@ class LoraRadioViewModelTest {
                         positionSecs = 600,
                         smartPosition = true,
                         telemetrySecs = 1_800,
+                        rebroadcastMode = 0,
                     ),
                 )
             }
@@ -344,7 +373,7 @@ class LoraRadioViewModelTest {
     @Test
     fun `re-running the setup on a set-up board never overwrites the recorded intervals`() =
         runTest {
-            provisionResult = ProvisionResult.Provisioned(index = 0, alreadyPresent = true)
+            provisionResult = ProvisionResult.Provisioned(index = 1, alreadyPresent = true)
             val vm = start()
 
             vm.setUpBoard()
@@ -358,7 +387,14 @@ class LoraRadioViewModelTest {
     fun `a restore hands the recorded intervals back, forgets the setup, and switches the plane off`() =
         runTest {
             val recorded =
-                KnitBoardSetup("AA:BB:CC:DD:EE:01", nodeInfoSecs = 900, positionSecs = 600, smartPosition = true, telemetrySecs = 1_800)
+                KnitBoardSetup(
+                    address = "AA:BB:CC:DD:EE:01",
+                    nodeInfoSecs = 900,
+                    positionSecs = 600,
+                    smartPosition = true,
+                    telemetrySecs = 1_800,
+                    rebroadcastMode = 3,
+                )
             boardSetup.value = recorded
             provisionResult = ProvisionResult.Restored
             val vm = start()
@@ -367,7 +403,7 @@ class LoraRadioViewModelTest {
             advanceUntilIdle()
 
             assertEquals(
-                ProvisionMode.Restore to BoardIntervals(900, 600, true, 1_800),
+                ProvisionMode.Restore to BoardSettings(900, 600, true, 1_800, rebroadcastMode = 3),
                 provisionCalls.single(),
             )
             assertEquals(LoraProvisionOutcome.Restored, vm.state.value.provisionOutcome)

@@ -35,7 +35,7 @@ class LoraStatusRepositoryTest {
 
             override suspend fun provisionKnitChannel(
                 mode: ProvisionMode,
-                previous: BoardIntervals?,
+                previous: BoardSettings?,
             ): ProvisionResult = ProvisionResult.NotReady(LinkState.Idle)
         }
     private val repo = LoraStatusRepository(settings, lora)

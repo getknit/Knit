@@ -48,16 +48,17 @@ doc). **Don't start a deferred item without explicit direction.**
   with the phones out of BLE/NAN range) — the GATT layer has no host test. **Knit-provisioned channel
   SHIPPED** (2026-08-24): "Set up Knit channel" (or `…debug.LORAPROV`) writes the derived `KnitChannel` as a
   secondary channel over the Meshtastic admin API — the user no longer hand-configures the boards;
-  region/modem-preset still set once at flash. **Board setup REWORKED** (2026-08-26, ADR 045): the
-  secondary channel never moved the radio (the firmware hashes the *primary* channel name into its RF slot),
-  so the single "Set up this board for Knit" now writes Knit as the PRIMARY — moving the board onto a
-  Knit-only frequency — and stretches its node-info / position / telemetry broadcasts, all as one
+  region/modem-preset still set once at flash. **Board setup REWORKED** (2026-08-26, ADR 045): a single
+  "Set up this board for Knit" writes the Knit channel into a free secondary slot, stretches the board's
+  node-info / position / telemetry broadcasts and sets `rebroadcast_mode = LOCAL_ONLY`, all as one
   read-modify-write admin transaction, with a Restore that puts the board's own values back and switches the
   plane off (`BoardQuiet`, `spliceVarintFields`, `SettingsStore.loraBoardSetup`, `…debug.LORAPROV [--es mode
   restore]`). There is deliberately **no lighter mode and no hand-set channel index**: a board is set up for
-  Knit or it is a stock Meshtastic node, so every Knit board is configured identically.
-  **Still owed:** the on-hardware confirmation that the frequency actually moved (`meshtastic --info` on both
-  boards) and that the battery row survives the telemetry stretch — the trial in `context/lora-bridge.md`.
+  Knit or it is a stock Meshtastic node. The board's **primary is never touched**, which keeps it on the
+  public frequency where stock nodes repeat Knit's packets for free — the reason the frequency-move design
+  was reverted before shipping. **Still owed:** the on-hardware trial in `context/lora-bridge.md` — the
+  frequency must be *unchanged*, the battery row must survive the telemetry stretch, and a stock node between
+  two boards should extend the range.
   Still deferred: a **user-set/shared private PSK** (the shipped
   channel is a public rendezvous; with DMs aboard it is also what would hide their metadata — needs
   out-of-band PSK sharing, QR/URL — and, since the name feeds the slot hash, a private deployment would also

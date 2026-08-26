@@ -139,14 +139,14 @@ class MeshtasticProtoTest {
                     index = 1,
                     name = "A",
                     psk = byteArrayOf(1, 2),
-                    role = MeshtasticProto.ROLE_PRIMARY,
+                    role = MeshtasticProto.ROLE_SECONDARY,
                     positionPrecision = MeshtasticProto.POSITION_PRECISION_NONE,
                 ),
                 passkey = null,
             )
         // ...settings{ psk, name, module_settings{} }: the submessage is *present but empty* (3A 00), which is
         // how precision 0 reaches the firmware — omitting it would read as "unset" and default to full.
-        assertEquals("8A 02 0F 08 01 12 09 12 02 01 02 1A 01 41 3A 00 18 01", bytes.hex())
+        assertEquals("8A 02 0F 08 01 12 09 12 02 01 02 1A 01 41 3A 00 18 02", bytes.hex())
     }
 
     @Test

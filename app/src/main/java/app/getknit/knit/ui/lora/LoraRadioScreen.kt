@@ -351,6 +351,14 @@ private fun SetupSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("lora_setup_body"),
         )
+        if (state.customPrimary) {
+            Text(
+                text = stringResource(R.string.lora_custom_primary_warning),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("lora_custom_primary"),
+            )
+        }
         // Until it is done, this is the emphasized button on the screen; afterwards all that is left is the
         // way back out, which never wants emphasis.
         if (state.boardSetUp) {
@@ -388,9 +396,9 @@ private fun SetupSection(
 }
 
 /**
- * Setting a board up rewrites its primary channel and moves its radio onto a Knit-only frequency, so it is
- * confirmed first: the board leaves the public Meshtastic network, and a fleet has to be all-or-nothing
- * because a board that is set up cannot hear one that is not.
+ * Setting a board up changes settings on hardware the user may also use for other things — what it stops
+ * broadcasting, and that it stops relaying other people's traffic — so it is confirmed first. What it does
+ * *not* touch is the board's own primary channel, and therefore its frequency.
  */
 @Composable
 private fun SetupConfirmDialog(
@@ -418,6 +426,7 @@ private fun LoraProvisionOutcome.messageAndSeverity(): Pair<Int, Boolean> =
         LoraProvisionOutcome.Provisioned -> R.string.lora_provisioned to false
         LoraProvisionOutcome.AlreadyPresent -> R.string.lora_provision_already to false
         LoraProvisionOutcome.Restored -> R.string.lora_restored to false
+        LoraProvisionOutcome.NoFreeSlot -> R.string.lora_provision_no_slot to true
         LoraProvisionOutcome.Failed -> R.string.lora_provision_failed to true
         LoraProvisionOutcome.NotReady -> R.string.lora_provision_not_ready to true
     }

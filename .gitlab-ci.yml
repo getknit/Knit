@@ -12,9 +12,12 @@ variables:
   # (Trivy CVE scanning now reads the committed app/gradle.lockfile, not these jars — see verify:trivy.)
   GRADLE_USER_HOME: "${CI_PROJECT_DIR}/.gradle"
   # daemon=false keeps no daemon alive between jobs; it does NOT stop Gradle forking a
-  # single-use worker JVM (it does, to honour org.gradle.jvmargs). That worker's heap is
-  # what the OOM killer reaps on this 2 GB VM — it's capped in the CI gradle.properties
-  # written by before_script below, which overrides the project gradle.properties.
+  # single-use daemon for the build (it does, to honour org.gradle.jvmargs) — but that daemon
+  # EXITS when the invocation ends, which is what makes the split in .compile-unit-tests work.
+  # Its heap is capped in the CI gradle.properties written by before_script below, which overrides
+  # the project gradle.properties. Note a Test task forks a THIRD JVM on top of those two, and
+  # nothing here reaches it: it runs at Gradle's Test default of -Xmx512m with Metaspace uncapped,
+  # which is ~1.25 GB RSS once Robolectric and the Kover agent have loaded their classes.
   GRADLE_OPTS: "-Dorg.gradle.daemon=false"
   ANDROID_HOME: "${CI_PROJECT_DIR}/.android-sdk"
   ANDROID_SDK_ROOT: "${CI_PROJECT_DIR}/.android-sdk"
@@ -109,10 +112,25 @@ build:release:
     expire_in: 1 year
 
 # ----------------- test ------------------
+# Build the test classpath and RUN the tests in two separate `./gradlew` invocations. Doing both in one
+# invocation is what killed job 3500 on the 2 GB runner: in-process Kotlin grows the single-use daemon to
+# ~2 GB of anonymous pages compiling :app and the test sources, a JVM never returns that to the OS, and
+# when the Test task then forks its own JVM (~1.25 GB once Robolectric has loaded android-all + Compose +
+# Room) the two coexist. 2.0 + 1.25 + 0.1 launcher + 0.25 host services is 3.6 GB against 1.9 GB RAM +
+# 2 GB swap, so the kernel OOM-killed the daemon with 120 kB of swap left. Split, the compile daemon is
+# gone before the test JVM starts and the second daemon starts near -Xms — nothing is recompiled (33 of
+# 35 tasks come back up-to-date), so the split costs one extra configuration phase and nothing else.
+# The task list is just `testDebugUnitTest`'s graph minus the Test task itself; re-derive it with
+# `./gradlew :app:testDebugUnitTest --dry-run` if AGP renames or adds one. Shared as a plain YAML anchor
+# rather than GitLab's `!reference` tag so the repo's yamllint can still parse this file.
+.compile-unit-tests: &compile-unit-tests
+  ./gradlew :app:compileDebugUnitTestJavaWithJavac :app:packageDebugUnitTestForUnitTest :app:bundleDebugClassesToRuntimeJar :app:processDebugUnitTestJavaRes :app:processDebugJavaRes :app:generateDebugUnitTestConfig :app:koverFindJar --stacktrace --console=plain
+
 test:unit:
   extends: .android
   stage: test
   script:
+    - *compile-unit-tests
     - ./gradlew :app:testDebugUnitTest --stacktrace --console=plain
   artifacts:
     when: always
@@ -134,6 +152,9 @@ test:coverage:
   stage: test
   allow_failure: true
   script:
+    # Same compile/run split as test:unit — the Kover report tasks run the suite themselves, so this job
+    # has exactly the same daemon-plus-forked-test-JVM overlap that OOM-killed job 3500.
+    - *compile-unit-tests
     - ./gradlew :app:koverXmlReportDebug :app:koverHtmlReportDebug :app:koverLogDebug --stacktrace --console=plain
   coverage: '/application line coverage: \d+\.\d+%/'
   artifacts:

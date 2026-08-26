@@ -101,6 +101,8 @@ internal sealed interface LinkState {
         val board: BoardInfo,
         val channels: List<ChannelInfo>,
         val mtu: Int,
+        /** The board's region + modem preset, once its config stream reported them; null on older firmware. */
+        val radio: LoraRadioConfig? = null,
     ) : LinkState
 
     data class Disconnected(
@@ -202,4 +204,6 @@ internal data class LoraConfig(
     val channelIndex: Int,
     /** Whether sealed DM-form chat may ride this plane (`SettingsStore.loraDmEnabled`, ADR 039); the room always does. */
     val dms: Boolean = true,
+    /** Whether this board gossips and serves backfill between pockets (`SettingsStore.loraBridgeEnabled`, ADR 044). */
+    val bridge: Boolean = true,
 )

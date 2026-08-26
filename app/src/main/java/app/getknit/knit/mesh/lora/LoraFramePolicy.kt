@@ -19,8 +19,11 @@ import app.getknit.knit.mesh.protocol.WireEnvelope
  * ([app.getknit.knit.mesh.lora.LoraFramePolicyTest]).
  */
 internal object LoraFramePolicy {
-    /** How the frame is being offered: a flood-to-everyone fan-out, or a targeted point-to-point send. */
-    enum class Path { FANOUT, TARGETED }
+    /**
+     * How the frame is being offered: a flood-to-everyone fan-out, a targeted point-to-point send, or the
+     * bridge's digest-driven backfill of frames a far gateway is missing (ADR 044).
+     */
+    enum class Path { FANOUT, TARGETED, BACKFILL }
 
     /**
      * Whether [env] (with its outer [wire], carrying the flood flag) may ride LoRa on [path]. On the
@@ -35,9 +38,33 @@ internal object LoraFramePolicy {
         to: String? = null,
     ): Boolean =
         when (path) {
-            Path.FANOUT -> isBroadcastRoom(env) || isDmForm(env) || env.type == FrameType.PROFILE
+            // BACKFILL admits exactly what FANOUT does, and that is deliberate rather than incidental: the
+            // bridge re-serves history, so anything it carries must be something the live plane would also
+            // have carried. What separates the two is [isFresh], which the fan-out applies and the backfill
+            // does not — an old frame is the whole point there. Kept a distinct arm so a future widening of
+            // one is a decision about the other rather than a silent inheritance.
+            Path.FANOUT, Path.BACKFILL -> isBroadcastRoom(env) || isDmForm(env) || env.type == FrameType.PROFILE
+
             Path.TARGETED -> env.type == FrameType.RECEIPT || isSealedTickTo(env, wire, to)
         }
+
+    /**
+     * How a frame ranks when the bridge can only afford a few (ADR 044). The cleartext `profile` comes first
+     * because nothing the far side receives verifies without the author's key — serving a DM to a peer that
+     * cannot check its signature is airtime spent on a frame that will be dropped. Sealed DM-form chat
+     * outranks the ambient room for the same reason it does in the pacing queue: somebody is specifically
+     * waiting for it. Lower is better.
+     */
+    fun backfillRank(env: RelayEnvelope): Int =
+        when {
+            env.type == FrameType.PROFILE -> RANK_PROFILE
+            isDmForm(env) -> RANK_DM
+            else -> RANK_ROOM
+        }
+
+    private const val RANK_PROFILE = 0
+    private const val RANK_DM = 1
+    private const val RANK_ROOM = 2
 
     /** DM-form chat: addressed to one recipient, no group — a DM, or any sealed ctl frame riding as one. */
     fun isDmForm(env: RelayEnvelope): Boolean = env.type == FrameType.CHAT && env.recipientId != null && env.group == null

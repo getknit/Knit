@@ -53,6 +53,10 @@ internal object FastFrameCodec {
     /** One fragment of a compact frame (layout above). */
     const val TAG_FRAG: Byte = 0x04
 
+    // Reserved elsewhere in this tag space: 0x10 is `LoraCtl.TAG`, the LoRa plane's gateway-to-gateway
+    // control packet (ADR 044). It never reaches this codec — it is dispatched before decode — but it shares
+    // the first byte, so don't mint a frame tag over it.
+
     /** Most parts one frame may split into — bounds reassembly state and the loss-probability cost. */
     const val MAX_PARTS = 3
 

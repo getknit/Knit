@@ -155,6 +155,7 @@ internal object MeshtasticProto {
             FR_CONFIG_COMPLETE -> FromRadio.ConfigComplete(reader.readVarint32().toUInt())
             FR_REBOOTED -> FromRadio.Rebooted.also { reader.readVarint64() }
             FR_QUEUE_STATUS -> decodeQueueStatus(reader.sub())
+            FR_CONFIG -> decodeConfig(reader.sub())
             FR_CHANNEL -> decodeChannel(reader.sub())
             FR_METADATA -> decodeMetadata(reader.sub())
             else -> FromRadio.Other(field).also { reader.skip(tag and WireType.MASK) }
@@ -337,6 +338,44 @@ internal object MeshtasticProto {
         return FromRadio.QueueStatus(res, free, maxlen, meshPacketId)
     }
 
+    /**
+     * A `Config` streamed during the want_config handshake. Only the `lora` variant is read (the radio
+     * settings the airtime governor needs); every other variant decodes to a null-payload [FromRadio.Config]
+     * and is ignored, so an unknown or reordered variant can never break the handshake.
+     */
+    private fun decodeConfig(reader: ProtoReader): FromRadio.Config {
+        var lora: LoraRadioConfig? = null
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            when (tag ushr WireType.FIELD_SHIFT) {
+                CONFIG_LORA -> lora = decodeLoraConfig(reader.sub())
+                else -> reader.skip(tag and WireType.MASK)
+            }
+        }
+        return FromRadio.Config(lora)
+    }
+
+    /** The four `Config.LoRaConfig` fields that decide time-on-air and the legal duty cycle. */
+    private fun decodeLoraConfig(reader: ProtoReader): LoraRadioConfig {
+        var usePreset = false
+        var preset = ModemPreset.LONG_FAST
+        var region = LoraRegion.UNSET
+        var hopLimit = 0
+        var overrideDutyCycle = false
+        while (reader.hasMore) {
+            val tag = reader.readTag()
+            when (tag ushr WireType.FIELD_SHIFT) {
+                LORA_USE_PRESET -> usePreset = reader.readVarint32() != 0
+                LORA_MODEM_PRESET -> preset = ModemPreset.fromCode(reader.readVarint32())
+                LORA_REGION -> region = LoraRegion.fromCode(reader.readVarint32())
+                LORA_HOP_LIMIT -> hopLimit = reader.readVarint32()
+                LORA_OVERRIDE_DUTY_CYCLE -> overrideDutyCycle = reader.readVarint32() != 0
+                else -> reader.skip(tag and WireType.MASK)
+            }
+        }
+        return LoraRadioConfig(usePreset, preset, region, hopLimit, overrideDutyCycle)
+    }
+
     private fun decodeChannel(reader: ProtoReader): FromRadio.Channel = FromRadio.Channel(decodeChannelInfo(reader))
 
     /** Decodes a `Channel { index, settings { name }, role }` — shared by the config handshake and admin reads. */
@@ -391,6 +430,7 @@ internal object MeshtasticProto {
     private const val FR_PACKET = 2
     private const val FR_MY_INFO = 3
     private const val FR_NODE_INFO = 4
+    private const val FR_CONFIG = 5
     private const val FR_CONFIG_COMPLETE = 7
     private const val FR_REBOOTED = 8
     private const val FR_CHANNEL = 10
@@ -439,6 +479,14 @@ internal object MeshtasticProto {
     private const val CHANNEL_ROLE = 3
     private const val METADATA_FIRMWARE_VERSION = 1
     private const val ROUTING_ERROR_REASON = 3
+
+    // Config / Config.LoRaConfig field numbers (the radio settings the airtime governor reads).
+    private const val CONFIG_LORA = 6
+    private const val LORA_USE_PRESET = 1
+    private const val LORA_MODEM_PRESET = 2
+    private const val LORA_REGION = 7
+    private const val LORA_HOP_LIMIT = 8
+    private const val LORA_OVERRIDE_DUTY_CYCLE = 12
 
     // NodeInfo / Telemetry / DeviceMetrics field numbers (the battery path).
     private const val NODEINFO_NUM = 1
@@ -538,6 +586,11 @@ internal sealed interface FromRadio {
         val channel: ChannelInfo,
     ) : FromRadio
 
+    /** A `Config` variant from the handshake; [lora] is non-null only for the radio-settings variant. */
+    data class Config(
+        val lora: LoraRadioConfig?,
+    ) : FromRadio
+
     data class ConfigComplete(
         val id: UInt,
     ) : FromRadio
@@ -560,6 +613,86 @@ internal sealed interface FromRadio {
         val fieldNumber: Int,
     ) : FromRadio
 }
+
+/**
+ * The board's own radio settings, read off the `Config.LoRaConfig` the want_config handshake streams. They
+ * are what [LoraAirtime] needs to turn a packet size into milliseconds of air and to know the legal duty
+ * cycle — Knit never writes any of them (ADR 038 §10: region and modem preset are a per-board, legally
+ * scoped setting the user configures once at flash time).
+ *
+ * [usePreset] false means the board is on hand-set bandwidth/spread-factor/coding-rate rather than
+ * [modemPreset]; we keep the preset's estimate anyway and say so, since a wrong estimate is still far
+ * better than none. [overrideDutyCycle] is the firmware's own escape hatch and is honoured: a user who set
+ * it has taken the regulatory call, so we stop applying the regional cap and fall back to the polite
+ * ceiling.
+ */
+internal data class LoraRadioConfig(
+    val usePreset: Boolean,
+    val modemPreset: ModemPreset,
+    val region: LoraRegion,
+    val hopLimit: Int,
+    val overrideDutyCycle: Boolean,
+)
+
+/**
+ * `Config.LoRaConfig.ModemPreset`, pinned by number, each carrying the spreading factor / bandwidth /
+ * coding rate the Meshtastic firmware programs for it (`RadioInterface.cpp`). Those three are the whole
+ * input to the LoRa time-on-air formula, which is why they live on the enum rather than in a side table.
+ * An unrecognised code falls back to [LONG_FAST] — the shipping default, and the slowest of the common
+ * presets, so an unknown future preset is over-estimated rather than under.
+ */
+@Suppress("MagicNumber") // the numbers ARE the wire codes and the firmware's radio parameters
+internal enum class ModemPreset(
+    val code: Int,
+    val spreadFactor: Int,
+    val bandwidthHz: Int,
+    /** Coding-rate denominator: 5 means 4/5. */
+    val codingRate: Int,
+) {
+    LONG_FAST(0, 11, 250_000, 5),
+    LONG_SLOW(1, 12, 125_000, 8),
+    VERY_LONG_SLOW(2, 12, 62_500, 8),
+    MEDIUM_SLOW(3, 10, 250_000, 5),
+    MEDIUM_FAST(4, 9, 250_000, 5),
+    SHORT_SLOW(5, 8, 250_000, 5),
+    SHORT_FAST(6, 7, 250_000, 5),
+    LONG_MODERATE(7, 11, 125_000, 8),
+    SHORT_TURBO(8, 7, 500_000, 5),
+    ;
+
+    companion object {
+        fun fromCode(code: Int): ModemPreset = entries.firstOrNull { it.code == code } ?: LONG_FAST
+    }
+}
+
+/**
+ * `Config.LoRaConfig.RegionCode`, pinned by number, carrying the transmit **duty cycle** percentage the
+ * Meshtastic firmware enforces for each (`RegionInfo` in `RadioInterface.cpp`). Only the duty-limited
+ * regions need naming individually; everything else is 100 % and collapses into [OTHER]. [UNSET] means the
+ * board has not been given a region and will not transmit at all — treated as the conservative case.
+ */
+@Suppress("MagicNumber") // the numbers ARE meshtastic's RegionCode wire codes
+internal enum class LoraRegion(
+    val code: Int,
+    val dutyCyclePercent: Double,
+) {
+    UNSET(0, DUTY_LIMITED_PERCENT),
+    EU_433(2, DUTY_LIMITED_PERCENT),
+    EU_868(3, DUTY_LIMITED_PERCENT),
+    UA_433(14, DUTY_LIMITED_PERCENT),
+    UA_868(15, DUTY_LIMITED_PERCENT),
+
+    /** Every region the firmware runs at 100 % duty (US, ANZ, JP, IN, …); named once rather than enumerated. */
+    OTHER(-1, 100.0),
+    ;
+
+    companion object {
+        fun fromCode(code: Int): LoraRegion = entries.firstOrNull { it.code == code && it != OTHER } ?: OTHER
+    }
+}
+
+/** The duty cycle the firmware enforces in the ETSI-style regions above. */
+private const val DUTY_LIMITED_PERCENT = 10.0
 
 /**
  * `Routing.Error` values (`meshtastic/mesh.proto`), pinned by number. [UNKNOWN] catches a future code so a

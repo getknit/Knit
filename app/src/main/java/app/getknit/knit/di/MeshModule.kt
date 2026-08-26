@@ -9,6 +9,7 @@ import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.relay.RelayStatusRepository
+import app.getknit.knit.mesh.BridgeFrameSource
 import app.getknit.knit.mesh.CompositeMeshTransport
 import app.getknit.knit.mesh.FarPeerFrameSource
 import app.getknit.knit.mesh.MeshController
@@ -139,10 +140,12 @@ val meshModule =
             MeshtasticSession(dialer = get(), scope = get(), now = SystemClock::elapsedRealtime, log = { Log.d("MeshtasticLink", it) })
         }
         single<BoardDirectory> { BondedBoardDirectory(androidContext()) }
-        // MeshManager supplies the signed profile frame for the LoRa key-bootstrap beacon (a third alias) and
-        // the carried DM-form frames the plane re-offers to a peer it first hears (a fourth).
+        // MeshManager supplies the signed profile frame for the LoRa key-bootstrap beacon (a third alias),
+        // the carried DM-form frames the plane re-offers to a peer it first hears (a fourth), and the custody
+        // window the bridge gossips about and serves from (a fifth, ADR 044).
         single<ProfileFrameSource> { get<MeshManager>() }
         single<FarPeerFrameSource> { get<MeshManager>() }
+        single<BridgeFrameSource> { get<MeshManager>() }
         single {
             val settings = get<app.getknit.knit.data.settings.SettingsStore>()
             LoraMeshTransport(
@@ -154,9 +157,12 @@ val meshModule =
                         settings.loraDeviceAddress,
                         settings.loraChannelIndex,
                         settings.loraDmEnabled,
-                    ) { on, addr, ch, dms -> if (on && addr != null) LoraConfig(addr, ch, dms) else null },
+                        settings.loraBridgeEnabled,
+                    ) { on, addr, ch, dms, bridge -> if (on && addr != null) LoraConfig(addr, ch, dms, bridge) else null },
                 selfProfile = { get<ProfileFrameSource>().signedProfile() },
                 farFrames = { get<FarPeerFrameSource>().framesFor(it) },
+                offerPrefixes = { get<BridgeFrameSource>().offerPrefixes(it) },
+                framesMissing = { prefixes, limit, dms -> get<BridgeFrameSource>().framesMissing(prefixes, limit, dms) },
                 scope = get(),
                 metrics = get(),
                 clock = SystemClock::elapsedRealtime,

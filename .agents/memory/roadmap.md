@@ -53,15 +53,23 @@ doc). **Don't start a deferred item without explicit direction.**
   out-of-band PSK sharing, QR/URL), a **periodic self-profile beacon** (a peer that only listens never
   triggers a beacon exchange or a re-offer), **Meshtastic unicast + `want_ack`** for DMs (needs a
   nodeNum↔nodeId map and a Routing `NONE`-is-success branch), **re-offer beyond the heard peer** (a
-  board-less recipient behind another board-holder — the "true DM routing" deferral),
-  **multi-board-per-clique dedup** (one board per clique for now), an **in-app scan + bond flow**
+  board-less recipient behind another board-holder — the "true DM routing" deferral), an **in-app scan + bond flow**
   (`MeshtasticScanner`/`MeshtasticBonder` are written but unwired — device-only verifiable, and the scan must
   go through `BleConnectArbiter`; the picker filters bonded devices instead, ADR 040), and a **per-message
   `loraTooBig` marker** (no persisted evidence; ADR 040's composer hint covers the sending side). **The plane's
   UI SHIPPED** (2026-08-25, ADR 040): `DeliveryPlane.LoRa` + bubble glyph, the header glyph, the board-only
   picker with a channel verdict, the LoRa-only DM notice and the long-message composer hint; the board's
   battery in the status + Profile rows followed (ADR 041). See
-  `context/lora-bridge.md`.
+  `context/lora-bridge.md`. **Bridging between mesh pockets SHIPPED** (2026-08-25, ADR 044): a `LoraCtl`
+  gossip OFFER (tag `0x10`, ≤ 48 id prefixes, one packet), a gateway election off `foreignReachable` that
+  closes the **multi-board-per-clique** deferral above, an airtime governor reading the board's region and
+  modem preset, and digest-driven backfill of what a far gateway's offer shows it lacks — behind
+  `SettingsStore.loraBridgeEnabled` (default on). Live traffic already crossed before this and was not
+  rebuilt. **Still owed:** the **four-device two-pocket trial** in `context/lora-bridge.md`. Still deferred
+  here: an **IBLT/Bloom offer body** (48 prefixes is a window — the upgrade if a busy pocket's oldest frames
+  start falling off it), **acknowledged backfill** (a served frame lost to the air waits for the next round),
+  and **faster passive-to-active takeover** when an active gateway's phone dies without leaving
+  `foreignReachable` (the 45-min `STALE_MS` is the whole blind spot today).
 
 - **The spool plane is hidden in shipped builds** (2026-08-22, ADR 031) — `BuildConfig.INTERNET_PLANE`
   is true in debug, false in release/staging, `-PinternetPlane=true|false` overrides. It gates

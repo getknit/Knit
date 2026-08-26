@@ -136,6 +136,7 @@ enum class FastPathDrop {
  * rebroadcasting the overhear suppression eliminates; [Snapshot.bytesSent] tracks the CBOR win;
  * [Snapshot.dropsByReason] makes the otherwise-silent inbound drops visible during a rollout.
  */
+@Suppress("TooManyFunctions") // a flat counter registry: one tiny increment per metric, so the count tracks the metrics
 class MeshMetrics {
     private val framesOriginated = AtomicLong()
     private val framesDelivered = AtomicLong()
@@ -204,6 +205,11 @@ class MeshMetrics {
     private val loraDmSent = AtomicLong()
     private val loraDmReceived = AtomicLong()
     private val loraReoffered = AtomicLong()
+    private val loraOfferSent = AtomicLong()
+    private val loraOfferReceived = AtomicLong()
+    private val loraBridged = AtomicLong()
+    private val loraBridgeRefused = AtomicLong()
+    private val loraPassive = AtomicLong()
 
     /** A frame this device authored and injected into the mesh. */
     fun onOriginated() {
@@ -547,6 +553,34 @@ class MeshMetrics {
         loraReoffered.incrementAndGet()
     }
 
+    /** A gossip OFFER we published — one packet naming the custody window this gateway holds (ADR 044). */
+    fun onLoraOfferSent() {
+        loraOfferSent.incrementAndGet()
+    }
+
+    /** A gossip OFFER heard from another gateway, co-pocket or far. */
+    fun onLoraOfferReceived() {
+        loraOfferReceived.incrementAndGet()
+    }
+
+    /** Frames served across the bridge because a far gateway's OFFER showed it lacked them. */
+    fun onLoraBridged(count: Int) {
+        loraBridged.addAndGet(count.toLong())
+    }
+
+    /** A backfill request refused outright — the publisher had already spent its hourly serve allowance. */
+    fun onLoraBridgeRefused() {
+        loraBridgeRefused.incrementAndGet()
+    }
+
+    /**
+     * A transmission suppressed because another board in this pocket is the gateway. Healthy and expected on
+     * a spare board; climbing on a phone that should be bridging means the election picked someone else.
+     */
+    fun onLoraPassive() {
+        loraPassive.incrementAndGet()
+    }
+
     @Suppress("LongMethod") // a flat field-by-field copy — one line per counter; splitting it would only scatter it
     fun snapshot(): Snapshot {
         val byReason = drops.mapValues { it.value.get() }
@@ -618,6 +652,11 @@ class MeshMetrics {
             loraDmSent = loraDmSent.get(),
             loraDmReceived = loraDmReceived.get(),
             loraReoffered = loraReoffered.get(),
+            loraOfferSent = loraOfferSent.get(),
+            loraOfferReceived = loraOfferReceived.get(),
+            loraBridged = loraBridged.get(),
+            loraBridgeRefused = loraBridgeRefused.get(),
+            loraPassive = loraPassive.get(),
         )
     }
 
@@ -688,5 +727,10 @@ class MeshMetrics {
         val loraDmSent: Long = 0,
         val loraDmReceived: Long = 0,
         val loraReoffered: Long = 0,
+        val loraOfferSent: Long = 0,
+        val loraOfferReceived: Long = 0,
+        val loraBridged: Long = 0,
+        val loraBridgeRefused: Long = 0,
+        val loraPassive: Long = 0,
     )
 }

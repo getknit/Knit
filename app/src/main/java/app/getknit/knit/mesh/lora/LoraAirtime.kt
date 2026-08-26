@@ -1,0 +1,218 @@
+package app.getknit.knit.mesh.lora
+
+import kotlin.math.ceil
+import kotlin.math.min
+import kotlin.math.pow
+
+/**
+ * Which airtime budget a queued frame spends from. Orthogonal to [FrameClass], which is about *queue
+ * shedding* — a backfilled DM keeps its DM class (so a room post never evicts it) while spending from the
+ * [BRIDGE] budget (so backfill can never crowd live chat off the air).
+ */
+internal enum class AirBucket {
+    /** Somebody is waiting for this right now: the live fan-out, the targeted tick, the profile bootstrap. */
+    LIVE,
+
+    /** Nobody is waiting: the gossip offer, the digest-driven backfill, and the first-hearing re-offer. */
+    BRIDGE,
+}
+
+/** A read-only view of the governor for the settings row and the `…debug.LORA` dump. */
+internal data class AirtimeSnapshot(
+    val preset: ModemPreset,
+    val region: LoraRegion,
+    val known: Boolean,
+    val liveUsedMs: Long,
+    val liveBudgetMs: Long,
+    val bridgeUsedMs: Long,
+    val bridgeBudgetMs: Long,
+)
+
+/**
+ * The LoRa plane's airtime governor: turns a packet size into milliseconds on air, keeps a rolling
+ * one-hour ledger of what we have spent, and answers whether one more packet fits its bucket's budget.
+ *
+ * Before this existed the only regulator was reactive — the board's `DUTY_CYCLE_LIMIT` NAK, which arrives
+ * *after* the medium has already been abused, and [LoraPacePolicy]'s fixed 3-second gap, which by itself
+ * would allow ~1200 packets an hour (over 70 % duty). That was survivable while the plane only carried
+ * frames a human had just typed; it is not once the bridge starts serving backfill nobody asked for.
+ *
+ * Two budgets come out of one number. [AirBucket.LIVE] may spend the whole allowance; [AirBucket.BRIDGE] is
+ * capped at [bridgeShare] of it, so a busy bridge degrades into serving less history rather than into
+ * delaying somebody's message. A [FrameClass.BOOTSTRAP] frame is always admitted and merely recorded —
+ * nothing verifies without the author's profile, so refusing it would cost more airtime than it saves
+ * (every frame that peer sends afterwards is undecodable and re-served forever).
+ *
+ * The allowance itself is `min(the region's duty cycle, a politeness ceiling) x a safety factor`. The
+ * region and modem preset are read off the board ([LoraRadioConfig]); until the handshake reports them we
+ * assume [FALLBACK_PERCENT], which is below every real region's limit. Pure and clock-driven by the caller,
+ * like [LoraPacePolicy] — the transport owns the actual clock.
+ */
+internal class LoraAirtime(
+    private val windowMs: Long = WINDOW_MS,
+    private val safety: Double = SAFETY,
+    private val bridgeShare: Double = BRIDGE_SHARE,
+    private val politeCeilingPercent: Double = POLITE_CEILING_PERCENT,
+) {
+    private class Sample(
+        val atMs: Long,
+        val ms: Long,
+        val bucket: AirBucket,
+    )
+
+    private val samples = ArrayDeque<Sample>()
+    private var liveUsedMs = 0L
+    private var bridgeUsedMs = 0L
+
+    /** The board's radio settings, or null until the handshake reports them. */
+    var radio: LoraRadioConfig? = null
+        private set
+
+    /** Records the board's radio settings from the config handshake; a null report leaves the last one standing. */
+    fun onRadioConfig(config: LoraRadioConfig?) {
+        if (config != null) radio = config
+    }
+
+    /**
+     * Milliseconds this packet will occupy the medium, from the LoRa time-on-air formula (Semtech AN1200.13)
+     * at the board's preset. [payloadBytes] is the `Data.payload` we hand the board; [PACKET_OVERHEAD_BYTES]
+     * covers the Meshtastic header and protobuf/crypto framing around it. This is a governor's estimate, not
+     * a measurement — it does not know the board's preamble length or whether a rebroadcaster repeated us.
+     */
+    fun timeOnAirMs(payloadBytes: Int): Long {
+        val preset = radio?.modemPreset ?: ModemPreset.LONG_FAST
+        val sf = preset.spreadFactor
+        val symbolMs = 2.0.pow(sf) * MS_PER_SECOND / preset.bandwidthHz
+        // Low-data-rate optimize: the firmware enables it once a symbol exceeds 16 ms, which costs 2 bits/symbol.
+        val de = if (symbolMs > LDO_THRESHOLD_MS) 1 else 0
+        val phyBytes = payloadBytes + PACKET_OVERHEAD_BYTES
+        val numerator = (BITS_PER_BYTE * phyBytes - 4 * sf + PAYLOAD_CONST + CRC_BITS).toDouble()
+        val denominator = (4 * (sf - 2 * de)).toDouble()
+        val payloadSymbols = PAYLOAD_SYMBOL_BASE + maxOf(0.0, ceil(numerator / denominator) * preset.codingRate)
+        return ((PREAMBLE_SYMBOLS + payloadSymbols) * symbolMs).toLong().coerceAtLeast(1)
+    }
+
+    /** The one-hour allowance, in milliseconds of air, before the per-bucket split. */
+    fun allowanceMs(): Long {
+        val cfg = radio
+        val percent =
+            when {
+                cfg == null -> FALLBACK_PERCENT
+
+                // The user set the firmware's own duty-cycle override: they have taken the regulatory call,
+                // so we stop applying the regional cap and keep only our own politeness ceiling.
+                cfg.overrideDutyCycle -> politeCeilingPercent
+
+                else -> min(cfg.region.dutyCyclePercent, politeCeilingPercent)
+            }
+        return (windowMs * percent / PERCENT * safety).toLong()
+    }
+
+    fun budgetMs(bucket: AirBucket): Long =
+        when (bucket) {
+            AirBucket.LIVE -> allowanceMs()
+            AirBucket.BRIDGE -> (allowanceMs() * bridgeShare).toLong()
+        }
+
+    fun usedMs(
+        bucket: AirBucket,
+        now: Long,
+    ): Long {
+        prune(now)
+        return if (bucket == AirBucket.LIVE) liveUsedMs else bridgeUsedMs
+    }
+
+    /**
+     * Whether a whole frame — [payloadSizes] is one entry per packet it fragments into — fits [bucket]'s
+     * budget. Admission is all-or-nothing per frame: half a fragmented message on the air is pure waste, so
+     * a frame that does not fit entirely waits rather than starting. A [FrameClass.BOOTSTRAP] frame is
+     * always admitted (see the class doc). Note [AirBucket.BRIDGE] spending counts against **both** budgets:
+     * the bridge is a share of the one allowance, not a second allowance beside it.
+     */
+    fun admits(
+        bucket: AirBucket,
+        klass: FrameClass,
+        payloadSizes: List<Int>,
+        now: Long,
+    ): Boolean {
+        if (klass == FrameClass.BOOTSTRAP) return true
+        prune(now)
+        val cost = payloadSizes.sumOf { timeOnAirMs(it) }
+        if (liveUsedMs + bridgeUsedMs + cost > budgetMs(AirBucket.LIVE)) return false
+        return bucket != AirBucket.BRIDGE || bridgeUsedMs + cost <= budgetMs(AirBucket.BRIDGE)
+    }
+
+    /** Books [payloadBytes] of air against [bucket]. Called once the board has actually accepted the write. */
+    fun record(
+        bucket: AirBucket,
+        payloadBytes: Int,
+        now: Long,
+    ) {
+        prune(now)
+        val ms = timeOnAirMs(payloadBytes)
+        samples.addLast(Sample(now, ms, bucket))
+        if (bucket == AirBucket.LIVE) liveUsedMs += ms else bridgeUsedMs += ms
+    }
+
+    fun snapshot(now: Long): AirtimeSnapshot {
+        prune(now)
+        val cfg = radio
+        return AirtimeSnapshot(
+            preset = cfg?.modemPreset ?: ModemPreset.LONG_FAST,
+            region = cfg?.region ?: LoraRegion.UNSET,
+            known = cfg != null,
+            liveUsedMs = liveUsedMs,
+            liveBudgetMs = budgetMs(AirBucket.LIVE),
+            bridgeUsedMs = bridgeUsedMs,
+            bridgeBudgetMs = budgetMs(AirBucket.BRIDGE),
+        )
+    }
+
+    /** Drops samples that have aged out of the rolling window. Cheap: the deque is in send order. */
+    private fun prune(now: Long) {
+        while (true) {
+            val oldest = samples.firstOrNull() ?: return
+            if (now - oldest.atMs < windowMs) return
+            samples.removeFirst()
+            if (oldest.bucket == AirBucket.LIVE) liveUsedMs -= oldest.ms else bridgeUsedMs -= oldest.ms
+        }
+    }
+
+    companion object {
+        /** The rolling window every budget is expressed over. */
+        const val WINDOW_MS = 60 * 60_000L
+
+        /**
+         * How much of the legal allowance Knit will use. We share the band with everyone else's Meshtastic
+         * traffic, and the estimate above is an estimate — half is the honest place to sit.
+         */
+        const val SAFETY = 0.5
+
+        /** The share of the allowance reserved for gossip + backfill; live traffic may use all of it. */
+        const val BRIDGE_SHARE = 0.30
+
+        /**
+         * The cap Knit applies even where the law does not. Most regions run at 100 % duty, but a phone that
+         * transmits a third of every hour on a shared community band is a bad neighbour, and the Meshtastic
+         * firmware itself warns above 10 % channel utilization.
+         */
+        const val POLITE_CEILING_PERCENT = 10.0
+
+        /** Assumed before the board reports its region — below every real region's limit. */
+        const val FALLBACK_PERCENT = 5.0
+
+        /** Meshtastic header + protobuf/crypto framing around our `Data.payload`. */
+        const val PACKET_OVERHEAD_BYTES = 24
+
+        private const val PERCENT = 100.0
+        private const val MS_PER_SECOND = 1000.0
+        private const val LDO_THRESHOLD_MS = 16.0
+        private const val BITS_PER_BYTE = 8
+        private const val PAYLOAD_CONST = 28
+        private const val CRC_BITS = 16
+        private const val PAYLOAD_SYMBOL_BASE = 8.0
+
+        /** 16 preamble symbols (the firmware's setting) plus the 4.25-symbol sync word. */
+        private const val PREAMBLE_SYMBOLS = 20.25
+    }
+}

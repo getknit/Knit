@@ -176,6 +176,47 @@ class MeshtasticProtoTest {
     }
 
     @Test
+    fun decodeLoraRadioConfig() {
+        // FromRadio{config=5}{lora=6}{use_preset=1 t, modem_preset=2 MEDIUM_FAST, region=7 EU_868,
+        // hop_limit=8 -> 3, override_duty_cycle=12 f}
+        val fr = MeshtasticProto.decodeFromRadio(hex("2A 0C 32 0A 08 01 10 04 38 03 40 03 60 00"))
+        assertEquals(
+            FromRadio.Config(
+                LoraRadioConfig(
+                    usePreset = true,
+                    modemPreset = ModemPreset.MEDIUM_FAST,
+                    region = LoraRegion.EU_868,
+                    hopLimit = 3,
+                    overrideDutyCycle = false,
+                ),
+            ),
+            fr,
+        )
+    }
+
+    @Test
+    fun decodeLoraRadioConfigHonoursTheDutyCycleOverride() {
+        val fr = MeshtasticProto.decodeFromRadio(hex("2A 06 32 04 38 03 60 01")) as FromRadio.Config
+        assertEquals(true, fr.lora?.overrideDutyCycle)
+        assertEquals(LoraRegion.EU_868, fr.lora?.region)
+    }
+
+    @Test
+    fun anotherConfigVariantDecodesToANullRadioRatherThanBreakingTheHandshake() {
+        // FromRadio{config=5}{device=1}{role=1} — a variant we don't read.
+        assertEquals(FromRadio.Config(null), MeshtasticProto.decodeFromRadio(hex("2A 04 0A 02 08 01")))
+    }
+
+    @Test
+    fun anUnknownPresetOrRegionFallsBackRatherThanThrowing() {
+        // An over-estimating preset and a 100 %-duty region are the safe fallbacks for codes we don't know.
+        assertEquals(ModemPreset.LONG_FAST, ModemPreset.fromCode(99))
+        assertEquals(LoraRegion.OTHER, LoraRegion.fromCode(99))
+        assertEquals(LoraRegion.OTHER, LoraRegion.fromCode(1)) // US: 100 % duty, collapses into OTHER
+        assertEquals(LoraRegion.UNSET, LoraRegion.fromCode(0))
+    }
+
+    @Test
     fun decodeRebooted() {
         assertEquals(FromRadio.Rebooted, MeshtasticProto.decodeFromRadio(hex("40 01")))
     }

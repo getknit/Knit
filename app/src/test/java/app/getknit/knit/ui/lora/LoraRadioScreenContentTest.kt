@@ -34,6 +34,7 @@ class LoraRadioScreenContentTest {
         state: LoraRadioUiState,
         onToggle: (Boolean) -> Unit = {},
         onShowAllBoards: (Boolean) -> Unit = {},
+        onToggleBridge: (Boolean) -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
@@ -41,6 +42,7 @@ class LoraRadioScreenContentTest {
                     state = state,
                     onBack = {},
                     onToggle = onToggle,
+                    onToggleBridge = onToggleBridge,
                     onShowAllBoards = onShowAllBoards,
                 )
             }
@@ -79,7 +81,7 @@ class LoraRadioScreenContentTest {
     @Test
     fun noPairedDeviceAtAllAsksToPairOne() {
         render(LoraRadioUiState(enabled = true, anyBonded = false))
-        compose.onNodeWithText("No paired Meshtastic boards found", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("No paired Meshtastic boards found", substring = true).performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_show_all_boards").assertDoesNotExist()
     }
 
@@ -87,7 +89,7 @@ class LoraRadioScreenContentTest {
     fun onlyNonBoardsPairedSaysSoAndOffersToShowThem() {
         var showAll: Boolean? = null
         render(LoraRadioUiState(enabled = true, anyBonded = true, hiddenBoards = 2), onShowAllBoards = { showAll = it })
-        compose.onNodeWithTag("lora_board_none_meshtastic").assertIsDisplayed()
+        compose.onNodeWithTag("lora_board_none_meshtastic").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("2 other paired devices hidden").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_show_all_boards").assertIsOff()
         compose.onNodeWithTag("lora_show_all_boards").performClick()
@@ -97,7 +99,7 @@ class LoraRadioScreenContentTest {
     @Test
     fun theShowAllToggleStaysAwayWhenNothingIsHidden() {
         render(connected())
-        compose.onNodeWithTag("lora_board_AA:BB:CC:DD:EE:FF").assertIsDisplayed()
+        compose.onNodeWithTag("lora_board_AA:BB:CC:DD:EE:FF").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_show_all_boards").assertDoesNotExist()
     }
 
@@ -151,5 +153,33 @@ class LoraRadioScreenContentTest {
     fun noBatteryReadingMeansNoBatteryLine() {
         render(connected())
         compose.onNodeWithTag("lora_battery").assertDoesNotExist()
+    }
+
+    @Test
+    fun theBridgeSwitchReflectsTheStoredSettingAndReportsATap() {
+        var toggled: Boolean? = null
+        render(connected().copy(bridgeEnabled = false), onToggleBridge = { toggled = it })
+        compose.onNodeWithTag("lora_bridge_switch").performScrollTo().assertIsOff()
+        compose.onNodeWithTag("lora_bridge_switch").performClick()
+        assertEquals(true, toggled)
+    }
+
+    @Test
+    fun theAirtimeLedgerShowsOnceTheBoardIsConnected() {
+        render(connected().copy(airtimePercent = 42))
+        compose.onNodeWithTag("lora_airtime").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("42%", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun aSpareBoardSaysItIsListeningRatherThanLookingBroken() {
+        render(connected().copy(bridgePassive = true))
+        compose.onNodeWithTag("lora_role_passive").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun theActiveGatewaySaysNothingAboutItsRole() {
+        render(connected())
+        compose.onNodeWithTag("lora_role_passive").assertDoesNotExist()
     }
 }

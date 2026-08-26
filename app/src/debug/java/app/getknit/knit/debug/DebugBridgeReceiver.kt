@@ -888,6 +888,11 @@ class DebugBridgeReceiver :
             .put("loraDmSent", snap.loraDmSent)
             .put("loraDmReceived", snap.loraDmReceived)
             .put("loraReoffered", snap.loraReoffered)
+            .put("loraOfferSent", snap.loraOfferSent)
+            .put("loraOfferReceived", snap.loraOfferReceived)
+            .put("loraBridged", snap.loraBridged)
+            .put("loraBridgeRefused", snap.loraBridgeRefused)
+            .put("loraPassive", snap.loraPassive)
 
     /**
      * Dumps the DM ratchet's per-peer state and, with `--es reset <peerNodeId>`, forces a session reset
@@ -1041,12 +1046,14 @@ class DebugBridgeReceiver :
         if (intent.hasExtra("channel")) settings.setLoraChannelIndex(intent.getIntExtra("channel", 0))
         if (intent.hasExtra(EXTRA_ON)) settings.setLoraEnabled(intent.getBooleanExtra(EXTRA_ON, false))
         if (intent.hasExtra("dms")) settings.setLoraDmEnabled(intent.getBooleanExtra("dms", true))
+        if (intent.hasExtra("bridge")) settings.setLoraBridgeEnabled(intent.getBooleanExtra("bridge", true))
 
         val status = lora.status.value
         return JSONObject()
             .put("status", "ok")
             .put("enabled", settings.loraEnabled.first())
             .put("dms", settings.loraDmEnabled.first())
+            .put("bridge", settings.loraBridgeEnabled.first())
             .put("address", settings.loraDeviceAddress.first() ?: JSONObject.NULL)
             .put("channel", settings.loraChannelIndex.first())
             .put("state", status.state::class.simpleName)
@@ -1055,7 +1062,20 @@ class DebugBridgeReceiver :
             .put("rssi", status.lastRssi ?: JSONObject.NULL)
             .put("queueFree", status.queueFree ?: JSONObject.NULL)
             .put("heard", status.heard)
-            .put("counters", metricsJson(metrics.snapshot()))
+            // The bridge's own oracle (ADR 044): which board here speaks for the pocket, what the radio is,
+            // and how much of the hour's airtime allowance has gone — the numbers a two-pocket trial reads.
+            .put("role", status.role.name)
+            .put("radio", status.airtime?.let { "${it.region}/${it.preset}${if (it.known) "" else " (assumed)"}" } ?: JSONObject.NULL)
+            .put(
+                "airtime",
+                status.airtime?.let { air ->
+                    JSONObject()
+                        .put("liveMs", air.liveUsedMs)
+                        .put("liveBudgetMs", air.liveBudgetMs)
+                        .put("bridgeMs", air.bridgeUsedMs)
+                        .put("bridgeBudgetMs", air.bridgeBudgetMs)
+                } ?: JSONObject.NULL,
+            ).put("counters", metricsJson(metrics.snapshot()))
     }
 
     /**

@@ -35,7 +35,8 @@ custody / relay all run unchanged.
 
 ```
 LoraMeshTransport (pure)      fastFanout/longRangeFanout/fastSend · LoraFramePolicy (+ isFresh) · LoraFrameCodec ·
-                              LoraPacePolicy (class shedding) · reachable(45min linger) · beacon + reofferTo on first hearing
+                              LoraPacePolicy (class shedding + LoraAirtime budget) · reachable(45min linger) ·
+                              beacon + reofferTo on first hearing · LoraGatewayPolicy/LoraGossipPolicy/LoraCtl (the bridge)
   └─ MeshtasticLink (seam)    state / packets / outcomes / queue / rxQuality · suspend send()
        └─ MeshtasticSession   pure actor: want_config handshake · drain-until-empty on FromNum · 180s heartbeat ·
           (pure)              client packet ids ↔ queueStatus/NAK · reconnect-with-backoff (ConnectBackoffPolicy)
@@ -74,13 +75,56 @@ this is the only way a late arrival learns our key). The composite's self-profil
 SeenSet** (first 8 B of `sig`, 10 min) recorded on send *and* receive stops re-fanning a LoRa-received
 frame and bounds AckSync's 24 h verbatim tick retries.
 
+## Bridging pockets (ADR 044)
+
+Two BLE/NAN cliques ("pockets") out of range of each other, one board-holder in each, boards in LoRa range.
+**Live traffic already crossed** before ADR 044 and still does with no new machinery: `InboundPipeline.onDeliver`
+re-fans every first-seen *relayed* frame, and `fanout` never checked authorship — so a post by any pocket-A
+member reaches A's gateway over BLE, crosses the hop, and floods pocket B from B's gateway. ADR 044 adds the
+three things that were missing.
+
+**A gateway role.** `LoraGatewayPolicy`: anything publishing a `LoraCtl` OFFER has a board; a publisher whose
+key is in `foreignReachable` (the composite fills that from **short-range** siblings only, so it *is* "my
+BLE/NAN pocket") is a co-pocket rival, one outside it is the bridge peer and is never suppressed. Lowest
+publisher key wins; the rest go PASSIVE and transmit **nothing** (fan-out, `fastSend`, beacon, offer, backfill
+— inbound is untouched, so a spare board still feeds its pocket). Self-healing with no timer: a rival that
+walks away leaves `foreignReachable`, one whose board dies stops publishing and ages out of `STALE_MS` (45 min).
+Closes ADR 038's "one board per clique" residual.
+
+**An airtime governor.** `LoraAirtime` (pure): time-on-air from the LoRa formula at the board's own preset
+(233 B at LongFast ≈ 2 s), a rolling hour, and one allowance = `min(region duty cycle, 10 % politeness) × 0.5`.
+`AirBucket.LIVE` may spend all of it; `AirBucket.BRIDGE` (offers + backfill + the ADR 039 re-offer) is capped
+at 30 %, so backfill degrades before live chat does. `FrameClass.BOOTSTRAP` is always admitted. Region + preset
+are read off the board (`FromRadio.config` → `Config.LoRaConfig`, pinned by `MeshtasticProtoTest`; conservative
+5 % until reported). `LoraPacePolicy.take` consults it, skipping a refused frame rather than blocking behind
+it, and **dequeue is now by class then FIFO** (a reversal of ADR 039 §5 — bursts of backfill must not queue-jump
+a live message).
+
+**Digest-driven backfill.** `LoraCtl` (tag **`0x10`**, beside `FastFrameCodec`'s `0x03`/`0x04`; an older build
+drops it as `UNKNOWN_TAG`, which is what makes this additive) carries an OFFER: publisher key + ≤ 48 4-byte id
+prefixes (`StoreDigest.hash64` truncated), never fragmented, one packet. `LoraGossipPolicy` is Trickle —
+5 → 15 min doubling, transmit in the interval's second half, snap to the floor on news, suppress only on **set
+equality** (a superset has not said what we needed to say). On a far gateway's OFFER: `BridgeFrameSource`
+(`MeshManager` over `ForwardStore.liveFrames`, already TTL- and quota-bounded, so no extra age gate) returns
+what the prefixes don't name, ranked profile → DM → room newest-first; ≤ 4 per offer, ≤ 12 per publisher per
+hour, sig-deduped, and hard-bounded by the BRIDGE budget. Frames are re-wrapped verbatim like any custody
+re-serve — no wire change, no custody rule touched. `SettingsStore.loraBridgeEnabled` (default **on**, the
+"Bridge distant groups" switch) gates offering and serving together.
+
+**Multi-hop is Meshtastic's job.** A frame injected at a far gateway can't be re-transmitted (sig dedup) and a
+second board there is PASSIVE, so a third pocket is reached by the board's own 3-hop flood, not by a second
+phone-level send.
+
 ## Pacing
 
-`LoraPacePolicy` (pure): 3 s min inter-packet gap, a 12-frame queue, NAK back-off (rate/duty → a 60 s
-cool-down), hold while `queueFree == 0`. When full the queue **sheds by class** (`FrameClass`: BOOTSTRAP >
+`LoraPacePolicy` (pure): 3 s min inter-packet gap, a 16-frame queue, NAK back-off (rate/duty → a 60 s
+cool-down), hold while `queueFree == 0`, and (ADR 044) a hold while the frame's [AirBucket] budget is spent —
+a refused frame is skipped rather than blocking the queue behind it. When full the queue **sheds by class** (`FrameClass`: BOOTSTRAP >
 DM > ROOM): the oldest **whole** frame (never a lone fragment) of the lowest class present goes, the
 newcomer included — a room post alone at the bottom is `REFUSED` rather than evicting a DM, and nothing ever
-evicts the profile bootstrap. Dequeue stays FIFO. Both eviction and refusal count as `loraDroppedQueue`.
+evicts the profile bootstrap. Dequeue runs the same class order forwards since ADR 044 (highest class first,
+FIFO within it — bursts of gossip/backfill must not queue-jump a live message). Both eviction and refusal
+count as `loraDroppedQueue`.
 
 **Freshness gate** (fan-out paths only, room included): a `chat`/`reaction` whose `sentAt` is more than
 15 min old (`LoraFramePolicy.FRESH_MS`) is a custody re-serve and is not fanned — without it a newcomer's
@@ -201,7 +245,8 @@ Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.me
   `lora provision wrote chN 'Knit'` (or `reuse`) → the board reboots and the link reconnects → the channel
   index in settings now points at the Knit slot. Both boards must be provisioned before frames cross.
 - `…debug.LORA` (debug bridge): `--es address <MAC>` + `--es name <n>` binds a board, `--ei channel <idx>`,
-  `--ez on <true|false>`; no extras dumps `state/boardNodeNum/snr/rssi/queueFree/heard/counters`. It is the
+  `--ez on <true|false>`, `--ez bridge <true|false>`; no extras dumps
+  `state/boardNodeNum/snr/rssi/queueFree/heard/role/radio/airtime/counters`. It is the
   two-board oracle. `…debug.LORATX --es text <s>` sends a raw payload straight to the board (board-side
   sanity via `meshtastic --noproto`). `…debug.LORAPROV` writes the Knit channel headlessly (reports the slot).
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips
@@ -215,6 +260,17 @@ Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.me
   ✓✓ returns, `loraReoffered == 2`. `…debug.LORA --ez dms false` on A → a new DM stays LoRa-silent
   (`loraDmSent` flat) while a room post crosses. Rejoin a BLE clique after an hour of history:
   `loraSuppressed` climbs, `loraDroppedQueue` stays 0.
+
+- Bridge (ADR 044), the four-device trial: pocket A = board-holder + one more phone, pocket B likewise, the
+  two pockets out of BLE/NAN range of each other. `…debug.LORA` shows `role: ACTIVE` on both board-holders and
+  a real `radio` (region/preset off the board, not `(assumed)`). (1) A room post from A's **board-less** phone
+  reaches B's board-less phone in ~10 s — `loraSent`/`loraReceived` climb on the gateways only. (2) Power B's
+  board off, post twice in A, wait past `FRESH_MS` (15 min), power it back on → B offers, A logs
+  `lora bridge served=2`, both land, `loraBridged == 2`. (3) Pair a third board to A's second phone → it
+  reports `role: PASSIVE`, `loraPassive` climbs, its `loraSent` stays flat, and the bridge keeps working.
+  (4) Over an hour of chat pace: `airtime.liveMs` under `liveBudgetMs`, `bridgeMs` under `bridgeBudgetMs`,
+  `loraNak == 0`, `loraDroppedQueue == 0`. (5) `…debug.LORA --ez bridge false` → `loraOfferSent` stops
+  climbing and no backfill is served, while a live room post still crosses.
 
 ## First-session unknowns to confirm (assumptions, not blockers)
 

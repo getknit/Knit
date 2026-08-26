@@ -56,12 +56,58 @@ class LoraPacePolicyTest {
     }
 
     @Test
-    fun dequeueStaysFifoAcrossClasses() {
+    fun dequeueGoesByClassThenFifoWithinIt() {
         val pace = LoraPacePolicy(minGapMs = 0)
         pace.enqueue(frame("room"))
         pace.enqueue(frame("dm", FrameClass.DM))
         pace.enqueue(frame("profile", FrameClass.BOOTSTRAP))
-        assertEquals("class governs shedding, not send order", listOf("room", "dm", "profile"), drain(pace))
+        // ADR 044 changed this from plain FIFO: the bridge enqueues gossip and backfill in bursts nobody is
+        // waiting for, and at a 3-second gap those would put a live message seconds behind for no reason.
+        assertEquals("class governs send order too", listOf("profile", "dm", "room"), drain(pace))
+    }
+
+    @Test
+    fun withinOneClassTheOldestStillGoesFirst() {
+        val pace = LoraPacePolicy(minGapMs = 0)
+        pace.enqueue(frame("room-1"))
+        pace.enqueue(frame("room-2"))
+        pace.enqueue(frame("dm", FrameClass.DM))
+        pace.enqueue(frame("room-3"))
+        assertEquals(listOf("dm", "room-1", "room-2", "room-3"), drain(pace))
+    }
+
+    @Test
+    fun aFrameOverItsAirtimeBudgetIsSkippedRatherThanBlockingTheQueue() {
+        // A bridge frame with the bridge share spent must not hold up the live frame behind it.
+        val air = LoraAirtime()
+        val pace = LoraPacePolicy(minGapMs = 0, airtime = air)
+        var now = 0L
+        while (air.admits(AirBucket.BRIDGE, FrameClass.ROOM, listOf(MeshtasticProto.MAX_PAYLOAD), now)) {
+            air.record(AirBucket.BRIDGE, MeshtasticProto.MAX_PAYLOAD, now)
+            now += 3_000
+        }
+        val big = ByteArray(MeshtasticProto.MAX_PAYLOAD)
+        pace.enqueue(OutboundFrame(listOf(big), "backfill", FrameClass.ROOM, AirBucket.BRIDGE))
+        pace.enqueue(OutboundFrame(listOf(big), "live", FrameClass.ROOM, AirBucket.LIVE))
+        assertEquals("live", pace.take(now)!!.label)
+        assertEquals("the refused backfill is still queued, not dropped", 1, pace.pending)
+        assertEquals(1, pace.lastAirtimeRefusals)
+    }
+
+    @Test
+    fun theBootstrapRidesEvenWithTheBudgetSpent() {
+        val air = LoraAirtime()
+        val pace = LoraPacePolicy(minGapMs = 0, airtime = air)
+        var now = 0L
+        while (air.admits(AirBucket.LIVE, FrameClass.ROOM, listOf(MeshtasticProto.MAX_PAYLOAD), now)) {
+            air.record(AirBucket.LIVE, MeshtasticProto.MAX_PAYLOAD, now)
+            now += 3_000
+        }
+        val big = ByteArray(MeshtasticProto.MAX_PAYLOAD)
+        pace.enqueue(OutboundFrame(listOf(big), "room", FrameClass.ROOM, AirBucket.LIVE))
+        pace.enqueue(OutboundFrame(listOf(big), "profile", FrameClass.BOOTSTRAP, AirBucket.LIVE))
+        assertEquals("profile", pace.take(now)!!.label)
+        assertNull("everything else waits for the window to roll", pace.take(now + 10_000))
     }
 
     /** Takes everything queued, advancing the clock past the min gap between takes. */

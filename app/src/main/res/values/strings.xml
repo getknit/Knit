@@ -544,6 +544,13 @@
         <item quantity="one">%d peer heard over LoRa</item>
         <item quantity="other">%d peers heard over LoRa</item>
     </plurals>
+    <!-- Bridging distant groups over LoRa (ADR 044). -->
+    <string name="lora_bridge_title">Bridge distant groups</string>
+    <string name="lora_bridge_subtitle">Pass on messages between groups too far apart to reach each other, including ones you did not send, using a small capped share of airtime. Off, you also stop receiving what you missed.</string>
+    <string name="lora_role_passive">Another Knit board nearby is bridging — this one is listening</string>
+    <string name="lora_airtime">Airtime %1$d%% of this hour\'s budget</string>
+    <string name="lora_radio_config">Radio %1$s</string>
+
     <string name="lora_summary_off">Off</string>
     <string name="lora_summary_connected">On · %1$s · connected</string>
     <string name="lora_summary_connected_battery">On · %1$s · connected · battery %2$d%%</string>

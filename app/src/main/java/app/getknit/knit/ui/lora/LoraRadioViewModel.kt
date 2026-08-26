@@ -3,12 +3,14 @@ package app.getknit.knit.ui.lora
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardFilter
 import app.getknit.knit.mesh.lora.BoardRef
 import app.getknit.knit.mesh.lora.KnitChannel
 import app.getknit.knit.mesh.lora.LinkState
+import app.getknit.knit.mesh.lora.LoraGatewayPolicy
 import app.getknit.knit.mesh.lora.LoraPlaneStatus
 import app.getknit.knit.mesh.lora.ProvisionResult
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +38,7 @@ data class LoraRadioUiState(
     val enabled: Boolean = false,
     /** Whether private messages ride LoRa too (`SettingsStore.loraDmEnabled`; meaningful only while [enabled]). */
     val dmEnabled: Boolean = true,
+    val bridgeEnabled: Boolean = true,
     val boardName: String? = null,
     val boardAddress: String? = null,
     val channel: Int = 0,
@@ -48,6 +51,12 @@ data class LoraRadioUiState(
     val firmware: String? = null,
     /** The board's own battery, once it has reported one; null while not connected. */
     val battery: BoardBattery? = null,
+    /** True when another board in this BLE/NAN clique won the gateway election and this one only listens. */
+    val bridgePassive: Boolean = false,
+    /** Airtime spent this hour as a percentage of the plane's own budget, or null before the link is up. */
+    val airtimePercent: Int? = null,
+    /** The board's region and modem preset, once its config stream has reported them. */
+    val radioConfig: String? = null,
     /** The name the connected board gives the selected [channel] slot; null while not connected or when unnamed. */
     val channelName: String? = null,
     /** Connected, but the selected slot is not the Knit channel — the setup step most likely still owed. */
@@ -94,12 +103,12 @@ internal class LoraRadioViewModel(
 
     val state: StateFlow<LoraRadioUiState> =
         combine(
-            combine(settings.loraEnabled, settings.loraDmEnabled) { on, dms -> on to dms },
+            combine(settings.loraEnabled, settings.loraDmEnabled, settings.loraBridgeEnabled, ::Triple),
             picker,
             settings.loraChannelIndex,
             lora.status,
             provisionState,
-        ) { (enabled, dmEnabled), picker, channel, status, provision ->
+        ) { (enabled, dmEnabled, bridgeEnabled), picker, channel, status, provision ->
             val address = picker.address
             val ready = status.state as? LinkState.Ready
             // Slot 0 is the board's unnamed primary, so it reads as a mismatch too — correctly: Knit is never there.
@@ -112,6 +121,7 @@ internal class LoraRadioViewModel(
             LoraRadioUiState(
                 enabled = enabled,
                 dmEnabled = dmEnabled,
+                bridgeEnabled = bridgeEnabled,
                 boardName = picker.bonded.firstOrNull { it.address == address }?.name ?: address,
                 boardAddress = address,
                 channel = channel,
@@ -122,6 +132,9 @@ internal class LoraRadioViewModel(
                 heard = status.heard,
                 firmware = ready?.board?.firmwareVersion,
                 battery = ready?.let { status.battery },
+                bridgePassive = status.role == LoraGatewayPolicy.Role.PASSIVE,
+                airtimePercent = ready?.let { status.airtime?.let(::airtimePercent) },
+                radioConfig = ready?.radio?.let { "${it.region} ${it.modemPreset}" },
                 channelName = channelName,
                 channelMismatch = ready != null && channelName != KnitChannel.NAME,
                 boards =
@@ -136,6 +149,18 @@ internal class LoraRadioViewModel(
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LoraRadioUiState())
 
+    /**
+     * Airtime spent this hour as a percentage of what the plane allows itself — the LIVE budget, which is the
+     * whole allowance, so this reads as "how much of my radio time Knit has used". Rounded up, so any spending
+     * at all shows as at least 1 %.
+     */
+    private fun airtimePercent(air: AirtimeSnapshot): Int {
+        val budget = air.liveBudgetMs
+        if (budget <= 0) return 0
+        val used = air.liveUsedMs + air.bridgeUsedMs
+        return ((used * PERCENT + budget - 1) / budget).toInt().coerceIn(0, PERCENT.toInt())
+    }
+
     /** Re-reads the bonded list — the screen calls this on resume, so a board paired in Settings shows up on return. */
     fun refreshBoards() {
         refresh.update { it + 1 }
@@ -148,6 +173,10 @@ internal class LoraRadioViewModel(
 
     fun onToggle(on: Boolean) {
         viewModelScope.launch { settings.setLoraEnabled(on) }
+    }
+
+    fun onToggleBridge(on: Boolean) {
+        viewModelScope.launch { settings.setLoraBridgeEnabled(on) }
     }
 
     fun onToggleDms(on: Boolean) {
@@ -210,6 +239,7 @@ internal class LoraRadioViewModel(
     )
 
     private companion object {
+        private const val PERCENT = 100L
         const val STOP_TIMEOUT_MS = 5_000L
     }
 }

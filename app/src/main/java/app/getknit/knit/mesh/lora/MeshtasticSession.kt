@@ -66,6 +66,10 @@ internal class MeshtasticSession(
     // The board's identity + channels, set at handshake; read when building the Ready state and for logs.
     private var board: BoardInfo? = null
     private var channels: List<ChannelInfo> = emptyList()
+
+    // The board's radio settings (region + modem preset) from the handshake's Config stream — what the
+    // airtime governor needs. Null until a board reports them; kept across a re-handshake of the same board.
+    private var radio: LoraRadioConfig? = null
     private var lastWriteAt = 0L
 
     // Pending sends awaiting their queueStatus, keyed by our packet id, so a late NAK can still be matched.
@@ -179,7 +183,7 @@ internal class MeshtasticSession(
     ): SessionEnd {
         val handshake = handshake(address, channel)
         if (handshake != null) return handshake
-        _state.value = LinkState.Ready(requireNotNull(board), channels, mtu)
+        _state.value = LinkState.Ready(requireNotNull(board), channels, mtu, radio)
         lastWriteAt = now()
         val heartbeat = scope.launch { heartbeatTicker() }
         try {
@@ -250,14 +254,7 @@ internal class MeshtasticSession(
         while (now() < deadline) {
             when (val read = channel.readFromRadio(READ_TIMEOUT_MS)) {
                 is GattResult.Ok -> {
-                    when (val fr = MeshtasticProto.decodeFromRadio(read.value)) {
-                        is FromRadio.ConfigComplete -> if (fr.id == nonce) return null else Unit
-                        is FromRadio.MyInfo -> board = BoardInfo(fr.myNodeNum, fr.pioEnv, board?.firmwareVersion)
-                        is FromRadio.Metadata -> board = (board ?: BLANK_BOARD).copy(firmwareVersion = fr.firmwareVersion)
-                        is FromRadio.Channel -> channels = channels + fr.channel
-                        is FromRadio.NodeInfo -> onNodeInfo(fr)
-                        else -> Unit
-                    }
+                    if (absorb(MeshtasticProto.decodeFromRadio(read.value), nonce)) return null
                 }
 
                 else -> {
@@ -266,6 +263,28 @@ internal class MeshtasticSession(
             }
         }
         return SessionEnd(reason = "handshake timeout")
+    }
+
+    /**
+     * Folds one handshake `FromRadio` into the session's picture of the board — identity, firmware, channel
+     * table, radio settings, its own battery. Returns true on the `config_complete` that matches [nonce],
+     * which is what ends the handshake. Anything else (including a variant we don't read) is absorbed
+     * silently: the board streams its whole config, and an unknown entry must never stall the handshake.
+     */
+    private fun absorb(
+        fr: FromRadio?,
+        nonce: UInt,
+    ): Boolean {
+        when (fr) {
+            is FromRadio.ConfigComplete -> return fr.id == nonce
+            is FromRadio.MyInfo -> board = BoardInfo(fr.myNodeNum, fr.pioEnv, board?.firmwareVersion)
+            is FromRadio.Metadata -> board = (board ?: BLANK_BOARD).copy(firmwareVersion = fr.firmwareVersion)
+            is FromRadio.Channel -> channels = channels + fr.channel
+            is FromRadio.Config -> fr.lora?.let { radio = it }
+            is FromRadio.NodeInfo -> onNodeInfo(fr)
+            else -> Unit
+        }
+        return false
     }
 
     // --- draining reads ---
@@ -330,6 +349,16 @@ internal class MeshtasticSession(
 
             is FromRadio.NodeInfo -> {
                 onNodeInfo(fr)
+                Signal.Continue
+            }
+
+            is FromRadio.Config -> {
+                // The firmware pushes a Config when the user edits the radio on the board; keep the
+                // governor current without waiting for the next handshake.
+                fr.lora?.let {
+                    radio = it
+                    (_state.value as? LinkState.Ready)?.let { ready -> _state.value = ready.copy(radio = it) }
+                }
                 Signal.Continue
             }
 

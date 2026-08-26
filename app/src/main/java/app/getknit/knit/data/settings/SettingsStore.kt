@@ -189,6 +189,18 @@ class SettingsStore(
     val loraDmEnabled: Flow<Boolean> =
         dataStore.data.map { BuildConfig.LORA_PLANE && (it[KEY_LORA_DM_ENABLED] ?: true) }
 
+    /**
+     * Whether this board acts as a **bridge** between mesh pockets (ADR 044) — **default on** whenever the
+     * plane is on. Live traffic crosses the hop either way; this governs the part nobody is waiting for: the
+     * gossip offer that says what this node holds, and serving a far gateway the history its offer shows it
+     * is missing. Off in both directions at once — a node that stops offering also stops being served, which
+     * is the honest reading of "don't use my board for other people's backlog". The airtime governor bounds
+     * the cost regardless; this is the switch for someone who would rather spend none of it.
+     * Gated on `BuildConfig.LORA_PLANE` like [loraEnabled].
+     */
+    val loraBridgeEnabled: Flow<Boolean> =
+        dataStore.data.map { BuildConfig.LORA_PLANE && (it[KEY_LORA_BRIDGE_ENABLED] ?: true) }
+
     /** The bonded Meshtastic board's MAC address the LoRa plane binds to, or null if none is chosen. */
     val loraDeviceAddress: Flow<String?> = dataStore.data.map { it[KEY_LORA_ADDRESS] }
 
@@ -297,6 +309,8 @@ class SettingsStore(
     suspend fun setLoraEnabled(value: Boolean) = dataStore.edit { it[KEY_LORA_ENABLED] = value }
 
     suspend fun setLoraDmEnabled(value: Boolean) = dataStore.edit { it[KEY_LORA_DM_ENABLED] = value }
+
+    suspend fun setLoraBridgeEnabled(value: Boolean) = dataStore.edit { it[KEY_LORA_BRIDGE_ENABLED] = value }
 
     /** Records the chosen board's address + name in one write so the row can never show a name without an address. */
     suspend fun setLoraDevice(
@@ -416,6 +430,7 @@ class SettingsStore(
         val KEY_SPOOL_CONSENTED = booleanPreferencesKey("spool_consented")
         val KEY_LORA_ENABLED = booleanPreferencesKey("lora_enabled")
         val KEY_LORA_DM_ENABLED = booleanPreferencesKey("lora_dm_enabled")
+        val KEY_LORA_BRIDGE_ENABLED = booleanPreferencesKey("lora_bridge_enabled")
         val KEY_LORA_ADDRESS = stringPreferencesKey("lora_device_address")
         val KEY_LORA_NAME = stringPreferencesKey("lora_device_name")
         val KEY_LORA_CHANNEL = intPreferencesKey("lora_channel_index")

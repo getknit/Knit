@@ -1,14 +1,18 @@
 package app.getknit.knit.ui.lora
 
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardInfo
 import app.getknit.knit.mesh.lora.BoardRef
 import app.getknit.knit.mesh.lora.ChannelInfo
 import app.getknit.knit.mesh.lora.LinkState
+import app.getknit.knit.mesh.lora.LoraGatewayPolicy
 import app.getknit.knit.mesh.lora.LoraPlaneStatus
+import app.getknit.knit.mesh.lora.LoraRegion
 import app.getknit.knit.mesh.lora.LoraStatus
+import app.getknit.knit.mesh.lora.ModemPreset
 import app.getknit.knit.mesh.lora.ProvisionResult
 import io.mockk.every
 import io.mockk.mockk
@@ -36,12 +40,14 @@ import org.junit.Test
 class LoraRadioViewModelTest {
     private val enabled = MutableStateFlow(true)
     private val dms = MutableStateFlow(true)
+    private val bridge = MutableStateFlow(true)
     private val address = MutableStateFlow<String?>("AA:BB:CC:DD:EE:01")
     private val channel = MutableStateFlow(1)
     private val settings =
         mockk<SettingsStore>(relaxed = true) {
             every { loraEnabled } returns enabled
             every { loraDmEnabled } returns dms
+            every { loraBridgeEnabled } returns bridge
             every { loraDeviceAddress } returns address
             every { loraChannelIndex } returns channel
         }
@@ -171,6 +177,78 @@ class LoraRadioViewModelTest {
             advanceUntilIdle()
             assertNull(vm.state.value.channelName)
             assertTrue(vm.state.value.channelMismatch)
+        }
+
+    @Test
+    fun `the bridge switch reflects the stored setting and a tap writes it back`() =
+        runTest {
+            val vm = start()
+            assertTrue(vm.state.value.bridgeEnabled)
+            bridge.value = false
+            advanceUntilIdle()
+            assertFalse(vm.state.value.bridgeEnabled)
+            vm.onToggleBridge(true)
+            advanceUntilIdle()
+            io.mockk.coVerify { settings.setLoraBridgeEnabled(true) }
+        }
+
+    @Test
+    fun `a spare board reports the passive role, an active one does not`() =
+        runTest {
+            val vm = start()
+            status.value = LoraStatus(state = ready(emptyList()), role = LoraGatewayPolicy.Role.PASSIVE)
+            advanceUntilIdle()
+            assertTrue(vm.state.value.bridgePassive)
+
+            status.value = LoraStatus(state = ready(emptyList()), role = LoraGatewayPolicy.Role.ACTIVE)
+            advanceUntilIdle()
+            assertFalse(vm.state.value.bridgePassive)
+        }
+
+    @Test
+    fun `the airtime ledger is a percentage of the budget, and only while connected`() =
+        runTest {
+            val vm = start()
+            val air =
+                AirtimeSnapshot(
+                    preset = ModemPreset.LONG_FAST,
+                    region = LoraRegion.EU_868,
+                    known = true,
+                    liveUsedMs = 40_000,
+                    liveBudgetMs = 100_000,
+                    bridgeUsedMs = 10_000,
+                    bridgeBudgetMs = 30_000,
+                )
+            status.value = LoraStatus(state = ready(emptyList()), airtime = air)
+            advanceUntilIdle()
+            assertEquals("both buckets spend the one allowance", 50, vm.state.value.airtimePercent)
+
+            // No board, no reading — the number would be about an hour that is not being spent.
+            status.value = LoraStatus(state = LinkState.Idle, airtime = air)
+            advanceUntilIdle()
+            assertNull(vm.state.value.airtimePercent)
+        }
+
+    @Test
+    fun `any spending at all rounds up to one percent rather than reading as zero`() =
+        runTest {
+            val vm = start()
+            status.value =
+                LoraStatus(
+                    state = ready(emptyList()),
+                    airtime =
+                        AirtimeSnapshot(
+                            preset = ModemPreset.LONG_FAST,
+                            region = LoraRegion.OTHER,
+                            known = true,
+                            liveUsedMs = 1,
+                            liveBudgetMs = 100_000,
+                            bridgeUsedMs = 0,
+                            bridgeBudgetMs = 30_000,
+                        ),
+                )
+            advanceUntilIdle()
+            assertEquals(1, vm.state.value.airtimePercent)
         }
 
     @Test

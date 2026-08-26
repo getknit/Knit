@@ -43,9 +43,7 @@ internal interface MeshtasticLink {
     ): SendResult
 
     /**
-     * Writes the well-known Knit channel ([spec]) onto the connected board, and returns where it landed so
-     * the caller can bind the plane to that index. [ProvisionSpec.mode] chooses how far the write goes — a
-     * secondary slot beside the board's own channels, or the whole board dedicated to Knit (ADR 045). The
+     * Sets the board up for Knit ([spec]), or puts it back the way it was ([ProvisionMode.Restore]). The
      * board typically reboots to apply the edit; the link rides that out (it re-handshakes) — the result is
      * returned as soon as the write is accepted, before the reboot.
      */
@@ -57,34 +55,29 @@ internal interface MeshtasticLink {
     fun stop()
 }
 
-/** The name + PSK to write, and how far to go; the link chooses the slot. */
+/** The channel name + PSK to write, and which direction to write it. */
 internal data class ProvisionSpec(
     val name: String,
     val psk: ByteArray,
-    val mode: ProvisionMode = ProvisionMode.Rendezvous,
-    /** [ProvisionMode.Restore] only: the board's own intervals as recorded when it was dedicated. */
+    val mode: ProvisionMode = ProvisionMode.Setup,
+    /** [ProvisionMode.Restore] only: the board's own intervals as recorded when it was set up. */
     val previous: BoardIntervals? = null,
 )
 
 /**
- * How much of the board a provision claims (ADR 045).
- *
- * The distinction is a radio one, not a bookkeeping one: the firmware derives its RF slot from
- * `hash(primary channel name)` whenever `lora.channel_num` is 0, so only a write to the **primary** moves
- * the board off the stock LongFast frequency it otherwise shares with every public Meshtastic node in range.
+ * The two things a user can do to a board (ADR 045). There is deliberately **no middle setting**: a board
+ * is either set up for Knit or it is a stock Meshtastic node, so any two Knit boards are configured
+ * identically and meet without coordination.
  */
 internal enum class ProvisionMode {
-    /** A secondary slot beside the board's own channels. The board stays a public Meshtastic node. */
-    Rendezvous,
-
     /**
-     * Knit becomes the primary — the radio moves to a Knit-derived slot — and the board's housekeeping
-     * broadcasts are quieted ([BoardQuiet]). The board can no longer hear, or be heard by, stock nodes, so
-     * this is all-boards-or-none for a fleet.
+     * Set the board up for Knit: Knit becomes the primary channel — which is what moves the radio onto a
+     * Knit-derived RF slot, since the firmware hashes the primary's name into its frequency — and the
+     * board's housekeeping broadcasts are quieted ([BoardQuiet]).
      */
-    Dedicate,
+    Setup,
 
-    /** Undoes [Dedicate]: the stock primary and intervals come back, with Knit demoted to a secondary. */
+    /** Undoes [Setup]: the stock Meshtastic primary comes back, along with the board's own intervals. */
     Restore,
 }
 
@@ -95,14 +88,15 @@ internal sealed interface ProvisionResult {
         val index: Int,
         val alreadyPresent: Boolean,
         /**
-         * [ProvisionMode.Dedicate] only: the housekeeping intervals the board had *before* the write, for the
-         * caller to persist — without them a restore can only offer the firmware's defaults, not the user's.
+         * The housekeeping intervals the board had *before* the write, for the caller to persist — without
+         * them a restore can only offer the firmware's defaults, not the user's own. Null when nothing was
+         * written ([alreadyPresent]), so a re-run never overwrites the record with the quieted values.
          */
         val previous: BoardIntervals? = null,
     ) : ProvisionResult
 
-    /** Every secondary slot (1..7) is already taken by a different channel; the user must free one. */
-    data object NoFreeSlot : ProvisionResult
+    /** The board is a stock Meshtastic node again; it carries no Knit channel, so the plane has nowhere to send. */
+    data object Restored : ProvisionResult
 
     /** The board never accepted the write (e.g. it kept rejecting the admin session key). */
     data class Failed(

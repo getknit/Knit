@@ -48,12 +48,14 @@ doc). **Don't start a deferred item without explicit direction.**
   with the phones out of BLE/NAN range) — the GATT layer has no host test. **Knit-provisioned channel
   SHIPPED** (2026-08-24): "Set up Knit channel" (or `…debug.LORAPROV`) writes the derived `KnitChannel` as a
   secondary channel over the Meshtastic admin API — the user no longer hand-configures the boards;
-  region/modem-preset still set once at flash. **Dedicating a board SHIPPED** (2026-08-25, ADR 045): a
+  region/modem-preset still set once at flash. **Board setup REWORKED** (2026-08-26, ADR 045): the
   secondary channel never moved the radio (the firmware hashes the *primary* channel name into its RF slot),
-  so an opt-in "Dedicate this board to Knit" now writes Knit as the PRIMARY — moving the board onto a
+  so the single "Set up this board for Knit" now writes Knit as the PRIMARY — moving the board onto a
   Knit-only frequency — and stretches its node-info / position / telemetry broadcasts, all as one
-  read-modify-write admin transaction with a Restore that puts the board's own values back
-  (`BoardQuiet`, `spliceVarintFields`, `SettingsStore.loraDedicatedBoard`, `…debug.LORAPROV --es mode`).
+  read-modify-write admin transaction, with a Restore that puts the board's own values back and switches the
+  plane off (`BoardQuiet`, `spliceVarintFields`, `SettingsStore.loraBoardSetup`, `…debug.LORAPROV [--es mode
+  restore]`). There is deliberately **no lighter mode and no hand-set channel index**: a board is set up for
+  Knit or it is a stock Meshtastic node, so every Knit board is configured identically.
   **Still owed:** the on-hardware confirmation that the frequency actually moved (`meshtastic --info` on both
   boards) and that the battery row survives the telemetry stretch — the trial in `context/lora-bridge.md`.
   Still deferred: a **user-set/shared private PSK** (the shipped

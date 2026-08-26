@@ -34,7 +34,7 @@ internal object MeshtasticProto {
     const val ROLE_SECONDARY = 2
 
     /**
-     * `Channel.Role.PRIMARY` — the role the *dedicate* flow writes Knit as (ADR 045). The firmware derives
+     * `Channel.Role.PRIMARY` — the role the board setup writes Knit as (ADR 045). The firmware derives
      * the RF slot from `hash(primary channel name)` whenever `lora.channel_num` is 0, so this is what
      * actually moves the radio off the stock LongFast frequency; a SECONDARY channel never does.
      */
@@ -49,7 +49,7 @@ internal object MeshtasticProto {
      */
     val DEFAULT_PSK = byteArrayOf(1)
 
-    // The three housekeeping intervals the dedicate flow stretches (ADR 045). Public because [BoardQuiet]
+    // The three housekeeping intervals the board setup stretches (ADR 045). Public because [BoardQuiet]
     // owns the *values*; the field numbers stay here with the rest of the pinned wire, beside their vectors.
 
     /** `Config.DeviceConfig.node_info_broadcast_secs`. */
@@ -627,7 +627,7 @@ internal data class AdminReply(
 )
 
 /**
- * One board sub-config the dedicate flow rewrites (ADR 045), naming both numbers the Meshtastic admin API
+ * One board sub-config the setup rewrites (ADR 045), naming both numbers the Meshtastic admin API
  * uses for it: [configType] is the `ConfigType` / `ModuleConfigType` enum value a *request* carries, and
  * [member] is the `Config` / `ModuleConfig` oneof field the *payload* rides in. They differ — LoRa is
  * `ConfigType.LORA_CONFIG = 5` but `Config.lora = 6` — so they are never interchangeable.

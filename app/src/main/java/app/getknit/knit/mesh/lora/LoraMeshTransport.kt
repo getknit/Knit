@@ -249,10 +249,10 @@ internal class LoraMeshTransport(
     }
 
     /**
-     * Writes the well-known [KnitChannel] onto the connected board — the one-tap alternative to setting up a
-     * channel by hand in the Meshtastic app. On [ProvisionResult.Provisioned] the settings VM persists the
-     * returned index so this plane binds to it (and, for a [ProvisionMode.Dedicate], the intervals the board
-     * had before, so the restore can put them back). Requires a Ready link.
+     * Sets the connected board up for Knit — the one-tap alternative to configuring a Meshtastic board by
+     * hand. On [ProvisionResult.Provisioned] the settings VM persists the returned index so this plane binds
+     * to it, along with the intervals the board had before so a restore can put them back. Requires a Ready
+     * link.
      */
     override suspend fun provisionKnitChannel(
         mode: ProvisionMode,
@@ -451,6 +451,21 @@ internal class LoraMeshTransport(
      */
     private fun pocketKeys(): Set<Long> = linkedPeers.mapTo(HashSet()) { StoreDigest.hash64(it) }
 
+    /**
+     * Whether the bound slot really is the Knit channel. Since ADR 045 a board is either set up for Knit or a
+     * stock Meshtastic node, so a bound slot carrying anything else means the setup was undone or never run —
+     * and transmitting there would put Knit's cleartext frames onto somebody else's channel, most likely the
+     * public one every stock radio listens to. Silence is the only safe reading of that.
+     *
+     * A board that reports no channel table at all is given the benefit of the doubt: going mute on firmware
+     * whose table we failed to read would be a worse failure than the one this guards against.
+     */
+    private fun boundSlotIsKnit(index: Int): Boolean {
+        val channels = (link.state.value as? LinkState.Ready)?.channels ?: return false
+        if (channels.isEmpty()) return true
+        return channels.any { it.index == index && it.name == KnitChannel.NAME }
+    }
+
     /** Whether we may put anything on the air at all. A passive gateway listens and relays, but never transmits. */
     private fun mayTransmit(): Boolean {
         if (role == LoraGatewayPolicy.Role.ACTIVE) return true
@@ -592,6 +607,11 @@ internal class LoraMeshTransport(
 
     private suspend fun sendFrame(frame: OutboundFrame) {
         val ch = currentConfig?.channelIndex ?: return
+        if (!boundSlotIsKnit(ch)) {
+            metrics.onLoraSuppressed()
+            log("lora send skipped: slot $ch is not the Knit channel — set this board up")
+            return
+        }
         for (message in frame.messages) {
             if (!sendMessage(message, ch, frame)) return
         }

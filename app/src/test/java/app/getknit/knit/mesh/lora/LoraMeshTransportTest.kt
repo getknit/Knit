@@ -79,9 +79,10 @@ class LoraMeshTransportTest {
         scope: kotlinx.coroutines.CoroutineScope,
         config: kotlinx.coroutines.flow.Flow<LoraConfig?> = MutableStateFlow(LoraConfig("AA:$nodeNum", 0)),
         farFrames: suspend (String) -> List<WireEnvelope> = { emptyList() },
+        channelName: String = KnitChannel.NAME,
         now: () -> Long,
     ): Rig {
-        val link = FakeMeshtasticLink(nodeNum, air)
+        val link = FakeMeshtasticLink(nodeNum, air, channelName)
         val metrics = MeshMetrics()
         val transport =
             LoraMeshTransport(
@@ -138,6 +139,27 @@ class LoraMeshTransportTest {
                     .any { it.nodeId == "alice" },
             )
             assertTrue("bob received at least the chat", b.metrics.snapshot().loraReceived >= 1)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    @Test
+    fun aBoardWhoseSlotIsNotTheKnitChannelStaysSilent() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            // The board was restored to Meshtastic defaults (or never set up) while the plane stayed on.
+            // Sending here would put Knit's cleartext frames on whatever channel the board landed back on.
+            val a = rig(air, 1u, "alice", backgroundScope, channelName = "LongFast") { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate in ten"))
+            runCurrent()
+
+            assertTrue("nothing reached the air", b.received.none { it.envelope.senderId == "alice" })
+            assertEquals(0, a.metrics.snapshot().loraSent)
             a.transport.stop()
             b.transport.stop()
         }

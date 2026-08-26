@@ -73,12 +73,10 @@ fun LoraRadioScreen(onBack: () -> Unit) {
         onPickBoard = viewModel::pickBoard,
         onForgetBoard = viewModel::forgetBoard,
         onShowAllBoards = viewModel::setShowAllBoards,
-        onSetChannel = viewModel::setChannel,
-        onProvision = viewModel::provisionChannel,
         onDismissProvision = viewModel::dismissProvisionOutcome,
-        onAskDedicate = viewModel::askDedicate,
-        onDismissDedicate = viewModel::dismissDedicate,
-        onDedicate = viewModel::dedicateBoard,
+        onAskSetup = viewModel::askSetup,
+        onDismissSetup = viewModel::dismissSetup,
+        onSetUp = viewModel::setUpBoard,
         onRestore = viewModel::restoreBoard,
     )
 }
@@ -94,12 +92,10 @@ internal fun LoraRadioScreenContent(
     onPickBoard: (BoardOption) -> Unit = {},
     onForgetBoard: () -> Unit = {},
     onShowAllBoards: (Boolean) -> Unit = {},
-    onSetChannel: (Int) -> Unit = {},
-    onProvision: () -> Unit = {},
     onDismissProvision: () -> Unit = {},
-    onAskDedicate: () -> Unit = {},
-    onDismissDedicate: () -> Unit = {},
-    onDedicate: () -> Unit = {},
+    onAskSetup: () -> Unit = {},
+    onDismissSetup: () -> Unit = {},
+    onSetUp: () -> Unit = {},
     onRestore: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -178,39 +174,17 @@ internal fun LoraRadioScreenContent(
                 TextButton(onClick = onForgetBoard) { Text(stringResource(R.string.lora_forget)) }
             }
 
-            Text(
-                // The slot's name once the board has told us (the index alone is opaque — "Knit" is the whole point).
-                text =
-                    when {
-                        state.channelName != null -> stringResource(R.string.lora_channel_named, state.channel, state.channelName)
-                        state.connection == LoraConnState.Ready -> stringResource(R.string.lora_channel_unnamed, state.channel)
-                        else -> stringResource(R.string.lora_channel_label, state.channel)
-                    },
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.testTag("lora_channel_title"),
-            )
-            ProvisionSection(
+            SetupSection(
                 state = state,
-                onProvision = onProvision,
-                onDismissProvision = onDismissProvision,
-            )
-            Text(
-                text = stringResource(R.string.lora_channel_manual_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            ChannelRow(channel = state.channel, onSetChannel = onSetChannel)
-            DedicateSection(
-                state = state,
-                onAskDedicate = onAskDedicate,
+                onAskSetup = onAskSetup,
                 onRestore = onRestore,
+                onDismissProvision = onDismissProvision,
             )
 
             StatusRow(state = state)
 
-            if (state.confirmDedicate) {
-                DedicateConfirmDialog(onConfirm = onDedicate, onDismiss = onDismissDedicate)
+            if (state.confirmSetup) {
+                SetupConfirmDialog(onConfirm = onSetUp, onDismiss = onDismissSetup)
             }
         }
     }
@@ -356,58 +330,47 @@ private fun BoardRow(
     }
 }
 
+/**
+ * The one step between a paired board and messages crossing (ADR 045): set the board up for Knit, or undo
+ * that. Deliberately not a spectrum — a board is configured for Knit or it is a stock Meshtastic node — so
+ * this is one button whose label is the whole choice.
+ */
 @Composable
-private fun ChannelRow(
-    channel: Int,
-    onSetChannel: (Int) -> Unit,
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(
-            onClick = { if (channel > 0) onSetChannel(channel - 1) },
-            enabled = channel > 0,
-        ) { Text("−") }
-        Spacer(Modifier.width(16.dp))
-        Text("$channel", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.width(16.dp))
-        OutlinedButton(
-            onClick = { if (channel < MAX_CHANNEL) onSetChannel(channel + 1) },
-            enabled = channel < MAX_CHANNEL,
-        ) { Text("+") }
-    }
-}
-
-@Composable
-private fun ProvisionSection(
+private fun SetupSection(
     state: LoraRadioUiState,
-    onProvision: () -> Unit,
+    onAskSetup: () -> Unit,
+    onRestore: () -> Unit,
     onDismissProvision: () -> Unit,
 ) {
+    if (state.connection != LoraConnState.Ready) return
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Connected, but the selected slot is not the Knit channel: the one setup step most people still owe
-        // (both boards must be provisioned before a frame crosses), so it is said out loud and the button below
-        // is the filled, emphasized one. Once the slot is Knit the button drops to a tonal "done" weight.
-        if (state.channelMismatch) {
-            Text(
-                text = stringResource(R.string.lora_channel_mismatch, state.channel),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("lora_channel_warning"),
-            )
-        }
-        val enabled = state.connection == LoraConnState.Ready && !state.provisioning
-        val label: @Composable () -> Unit = {
-            if (state.provisioning) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(12.dp))
-                Text(stringResource(R.string.lora_provision_running))
-            } else {
-                Text(stringResource(R.string.lora_provision_button))
+        Text(stringResource(R.string.lora_setup_title), style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = stringResource(if (state.boardSetUp) R.string.lora_setup_done else R.string.lora_setup_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("lora_setup_body"),
+        )
+        // Until it is done, this is the emphasized button on the screen; afterwards all that is left is the
+        // way back out, which never wants emphasis.
+        if (state.boardSetUp) {
+            OutlinedButton(
+                onClick = onRestore,
+                enabled = !state.provisioning,
+                modifier = Modifier.testTag("lora_restore"),
+            ) {
+                Text(stringResource(R.string.lora_setup_restore_button))
             }
-        }
-        if (state.channelMismatch) {
-            Button(onClick = onProvision, enabled = enabled, modifier = Modifier.testTag("lora_provision")) { label() }
         } else {
-            FilledTonalButton(onClick = onProvision, enabled = enabled, modifier = Modifier.testTag("lora_provision")) { label() }
+            Button(onClick = onAskSetup, enabled = !state.provisioning, modifier = Modifier.testTag("lora_setup")) {
+                if (state.provisioning) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text(stringResource(R.string.lora_provision_running))
+                } else {
+                    Text(stringResource(R.string.lora_setup_button))
+                }
+            }
         }
         state.provisionOutcome?.let { outcome ->
             val (message, isError) = outcome.messageAndSeverity()
@@ -425,62 +388,23 @@ private fun ProvisionSection(
 }
 
 /**
- * The one action that changes the board's *radio* rather than its channel table (ADR 045): dedicating it
- * moves it onto a Knit-only frequency slot and quiets its own broadcasts.
- *
- * It is gated behind a confirmation because both halves of the bargain are irreversible-feeling and easy to
- * misread — the board leaves the public Meshtastic channel entirely, and a fleet has to be all-or-nothing.
- * Offered only on a connected board that already carries the Knit channel: dedicating before that would
- * strand a user who has not got the basics working yet.
+ * Setting a board up rewrites its primary channel and moves its radio onto a Knit-only frequency, so it is
+ * confirmed first: the board leaves the public Meshtastic network, and a fleet has to be all-or-nothing
+ * because a board that is set up cannot hear one that is not.
  */
 @Composable
-private fun DedicateSection(
-    state: LoraRadioUiState,
-    onAskDedicate: () -> Unit,
-    onRestore: () -> Unit,
-) {
-    if (state.connection != LoraConnState.Ready) return
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.lora_dedicate_title), style = MaterialTheme.typography.titleMedium)
-        Text(
-            text = stringResource(if (state.dedicated) R.string.lora_dedicated_status else R.string.lora_dedicate_body),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.testTag("lora_dedicate_body"),
-        )
-        if (state.dedicated) {
-            OutlinedButton(
-                onClick = onRestore,
-                enabled = !state.provisioning,
-                modifier = Modifier.testTag("lora_restore"),
-            ) {
-                Text(stringResource(R.string.lora_dedicate_restore_button))
-            }
-        } else {
-            OutlinedButton(
-                onClick = onAskDedicate,
-                enabled = !state.provisioning && !state.channelMismatch,
-                modifier = Modifier.testTag("lora_dedicate"),
-            ) {
-                Text(stringResource(R.string.lora_dedicate_button))
-            }
-        }
-    }
-}
-
-@Composable
-private fun DedicateConfirmDialog(
+private fun SetupConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.testTag("lora_dedicate_dialog"),
-        title = { Text(stringResource(R.string.lora_dedicate_confirm_title)) },
-        text = { Text(stringResource(R.string.lora_dedicate_confirm_body)) },
+        modifier = Modifier.testTag("lora_setup_dialog"),
+        title = { Text(stringResource(R.string.lora_setup_confirm_title)) },
+        text = { Text(stringResource(R.string.lora_setup_confirm_body)) },
         confirmButton = {
-            TextButton(onClick = onConfirm, modifier = Modifier.testTag("lora_dedicate_confirm")) {
-                Text(stringResource(R.string.lora_dedicate_confirm_action))
+            TextButton(onClick = onConfirm, modifier = Modifier.testTag("lora_setup_confirm")) {
+                Text(stringResource(R.string.lora_setup_confirm_action))
             }
         },
         dismissButton = {
@@ -493,9 +417,7 @@ private fun LoraProvisionOutcome.messageAndSeverity(): Pair<Int, Boolean> =
     when (this) {
         LoraProvisionOutcome.Provisioned -> R.string.lora_provisioned to false
         LoraProvisionOutcome.AlreadyPresent -> R.string.lora_provision_already to false
-        LoraProvisionOutcome.Dedicated -> R.string.lora_dedicated to false
         LoraProvisionOutcome.Restored -> R.string.lora_restored to false
-        LoraProvisionOutcome.NoFreeSlot -> R.string.lora_provision_no_slot to true
         LoraProvisionOutcome.Failed -> R.string.lora_provision_failed to true
         LoraProvisionOutcome.NotReady -> R.string.lora_provision_not_ready to true
     }
@@ -591,8 +513,6 @@ private fun batteryText(battery: BoardBattery): String {
         else -> stringResource(R.string.lora_battery_powered)
     }
 }
-
-private const val MAX_CHANNEL = 7
 
 @Preview(showBackground = true)
 @Composable

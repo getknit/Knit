@@ -35,8 +35,8 @@ class LoraRadioScreenContentTest {
         onToggle: (Boolean) -> Unit = {},
         onShowAllBoards: (Boolean) -> Unit = {},
         onToggleBridge: (Boolean) -> Unit = {},
-        onAskDedicate: () -> Unit = {},
-        onDedicate: () -> Unit = {},
+        onAskSetup: () -> Unit = {},
+        onSetUp: () -> Unit = {},
         onRestore: () -> Unit = {},
     ) {
         compose.setContent {
@@ -47,8 +47,8 @@ class LoraRadioScreenContentTest {
                     onToggle = onToggle,
                     onToggleBridge = onToggleBridge,
                     onShowAllBoards = onShowAllBoards,
-                    onAskDedicate = onAskDedicate,
-                    onDedicate = onDedicate,
+                    onAskSetup = onAskSetup,
+                    onSetUp = onSetUp,
                     onRestore = onRestore,
                 )
             }
@@ -57,7 +57,7 @@ class LoraRadioScreenContentTest {
 
     private fun connected(
         channelName: String? = "Knit",
-        channelMismatch: Boolean = false,
+        boardSetUp: Boolean = true,
     ) = LoraRadioUiState(
         enabled = true,
         boardName = "Meshtastic_1a2b",
@@ -71,7 +71,7 @@ class LoraRadioScreenContentTest {
         boardsHeard = 1,
         firmware = "2.5.0",
         channelName = channelName,
-        channelMismatch = channelMismatch,
+        boardSetUp = boardSetUp,
         boards = listOf(BoardOption("AA:BB:CC:DD:EE:FF", "Meshtastic_1a2b", selected = true)),
         anyBonded = true,
     )
@@ -118,29 +118,17 @@ class LoraRadioScreenContentTest {
     }
 
     @Test
-    fun aConnectedBoardNamesItsChannelFirmwareAndPeers() {
+    fun aConnectedBoardNamesItsFirmwareAndPeers() {
         render(connected())
-        compose.onNodeWithText("Channel 1 · Knit").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Firmware 2.5.0").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("1 other radio in range").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("2 people reachable over LoRa").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("lora_channel_warning").assertDoesNotExist()
-        compose.onNodeWithTag("lora_provision").assertIsEnabled()
     }
 
     @Test
-    fun aSlotThatIsNotTheKnitChannelIsFlagged() {
-        render(connected(channelName = null, channelMismatch = true))
-        compose.onNodeWithText("Channel 1 · unnamed").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("lora_channel_warning").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("lora_provision").assertIsEnabled()
-    }
-
-    @Test
-    fun provisioningNeedsAConnectedBoard() {
+    fun aBoardStillConnectingIsNotOfferedTheSetup() {
         render(LoraRadioUiState(enabled = true, boardAddress = "AA:BB:CC:DD:EE:FF", connection = LoraConnState.Connecting))
-        compose.onNodeWithText("Channel index: 0").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("lora_provision").assertIsNotEnabled()
+        compose.onNodeWithTag("lora_setup").assertDoesNotExist()
         compose.onNodeWithTag("lora_peers_heard").assertDoesNotExist()
         compose.onNodeWithTag("lora_boards_heard").assertDoesNotExist()
     }
@@ -209,49 +197,43 @@ class LoraRadioScreenContentTest {
     }
 
     @Test
-    fun dedicatingIsOfferedOnAProvisionedBoardAndOnlyAsks() {
+    fun aBoardThatIsNotSetUpOffersTheOneSetupButtonAndOnlyAsks() {
         var asked = 0
-        var dedicated = 0
-        render(connected(), onAskDedicate = { asked++ }, onDedicate = { dedicated++ })
+        var setUp = 0
+        render(connected(boardSetUp = false), onAskSetup = { asked++ }, onSetUp = { setUp++ })
         compose
-            .onNodeWithTag("lora_dedicate")
+            .onNodeWithTag("lora_setup")
             .performScrollTo()
             .assertIsEnabled()
             .performClick()
         assertEquals(1, asked)
-        assertEquals("the button asks; the dialog acts", 0, dedicated)
+        assertEquals("the button asks; the dialog acts", 0, setUp)
         compose.onNodeWithTag("lora_restore").assertDoesNotExist()
     }
 
     @Test
-    fun dedicatingWaitsUntilTheKnitChannelIsActuallySetUp() {
-        render(connected(channelName = "LongFast", channelMismatch = true))
-        compose.onNodeWithTag("lora_dedicate").performScrollTo().assertIsNotEnabled()
+    fun theConfirmationSpellsOutTheCostAndIsWhatSetsTheBoardUp() {
+        var setUp = 0
+        render(connected(boardSetUp = false).copy(confirmSetup = true), onSetUp = { setUp++ })
+        compose.onNodeWithText("leave the public Meshtastic network", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("lora_setup_confirm").performClick()
+        assertEquals(1, setUp)
     }
 
     @Test
-    fun theConfirmationSpellsOutTheCostAndIsWhatDedicates() {
-        var dedicated = 0
-        render(connected().copy(confirmDedicate = true), onDedicate = { dedicated++ })
-        compose.onNodeWithText("leave the public Meshtastic channel", substring = true).assertIsDisplayed()
-        compose.onNodeWithTag("lora_dedicate_confirm").performClick()
-        assertEquals(1, dedicated)
-    }
-
-    @Test
-    fun aDedicatedBoardSaysSoAndOffersTheWayBack() {
+    fun aSetUpBoardSaysSoAndOffersOnlyTheWayBack() {
         var restored = 0
-        render(connected().copy(dedicated = true), onRestore = { restored++ })
-        compose.onNodeWithTag("lora_dedicate").assertDoesNotExist()
+        render(connected(), onRestore = { restored++ })
+        compose.onNodeWithTag("lora_setup").assertDoesNotExist()
         compose.onNodeWithText("Knit-only frequency", substring = true).performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_restore").performScrollTo().performClick()
         assertEquals(1, restored)
     }
 
     @Test
-    fun anUnconnectedBoardIsNeverOfferedTheDedicateStep() {
+    fun anUnconnectedBoardIsNeverOfferedTheSetupStep() {
         render(LoraRadioUiState(enabled = true, anyBonded = true))
-        compose.onNodeWithTag("lora_dedicate").assertDoesNotExist()
+        compose.onNodeWithTag("lora_setup").assertDoesNotExist()
         compose.onNodeWithTag("lora_restore").assertDoesNotExist()
     }
 }

@@ -422,78 +422,7 @@ class MeshtasticSessionTest {
     }
 
     @Test
-    fun provisionWritesAFreeSecondarySlot() =
-        runTest {
-            val ch = FakeGattChannel()
-            scriptBoard(ch, channels = listOf(Triple(0, "", 1))) // only the (unnamed) primary
-            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
-            session.start("AA")
-            runCurrent()
-
-            val call = async { session.provisionChannel(provisionSpec) }
-            runCurrent()
-            val result = call.await()
-            assertEquals(ProvisionResult.Provisioned(index = 1, alreadyPresent = false), result)
-            assertTrue("a set_channel was written", ch.writes.any { BoardBytes.isAdminSet(it) })
-            session.stop()
-        }
-
-    @Test
-    fun provisionReusesAnExistingSameNamedChannelWithoutWriting() =
-        runTest {
-            val ch = FakeGattChannel()
-            scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(2, "Knit", 2)))
-            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
-            session.start("AA")
-            runCurrent()
-
-            val call = async { session.provisionChannel(provisionSpec) }
-            runCurrent()
-            val result = call.await()
-            assertEquals(ProvisionResult.Provisioned(index = 2, alreadyPresent = true), result)
-            assertTrue("no set_channel written on reuse", ch.writes.none { BoardBytes.isAdminSet(it) })
-            session.stop()
-        }
-
-    @Test
-    fun provisionReportsNoFreeSlotWhenEverySecondaryIsTaken() =
-        runTest {
-            val ch = FakeGattChannel()
-            scriptBoard(ch, channels = (0..7).map { Triple(it, "ch$it", if (it == 0) 1 else 2) })
-            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
-            session.start("AA")
-            runCurrent()
-
-            val call = async { session.provisionChannel(provisionSpec) }
-            runCurrent()
-            assertEquals(ProvisionResult.NoFreeSlot, call.await())
-            assertTrue("no set_channel written", ch.writes.none { BoardBytes.isAdminSet(it) })
-            session.stop()
-        }
-
-    @Test
-    fun provisionRetriesOnceAfterABadSessionKey() =
-        runTest {
-            val ch = FakeGattChannel()
-            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), nakFirstSet = 1)
-            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
-            session.start("AA")
-            runCurrent()
-
-            val call = async { session.provisionChannel(provisionSpec) }
-            runCurrent()
-            val result = call.await()
-            assertEquals(ProvisionResult.Provisioned(index = 1, alreadyPresent = false), result)
-            assertEquals("first set NAK'd, second succeeded", 2, ch.writes.count { BoardBytes.isAdminSet(it) })
-            session.stop()
-        }
-
-    // --- dedicating the whole board (ADR 045) ---
-
-    private val dedicateSpec = provisionSpec.copy(mode = ProvisionMode.Dedicate)
-
-    @Test
-    fun dedicateWritesKnitAsThePrimaryWithNoPositionSharing() =
+    fun provisionWritesKnitAsThePrimaryWithNoPositionSharing() =
         runTest {
             val ch = FakeGattChannel()
             scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs)
@@ -501,7 +430,7 @@ class MeshtasticSessionTest {
             session.start("AA")
             runCurrent()
 
-            val result = async { session.provisionChannel(dedicateSpec) }.await()
+            val result = async { session.provisionChannel(provisionSpec) }.await()
             assertEquals(ProvisionResult.Provisioned(0, alreadyPresent = false, previous = boardIntervals), result)
             val writes = ch.writes.mapNotNull { BoardBytes.adminSetChannel(it) }
             assertEquals(1, writes.size)
@@ -513,7 +442,42 @@ class MeshtasticSessionTest {
         }
 
     @Test
-    fun dedicateQuietsTheIntervalsAndLeavesEverythingElseAlone() =
+    fun provisionOnAnAlreadySetUpBoardKeepsTheRecordedIntervals() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "Knit", 1)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val result = async { session.provisionChannel(provisionSpec) }.await()
+            // `previous` stays null so the caller keeps the intervals it stored the first time round.
+            assertEquals(ProvisionResult.Provisioned(0, alreadyPresent = true), result)
+            assertTrue("nothing rewritten", ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) })
+            session.stop()
+        }
+
+    @Test
+    fun provisionRetriesOnceAfterABadSessionKey() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), nakFirstSet = 1, configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val call = async { session.provisionChannel(provisionSpec) }
+            runCurrent()
+            val result = call.await()
+            assertEquals(ProvisionResult.Provisioned(0, alreadyPresent = false, previous = boardIntervals), result)
+            assertEquals("first set NAK'd, second succeeded", 2, ch.writes.count { BoardBytes.isAdminSet(it) })
+            session.stop()
+        }
+
+    // --- what the setup rewrites on the board (ADR 045) ---
+
+    @Test
+    fun provisionQuietsTheIntervalsAndLeavesEverythingElseAlone() =
         runTest {
             val ch = FakeGattChannel()
             scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs)
@@ -521,7 +485,7 @@ class MeshtasticSessionTest {
             session.start("AA")
             runCurrent()
 
-            async { session.provisionChannel(dedicateSpec) }.await()
+            async { session.provisionChannel(provisionSpec) }.await()
             val written = ch.writes.mapNotNull { BoardBytes.adminSetConfigRaw(it) }
             assertEquals("one write per sub-config", 3, written.size)
             val device = written.first()
@@ -539,7 +503,7 @@ class MeshtasticSessionTest {
         }
 
     @Test
-    fun dedicateDisablesAnEarlierKnitSecondarySoOnlyOneChannelCarriesTheName() =
+    fun provisionDisablesAnEarlierKnitSecondarySoOnlyOneChannelCarriesTheName() =
         runTest {
             val ch = FakeGattChannel()
             scriptBoard(ch, channels = listOf(Triple(0, "", 1), Triple(2, "Knit", 2)), configs = boardConfigs)
@@ -547,7 +511,7 @@ class MeshtasticSessionTest {
             session.start("AA")
             runCurrent()
 
-            async { session.provisionChannel(dedicateSpec) }.await()
+            async { session.provisionChannel(provisionSpec) }.await()
             val writes = ch.writes.mapNotNull { BoardBytes.adminSetChannel(it) }
             assertEquals(2, writes.size)
             assertEquals(2, writes[1].index)
@@ -556,7 +520,7 @@ class MeshtasticSessionTest {
         }
 
     @Test
-    fun dedicateAbortsWithoutWritingWhenTheBoardWillNotReturnItsConfig() =
+    fun provisionAbortsWithoutWritingWhenTheBoardWillNotReturnItsConfig() =
         runTest {
             val ch = FakeGattChannel()
             scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = null) // answers no get_config
@@ -564,49 +528,48 @@ class MeshtasticSessionTest {
             session.start("AA")
             runCurrent()
 
-            val result = async { session.provisionChannel(dedicateSpec) }.await()
+            val result = async { session.provisionChannel(provisionSpec) }.await()
             assertTrue("got $result", result is ProvisionResult.Failed)
             assertTrue("nothing written", ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) })
             session.stop()
         }
 
     @Test
-    fun dedicateOnAnAlreadyDedicatedBoardKeepsTheRecordedIntervals() =
+    fun restorePutsTheStockPrimaryBackAndLeavesNoKnitChannel() =
         runTest {
             val ch = FakeGattChannel()
-            scriptBoard(ch, channels = listOf(Triple(0, "Knit", 1)), configs = boardConfigs)
-            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
-            session.start("AA")
-            runCurrent()
-
-            val result = async { session.provisionChannel(dedicateSpec) }.await()
-            // `previous` stays null so the caller keeps the intervals it stored the first time round.
-            assertEquals(ProvisionResult.Provisioned(0, alreadyPresent = true), result)
-            assertTrue("nothing rewritten", ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) })
-            session.stop()
-        }
-
-    @Test
-    fun restorePutsTheStockPrimaryBackWithKnitOnASecondary() =
-        runTest {
-            val ch = FakeGattChannel()
-            scriptBoard(ch, channels = listOf(Triple(0, "Knit", 1)), configs = quietedConfigs)
+            scriptBoard(ch, channels = listOf(Triple(0, "Knit", 1), Triple(3, "Knit", 2)), configs = quietedConfigs)
             val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
             session.start("AA")
             runCurrent()
 
             val spec = provisionSpec.copy(mode = ProvisionMode.Restore, previous = boardIntervals)
-            val result = async { session.provisionChannel(spec) }.await()
-            assertEquals(ProvisionResult.Provisioned(1, alreadyPresent = false), result)
+            assertEquals(ProvisionResult.Restored, async { session.provisionChannel(spec) }.await())
             val writes = ch.writes.mapNotNull { BoardBytes.adminSetChannel(it) }
             assertEquals(2, writes.size)
             assertEquals(0, writes.first().index)
             assertEquals("an empty name sends the board back to its preset-derived slot", "", writes.first().name)
             assertTrue("the stock public key", writes.first().psk.contentEquals(MeshtasticProto.DEFAULT_PSK))
             assertEquals(MeshtasticProto.ROLE_PRIMARY, writes.first().role)
-            assertEquals(1, writes[1].index)
-            assertEquals("Knit", writes[1].name)
-            assertEquals(MeshtasticProto.ROLE_SECONDARY, writes[1].role)
+            assertEquals("a stray Knit secondary goes with it", 3, writes[1].index)
+            assertEquals("disabled", 0, writes[1].role)
+            session.stop()
+        }
+
+    @Test
+    fun restoringABoardThatWasNeverSetUpIsRefused() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "MyChannel", 1)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            // Writing the stock default over somebody else's primary is not an undo of anything.
+            val spec = provisionSpec.copy(mode = ProvisionMode.Restore)
+            val result = async { session.provisionChannel(spec) }.await()
+            assertTrue("got $result", result is ProvisionResult.Failed)
+            assertTrue("nothing written", ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) })
             session.stop()
         }
 

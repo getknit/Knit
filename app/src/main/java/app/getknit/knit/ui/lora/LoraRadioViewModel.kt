@@ -2,7 +2,7 @@ package app.getknit.knit.ui.lora
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import app.getknit.knit.data.settings.DedicatedBoard
+import app.getknit.knit.data.settings.KnitBoardSetup
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
@@ -36,7 +36,7 @@ data class BoardOption(
 enum class LoraConnState { Off, Connecting, Ready, Reconnecting, NeedsPairing, Unavailable }
 
 /** The result of the last provisioning tap, mapped off the internal provision result for the screen. */
-enum class LoraProvisionOutcome { Provisioned, AlreadyPresent, Dedicated, Restored, NoFreeSlot, Failed, NotReady }
+enum class LoraProvisionOutcome { Provisioned, AlreadyPresent, Restored, Failed, NotReady }
 
 data class LoraRadioUiState(
     val enabled: Boolean = false,
@@ -65,12 +65,13 @@ data class LoraRadioUiState(
     val radioConfig: String? = null,
     /** The name the connected board gives the selected [channel] slot; null while not connected or when unnamed. */
     val channelName: String? = null,
-    /** Connected, but the selected slot is not the Knit channel — the setup step most likely still owed. */
-    val channelMismatch: Boolean = false,
-    /** The board carries Knit as its *primary*: the radio is on a Knit slot and its housekeeping is quiet. */
-    val dedicated: Boolean = false,
-    /** The "dedicate this board" confirmation is open — the costs are real, so the tap is never the action. */
-    val confirmDedicate: Boolean = false,
+    /**
+     * The board is set up for Knit: it carries Knit as its *primary*, so its radio sits on a Knit slot and
+     * its housekeeping is quiet. The only other state is "a stock Meshtastic board" — there is no middle one.
+     */
+    val boardSetUp: Boolean = false,
+    /** The setup confirmation is open — it replaces the board's own channel, so the tap is never the action. */
+    val confirmSetup: Boolean = false,
     val boards: List<BoardOption> = emptyList(),
     /** Bonded devices the picker hides as not board-like (`BoardFilter`); the "show all" toggle reveals them. */
     val hiddenBoards: Int = 0,
@@ -121,8 +122,8 @@ internal class LoraRadioViewModel(
         ) { (enabled, dmEnabled, bridgeEnabled), picker, channel, status, provision ->
             val address = picker.address
             val ready = status.state as? LinkState.Ready
-            // An un-dedicated board leaves slot 0 as its own (usually unnamed) primary, so that reads as a
-            // mismatch — correctly, since Knit is then in a secondary. On a dedicated board Knit *is* slot 0.
+            // Slot 0 is the board's primary, and a board set up for Knit carries Knit there — so the name of
+            // the bound slot is the whole verdict on whether this board has been set up at all.
             val channelName =
                 ready
                     ?.channels
@@ -148,9 +149,8 @@ internal class LoraRadioViewModel(
                 airtimePercent = ready?.let { status.airtime?.let(::airtimePercent) },
                 radioConfig = ready?.radio?.let { "${it.region} ${it.modemPreset}" },
                 channelName = channelName,
-                channelMismatch = ready != null && channelName != KnitChannel.NAME,
-                dedicated = ready?.channels?.any { it.index == PRIMARY_INDEX && it.name == KnitChannel.NAME } == true,
-                confirmDedicate = provision.confirm,
+                boardSetUp = ready?.channels?.any { it.index == PRIMARY_INDEX && it.name == KnitChannel.NAME } == true,
+                confirmSetup = provision.confirm,
                 boards =
                     BoardFilter
                         .visible(picker.bonded, address, picker.showAll)
@@ -205,38 +205,29 @@ internal class LoraRadioViewModel(
         viewModelScope.launch { settings.clearLoraDevice() }
     }
 
-    fun setChannel(index: Int) {
-        viewModelScope.launch { settings.setLoraChannelIndex(index) }
-    }
-
-    /**
-     * Writes the well-known Knit channel onto the connected board (over the Meshtastic admin API), and on
-     * success binds the plane to the slot it landed in. A one-tap replacement for configuring a channel by
-     * hand in the Meshtastic app.
-     */
-    fun provisionChannel() {
-        provision(ProvisionMode.Rendezvous)
-    }
-
-    /** Opens the confirmation for handing the whole board to Knit; the costs are stated there, not here. */
-    fun askDedicate() {
+    /** Opens the setup confirmation; what it costs the board is spelled out there, not here. */
+    fun askSetup() {
         provisionState.update { it.copy(confirm = true, outcome = null) }
     }
 
-    fun dismissDedicate() {
+    fun dismissSetup() {
         provisionState.update { it.copy(confirm = false) }
     }
 
     /**
-     * Hands the board to Knit (ADR 045): Knit becomes its primary channel, which moves the radio onto a
-     * Knit-derived RF slot, and its housekeeping broadcasts are stretched. The intervals the board had before
-     * come back in the result and are persisted here — they are the only way a restore can be faithful.
+     * Sets the connected board up for Knit over the Meshtastic admin API (ADR 045): Knit becomes its primary
+     * channel — which moves the radio onto a Knit-derived RF slot — and its housekeeping broadcasts are
+     * stretched. The intervals the board had before come back in the result and are persisted here; they are
+     * the only way a restore can put back what was actually there.
      */
-    fun dedicateBoard() {
-        provision(ProvisionMode.Dedicate)
+    fun setUpBoard() {
+        provision(ProvisionMode.Setup)
     }
 
-    /** Puts the board back on the stock public channel, with Knit demoted to a secondary. */
+    /**
+     * Puts the board back the way it was. It carries no Knit channel afterwards, so the plane goes off with
+     * it — left on, it would fan Knit's frames out over whatever channel the board landed back on.
+     */
     fun restoreBoard() {
         provision(ProvisionMode.Restore)
     }
@@ -245,30 +236,37 @@ internal class LoraRadioViewModel(
         if (provisionState.value.running) return
         viewModelScope.launch {
             provisionState.update { it.copy(running = true, outcome = null, confirm = false) }
-            val recorded = settings.loraDedicatedBoard.first()
-            val result = lora.provisionKnitChannel(mode, recorded?.toIntervals())
-            if (result is ProvisionResult.Provisioned) {
-                settings.setLoraChannelIndex(result.index)
-                when (mode) {
-                    ProvisionMode.Dedicate -> settings.rememberDedication(result)
-                    ProvisionMode.Restore -> settings.clearLoraDedicatedBoard()
-                    ProvisionMode.Rendezvous -> Unit
+            val recorded = settings.loraBoardSetup.first()
+            when (val result = lora.provisionKnitChannel(mode, recorded?.toIntervals())) {
+                is ProvisionResult.Provisioned -> {
+                    settings.setLoraChannelIndex(result.index)
+                    settings.rememberSetup(result)
+                    provisionState.value = ProvisionState(outcome = result.toOutcome())
+                }
+
+                ProvisionResult.Restored -> {
+                    settings.clearLoraBoardSetup()
+                    settings.setLoraEnabled(false)
+                    provisionState.value = ProvisionState(outcome = LoraProvisionOutcome.Restored)
+                }
+
+                else -> {
+                    provisionState.value = ProvisionState(outcome = result.toOutcome())
                 }
             }
-            provisionState.value = ProvisionState(running = false, outcome = result.toOutcome(mode))
         }
     }
 
     /**
-     * Records the dedication against the bound board's address. Skipped when the board was already dedicated
+     * Records the setup against the bound board's address. Skipped when the board was already set up
      * ([ProvisionResult.Provisioned.previous] is null then) — overwriting the stored intervals with nothing
      * would throw away the only copy of what the board looked like before Knit took it over.
      */
-    private suspend fun SettingsStore.rememberDedication(result: ProvisionResult.Provisioned) {
+    private suspend fun SettingsStore.rememberSetup(result: ProvisionResult.Provisioned) {
         val address = loraDeviceAddress.first() ?: return
         val previous = result.previous ?: return
-        setLoraDedicatedBoard(
-            DedicatedBoard(
+        setLoraBoardSetup(
+            KnitBoardSetup(
                 address = address,
                 nodeInfoSecs = previous.nodeInfoSecs,
                 positionSecs = previous.positionSecs,
@@ -278,7 +276,7 @@ internal class LoraRadioViewModel(
         )
     }
 
-    private fun DedicatedBoard.toIntervals(): BoardIntervals =
+    private fun KnitBoardSetup.toIntervals(): BoardIntervals =
         BoardIntervals(
             nodeInfoSecs = nodeInfoSecs,
             positionSecs = positionSecs,
@@ -291,28 +289,12 @@ internal class LoraRadioViewModel(
         provisionState.update { it.copy(outcome = null) }
     }
 
-    private fun ProvisionResult.toOutcome(mode: ProvisionMode): LoraProvisionOutcome =
+    private fun ProvisionResult.toOutcome(): LoraProvisionOutcome =
         when (this) {
-            is ProvisionResult.Provisioned -> {
-                when {
-                    alreadyPresent -> LoraProvisionOutcome.AlreadyPresent
-                    mode == ProvisionMode.Dedicate -> LoraProvisionOutcome.Dedicated
-                    mode == ProvisionMode.Restore -> LoraProvisionOutcome.Restored
-                    else -> LoraProvisionOutcome.Provisioned
-                }
-            }
-
-            ProvisionResult.NoFreeSlot -> {
-                LoraProvisionOutcome.NoFreeSlot
-            }
-
-            is ProvisionResult.Failed -> {
-                LoraProvisionOutcome.Failed
-            }
-
-            is ProvisionResult.NotReady -> {
-                LoraProvisionOutcome.NotReady
-            }
+            is ProvisionResult.Provisioned -> if (alreadyPresent) LoraProvisionOutcome.AlreadyPresent else LoraProvisionOutcome.Provisioned
+            ProvisionResult.Restored -> LoraProvisionOutcome.Restored
+            is ProvisionResult.Failed -> LoraProvisionOutcome.Failed
+            is ProvisionResult.NotReady -> LoraProvisionOutcome.NotReady
         }
 
     private fun LinkState.toConnState(): LoraConnState =

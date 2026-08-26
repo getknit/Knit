@@ -1,6 +1,6 @@
 package app.getknit.knit.ui.lora
 
-import app.getknit.knit.data.settings.DedicatedBoard
+import app.getknit.knit.data.settings.KnitBoardSetup
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.lora.AirtimeSnapshot
 import app.getknit.knit.mesh.lora.BoardBattery
@@ -46,7 +46,7 @@ class LoraRadioViewModelTest {
     private val bridge = MutableStateFlow(true)
     private val address = MutableStateFlow<String?>("AA:BB:CC:DD:EE:01")
     private val channel = MutableStateFlow(1)
-    private val dedicated = MutableStateFlow<DedicatedBoard?>(null)
+    private val boardSetup = MutableStateFlow<KnitBoardSetup?>(null)
     private val settings =
         mockk<SettingsStore>(relaxed = true) {
             every { loraEnabled } returns enabled
@@ -54,7 +54,7 @@ class LoraRadioViewModelTest {
             every { loraBridgeEnabled } returns bridge
             every { loraDeviceAddress } returns address
             every { loraChannelIndex } returns channel
-            every { loraDedicatedBoard } returns dedicated
+            every { loraBoardSetup } returns boardSetup
         }
     private val status = MutableStateFlow(LoraStatus())
     private val provisionCalls = mutableListOf<Pair<ProvisionMode, BoardIntervals?>>()
@@ -176,22 +176,16 @@ class LoraRadioViewModelTest {
 
             assertEquals(LoraConnState.Ready, vm.state.value.connection)
             assertEquals("Knit", vm.state.value.channelName)
-            assertFalse(vm.state.value.channelMismatch)
             assertEquals("2.5.0", vm.state.value.firmware)
             assertEquals("people reachable through the mesh", 3, vm.state.value.heard)
             assertEquals("radios actually in range", 1, vm.state.value.boardsHeard)
-
-            // Slot 0 is the board's unnamed primary — never Knit.
-            channel.value = 0
-            advanceUntilIdle()
-            assertNull(vm.state.value.channelName)
-            assertTrue(vm.state.value.channelMismatch)
+            // Knit sitting in a secondary is a board an older build provisioned: not set up, and one tap fixes it.
+            assertFalse(vm.state.value.boardSetUp)
 
             // A slot the board has no entry for at all.
             channel.value = 2
             advanceUntilIdle()
             assertNull(vm.state.value.channelName)
-            assertTrue(vm.state.value.channelMismatch)
         }
 
     @Test
@@ -273,7 +267,7 @@ class LoraRadioViewModelTest {
 
             assertEquals(LoraConnState.Off, vm.state.value.connection)
             assertNull(vm.state.value.channelName)
-            assertFalse(vm.state.value.channelMismatch)
+            assertFalse(vm.state.value.boardSetUp)
             assertNull(vm.state.value.firmware)
         }
 
@@ -292,61 +286,51 @@ class LoraRadioViewModelTest {
         }
 
     @Test
-    fun `a board carrying Knit as its primary reads as dedicated`() =
+    fun `a board carrying Knit as its primary reads as set up`() =
         runTest {
             val vm = start()
             status.value = LoraStatus(state = ready(listOf(ChannelInfo(index = 0, name = "Knit", role = 1))))
             channel.value = 0
             advanceUntilIdle()
 
-            assertTrue(vm.state.value.dedicated)
-            assertFalse("slot 0 is the Knit channel, so nothing is mismatched", vm.state.value.channelMismatch)
+            assertTrue(vm.state.value.boardSetUp)
+            assertEquals("Knit", vm.state.value.channelName)
         }
 
     @Test
-    fun `Knit in a secondary slot is provisioned but not dedicated`() =
-        runTest {
-            val vm = start()
-            status.value = LoraStatus(state = ready(listOf(ChannelInfo(0, "", 1), ChannelInfo(1, "Knit", 2))))
-            advanceUntilIdle()
-
-            assertFalse(vm.state.value.dedicated)
-        }
-
-    @Test
-    fun `dedicating asks first, and the tap alone changes nothing`() =
+    fun `setting up asks first, and the tap alone changes nothing`() =
         runTest {
             val vm = start()
 
-            vm.askDedicate()
+            vm.askSetup()
             advanceUntilIdle()
-            assertTrue(vm.state.value.confirmDedicate)
+            assertTrue(vm.state.value.confirmSetup)
             assertTrue("no provision until the user confirms", provisionCalls.isEmpty())
 
-            vm.dismissDedicate()
+            vm.dismissSetup()
             advanceUntilIdle()
-            assertFalse(vm.state.value.confirmDedicate)
+            assertFalse(vm.state.value.confirmSetup)
             assertTrue(provisionCalls.isEmpty())
         }
 
     @Test
-    fun `a dedicate binds channel zero and records the board's own intervals`() =
+    fun `a setup binds channel zero and records the board's own intervals`() =
         runTest {
             val previous = BoardIntervals(nodeInfoSecs = 900, positionSecs = 600, smartPosition = true, telemetrySecs = 1_800)
             provisionResult = ProvisionResult.Provisioned(index = 0, alreadyPresent = false, previous = previous)
             val vm = start()
 
-            vm.askDedicate()
-            vm.dedicateBoard()
+            vm.askSetup()
+            vm.setUpBoard()
             advanceUntilIdle()
 
-            assertEquals(listOf(ProvisionMode.Dedicate to null), provisionCalls)
-            assertFalse("the confirmation closes when the action runs", vm.state.value.confirmDedicate)
-            assertEquals(LoraProvisionOutcome.Dedicated, vm.state.value.provisionOutcome)
+            assertEquals(listOf(ProvisionMode.Setup to null), provisionCalls)
+            assertFalse("the confirmation closes when the action runs", vm.state.value.confirmSetup)
+            assertEquals(LoraProvisionOutcome.Provisioned, vm.state.value.provisionOutcome)
             io.mockk.coVerify { settings.setLoraChannelIndex(0) }
             io.mockk.coVerify {
-                settings.setLoraDedicatedBoard(
-                    DedicatedBoard(
+                settings.setLoraBoardSetup(
+                    KnitBoardSetup(
                         address = "AA:BB:CC:DD:EE:01",
                         nodeInfoSecs = 900,
                         positionSecs = 600,
@@ -358,25 +342,25 @@ class LoraRadioViewModelTest {
         }
 
     @Test
-    fun `re-dedicating an already dedicated board never overwrites the recorded intervals`() =
+    fun `re-running the setup on a set-up board never overwrites the recorded intervals`() =
         runTest {
             provisionResult = ProvisionResult.Provisioned(index = 0, alreadyPresent = true)
             val vm = start()
 
-            vm.dedicateBoard()
+            vm.setUpBoard()
             advanceUntilIdle()
 
             assertEquals(LoraProvisionOutcome.AlreadyPresent, vm.state.value.provisionOutcome)
-            io.mockk.coVerify(exactly = 0) { settings.setLoraDedicatedBoard(any()) }
+            io.mockk.coVerify(exactly = 0) { settings.setLoraBoardSetup(any()) }
         }
 
     @Test
-    fun `a restore hands the recorded intervals back and forgets the dedication`() =
+    fun `a restore hands the recorded intervals back, forgets the setup, and switches the plane off`() =
         runTest {
             val recorded =
-                DedicatedBoard("AA:BB:CC:DD:EE:01", nodeInfoSecs = 900, positionSecs = 600, smartPosition = true, telemetrySecs = 1_800)
-            dedicated.value = recorded
-            provisionResult = ProvisionResult.Provisioned(index = 1, alreadyPresent = false)
+                KnitBoardSetup("AA:BB:CC:DD:EE:01", nodeInfoSecs = 900, positionSecs = 600, smartPosition = true, telemetrySecs = 1_800)
+            boardSetup.value = recorded
+            provisionResult = ProvisionResult.Restored
             val vm = start()
 
             vm.restoreBoard()
@@ -387,7 +371,9 @@ class LoraRadioViewModelTest {
                 provisionCalls.single(),
             )
             assertEquals(LoraProvisionOutcome.Restored, vm.state.value.provisionOutcome)
-            io.mockk.coVerify { settings.setLoraChannelIndex(1) }
-            io.mockk.coVerify { settings.clearLoraDedicatedBoard() }
+            io.mockk.coVerify { settings.clearLoraBoardSetup() }
+            // The board carries no Knit channel afterwards, so leaving the plane on would fan frames out
+            // over whatever channel it landed back on.
+            io.mockk.coVerify { settings.setLoraEnabled(false) }
         }
 }

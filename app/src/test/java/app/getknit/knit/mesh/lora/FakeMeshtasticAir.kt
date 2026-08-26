@@ -36,7 +36,7 @@ internal class FakeMeshtasticAir {
 internal class FakeMeshtasticLink(
     val nodeNum: UInt,
     private val air: FakeMeshtasticAir,
-    private val channelName: String = "knit",
+    private val channelName: String = KnitChannel.NAME,
 ) : MeshtasticLink {
     private val _state = MutableStateFlow<LinkState>(LinkState.Idle)
     override val state = _state

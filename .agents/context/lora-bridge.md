@@ -180,38 +180,38 @@ size now travel on the public-PSK rendezvous channel at kilometre range. `Settin
 rides into `LoraConfig.dms`; off, the transport refuses DM-form on fan-out and skips the re-offer while the
 room keeps riding. Each side gates its own sends. The confidentiality fix remains the deferred private PSK.
 
-## Channel provisioning (Knit writes its own channel)
+## Board provisioning (Knit configures the board)
 
-`LoraMeshTransport.provisionKnitChannel()` (settings button "Set up Knit channel" or `…debug.LORAPROV`)
-writes the well-known **`KnitChannel`** onto the board over the Meshtastic **admin** API so the user never
-hand-configures a channel. Flow, all inside `MeshtasticSession` (serialized with sends): `get_channel` to
-the local node (`to = myNodeNum`, portnum ADMIN=6, `want_response`) → grab the `session_passkey` (field 101,
-300 s TTL) and pick a **free secondary slot** (reuse an existing same-named channel; else lowest 1..7 not
-live) → `begin_edit_settings` → `set_channel{ index, settings{ psk, name }, role=SECONDARY }` →
-`commit_edit_settings`, each echoing the passkey. The commit reboots the board to apply the edit, so the
-session ends (reset backoff) and re-handshakes, reloading the channel table; the result returns as soon as
-the write is accepted. A `Routing.ADMIN_BAD_SESSION_KEY` NAK triggers one fresh-passkey retry.
+`LoraMeshTransport.provisionKnitChannel()` (the settings button "Set up this board for Knit", or
+`…debug.LORAPROV`) configures the board over the Meshtastic **admin** API so the user never hand-configures
+anything. The mechanics, all inside `MeshtasticSession` (serialized with sends): an admin `get_channel` to
+the local node (`to = myNodeNum`, portnum ADMIN=6, `want_response`) yields the `session_passkey` (field 101,
+300 s TTL) that every following write echoes; then `begin_edit_settings` → the writes → `commit_edit_settings`.
+The commit reboots the board to apply the edit, so the session ends (reset backoff) and re-handshakes,
+reloading the channel table; the result returns as soon as the writes are accepted. A
+`Routing.ADMIN_BAD_SESSION_KEY` NAK triggers one fresh-passkey retry of the whole transaction. **What** gets
+written is the next section.
 
 **`KnitChannel`** (`mesh/lora/KnitChannel.kt`): name `"Knit"`, 16-byte AES128 PSK **derived** (pinned +
 guarded by `KnitChannelTest`) via `HKDF-SHA256(ikm="nearby", salt=0³², info="knit/lora/channel/psk/v1")`.
 The seed is public, so the PSK is public — deliberately: the Nearby room is cleartext, so this channel is a
 **rendezvous** (any two Knit boards converge with zero coordination), not a confidentiality boundary. Knit's
-per-frame Ed25519 signatures remain the integrity boundary. It is written as SECONDARY, so the board's primary
-channel and radio config (region, modem preset) are never touched. A confidential per-deployment PSK (shared
+per-frame Ed25519 signatures remain the integrity boundary. A confidential per-deployment PSK (shared
 out-of-band via a channel QR/URL) is deferred — see `roadmap.md`.
 
-> **A secondary channel does not move the radio.** The firmware derives its RF slot from
-> `hash(primary channel name) % numChannels` whenever `lora.channel_num` is 0 (`RadioInterface::getChannelNum`),
-> so a rendezvous-provisioned board still transmits on **the stock LongFast frequency**, sharing it with every
-> public Meshtastic node in earshot — which also means those nodes repeat our undecryptable packets up to
-> three hops (free range, invisible to `LoraAirtime`). Moving off that slot is what dedicating a board, below,
-> is for. ADR 038 originally claimed this channel kept Knit off LongFast; it does not.
+> **The channel has to be the PRIMARY, because that is what picks the frequency.** The firmware derives its
+> RF slot from `hash(primary channel name) % numChannels` whenever `lora.channel_num` is 0
+> (`RadioInterface::getChannelNum`), so writing Knit into a *secondary* slot — which is what shipped
+> originally — leaves the board transmitting on **the stock LongFast frequency**, sharing it with every
+> public Meshtastic node in earshot and having its undecryptable packets repeated three hops by radios
+> `LoraAirtime` cannot see. ADR 038 claimed the channel kept Knit off LongFast; it did not.
 
-## Dedicating a board (ADR 045)
+## Setting a board up (ADR 045)
 
-`provisionKnitChannel(ProvisionMode.Dedicate)` — the "Dedicate this board to Knit" button, or
-`…debug.LORAPROV --es mode dedicate` — hands the whole board over, in one `begin_edit`/`commit_edit`
-transaction after three reads:
+A board is **either set up for Knit or a stock Meshtastic node** — there is no lighter option and no
+hand-editable channel index, so every Knit board is configured identically and any two meet without
+coordination. `provisionKnitChannel(ProvisionMode.Setup)` — the "Set up this board for Knit" button, or
+`…debug.LORAPROV` — does all of it in one `begin_edit`/`commit_edit` transaction after three reads:
 
 1. `get_config(DEVICE)`, `get_config(POSITION)`, `get_module_config(TELEMETRY)` — **before** the transaction.
    `AdminModule::handleSetConfig` assigns the whole sub-config, so every write is a read-modify-write over the
@@ -221,28 +221,39 @@ transaction after three reads:
 2. `set_channel { index 0, settings { psk, name "Knit", module_settings {} }, role = PRIMARY }` — the slot
    move. The empty `module_settings` **is** `position_precision = 0`; an absent one reads as "unset" and the
    firmware defaults to full precision.
-3. `set_channel { index N, role = DISABLED }` for any earlier Knit secondary — two channels sharing a
-   name + PSK share a hash.
+3. `set_channel { index N, role = DISABLED }` for any Knit channel left in a secondary slot by an older
+   build — two channels sharing a name + PSK share a hash, and this is the whole upgrade path.
 4. `set_config` / `set_module_config` stretching `node_info_broadcast_secs`, `position_broadcast_secs` (smart
    broadcast cleared) and `telemetry.device_update_interval` to `BoardQuiet.QUIET_SECS` (6 h). The GPS itself
    is not touched — silencing what the board *broadcasts* is Knit's business, powering down the user's
    hardware is not.
 
 The intervals the board had first come back as `ProvisionResult.Provisioned.previous` and are persisted per
-board (`SettingsStore.loraDedicatedBoard`); **Restore** writes them back, puts an empty-named primary carrying
+board (`SettingsStore.loraBoardSetup`); **Restore** writes them back and puts an empty-named primary carrying
 Meshtastic's `0x01` default-key shorthand at index 0 (an empty name falls back to the modem-preset name, which
-is the slot the board shipped on) and moves Knit down to a secondary. Re-dedicating an already-dedicated board
-is a reported no-op, so that record is never overwritten with the quieted values.
+is the slot the board shipped on). It leaves **no** Knit channel, so the caller switches the plane off with it
+— otherwise the next fan-out would go out over whatever channel the board landed back on — and restoring a
+board that was never set up is refused, since writing the stock default over somebody's own primary is not an
+undo of anything. Re-running the setup on a board that already has it is a reported no-op, so the recorded
+intervals are never overwritten with the quieted ones.
 
-**The cost, which the confirmation states out loud:** a dedicated board leaves the public Meshtastic channel
-entirely — it cannot hear stock nodes or be heard by them, and third-party repeaters stop extending its range
-— and a fleet is all-or-nothing, since a dedicated and an undedicated board sit on different frequencies and
-never meet. The button is offered only once the board already carries the Knit channel.
+A board whose bound slot is **not** the Knit channel never transmits (`LoraMeshTransport.boundSlotIsKnit`,
+counted as `loraSuppressed`): after a restore, or before a setup, sending would put Knit's cleartext frames
+onto whatever channel the board is on — most likely the public one. A board that reports no channel table at
+all is given the benefit of the doubt, since going mute on unreadable firmware is the worse failure.
+
+**The cost, which the confirmation states out loud:** the board's own primary channel is replaced, and it
+leaves the public Meshtastic network — it cannot hear stock nodes or be heard by them, and third-party
+repeaters stop extending its range. A fleet is all-or-nothing, since a set-up board and a stock one sit on
+different frequencies and never meet.
 
 Admin wire (pinned by `MeshtasticProtoTest`): `AdminMessage{ get_channel_request=1, get_channel_response=2,
-set_channel=33, begin_edit_settings=64, commit_edit_settings=65, session_passkey=101 }`;
-`Channel{ index=1, settings=2, role=3 }` (Role SECONDARY=2); `ChannelSettings{ psk=2, name=3 }`;
-`Data.want_response=3`.
+get_config_request=5, get_config_response=6, get_module_config_request=7, get_module_config_response=8,
+set_channel=33, set_config=34, set_module_config=35, begin_edit_settings=64, commit_edit_settings=65,
+session_passkey=101 }`; `Channel{ index=1, settings=2, role=3 }` (Role PRIMARY=1, SECONDARY=2, DISABLED=0);
+`ChannelSettings{ psk=2, name=3, module_settings=7 }` with `ModuleSettings{ position_precision=1 }`;
+`Config{ device=1, position=2 }` / `ModuleConfig{ telemetry=6 }` (the request enums number differently:
+`ConfigType{ DEVICE=0, POSITION=1 }`, `ModuleConfigType{ TELEMETRY=5 }`); `Data.want_response=3`.
 
 ## UI surfaces (ADR 040)
 
@@ -258,8 +269,8 @@ set_channel=33, begin_edit_settings=64, commit_edit_settings=65, session_passkey
 - **LoRa radio screen.** `BondedBoardDirectory` marks each bonded device board-like (LE + `Meshtastic_xxxx` /
   `<short>_xxxx` / the service UUID in cache); `BoardFilter.visible` lists those plus the bound board, with
   "Show all paired devices" (`lora_show_all_boards`) for the rest; the list re-reads on resume
-  (`refreshBoards`). A connected board shows "Channel N · name" (`lora_channel_title`), a mismatch warning
-  (`lora_channel_warning`) when the slot is not `Knit`, firmware, **radios in range** (`lora_boards_heard`,
+  (`refreshBoards`). A connected board shows the one setup section (`lora_setup` / `lora_restore`, ADR 045),
+  firmware, **radios in range** (`lora_boards_heard`,
   distinct Meshtastic `packet.from` on our channel, control packets and part-fragments included) and — only
   when the two differ — **people reachable** (`lora_peers_heard`, distinct frame *authors*). The two diverge as
   soon as a gateway relays or backfills somebody else's frame, so "1 radio, 3 people" is normal; reporting only
@@ -285,10 +296,11 @@ set_channel=33, begin_edit_settings=64, commit_edit_settings=65, session_passkey
 
 Flash `firmware-heltec-v4-<ver>`; `--set lora.region <US|EU_868|…>`; `--set network.wifi_enabled false`;
 `--set bluetooth.enabled true --set bluetooth.mode RANDOM_PIN`; same `lora.modem_preset` (LongFast) on
-both. **The channel no longer needs hand-setup** — pair the board in Knit, then tap "Set up Knit channel"
-(or `…debug.LORAPROV`) on each phone and both converge on the derived `KnitChannel`. (The old manual path
-still works: `--ch-add knit` on A, `--qr-all` → `--seturl <url>` on B, then pick the index in Knit.) Set the
-Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.mesh`.
+both. **Nothing else needs hand-setup** — pair the board in Knit, then tap "Set up this board for Knit" (or
+`…debug.LORAPROV`) on each phone: the channel, the frequency slot and the housekeeping all follow from that
+one action, and there is no hand-picked channel index any more (the debug bridge keeps `--ei channel <idx>`
+for lab work). Set the Meshtastic app's device to **None** /
+`adb shell am force-stop com.geeksville.mesh`.
 
 ## On-device verification (physical devices only, with an explicit go-ahead — `rules/devices.md`)
 
@@ -297,27 +309,25 @@ Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.me
   `my_info !… pio=heltec-v4` → `config complete` → `ready`.
 - Battery: the status row shows the reading with `ready` (the handshake's `node_info`) and refreshes within a
   minute; unplug USB and "Plugged in" becomes a percentage on the next telemetry, replug and it flips back.
-- Dedicate the boards (ADR 045), once the basics above pass: `…debug.LORAPROV --es mode dedicate` (or the
-  screen's "Dedicate this board to Knit") on **both** phones → log `lora provision dedicated ch0 'Knit'`, the
-  board reboots, the link returns, and settings read channel 0 · Knit. Then, over USB with the Meshtastic app
-  disconnected: (1) `meshtastic --info` on both boards reports a **frequency off the stock LongFast slot, and
+- Set the boards up (ADR 045): `…debug.LORAPROV` (or the screen's "Set up this board for Knit") on **both**
+  phones → log `lora provision set up ch0 'Knit'`, the board reboots, and the link returns. Then, over USB
+  with the Meshtastic app disconnected: (1) `meshtastic --info` on both boards reports a **frequency off the stock LongFast slot, and
   the same on both** — nothing in-app can see the frequency, so this is the only proof the slot moved;
   (2) a Nearby post still crosses and `loraNak == 0`; (3) the **battery row still refreshes within a minute**,
   which is what proves stretching the *mesh* telemetry interval did not silence the phone-only telemetry ADR
   041 reads (if it did, that interval is the wrong lever); (4) `meshtastic --get device.role`,
   `--get lora.region`, `--get position.gps_mode` are unchanged from before — the read-modify-write proof;
-  (5) a third, **undedicated** board hears nothing from the pair and they hear nothing from it (expected, and
-  the reason the fleet is all-or-nothing); (6) `…debug.LORAPROV --es mode restore` puts the board back on the
-  public channel with Knit as a secondary and the three intervals at their pre-dedicate values.
-- Provision the channel: tap "Set up Knit channel" (or `…debug.LORAPROV`) on **both** phones → log
+  (5) a third, **un-set-up** board hears nothing from the pair and they hear nothing from it (expected, and
+  the reason a fleet is all-or-nothing); (6) `…debug.LORAPROV --es mode restore` puts the board back on the
+  public channel with no Knit channel, the three intervals at their pre-setup values, and the LoRa switch off.
+- Provision the channel: tap "Set up this board for Knit" (or `…debug.LORAPROV`) on **both** phones → log
   `lora provision wrote chN 'Knit'` (or `reuse`) → the board reboots and the link reconnects → the channel
   index in settings now points at the Knit slot. Both boards must be provisioned before frames cross.
 - `…debug.LORA` (debug bridge): `--es address <MAC>` + `--es name <n>` binds a board, `--ei channel <idx>`,
   `--ez on <true|false>`, `--ez bridge <true|false>`; no extras dumps
   `state/boardNodeNum/snr/rssi/queueFree/heard/role/pocketLinks/pocketSightings/gatewaysHeard/radio/airtime/counters`. It is the
   two-board oracle. `…debug.LORATX --es text <s>` sends a raw payload straight to the board (board-side
-  sanity via `meshtastic --noproto`). `…debug.LORAPROV` writes the Knit channel headlessly (reports the slot); `--es mode dedicate|restore` runs
-  the ADR 045 hand-over or its undo.
+  sanity via `meshtastic --noproto`). `…debug.LORAPROV` sets the board up headlessly; `--es mode restore` undoes it.
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips
   ✓✓ (sealed tick over LoRa); a reaction crosses. Move B out of BLE/NAN range and repeat. Counters:
   `loraSent/loraReceived/loraReassembled` climb, `loraNak == 0`, `loraDroppedQueue == 0` at chat pace,

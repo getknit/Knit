@@ -492,66 +492,33 @@ internal class MeshtasticSession(
             return null
         }
         return when (cmd.spec.mode) {
-            ProvisionMode.Rendezvous -> runRendezvous(channel, myNode, cmd)
-            ProvisionMode.Dedicate -> runDedicate(channel, myNode, cmd)
+            ProvisionMode.Setup -> runSetup(channel, myNode, cmd)
             ProvisionMode.Restore -> runRestore(channel, myNode, cmd)
         }
     }
 
-    /** The original write: Knit into a free secondary slot, the board's own primary left exactly as it is. */
-    private suspend fun runRendezvous(
-        channel: GattChannel,
-        myNode: UInt,
-        cmd: Cmd.Provision,
-    ): SessionEnd? {
-        // A dedicated board already carries Knit as its primary; writing a second copy would put two
-        // channels with the same name+PSK — and so the same hash — on the air.
-        channels.firstOrNull { it.name == cmd.spec.name }?.let { existing ->
-            log("lora provision reuse ch${existing.index} '${cmd.spec.name}'")
-            cmd.reply.complete(ProvisionResult.Provisioned(existing.index, alreadyPresent = true))
-            return null
-        }
-        val slot = freeSecondarySlot()
-        if (slot == null) {
-            cmd.reply.complete(ProvisionResult.NoFreeSlot)
-            return null
-        }
-        val write = ChannelWrite(index = slot, name = cmd.spec.name, psk = cmd.spec.psk)
-        return applySteps(
-            channel = channel,
-            myNode = myNode,
-            steps = listOf(channelStep(write)),
-            index = slot,
-            label = "wrote ch$slot '${cmd.spec.name}'",
-            reply = cmd.reply,
-        )
-    }
-
     /**
-     * Hands the whole board to Knit (ADR 045): Knit becomes the **primary**, which is what moves the radio
-     * onto a Knit-derived RF slot, any earlier Knit secondary is disabled so only one channel carries the
-     * name, and the three housekeeping intervals are stretched.
+     * Sets the board up for Knit (ADR 045). Knit is written as the **primary**, which is what moves the radio
+     * onto a Knit-derived RF slot; any other channel carrying the name is disabled so only one does; and the
+     * three housekeeping intervals are stretched. There is no lighter variant — a board is either configured
+     * for Knit or it is a stock Meshtastic node.
      *
-     * Every config write is a read-modify-write — the firmware assigns the whole sub-config, so a write
-     * built from scratch would silently reset `role`, `rebroadcast_mode`, `gps_mode` and everything else this
-     * codec does not model. The reads therefore run **before** `begin_edit_settings`, and a read that fails
-     * aborts with nothing written.
+     * Every config write is a read-modify-write — the firmware assigns the whole sub-config, so a write built
+     * from scratch would silently reset `role`, `rebroadcast_mode`, `gps_mode` and everything else this codec
+     * does not model. The reads therefore run **before** `begin_edit_settings`, and a read that fails aborts
+     * with nothing written.
      */
-    private suspend fun runDedicate(
+    private suspend fun runSetup(
         channel: GattChannel,
         myNode: UInt,
         cmd: Cmd.Provision,
     ): SessionEnd? {
-        channels.firstOrNull { it.index == PRIMARY_INDEX && it.name == cmd.spec.name }?.let {
-            log("lora provision already dedicated ch$PRIMARY_INDEX '${cmd.spec.name}'")
+        if (isSetUp(cmd.spec.name)) {
+            log("lora provision already set up ch$PRIMARY_INDEX '${cmd.spec.name}'")
             cmd.reply.complete(ProvisionResult.Provisioned(PRIMARY_INDEX, alreadyPresent = true))
             return null
         }
-        val raws = readBoardConfigs(channel, myNode)
-        if (raws == null) {
-            cmd.reply.complete(ProvisionResult.Failed("board did not return its config"))
-            return null
-        }
+        val raws = readBoardConfigs(channel, myNode) ?: return failProvision(cmd, "board did not return its config")
         val steps =
             buildList {
                 add(
@@ -565,50 +532,35 @@ internal class MeshtasticSession(
                         ),
                     ),
                 )
-                channels
-                    .filter { it.index != PRIMARY_INDEX && it.name == cmd.spec.name }
-                    .forEach { add(channelStep(ChannelWrite(it.index, name = "", psk = ByteArray(0), role = ROLE_DISABLED))) }
-                raws.forEach { (config, raw) ->
-                    val spliced = spliceVarintFields(raw, BoardQuiet.quiet(config))
-                    if (spliced == null) {
-                        cmd.reply.complete(ProvisionResult.Failed("board sent a malformed ${config.name} config"))
-                        return null
-                    }
-                    add(configStep(config, spliced))
-                }
+                addAll(disableOtherKnitChannels(cmd.spec.name))
+                addAll(quietSteps(raws) { config -> BoardQuiet.quiet(config) } ?: return failProvision(cmd, MALFORMED_CONFIG))
             }
         return applySteps(
             channel = channel,
             myNode = myNode,
             steps = steps,
-            index = PRIMARY_INDEX,
-            label = "dedicated ch$PRIMARY_INDEX '${cmd.spec.name}'",
+            label = "set up ch$PRIMARY_INDEX '${cmd.spec.name}'",
             reply = cmd.reply,
-            previous = BoardQuiet.recorded(raws),
+            result = ProvisionResult.Provisioned(PRIMARY_INDEX, alreadyPresent = false, previous = BoardQuiet.recorded(raws)),
         )
     }
 
     /**
-     * Undoes [runDedicate]: the primary goes back to the stock public channel — an empty name makes the
-     * firmware fall back to the modem-preset name, which is the frequency slot the board shipped on — Knit
-     * moves down to a secondary so the plane keeps working, and the intervals return to
-     * [ProvisionSpec.previous] (the board's own values, recorded at dedicate time).
+     * Undoes [runSetup]: the primary goes back to the stock public channel — an empty name makes the firmware
+     * fall back to the modem-preset name, which is the frequency slot the board shipped on — every Knit
+     * channel is disabled, and the intervals return to [ProvisionSpec.previous] (the board's own values,
+     * recorded at setup time).
+     *
+     * Refused on a board that was never set up: writing the stock default over somebody's own primary channel
+     * is not an undo of anything.
      */
     private suspend fun runRestore(
         channel: GattChannel,
         myNode: UInt,
         cmd: Cmd.Provision,
     ): SessionEnd? {
-        val raws = readBoardConfigs(channel, myNode)
-        if (raws == null) {
-            cmd.reply.complete(ProvisionResult.Failed("board did not return its config"))
-            return null
-        }
-        val slot = channels.firstOrNull { it.name == cmd.spec.name && it.index != PRIMARY_INDEX }?.index ?: freeSecondarySlot()
-        if (slot == null) {
-            cmd.reply.complete(ProvisionResult.NoFreeSlot)
-            return null
-        }
+        if (!isSetUp(cmd.spec.name)) return failProvision(cmd, "this board is not set up for Knit")
+        val raws = readBoardConfigs(channel, myNode) ?: return failProvision(cmd, "board did not return its config")
         val steps =
             buildList {
                 add(
@@ -621,24 +573,50 @@ internal class MeshtasticSession(
                         ),
                     ),
                 )
-                add(channelStep(ChannelWrite(index = slot, name = cmd.spec.name, psk = cmd.spec.psk)))
-                raws.forEach { (config, raw) ->
-                    val spliced = spliceVarintFields(raw, BoardQuiet.restore(config, cmd.spec.previous))
-                    if (spliced == null) {
-                        cmd.reply.complete(ProvisionResult.Failed("board sent a malformed ${config.name} config"))
-                        return null
-                    }
-                    add(configStep(config, spliced))
-                }
+                addAll(disableOtherKnitChannels(cmd.spec.name))
+                addAll(
+                    quietSteps(raws) { config -> BoardQuiet.restore(config, cmd.spec.previous) }
+                        ?: return failProvision(cmd, MALFORMED_CONFIG),
+                )
             }
         return applySteps(
             channel = channel,
             myNode = myNode,
             steps = steps,
-            index = slot,
-            label = "restored the stock primary, Knit at ch$slot",
+            label = "restored the stock primary",
             reply = cmd.reply,
+            result = ProvisionResult.Restored,
         )
+    }
+
+    /** Whether the board already carries Knit as its primary — the one state that means "set up". */
+    private fun isSetUp(name: String): Boolean = channels.any { it.index == PRIMARY_INDEX && it.name == name }
+
+    /**
+     * Disables every *other* channel carrying the Knit name — an earlier build wrote it into a secondary slot,
+     * and two channels sharing a name + PSK share a hash, which is ambiguous on the air.
+     */
+    private fun disableOtherKnitChannels(name: String): List<AdminStep> =
+        channels
+            .filter { it.index != PRIMARY_INDEX && it.name == name }
+            .map { channelStep(ChannelWrite(it.index, name = "", psk = ByteArray(0), role = ROLE_DISABLED)) }
+
+    /** One spliced write per sub-config, or null if the board sent one this codec could not walk. */
+    private fun quietSteps(
+        raws: Map<BoardConfig, ByteArray>,
+        fields: (BoardConfig) -> Map<Int, Long>,
+    ): List<AdminStep>? =
+        raws.map { (config, raw) ->
+            val spliced = spliceVarintFields(raw, fields(config)) ?: return null
+            configStep(config, spliced)
+        }
+
+    private fun failProvision(
+        cmd: Cmd.Provision,
+        reason: String,
+    ): SessionEnd? {
+        cmd.reply.complete(ProvisionResult.Failed(reason))
+        return null
     }
 
     /** Reads every sub-config the quieting touches, as raw bytes; null if the board fails to return one. */
@@ -662,20 +640,13 @@ internal class MeshtasticSession(
         raw: ByteArray,
     ): AdminStep = { passkey -> MeshtasticProto.encodeAdminSetConfig(config, raw, passkey) }
 
-    /** The lowest secondary index (1..7) not already holding a live channel, or null when all are taken. */
-    private fun freeSecondarySlot(): Int? {
-        val used = channels.filter { it.role != ROLE_DISABLED && it.name.isNotEmpty() }.map { it.index }.toSet()
-        return (FIRST_SECONDARY..LAST_SECONDARY).firstOrNull { it !in used }
-    }
-
     private suspend fun applySteps(
         channel: GattChannel,
         myNode: UInt,
         steps: List<AdminStep>,
-        index: Int,
         label: String,
         reply: CompletableDeferred<ProvisionResult>,
-        previous: BoardIntervals? = null,
+        result: ProvisionResult,
     ): SessionEnd? {
         var outcome = writeSteps(channel, myNode, adminGet(channel, myNode)?.passkey, steps)
         if (outcome == AdminOutcome.BadSessionKey) {
@@ -684,7 +655,7 @@ internal class MeshtasticSession(
         return when (outcome) {
             AdminOutcome.Applied -> {
                 log("lora provision $label")
-                reply.complete(ProvisionResult.Provisioned(index, alreadyPresent = false, previous = previous))
+                reply.complete(result)
                 SessionEnd(reason = "provisioned", resetStreak = true) // the commit reboots; reconnect reloads channels
             }
 
@@ -969,12 +940,11 @@ internal class MeshtasticSession(
         const val ADMIN_TIMEOUT_MS = 8_000L
         const val MAX_STALE_READS = 32
 
-        // Channel provisioning: index 0 is the board's primary. The rendezvous write takes a free secondary
-        // (1..7) and leaves it alone; the dedicate write claims it, which is what moves the RF slot (ADR 045).
+        // Channel provisioning: index 0 is the board's primary, and Knit claims it — that is what moves the
+        // board's RF slot, since the firmware hashes the primary's name into its frequency (ADR 045).
         const val PRIMARY_INDEX = 0
-        const val FIRST_SECONDARY = 1
-        const val LAST_SECONDARY = 7
         const val ROLE_DISABLED = 0
+        const val MALFORMED_CONFIG = "board sent a config this build cannot read"
         const val PACKET_BUFFER = 256
         const val OUTCOME_BUFFER = 64
 

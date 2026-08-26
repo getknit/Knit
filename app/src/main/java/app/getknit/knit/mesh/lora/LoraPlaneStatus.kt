@@ -16,13 +16,12 @@ internal interface LoraPlaneStatus {
     val status: StateFlow<LoraStatus>
 
     /**
-     * Writes the well-known Knit channel onto the connected board (`LoraMeshTransport.provisionKnitChannel`).
-     * [mode] chooses how far it goes: a secondary slot beside the board's own channels, the whole board
-     * dedicated to Knit, or that undone (ADR 045). [previous] carries the intervals a dedicate recorded,
-     * so a restore can put the user's own values back rather than the firmware's defaults.
+     * Sets the connected board up for Knit (`LoraMeshTransport.provisionKnitChannel`), or puts it back the
+     * way it was ([ProvisionMode.Restore]) — ADR 045. [previous] carries the intervals a setup recorded, so a
+     * restore can put the user's own values back rather than the firmware's defaults.
      */
     suspend fun provisionKnitChannel(
-        mode: ProvisionMode = ProvisionMode.Rendezvous,
+        mode: ProvisionMode = ProvisionMode.Setup,
         previous: BoardIntervals? = null,
     ): ProvisionResult
 

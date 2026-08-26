@@ -29,7 +29,7 @@ import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
-import app.getknit.knit.data.settings.DedicatedBoard
+import app.getknit.knit.data.settings.KnitBoardSetup
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.data.webp.WebpTranscode
 import app.getknit.knit.identity.Identity
@@ -1101,23 +1101,17 @@ class DebugBridgeReceiver :
     }
 
     /**
-     * Writes the well-known Knit channel onto the connected board over the Meshtastic admin API (the
-     * headless equivalent of the settings screen's "Set up Knit channel"), and — on success — binds the
-     * plane to the slot it landed in. Requires the board Ready.
+     * Sets the connected board up for Knit over the Meshtastic admin API (the headless equivalent of the
+     * settings screen's one setup button), and — on success — binds the plane to it. Requires the board
+     * Ready.
      *
-     * `--es mode dedicate` hands the whole board over instead (ADR 045: Knit becomes the primary, so the
-     * radio moves to a Knit-derived slot, and the housekeeping is quieted) and `--es mode restore` undoes
-     * that; anything else keeps the original secondary-slot write. This is the two-board oracle for the
-     * dedicate trial, so it persists exactly what the settings screen would.
+     * `--es mode restore` puts the board back the way it was instead. This is the two-board oracle for the
+     * ADR 045 trial, so it persists exactly what the settings screen would.
      */
     private suspend fun handleLoraProv(intent: Intent): JSONObject {
         val mode =
-            when (intent.getStringExtra(EXTRA_MODE)?.lowercase()) {
-                "dedicate" -> ProvisionMode.Dedicate
-                "restore" -> ProvisionMode.Restore
-                else -> ProvisionMode.Rendezvous
-            }
-        val recorded = settings.loraDedicatedBoard.first()
+            if (intent.getStringExtra(EXTRA_MODE)?.lowercase() == "restore") ProvisionMode.Restore else ProvisionMode.Setup
+        val recorded = settings.loraBoardSetup.first()
         val result =
             lora.provisionKnitChannel(
                 mode,
@@ -1130,18 +1124,14 @@ class DebugBridgeReceiver :
                     )
                 },
             )
-        if (result is app.getknit.knit.mesh.lora.ProvisionResult.Provisioned) {
-            settings.setLoraChannelIndex(result.index)
-            val previous = result.previous
-            val address = settings.loraDeviceAddress.first()
-            when {
-                mode == ProvisionMode.Restore -> {
-                    settings.clearLoraDedicatedBoard()
-                }
-
-                mode == ProvisionMode.Dedicate && previous != null && address != null -> {
-                    settings.setLoraDedicatedBoard(
-                        DedicatedBoard(
+        val address = settings.loraDeviceAddress.first()
+        when (result) {
+            is app.getknit.knit.mesh.lora.ProvisionResult.Provisioned -> {
+                settings.setLoraChannelIndex(result.index)
+                val previous = result.previous
+                if (previous != null && address != null) {
+                    settings.setLoraBoardSetup(
+                        KnitBoardSetup(
                             address = address,
                             nodeInfoSecs = previous.nodeInfoSecs,
                             positionSecs = previous.positionSecs,
@@ -1150,6 +1140,16 @@ class DebugBridgeReceiver :
                         ),
                     )
                 }
+            }
+
+            // Restoring leaves no Knit channel on the board, so the plane goes off with it — same as the UI.
+            app.getknit.knit.mesh.lora.ProvisionResult.Restored -> {
+                settings.clearLoraBoardSetup()
+                settings.setLoraEnabled(false)
+            }
+
+            else -> {
+                Unit
             }
         }
         val index =

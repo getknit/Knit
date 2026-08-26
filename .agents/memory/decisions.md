@@ -2048,14 +2048,34 @@ worth not relitigating:
    fragmented** — a control packet that needs reassembly to be useful is worse than a shorter one, so it
    truncates. A prefix collision (~1 in 4·10⁹) skips one frame for a round; nothing here is a trust boundary,
    every frame still carries the originator's signature.
-3. **The election costs no airtime, because `foreignReachable` already is the pocket.** The composite
-   populates it from **short-range** siblings only (ADR 038 §3), so it means "who is in my BLE/NAN clique";
-   and anything that publishes an OFFER has a board by definition. A publisher inside that set is a co-pocket
-   rival, one outside is the bridge peer and is **never** suppressed. Lowest publisher key wins (the 64-bit id
-   hash — all the packet has room for, and uniformly distributed, so no node is structurally favoured).
-   PASSIVE suppresses *every* transmit path — fan-out, `fastSend`, beacon, offer, backfill — and nothing else,
-   so a spare board keeps feeding its pocket. Recovery needs no timer: a gateway that walks away leaves
-   `foreignReachable`, one whose board dies stops publishing and ages out of `LoraGatewayPolicy.STALE_MS`.
+3. **The election costs no airtime, because the composite already tells us who holds a live link.**
+   `suppressDataPath` hands the LoRa child the higher-preference planes' `neighbors` — "who in my pocket can be
+   handed my traffic" — and anything that publishes an OFFER has a board by definition. A publisher we are
+   linked to is a co-pocket rival, one we are not is the bridge peer and is **never** suppressed. Lowest
+   publisher key wins (the 64-bit id hash — all the packet has room for, and uniformly distributed, so no node
+   is structurally favoured). PASSIVE suppresses the **floodable** paths — fan-out, beacon, offer, backfill —
+   and nothing else, so a spare board keeps feeding its pocket. Recovery runs on a lost link, on an OFFER, and
+   on the 60-s sweep, because both event sources can fall silent together and being wrongly passive is total
+   silence.
+
+   *Amendment (2026-08-25, field).* This first shipped keyed on `onForeignReachable`, and that was wrong:
+   `reachable` is a **sighting**, not a data path — BLE publishes presence adverts far beyond L2CAP range,
+   Wi-Fi Aware keeps a 150-s ghost, and the member's own kdoc says "not necessarily linked here". Two Pixels
+   across a field sighted each other without ever linking; the higher-keyed one stood down and went completely
+   silent — no room posts, no DMs, no ✓✓ — with nothing carrying its traffic. Standing down is only ever safe
+   toward a board our frames can actually reach. Two rules fall out and are pinned by
+   `LoraGatewayPolicyTest`/`LoraBridgeTest`: elect on **links**, and **never gate `fastSend`** — a
+   `relay = false` targeted send is owed by exactly one node and never flooded, so no co-pocket gateway holds a
+   copy to relay *or* to duplicate, and suppressing it only stranded AckSync's ticks for their full 24 h of
+   retries.
+
+   The same audit found ADR 039's own two `foreignReachable` guards making the identical mistake, and the
+   `fastSend` one would have kept the field test's receipts stranded even after the role was fixed. "Another
+   plane already carries this peer's traffic" and "custody syncs to it for real there" both describe a **data
+   path**: `ForwardSync`'s digest exchange runs off `neighbors`, and a sighting never triggers it. Both now
+   read the link set. `foreignReachable` is kept, recorded and surfaced as `pocketSightings` — nothing routes
+   on it, and it sits beside `pocketLinks` precisely so the gap between heard and linked is visible. That gap
+   being invisible is how this survived review, so `…debug.LORA` now reports `role` with both its inputs.
 4. **Airtime is measured, not inferred from a refusal.** `LoraAirtime` computes time-on-air from the LoRa
    formula at the board's own modem preset, keeps a rolling hour, and holds two budgets from one allowance:
    `min(the region's duty cycle, a 10 % politeness ceiling) x 0.5`. LIVE may spend all of it; BRIDGE — gossip

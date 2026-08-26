@@ -9,6 +9,7 @@ import org.junit.Test
 class LoraGatewayPolicyTest {
     private fun key(node: String) = StoreDigest.hash64(node)
 
+    /** The election's pocket: peers a short-range plane holds a LIVE LINK to, not merely peers it has sighted. */
     private fun pocket(vararg nodes: String) = nodes.mapTo(HashSet()) { key(it) }
 
     /** Two node names whose publisher keys are ordered, so "lowest key wins" is testable by name. */
@@ -101,6 +102,34 @@ class LoraGatewayPolicyTest {
         assertTrue(
             "an active gateway's OFFER is also its liveness beacon",
             LoraGatewayPolicy.STALE_MS > 2 * LoraGossipPolicy.MAX_INTERVAL_MS,
+        )
+    }
+
+    @Test
+    fun aSightedButUnlinkedGatewayNeverMakesUsStandDown() {
+        // The field bug (two Pixels across a field, one stuck "listening"): BLE publishes presence adverts far
+        // beyond L2CAP range and Wi-Fi Aware keeps a 150-s ghost, so a peer can be `reachable` with no data
+        // path. Standing down for it means going silent with nobody carrying our traffic. The election is fed
+        // the LINK set, so an unlinked rival — however low its key — leaves us ACTIVE.
+        val policy = LoraGatewayPolicy()
+        policy.onOffer(key(lowerKeyNode), 0)
+        assertEquals(
+            LoraGatewayPolicy.Role.ACTIVE,
+            policy.roleFor(key("alice"), pocketKeys = emptySet(), now = 0),
+        )
+        // ...and it is a bridge peer, so we serve it rather than ignoring it.
+        assertTrue(policy.isFarGateway(key(lowerKeyNode), emptySet()))
+    }
+
+    @Test
+    fun losingTheLinkToTheActiveGatewayPromotesUsImmediately() {
+        val policy = LoraGatewayPolicy()
+        policy.onOffer(key(lowerKeyNode), 0)
+        assertEquals(LoraGatewayPolicy.Role.PASSIVE, policy.roleFor(key("alice"), pocket(lowerKeyNode), 0))
+        assertEquals(
+            "no link means nothing is carrying our traffic, so we carry it ourselves",
+            LoraGatewayPolicy.Role.ACTIVE,
+            policy.roleFor(key("alice"), emptySet(), 1_000),
         )
     }
 

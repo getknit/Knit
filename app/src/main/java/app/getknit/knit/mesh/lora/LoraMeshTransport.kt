@@ -114,8 +114,17 @@ internal class LoraMeshTransport(
     private val heardPeers = ConcurrentHashMap<String, Peer>()
     private val lastSelfProfileAt = AtomicLong(NEVER)
 
+    // Peers a short-range sibling has *sighted*. Diagnostics only — deliberately nothing routes on it.
+    // Every routing decision here reads `linkedPeers` instead; the two differ exactly when a peer is heard
+    // but not linked, which is the state that silenced a board in the field, so it is worth being able to see.
     @Volatile
     private var foreignReachable: Set<String> = emptySet()
+
+    // Peers a higher-preference plane holds a **live link** to right now (BLE/NAN, via suppressDataPath).
+    // The gateway election reads this and NOT `foreignReachable`: a sighting is not a data path, and the
+    // whole premise of standing down is that the other board will carry our traffic for us.
+    @Volatile
+    private var linkedPeers: Set<String> = emptySet()
 
     @Volatile
     private var currentConfig: LoraConfig? = null
@@ -213,9 +222,20 @@ internal class LoraMeshTransport(
         wake.trySend(Unit)
     }
 
+    /** Sightings from the short-range planes. Recorded for the diagnostics dump; never routed on — see the field. */
     override fun onForeignReachable(peers: Set<String>) {
         foreignReachable = peers
-        // A co-pocket gateway walking away (or arriving) is exactly what changes who speaks for this pocket.
+        publishStatus()
+    }
+
+    /**
+     * The peers BLE/NAN currently hold a live link to. This plane has no data path of its own, so the hint's
+     * usual meaning (don't bring up a redundant sync) is moot — what it is read for here is the **gateway
+     * election**: standing down is only safe toward a board that can actually be handed our traffic.
+     */
+    override fun suppressDataPath(peers: Set<String>) {
+        linkedPeers = peers
+        // A co-pocket gateway gaining or losing its link is exactly what changes who speaks for this pocket.
         recomputeRole()
     }
 
@@ -265,9 +285,17 @@ internal class LoraMeshTransport(
         wire: WireEnvelope,
         to: Peer,
     ) {
-        if (!mayTransmit()) return
+        // Deliberately NOT gated on the gateway role. A targeted send is `relay = false`: only this node owes
+        // it, it is never flooded, and a co-pocket gateway therefore has no copy of it to relay and no copy to
+        // duplicate. Suppressing it was pure loss — it stranded AckSync's ✓✓ ticks on a passive board, which
+        // retries them for 24 h and never lands one.
         if (to.nodeId !in _reachable.value.mapTo(HashSet()) { it.nodeId }) return
-        if (to.nodeId in foreignReachable) return // another plane already carries this peer's traffic
+        // "Another plane carries this peer's traffic" (ADR 039) means a **link**, not a sighting: a peer BLE
+        // has merely heard advertise, or one Wi-Fi Aware still lists 150 s after its last cue, is being
+        // carried by nothing. Read as a sighting this refused the one path a far peer's ✓✓ had — the same
+        // reachable-vs-linked error as the gateway election, and the second reason the field test lost its
+        // receipts even once the role was right.
+        if (to.nodeId in linkedPeers) return
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return
         if (!LoraFramePolicy.eligible(env, wire, LoraFramePolicy.Path.TARGETED, to.nodeId)) return
         val label = "send:${env.type}->${to.nodeId}"
@@ -361,7 +389,10 @@ internal class LoraMeshTransport(
      */
     private suspend fun reofferTo(peer: Peer) {
         if (!mayTransmit()) return
-        if (currentConfig?.dms != true || peer.nodeId in foreignReachable) return
+        // Links, not sightings, for the same reason: the re-offer is skipped because custody syncs to this
+        // peer for real elsewhere, and `ForwardSync`'s digest exchange runs off `neighbors` — a sighting
+        // never triggers it, so skipping on one strands the very DMs this path exists to deliver.
+        if (currentConfig?.dms != true || peer.nodeId in linkedPeers) return
         farFrames(peer.nodeId).forEach { wire -> reofferOne(wire, peer.nodeId) }
     }
 
@@ -388,13 +419,24 @@ internal class LoraMeshTransport(
      */
     private fun recomputeRole() {
         val self = selfIdCached ?: return
-        val pocketKeys = foreignReachable.mapTo(HashSet()) { StoreDigest.hash64(it) }
-        val next = gateway.roleFor(StoreDigest.hash64(self), pocketKeys, clock())
+        val next = gateway.roleFor(StoreDigest.hash64(self), pocketKeys(), clock())
         if (next == role) return
         role = next
-        log("lora role $next (pocket gateways=${pocketKeys.size})")
+        log("lora role $next (links=${linkedPeers.size} gateways=${gateway.heard})")
         publishStatus()
     }
+
+    /**
+     * The pocket, for election purposes: peers a short-range plane holds a **live link** to.
+     *
+     * Deliberately [linkedPeers] and not [foreignReachable]. The latter is a *sighting* — BLE publishes
+     * presence adverts ∪ links, and Wi-Fi Aware keeps a 150-second ghost after the last cue — and its own
+     * kdoc says "not necessarily linked here". Electing on it strands a board: two phones that can hear each
+     * other's adverts across a field, with no L2CAP link between them, would have the higher-keyed one stand
+     * down for a peer that never receives, let alone relays, a single frame of its traffic. Standing down is
+     * only ever safe toward a board our frames can actually be handed to.
+     */
+    private fun pocketKeys(): Set<Long> = linkedPeers.mapTo(HashSet()) { StoreDigest.hash64(it) }
 
     /** Whether we may put anything on the air at all. A passive gateway listens and relays, but never transmits. */
     private fun mayTransmit(): Boolean {
@@ -444,14 +486,13 @@ internal class LoraMeshTransport(
         gateway.onOffer(offer.publisher, now)
         gossip.onOffer(sameSet = offer.prefixes.contentEquals(lastOfferPrefixes), now = now)
         recomputeRole()
-        val pocketKeys = foreignReachable.mapTo(HashSet()) { StoreDigest.hash64(it) }
         // Note an OFFER does NOT mark its publisher `reachable`: the packet carries a hash, not a node id,
         // so there is no Peer to record. The first actual frame from that node does it, which is the right
         // moment anyway — a gateway is a relay, not necessarily someone you can address.
         //
         // A co-pocket gateway is not a bridge peer: custody syncs to it for real over BLE/NAN, so serving it
         // over LoRa would spend air on frames already crossing a link that costs nothing.
-        if (!gateway.isFarGateway(offer.publisher, pocketKeys)) return
+        if (!gateway.isFarGateway(offer.publisher, pocketKeys())) return
         scope.launch { serveBackfill(offer) }
     }
 
@@ -662,6 +703,11 @@ internal class LoraMeshTransport(
         while (scope.isActive) {
             delay(LINGER_SWEEP_MS)
             recomputeReachable(clock())
+            // Also re-run the election on a timer. Both its event triggers can go quiet at once — a passive
+            // board stops offering, and if the gateway it stood down for goes silent too, nothing would ever
+            // expire it from the heard set. Being wrongly passive is total silence, so it must not need an
+            // event to recover from.
+            recomputeRole()
         }
     }
 
@@ -712,6 +758,9 @@ internal class LoraMeshTransport(
                 battery = link.battery.value,
                 airtime = pace.airtime.snapshot(clock()),
                 role = role,
+                pocketLinks = linkedPeers.size,
+                pocketSightings = foreignReachable.size,
+                gatewaysHeard = gateway.heard,
             )
     }
 

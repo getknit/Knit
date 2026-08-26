@@ -83,13 +83,25 @@ re-fans every first-seen *relayed* frame, and `fanout` never checked authorship 
 member reaches A's gateway over BLE, crosses the hop, and floods pocket B from B's gateway. ADR 044 adds the
 three things that were missing.
 
-**A gateway role.** `LoraGatewayPolicy`: anything publishing a `LoraCtl` OFFER has a board; a publisher whose
-key is in `foreignReachable` (the composite fills that from **short-range** siblings only, so it *is* "my
-BLE/NAN pocket") is a co-pocket rival, one outside it is the bridge peer and is never suppressed. Lowest
-publisher key wins; the rest go PASSIVE and transmit **nothing** (fan-out, `fastSend`, beacon, offer, backfill
-— inbound is untouched, so a spare board still feeds its pocket). Self-healing with no timer: a rival that
-walks away leaves `foreignReachable`, one whose board dies stops publishing and ages out of `STALE_MS` (45 min).
-Closes ADR 038's "one board per clique" residual.
+**A gateway role.** `LoraGatewayPolicy`: anything publishing a `LoraCtl` OFFER has a board; a publisher we
+hold a **live link** to (`suppressDataPath`, the higher-preference planes' `neighbors`) is a co-pocket rival,
+one we do not is the bridge peer and is never suppressed. Lowest publisher key wins; the rest go PASSIVE and
+suppress the **floodable** paths (fan-out, beacon, offer, backfill) — inbound is untouched, so a spare board
+still feeds its pocket, and `fastSend` is untouched too (a `relay = false` targeted tick is owed by one node,
+never flooded, so no co-pocket board has a copy to relay *or* to duplicate). Recovery: on a lost link, on a
+gateway ageing past `STALE_MS` (45 min), and on the 60-s sweep — being wrongly passive is total silence, so it
+must never need an event to recover. Closes ADR 038's "one board per clique" residual.
+
+> **It must be the link set, never `reachable`.** BLE publishes presence adverts far beyond L2CAP range and
+> Wi-Fi Aware keeps a peer reachable for 150 s after its last cue, so a sighting is not a data path — and
+> standing down is only safe toward a board our frames can actually be handed to. Electing on `reachable`
+> was field-observed (2026-08-25, two Pixels across a field): the higher-keyed one showed "listening", sent
+> nothing in either conversation, and its ✓✓ ticks never landed, with no peer carrying any of it. The same
+> audit moved ADR 039's two `foreignReachable` guards (`fastSend`'s "another plane covers this peer" and the
+> re-offer's "custody syncs there for real") onto the link set for the identical reason — custody's digest
+> exchange runs off `neighbors`, so a sighting never triggers it, and the `fastSend` one alone would have kept
+> those receipts stranded. `…debug.LORA` reports `role` with both its inputs plus `pocketSightings`, so the
+> gap between heard and linked is visible rather than inferred.
 
 **An airtime governor.** `LoraAirtime` (pure): time-on-air from the LoRa formula at the board's own preset
 (233 B at LongFast ≈ 2 s), a rolling hour, and one allowance = `min(region duty cycle, 10 % politeness) × 0.5`.
@@ -246,7 +258,7 @@ Meshtastic app's device to **None** / `adb shell am force-stop com.geeksville.me
   index in settings now points at the Knit slot. Both boards must be provisioned before frames cross.
 - `…debug.LORA` (debug bridge): `--es address <MAC>` + `--es name <n>` binds a board, `--ei channel <idx>`,
   `--ez on <true|false>`, `--ez bridge <true|false>`; no extras dumps
-  `state/boardNodeNum/snr/rssi/queueFree/heard/role/radio/airtime/counters`. It is the
+  `state/boardNodeNum/snr/rssi/queueFree/heard/role/pocketLinks/pocketSightings/gatewaysHeard/radio/airtime/counters`. It is the
   two-board oracle. `…debug.LORATX --es text <s>` sends a raw payload straight to the board (board-side
   sanity via `meshtastic --noproto`). `…debug.LORAPROV` writes the Knit channel headlessly (reports the slot).
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips

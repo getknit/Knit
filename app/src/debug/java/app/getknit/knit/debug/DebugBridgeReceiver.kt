@@ -1065,6 +1065,12 @@ class DebugBridgeReceiver :
             // The bridge's own oracle (ADR 044): which board here speaks for the pocket, what the radio is,
             // and how much of the hour's airtime allowance has gone — the numbers a two-pocket trial reads.
             .put("role", status.role.name)
+            // The election's inputs, not just its verdict: "why is this board listening?" is otherwise
+            // unanswerable in the field, which is exactly how the reachable-vs-linked bug survived review.
+            .put("pocketLinks", status.pocketLinks)
+            .put("gatewaysHeard", status.gatewaysHeard)
+            // pocketSightings > pocketLinks is the shape of the field failure: peers heard but not linked.
+            .put("pocketSightings", status.pocketSightings)
             .put("radio", status.airtime?.let { "${it.region}/${it.preset}${if (it.known) "" else " (assumed)"}" } ?: JSONObject.NULL)
             .put(
                 "airtime",

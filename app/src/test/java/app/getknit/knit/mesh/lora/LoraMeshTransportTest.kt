@@ -384,7 +384,8 @@ class LoraMeshTransportTest {
                 }) { testScheduler.currentTime }
             a.transport.start()
             runCurrent()
-            a.transport.onForeignReachable(setOf("bob")) // bob is also on BLE/NAN — custody syncs there for real
+            // Bob is on a live BLE/NAN link — custody's digest exchange syncs to him there for real.
+            a.transport.suppressDataPath(setOf("bob"))
             val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
             b.transport.start()
             advanceTimeBy(4_000)
@@ -441,14 +442,16 @@ class LoraMeshTransportTest {
             runCurrent()
             assertEquals("no send to an unreachable peer", bSentBefore, b.link.sent.size)
 
-            // A tick toward alice, whom another plane already serves, is skipped.
-            b.transport.onForeignReachable(setOf("alice"))
+            // A tick toward alice, whom another plane holds a LIVE LINK to, is skipped — she gets it there.
+            b.transport.suppressDataPath(setOf("alice"))
             b.transport.fastSend(frame(FrameType.RECEIPT, "bob"), Peer("alice"))
             runCurrent()
             assertEquals("no send to a peer another plane covers", bSentBefore, b.link.sent.size)
 
-            // With alice reachable and not foreign, the tick goes out.
-            b.transport.onForeignReachable(emptySet())
+            // But a peer merely *sighted* on BLE/NAN is covered by nothing, so the tick must still ride.
+            // Read as coverage, a sighting refused a far peer's only path to its ✓✓ (field, 2026-08-25).
+            b.transport.suppressDataPath(emptySet())
+            b.transport.onForeignReachable(setOf("alice"))
             b.transport.fastSend(frame(FrameType.RECEIPT, "bob"), Peer("alice"))
             advanceTimeBy(4_000)
             runCurrent()

@@ -10,12 +10,18 @@ package app.getknit.knit.mesh.lora
  * boards are different origins. ADR 038 shipped with "one board per clique" as an accepted residual; a bridge
  * makes it expensive, because now every pocket has a board by construction.
  *
- * The signal is free. [MeshTransport.onForeignReachable] hands the LoRa child the union of its **short-range**
- * siblings' reachable sets ([CompositeMeshTransport] filters on `shortRange`), which is exactly "who is in my
- * BLE/NAN pocket". And anything that publishes a [LoraCtl] OFFER is, by definition, a board-holder. So:
+ * The signal is free. [MeshTransport.suppressDataPath] hands the LoRa child the nodeIds a higher-preference
+ * plane holds a **live link** to, which is exactly "who in my pocket can be handed my traffic". And anything
+ * that publishes a [LoraCtl] OFFER is, by definition, a board-holder. So:
  *
- * - a publisher that **is** in `foreignReachable` is a **co-pocket** gateway — a rival for the same job;
- * - a publisher that is **not** is a **far-pocket** gateway — the bridge peer, and never a rival.
+ * - a publisher we hold a **link** to is a **co-pocket** gateway — a rival for the same job;
+ * - a publisher we do not is a **far-pocket** gateway — the bridge peer, and never a rival.
+ *
+ * It must be the *link* set and not the *reachable* set. A sighting is not a data path: BLE publishes
+ * presence adverts far beyond where an L2CAP link works, and Wi-Fi Aware keeps a peer "reachable" for 150 s
+ * after its last cue. Electing on those strands a board — it stands down for a peer that never receives its
+ * traffic, and goes silent with nobody carrying it. Field-observed, two Pixels across a field: one showed
+ * "listening", sent nothing at all, and its ✓✓ ticks never landed.
  *
  * Among co-pocket gateways the lowest **publisher key** wins — the 64-bit hash of the node id an OFFER
  * carries, since that is all the packet has room for. Same lowest-decides convention the mesh already uses
@@ -53,6 +59,9 @@ internal class LoraGatewayPolicy(
     }
 
     fun forget() = gatewaysHeardAt.clear()
+
+    /** How many gateways are currently remembered — for the log line and the `…debug.LORA` dump. */
+    val heard: Int get() = gatewaysHeardAt.size
 
     /**
      * Our role, given our own [selfKey], the keys of the peers our short-range siblings can see

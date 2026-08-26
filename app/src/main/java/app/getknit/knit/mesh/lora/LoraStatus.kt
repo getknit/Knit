@@ -20,4 +20,13 @@ internal data class LoraStatus(
     val airtime: AirtimeSnapshot? = null,
     /** Whether this phone speaks for its pocket on the hop, or another board here does (ADR 044). */
     val role: LoraGatewayPolicy.Role = LoraGatewayPolicy.Role.ACTIVE,
+    /** Peers a short-range plane holds a live link to — the election's input, so [role] can be explained. */
+    val pocketLinks: Int = 0,
+    /** LoRa gateways heard within the staleness window — the election's other input. */
+    val gatewaysHeard: Int = 0,
+    /**
+     * Peers a short-range plane has merely *sighted*. Nothing routes on this; it sits beside [pocketLinks]
+     * so the gap between "heard" and "linked" — the state that silenced a board in the field — is visible.
+     */
+    val pocketSightings: Int = 0,
 )

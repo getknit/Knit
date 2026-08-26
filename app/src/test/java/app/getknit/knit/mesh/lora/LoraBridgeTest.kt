@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.lora
 
 import app.getknit.knit.mesh.InboundFrame
 import app.getknit.knit.mesh.MeshMetrics
+import app.getknit.knit.mesh.Peer
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.FrameType
@@ -40,6 +41,7 @@ class LoraBridgeTest {
         sentAt: Long = 0L,
         type: String = FrameType.CHAT,
         recipientId: String? = null,
+        relay: Boolean = true,
     ): WireEnvelope {
         val env =
             RelayEnvelope(
@@ -54,7 +56,7 @@ class LoraBridgeTest {
         sig[0] = (sigCounter shr 8).toByte()
         sig[1] = sigCounter.toByte()
         sigCounter++
-        return WireEnvelope(sig = sig, signed = WireCodec.encodeEnvelope(env))
+        return WireEnvelope(relay = relay, sig = sig, signed = WireCodec.encodeEnvelope(env))
     }
 
     private fun idOf(wire: WireEnvelope) = WireCodec.decodeEnvelope(wire.signed)!!.id
@@ -139,6 +141,24 @@ class LoraBridgeTest {
             }
         }
         return Rig(node, transport, link, metrics, custody, received)
+    }
+
+    /**
+     * Puts a second board in [a]'s pocket, **linked**, with whichever key ordering forces [a] passive, and
+     * returns it. Retries node names until one hashes below [a]'s, since the election is keyed on the hash.
+     */
+    private fun forcePassive(
+        a: Rig,
+        air: FakeMeshtasticAir,
+        scope: CoroutineScope,
+        now: () -> Long,
+    ): Rig {
+        val selfKey = StoreDigest.hash64(a.node)
+        val name = generateSequence(0) { it + 1 }.map { "mate$it" }.first { StoreDigest.hash64(it) < selfKey }
+        val mate = rig(air, 8u, name, scope, now = now)
+        mate.transport.start()
+        a.transport.suppressDataPath(setOf(name))
+        return mate
     }
 
     /** Long enough for the first gossip interval's midpoint (5 min / 2) plus a few pacer turns. */
@@ -253,9 +273,11 @@ class LoraBridgeTest {
             a1.transport.start()
             a2.transport.start()
             b.transport.start()
-            a1.transport.onForeignReachable(setOf("amber"))
-            a2.transport.onForeignReachable(setOf("alice"))
-            b.transport.onForeignReachable(emptySet())
+            // One pocket = a live BLE/NAN link between them, which is what makes standing down safe: the
+            // active board can actually be handed the passive one's traffic.
+            a1.transport.suppressDataPath(setOf("amber"))
+            a2.transport.suppressDataPath(setOf("alice"))
+            b.transport.suppressDataPath(emptySet())
             runCurrent()
 
             // Let the offers settle the election.
@@ -288,6 +310,75 @@ class LoraBridgeTest {
 
             // And bob, in the other pocket, is never suppressed by either of them.
             assertEquals(LoraGatewayPolicy.Role.ACTIVE, b.status().role)
+        }
+
+    @Test
+    fun twoBoardsThatOnlySightEachOtherBothKeepTransmitting() =
+        runTest {
+            // The field regression: two phones far enough apart that neither holds a BLE/NAN link, but close
+            // enough to have sighted each other (a presence advert, or a Wi-Fi Aware ghost that has not aged
+            // out). Before the fix the higher-keyed one stood down and went completely silent — no room posts,
+            // no DMs, and no ✓✓ ticks — with no peer carrying any of it.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            // Sighted, but no live link either way.
+            a.transport.onForeignReachable(setOf("bob"))
+            b.transport.onForeignReachable(setOf("alice"))
+            a.transport.suppressDataPath(emptySet())
+            b.transport.suppressDataPath(emptySet())
+            runCurrent()
+            advanceTimeBy(toFirstOffer)
+            runCurrent()
+            advanceTimeBy(2 * LoraGossipPolicy.MIN_INTERVAL_MS)
+            runCurrent()
+
+            assertEquals(LoraGatewayPolicy.Role.ACTIVE, a.status().role)
+            assertEquals(LoraGatewayPolicy.Role.ACTIVE, b.status().role)
+
+            val fromB = frame("bob", body = "does this cross?", sentAt = testScheduler.currentTime)
+            b.transport.fastFanout(fromB)
+            advanceTimeBy(5_000)
+            runCurrent()
+            assertTrue("both directions carry", a.received.any { it.envelope.id == idOf(fromB) })
+
+            val fromA = frame("alice", body = "and back", sentAt = testScheduler.currentTime)
+            a.transport.fastFanout(fromA)
+            advanceTimeBy(5_000)
+            runCurrent()
+            assertTrue("including from the one that used to fall silent", b.received.any { it.envelope.id == idOf(fromA) })
+        }
+
+    @Test
+    fun aPassiveBoardStillSendsItsTargetedTicks() =
+        runTest {
+            // A `relay = false` targeted send is owed by exactly one node and is never flooded, so no
+            // co-pocket gateway holds a copy to relay OR to duplicate. Gating it on the role stranded
+            // AckSync's ✓✓ ticks on a passive board, which then retries them for 24 h and lands none.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+
+            // Alice hears bob so he is LoRa-reachable, then alice is forced passive by a linked co-pocket board.
+            b.transport.fastFanout(frame("bob", body = "hi", sentAt = testScheduler.currentTime))
+            advanceTimeBy(5_000)
+            runCurrent()
+            val passive = forcePassive(a, air, backgroundScope) { testScheduler.currentTime }
+            advanceTimeBy(toFirstOffer + 30_000)
+            runCurrent()
+            assertEquals(LoraGatewayPolicy.Role.PASSIVE, a.status().role)
+
+            val sentBefore = a.link.sent.size
+            // AckSync's sealed ✓✓: a chat frame addressed to the author, `relay = false`.
+            a.transport.fastSend(frame("alice", recipientId = "bob", body = "tick", relay = false), Peer("bob"))
+            advanceTimeBy(5_000)
+            runCurrent()
+            assertTrue("the tick went out despite the passive role", a.link.sent.size > sentBefore)
         }
 
     @Test

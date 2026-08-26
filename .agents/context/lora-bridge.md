@@ -220,7 +220,12 @@ set_channel=33, begin_edit_settings=64, commit_edit_settings=65, session_passkey
   `<short>_xxxx` / the service UUID in cache); `BoardFilter.visible` lists those plus the bound board, with
   "Show all paired devices" (`lora_show_all_boards`) for the rest; the list re-reads on resume
   (`refreshBoards`). A connected board shows "Channel N · name" (`lora_channel_title`), a mismatch warning
-  (`lora_channel_warning`) when the slot is not `Knit`, firmware, and peers heard (`lora_peers_heard`). The
+  (`lora_channel_warning`) when the slot is not `Knit`, firmware, **radios in range** (`lora_boards_heard`,
+  distinct Meshtastic `packet.from` on our channel, control packets and part-fragments included) and — only
+  when the two differ — **people reachable** (`lora_peers_heard`, distinct frame *authors*). The two diverge as
+  soon as a gateway relays or backfills somebody else's frame, so "1 radio, 3 people" is normal; reporting only
+  the author count read as phantom hardware in the field (2026-08-25: "3 peers heard" with two radios in
+  existence). `LoraStatus.heard` stays the author count and remains what `reachable`/routing use. The
   Profile row reads "On · <board> · connected / not connected".
 - **Chat.** `LoraNotice` (`chat_lora_notice`, `ui/chat/LoraReach.kt`) under the relay notice for a DM whose
   peer only the board has heard (`peerTransports[peer] == {LoRa}`, plane live, not relay-covered), with a

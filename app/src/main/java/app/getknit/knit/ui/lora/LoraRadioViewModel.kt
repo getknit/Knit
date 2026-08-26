@@ -47,6 +47,8 @@ data class LoraRadioUiState(
     val snr: Float? = null,
     val rssi: Int? = null,
     val heard: Int = 0,
+    /** Radios heard on our channel — the honest answer to "is the other board in range". */
+    val boardsHeard: Int = 0,
     /** The board's firmware, once the handshake has told us. */
     val firmware: String? = null,
     /** The board's own battery, once it has reported one; null while not connected. */
@@ -130,6 +132,7 @@ internal class LoraRadioViewModel(
                 snr = status.lastSnr,
                 rssi = status.lastRssi,
                 heard = status.heard,
+                boardsHeard = status.boardsHeard,
                 firmware = ready?.board?.firmwareVersion,
                 battery = ready?.let { status.battery },
                 bridgePassive = status.role == LoraGatewayPolicy.Role.PASSIVE,

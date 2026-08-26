@@ -2124,6 +2124,14 @@ Multi-hop between pockets stays **Meshtastic's** job: a frame injected at a far 
 re-transmission by the sig dedup, and any second board in that pocket is PASSIVE, so a third pocket is reached
 by the board's own 3-hop flood rather than by a second phone-level transmission.
 
+**Radios and people are different numbers, and the row asks for radios.** `LoraStatus.heard` counts distinct
+frame **authors** (`noteReachable(Peer(env.senderId))`) and always did — which is right for `reachable`, since
+the question there is who this mesh can reach. The bridge makes it diverge sharply from the hardware, because
+backfill serves frames authored by people nowhere near any radio: the field saw "3 peers heard over LoRa" with
+two radios in existence. `boardsHeard` now counts distinct Meshtastic `packet.from` on our channel — control
+packets and incomplete fragments included, so a board that only gossips still registers — and the settings row
+leads with that, showing the author count beneath only when the two differ. Routing is untouched.
+
 Counters: `loraOfferSent`/`loraOfferReceived`, `loraBridged`, `loraBridgeRefused`, `loraPassive`, plus the
 airtime ledger on `LoraStatus`. Surfaced on the LoRa radio screen (role, radio, airtime percent) and in
 `…debug.LORA` (`role`, `radio`, `airtime`, `--ez bridge`).

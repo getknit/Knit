@@ -105,6 +105,11 @@ class LoraBridgeTest {
         node: String,
         scope: CoroutineScope,
         wallClock: (() -> Long)? = null,
+        /**
+         * True gives the node nothing to say at all — no profile to beacon and empty custody, so nothing it
+         * holds can be backfilled either. Lets a test isolate what the control packets alone prove.
+         */
+        mute: Boolean = false,
         now: () -> Long,
     ): Rig {
         val link = FakeMeshtasticLink(nodeNum, air)
@@ -113,13 +118,13 @@ class LoraBridgeTest {
         // A node's own profile is in its own custody (`ORIGIN_SELF`), which is why its offer names it and a
         // far gateway never serves it back. One stable frame, like `MeshManager.signedProfile`'s stable id.
         val ownProfile = frame(node, type = FrameType.PROFILE, body = "p")
-        custody.held += ownProfile
+        if (!mute) custody.held += ownProfile
         val transport =
             LoraMeshTransport(
                 selfId = { node },
                 link = link,
                 config = MutableStateFlow(LoraConfig("AA:$nodeNum", 0)),
-                selfProfile = { ownProfile },
+                selfProfile = { ownProfile.takeIf { !mute } },
                 scope = scope,
                 metrics = metrics,
                 clock = now,
@@ -379,6 +384,48 @@ class LoraBridgeTest {
             advanceTimeBy(5_000)
             runCurrent()
             assertTrue("the tick went out despite the passive role", a.link.sent.size > sentBefore)
+        }
+
+    @Test
+    fun oneRadioRelayingOthersFramesCountsAsOneRadioAndSeveralPeople() =
+        runTest {
+            // Field report: "3 peers heard over LoRa" with only two radios in existence. The count was of
+            // frame *authors*, and a gateway relays and backfills frames authored by people nowhere near it,
+            // so the number legitimately outran the hardware. Radios and people are now counted separately.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+
+            // Bob's single radio puts three different authors' frames on the air — his own and two he relays.
+            listOf("bob", "carol", "dave").forEach { author ->
+                b.transport.fastFanout(frame(author, body = "from $author", sentAt = testScheduler.currentTime))
+                advanceTimeBy(5_000)
+                runCurrent()
+            }
+
+            assertEquals("one other radio, however many people it speaks for", 1, a.status().boardsHeard)
+            assertEquals("three people are reachable through it", 3, a.status().heard)
+        }
+
+    @Test
+    fun aGatewayThatOnlyPublishesOffersStillCountsAsARadioInRange() =
+        runTest {
+            // An offer is a transmission: a board doing nothing but gossiping used to be invisible in the row.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope, mute = true) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+            advanceTimeBy(toFirstOffer + 30_000)
+            runCurrent()
+
+            assertTrue("bob offered", b.metrics.snapshot().loraOfferSent > 0)
+            assertEquals("the offer alone proves a radio is there", 1, a.status().boardsHeard)
+            assertEquals("but nobody has spoken, so no person is reachable yet", 0, a.status().heard)
         }
 
     @Test

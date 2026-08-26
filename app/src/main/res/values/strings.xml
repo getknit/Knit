@@ -540,9 +540,13 @@
     <string name="lora_battery_percent_voltage">Battery %1$d%% · %2$.2f V</string>
     <string name="lora_battery_powered">Plugged in</string>
     <string name="lora_battery_powered_voltage">Plugged in · %1$.2f V</string>
+    <plurals name="lora_boards_heard">
+        <item quantity="one">%d other radio in range</item>
+        <item quantity="other">%d other radios in range</item>
+    </plurals>
     <plurals name="lora_peers_heard">
-        <item quantity="one">%d peer heard over LoRa</item>
-        <item quantity="other">%d peers heard over LoRa</item>
+        <item quantity="one">%d person reachable over LoRa</item>
+        <item quantity="other">%d people reachable over LoRa</item>
     </plurals>
     <!-- Bridging distant groups over LoRa (ADR 044). -->
     <string name="lora_bridge_title">Bridge distant groups</string>

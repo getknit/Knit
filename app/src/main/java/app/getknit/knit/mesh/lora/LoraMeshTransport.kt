@@ -110,7 +110,15 @@ internal class LoraMeshTransport(
     private val reassembler = FragReassembler<UInt>(now = clock, capacity = FRAG_CAP, timeoutMs = FRAG_TIMEOUT_MS)
 
     // LoRa-heard senders (a long linger — there are no periodic cues on LoRa), and the profile-beacon floor.
+    // NOTE these are frame **authors**, not radios: a frame is authored by one node and may be put on air by
+    // another's board, relayed or backfilled out of its custody. That is the right key for `reachable` (who
+    // can I reach through this mesh) and the wrong one for "how many radios can I hear" — see boardsHeardAt.
     private val lastHeardAt = ConcurrentHashMap<String, Long>()
+
+    // Meshtastic node numbers we have heard transmit on our channel: one entry per **radio**, which is what
+    // the settings row is actually asking. Counted for every Knit packet including control packets and
+    // incomplete fragments — a board that only publishes offers is still a board in range.
+    private val boardsHeardAt = ConcurrentHashMap<UInt, Long>()
     private val heardPeers = ConcurrentHashMap<String, Peer>()
     private val lastSelfProfileAt = AtomicLong(NEVER)
 
@@ -207,6 +215,7 @@ internal class LoraMeshTransport(
         link.stop()
         lastHeardAt.clear()
         heardPeers.clear()
+        boardsHeardAt.clear()
         gateway.forget()
         servedTo.clear()
         // A restart must not inherit a deferral to a board that may no longer be there.
@@ -635,10 +644,12 @@ internal class LoraMeshTransport(
         // Knit traffic on it used to ingest both. Ignore anything off the channel this plane is bound to.
         val bound = currentConfig?.channelIndex
         if (bound != null && packet.channelIndex != bound) return
-        if (LoraCtl.isCtl(packet.payload)) {
-            onCtlPacket(packet)
-            return
-        }
+        noteBoard(packet.from)
+        if (LoraCtl.isCtl(packet.payload)) onCtlPacket(packet) else onFramePacket(packet)
+    }
+
+    /** One inbound mesh frame off the air: reassemble, decode, dedup, and hand it to the router. */
+    private fun onFramePacket(packet: ReceivedPacket) {
         val fragmented = packet.payload[0] == FastFrameCodec.TAG_FRAG
         val compact = reassemble(packet) ?: return
         val wire = FastFrameCodec.decodeCompact(compact)
@@ -679,6 +690,19 @@ internal class LoraMeshTransport(
             }
         }
 
+    /**
+     * Records that the radio [from] is on air. Separate from [noteReachable] because they answer different
+     * questions: this one counts **radios**, that one counts the **people** whose frames reached us — and the
+     * two diverge the moment a gateway relays or backfills somebody else's frame, which is the whole point of
+     * the bridge. Reporting the second as the first read as a phantom radio in the field.
+     */
+    private fun noteBoard(from: UInt) {
+        if (from == 0u) return // undecoded `from`; counting it would invent a radio
+        if (from == (link.state.value as? LinkState.Ready)?.board?.myNodeNum) return // our own board's echo
+        boardsHeardAt[from] = clock()
+        publishStatus()
+    }
+
     private fun noteReachable(peer: Peer) {
         val now = clock()
         val firstHeard = lastHeardAt.put(peer.nodeId, now) == null
@@ -694,6 +718,7 @@ internal class LoraMeshTransport(
 
     private fun recomputeReachable(now: Long) {
         lastHeardAt.entries.removeAll { now - it.value > REACHABLE_LINGER_MS }
+        boardsHeardAt.entries.removeAll { now - it.value > REACHABLE_LINGER_MS }
         heardPeers.keys.retainAll(lastHeardAt.keys)
         _reachable.value = heardPeers.values.toSet()
         publishStatus()
@@ -755,6 +780,7 @@ internal class LoraMeshTransport(
                 lastRssi = link.rxQuality.value?.rssi,
                 queueFree = link.queue.value?.free,
                 heard = _reachable.value.size,
+                boardsHeard = boardsHeardAt.size,
                 battery = link.battery.value,
                 airtime = pace.airtime.snapshot(clock()),
                 role = role,

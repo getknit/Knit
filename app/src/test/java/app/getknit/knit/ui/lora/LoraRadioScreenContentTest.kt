@@ -62,6 +62,7 @@ class LoraRadioScreenContentTest {
         snr = 6.5f,
         rssi = -85,
         heard = 2,
+        boardsHeard = 1,
         firmware = "2.5.0",
         channelName = channelName,
         channelMismatch = channelMismatch,
@@ -115,7 +116,8 @@ class LoraRadioScreenContentTest {
         render(connected())
         compose.onNodeWithText("Channel 1 · Knit").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Firmware 2.5.0").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("2 peers heard over LoRa").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("1 other radio in range").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("2 people reachable over LoRa").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_channel_warning").assertDoesNotExist()
         compose.onNodeWithTag("lora_provision").assertIsEnabled()
     }
@@ -134,6 +136,7 @@ class LoraRadioScreenContentTest {
         compose.onNodeWithText("Channel index: 0").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("lora_provision").assertIsNotEnabled()
         compose.onNodeWithTag("lora_peers_heard").assertDoesNotExist()
+        compose.onNodeWithTag("lora_boards_heard").assertDoesNotExist()
     }
 
     @Test
@@ -181,5 +184,21 @@ class LoraRadioScreenContentTest {
     fun theActiveGatewaySaysNothingAboutItsRole() {
         render(connected())
         compose.onNodeWithTag("lora_role_passive").assertDoesNotExist()
+    }
+
+    @Test
+    fun theStatusSeparatesRadiosInRangeFromPeopleReachableThroughThem() {
+        // One board relaying two other authors' frames is one radio, not three — the field report.
+        render(connected().copy(boardsHeard = 1, heard = 3))
+        compose.onNodeWithTag("lora_boards_heard").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("1 other radio in range").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("3 people reachable over LoRa").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun thePeopleLineStaysAwayWhenItWouldOnlyRestateTheRadioCount() {
+        render(connected().copy(boardsHeard = 1, heard = 1))
+        compose.onNodeWithTag("lora_boards_heard").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("lora_peers_heard").assertDoesNotExist()
     }
 }

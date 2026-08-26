@@ -13,7 +13,10 @@ internal data class LoraStatus(
     val lastSnr: Float? = null,
     val lastRssi: Int? = null,
     val queueFree: Int? = null,
+    /** People whose frames have reached us over LoRa — authors, so relayed and backfilled ones count too. */
     val heard: Int = 0,
+    /** Radios we have heard transmit on our channel. This, not [heard], is "how many boards are in range". */
+    val boardsHeard: Int = 0,
     /** The board's own power reading, once its handshake or telemetry has reported one. */
     val battery: BoardBattery? = null,
     /** The airtime ledger: what the plane has spent this hour against what it allows itself (ADR 044). */

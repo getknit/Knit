@@ -448,14 +448,25 @@ private fun StatusRow(state: LoraRadioUiState) {
                     color = muted,
                 )
             }
-            // Who the board has heard speak Knit (the plane's 45-min reachable linger): the only sign, short
-            // of a message, that the far side is provisioned and in range.
+            // Radios first, because that is what "is the other board provisioned and in range" asks, and it
+            // is the only sign short of a message. People second, and only when the two differ: a person is
+            // counted from the frames that reached us, which a gateway may have relayed or backfilled on
+            // their behalf from kilometres away — so "1 radio, 3 people" is normal, and reporting only the
+            // second read as phantom hardware.
             Text(
-                text = pluralStringResource(R.plurals.lora_peers_heard, state.heard, state.heard),
+                text = pluralStringResource(R.plurals.lora_boards_heard, state.boardsHeard, state.boardsHeard),
                 style = detail,
                 color = muted,
-                modifier = Modifier.testTag("lora_peers_heard"),
+                modifier = Modifier.testTag("lora_boards_heard"),
             )
+            if (state.heard > 0 && state.heard != state.boardsHeard) {
+                Text(
+                    text = pluralStringResource(R.plurals.lora_peers_heard, state.heard, state.heard),
+                    style = detail,
+                    color = muted,
+                    modifier = Modifier.testTag("lora_peers_heard"),
+                )
+            }
             state.radioConfig?.let { Text(stringResource(R.string.lora_radio_config, it), style = detail, color = muted) }
             // What the plane has spent of its own hourly allowance — the whole point of the governor is that
             // this is visible rather than inferred from a duty-cycle refusal.

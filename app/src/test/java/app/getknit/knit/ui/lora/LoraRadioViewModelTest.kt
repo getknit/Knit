@@ -157,6 +157,7 @@ class LoraRadioViewModelTest {
                             channels = listOf(ChannelInfo(index = 0, name = "", role = 1), ChannelInfo(index = 1, name = "Knit", role = 2)),
                         ),
                     heard = 3,
+                    boardsHeard = 1,
                 )
             advanceUntilIdle()
 
@@ -164,7 +165,8 @@ class LoraRadioViewModelTest {
             assertEquals("Knit", vm.state.value.channelName)
             assertFalse(vm.state.value.channelMismatch)
             assertEquals("2.5.0", vm.state.value.firmware)
-            assertEquals(3, vm.state.value.heard)
+            assertEquals("people reachable through the mesh", 3, vm.state.value.heard)
+            assertEquals("radios actually in range", 1, vm.state.value.boardsHeard)
 
             // Slot 0 is the board's unnamed primary — never Knit.
             channel.value = 0

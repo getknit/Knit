@@ -1061,7 +1061,8 @@ class DebugBridgeReceiver :
             .put("snr", status.lastSnr?.toDouble() ?: JSONObject.NULL)
             .put("rssi", status.lastRssi ?: JSONObject.NULL)
             .put("queueFree", status.queueFree ?: JSONObject.NULL)
-            .put("heard", status.heard)
+            .put("heard", status.heard) // frame authors, relayed and backfilled ones included
+            .put("boardsHeard", status.boardsHeard) // radios on air — "how many boards can I hear"
             // The bridge's own oracle (ADR 044): which board here speaks for the pocket, what the radio is,
             // and how much of the hour's airtime allowance has gone — the numbers a two-pocket trial reads.
             .put("role", status.role.name)

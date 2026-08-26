@@ -147,16 +147,26 @@ fun KnitApp(startRoute: String? = null) {
     }
 
     // A notification tap deep-links to a thread (cold start: pending at first composition; warm start:
-    // onNewIntent flips it). The chat opens over the chat list (the start destination), so Back returns
-    // there; launchSingleTop avoids stacking a duplicate when the thread is already on top. A deep-link
-    // that lands before onboarding is dropped. Re-fires even while the app is foregrounded in another chat.
+    // onNewIntent flips it). Nearby, groups and DMs all share the chat/{conversationId} destination, so
+    // launchSingleTop here would REUSE the chat already on screen: Navigation replays the top entry under
+    // its existing id, so the retained ChatViewModel stays bound to the old conversation and the tap
+    // silently does nothing (it only appeared to work from the chat list, where the top destination
+    // differs — the same trap as ProfileDetailsScreen's Message button below). Instead pop back to the
+    // chat list and open the thread over it, so a tap behaves identically from any screen and Back returns
+    // to the list rather than to whatever chat happened to be open. A tap for the thread already on top is
+    // a no-op, keeping its draft and scroll position. A deep-link that lands before onboarding is dropped.
     LaunchedEffect(pendingRoute) {
         val route = pendingRoute ?: return@LaunchedEffect
         if (!onboarded) {
             routeInbox.clear()
             return@LaunchedEffect
         }
-        navController.navigate(route) { launchSingleTop = true }
+        val current = navController.currentBackStackEntry
+        val alreadyOpen =
+            current?.destination?.route == Routes.CHAT &&
+                current.arguments?.getString("conversationId")?.let(Routes::chat) == route
+        // popUpTo is a no-op when the chat list isn't on the stack (debug -PstartRoute captures).
+        if (!alreadyOpen) navController.navigate(route) { popUpTo(Routes.CHAT_LIST) }
         routeInbox.consume()
     }
 

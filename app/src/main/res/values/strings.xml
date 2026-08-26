@@ -299,7 +299,7 @@
     <string name="verify_invalid">That\'s not a Knit contact code.</string>
 
     <!-- Contact links (docs/CONTACT_CARD.md): the identity QR as a shareable link, for people too far apart to scan. -->
-    <string name="contact_link_share">Share my contact link</string>
+    <string name="contact_link_share">Share link</string>
     <string name="contact_link_copy">Copy link</string>
     <string name="contact_link_caption">Too far apart to scan? Send your link instead — the other person adds you from it, and you add them from theirs.</string>
     <string name="contact_link_chooser_title">Share your contact link</string>

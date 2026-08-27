@@ -23,7 +23,10 @@ import java.util.concurrent.ConcurrentHashMap
  *   A capable author's tick is sealed (a v2 `CTL_RECEIPT` ctl chat frame, indistinguishable from chat on
  *   the wire); sealing consumes a ratchet chain key, so an owed tick is sealed **once** and every retry
  *   re-sends those bytes verbatim — a duplicate is router-deduped inside the author's SeenSet window and
- *   a benign RATCHET_DUPLICATE beyond it.
+ *   a benign RATCHET_DUPLICATE beyond it. That window (10 min) is *shorter* than the heal heartbeat
+ *   (15 min), so a flat retry cleared it every single time; a sealed entry that never finds a live link
+ *   now retries on a doubling backoff ([backOff]) instead — ~8 re-sends across the 24 h TTL, not ~96.
+ *   A live link overrides the schedule: it is the reliable path home, and it ends the entry.
  * - **Absent, sealed-capable author** — the acks *batch* per author ([enqueue]) and, after [debounceMs]
  *   (a best-effort [flushScope] wake; [retryPending] on the heal heartbeat is the backstop), escalate as
  *   ONE sealed tick carrying every pending id (`MessageContent.acks`) handed to [originateTick] — signed
@@ -85,6 +88,10 @@ class AckSync(
         val recordedAt: Long,
         /** The once-sealed tick these retries re-send verbatim; null = cleartext form (built per attempt). */
         val sealed: WireEnvelope? = null,
+        /** Best-effort re-sends already spent on this entry — the doubling exponent (see [backOff]). */
+        val retries: Int = 0,
+        /** Earliest clock at which a best-effort re-send may go out; 0 = due now. Sealed form only. */
+        val nextAttemptAt: Long = 0,
     )
 
     /**
@@ -139,7 +146,10 @@ class AckSync(
                 Owed(authorId, now(), sealed = sealTick(authorId, listOf(messageId)))
             }
         owed[messageId] = entry
-        if (attempt(me, messageId, entry)) owed.remove(messageId) // sent over a live link → done
+        // A re-owe (custody re-served the message, so the deliver path re-acked it) rides the same schedule
+        // as the heartbeat retry: the cached sealed bytes are identical every time, so an off-schedule
+        // re-send is one more RATCHET_DUPLICATE at the author. A fresh entry is always due.
+        sendOwedIfDue(me, messageId, entry, now())
     }
 
     /**
@@ -169,11 +179,12 @@ class AckSync(
         flushDueBatches()
         if (owed.isEmpty()) return
         val me = selfId()
+        val nowMs = now()
         // Oldest-first: the entries closest to their TTL get their retry before any newcomer's.
         owed.toMap().entries.sortedBy { it.value.recordedAt }.forEach { (messageId, entry) ->
-            val overLiveLink = attempt(me, messageId, entry)
-            metrics.onReceiptResent()
-            if (overLiveLink) owed.remove(messageId)
+            // Counted only when something actually went out, so `receiptsResent` stays a re-send tally
+            // rather than a heartbeat tally — an entry still inside its backoff is skipped silently.
+            if (sendOwedIfDue(me, messageId, entry, nowMs)) metrics.onReceiptResent()
         }
     }
 
@@ -302,9 +313,9 @@ class AckSync(
         me: String,
         messageId: String,
         entry: Owed,
+        linked: Peer? = linkedTo(entry.authorId),
     ): Boolean {
         val wire = entry.sealed ?: receipt(me, messageId)
-        val linked = transport.neighbors.value.firstOrNull { it.nodeId == entry.authorId }
         return if (linked != null) {
             transport.send(wire, linked)
             true
@@ -313,6 +324,58 @@ class AckSync(
             false
         }
     }
+
+    /**
+     * Sends one owed tick and settles its entry: a live-link send is reliable and drops the entry, a
+     * best-effort coordination-plane send re-arms the backoff. Returns false when the entry was not due and
+     * nothing went out. A live link always makes it due — it is the reliable path home the backoff is
+     * waiting for, so it never waits.
+     */
+    private suspend fun sendOwedIfDue(
+        me: String,
+        messageId: String,
+        entry: Owed,
+        now: Long,
+    ): Boolean {
+        val linked = linkedTo(entry.authorId)
+        if (linked == null && now < entry.nextAttemptAt) return false
+        if (attempt(me, messageId, entry, linked)) {
+            owed.remove(messageId) // sent over a live link → done
+        } else {
+            backOff(messageId, entry, now)
+        }
+        return true
+    }
+
+    /** The author's live link, if any — the reliable path home, and the one thing that overrides [backOff]. */
+    private fun linkedTo(authorId: String): Peer? = transport.neighbors.value.firstOrNull { it.nodeId == authorId }
+
+    /**
+     * Schedules the next best-effort re-send of a **sealed** owed entry. The cleartext form is exempt and
+     * returns unchanged: it is rebuilt with a fresh id per attempt, so a retry costs the author a SeenSet
+     * dedup, never a decrypt.
+     *
+     * The sealed form re-sends one frame id verbatim for the entry's whole life. The router suppresses a
+     * repeat for only 10 minutes ([SeenSet]) while the heal heartbeat runs every 15, so every flat retry
+     * cleared the window and landed on a consumed ratchet chain index — ~96 `RATCHET_DUPLICATE` drops at
+     * the author per stuck tick, across the 24 h TTL. Doubling from one heartbeat up to [RETRY_CAP_MS]
+     * holds the same horizon at ~8. Nothing here extends the entry's life: [sweep] still ages it out on
+     * [Owed.recordedAt], and the tick self-heals anyway when the message re-serves and re-[owe]s.
+     */
+    private fun backOff(
+        messageId: String,
+        entry: Owed,
+        now: Long,
+    ) {
+        if (entry.sealed == null) return
+        val retries = entry.retries + 1
+        // Compare-and-set: never resurrect an entry a concurrent live-link send has just removed.
+        owed.replace(messageId, entry, entry.copy(retries = retries, nextAttemptAt = now + retryDelayMs(retries)))
+    }
+
+    /** Doubling delay from one heal heartbeat, capped — 15 m, 30 m, 1 h, 2 h, 4 h, then [RETRY_CAP_MS]. */
+    private fun retryDelayMs(retries: Int): Long =
+        (RETRY_BASE_MS shl (retries - 1).coerceIn(0, MAX_BACKOFF_SHIFT)).coerceAtMost(RETRY_CAP_MS)
 
     /**
      * A signed, point-to-point (`relay = false`) delivery receipt for [messageId] — MeshRouter never floods it
@@ -385,5 +448,14 @@ class AckSync(
 
         /** Cap on remembered escalated ids (the re-owe dedup ledger); evict oldest. */
         const val ESCALATED_CAP = 1_000
+
+        /** First backoff step for a sealed owed tick — one heal heartbeat (`MeshService`'s 15 min alarm). */
+        const val RETRY_BASE_MS = 15 * 60_000L
+
+        /** Ceiling on the doubling, so even a day-old entry still gets a few attempts before it ages out. */
+        const val RETRY_CAP_MS = 8 * 60 * 60_000L
+
+        /** Bounds the shift so a long-lived entry cannot overflow the doubling. */
+        private const val MAX_BACKOFF_SHIFT = 10
     }
 }

@@ -498,6 +498,94 @@ class AckSyncTest {
             assertTrue("an aged-out batch is swept, not escalated", originated.isEmpty())
         }
 
+    @Test
+    fun aSealedTickBacksOffInsteadOfResendingEveryHeartbeat() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The RATCHET_DUPLICATE fix. The sealed form re-sends ONE frame id verbatim, and the router's
+            // SeenSet only suppresses a repeat for 10 min while the heal heartbeat runs every 15 — so a flat
+            // retry cleared the window every single time and landed on a consumed ratchet chain index. Due
+            // times double from one heartbeat: 0, 15 m, 45 m, 1 h45, 3 h45, 7 h45, 15 h45, then the 8 h cap
+            // at 23 h45 — 8 best-effort sends across the 24 h TTL where the flat loop made 97.
+            var clock = 0L
+            val recorder = FastSendRecorder(FakeLoopTransport("recip"))
+            val ack =
+                ackSyncOn(recorder, "recip", clock = { clock }) { authorId, ackIds ->
+                    sealedWire("recip", authorId, ackIds)
+                }
+
+            ack.owe("m1", "author") // absent author: sealed, fast-sent once, held
+            assertEquals(1, recorder.fastSent.size)
+
+            clock += AckSync.RETRY_BASE_MS // +15m: the first step is due
+            ack.retryPending()
+            assertEquals(2, recorder.fastSent.size)
+
+            clock += AckSync.RETRY_BASE_MS // +30m: the next step is 30m out, not due
+            ack.retryPending()
+            assertEquals("a heartbeat inside the backoff must not re-send", 2, recorder.fastSent.size)
+
+            clock += AckSync.RETRY_BASE_MS // +45m: due again
+            ack.retryPending()
+            assertEquals(3, recorder.fastSent.size)
+
+            // Drive the remaining heartbeats out to the 24 h TTL.
+            while (clock < AckSync.OWED_TTL_MS) {
+                clock += AckSync.RETRY_BASE_MS
+                ack.retryPending()
+            }
+            assertEquals("the whole 24h horizon costs 8 re-sends, not 97", 8, recorder.fastSent.size)
+            recorder.fastSent.forEach {
+                assertArrayEquals(
+                    "every re-send is the same sealed bytes",
+                    sealedWire("recip", "author", listOf("m1")).signed,
+                    it.signed,
+                )
+            }
+        }
+
+    @Test
+    fun aBackedOffTickStillGoesHomeTheMomentALinkExists() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The backoff throttles the best-effort coordination-plane re-send only: a live link is the
+            // reliable path home and is exactly what the schedule is waiting for, so it never waits.
+            var clock = 0L
+            val author = Author("author")
+            val recip = FakeLoopTransport("recip")
+            author.start(backgroundScope)
+            val ack =
+                ackSyncOn(recip, "recip", clock = { clock }) { authorId, ackIds ->
+                    sealedWire("recip", authorId, ackIds)
+                }
+
+            ack.owe("m1", "author") // absent: sealed, held, next step 15m out
+            clock += 60_000 // one minute later — deep inside the backoff
+            recip.connect(author.transport)
+            ack.retryPending()
+
+            val chats = author.received().filter { it.envelope.type == FrameType.CHAT }
+            assertEquals("a live link overrides the backoff", 1, chats.size)
+            ack.retryPending()
+            assertEquals("and the entry is dropped, not re-sent", 1, chats.size)
+        }
+
+    @Test
+    fun aCleartextTickIsNotBackedOff() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Only the sealed form costs the author a decrypt. The cleartext form is rebuilt with a fresh
+            // id per attempt, so a retry is a SeenSet dedup — it keeps today's every-heartbeat cadence.
+            var clock = 0L
+            val recorder = FastSendRecorder(FakeLoopTransport("recip"))
+            val ack = ackSyncOn(recorder, "recip", clock = { clock }) // sealTick defaults to null
+
+            ack.owe("m1", "author")
+            repeat(3) {
+                clock += AckSync.RETRY_BASE_MS
+                ack.retryPending()
+            }
+
+            assertEquals("a legacy author's tick still retries every heartbeat", 4, recorder.fastSent.size)
+        }
+
     private companion object {
         const val SIG_MARKER: Byte = 0x5A
     }

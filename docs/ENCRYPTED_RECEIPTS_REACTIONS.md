@@ -127,6 +127,15 @@ it as ≤ 2 compact fragments (`mesh/link/FastFrameCodec` — still best-effort,
 loop stays the reliability mechanism), while toward a legacy author `fastSend` still no-ops and the
 tick waits for a live link.
 
+**The retry cadence is a backoff, not a heartbeat** (ADR 053). Seal-once-resend-verbatim means the
+sealed tick re-sends *one frame id* for the entry's whole 24 h life, and the router's SeenSet only
+suppresses a repeat for 10 minutes while the heartbeat runs every 15 — so every flat retry cleared the
+window and landed on a consumed ratchet chain index, ~96 `RATCHET_DUPLICATE` drops at the author per
+stuck tick. A sealed owed entry now doubles from one heartbeat (15 m, 30 m, 1 h, 2 h, 4 h, then an 8 h
+ceiling), holding the same horizon at ~8 re-sends. A live link overrides the schedule — it is the
+reliable path home the backoff is waiting for. The cleartext form is exempt: rebuilt with a fresh id per
+attempt, it costs the author a dedup rather than a decrypt.
+
 The escalated batch (ADR 033) adds three rules of its own: **batches never ride the coordination
 plane** (a 16-ack batch already outgrows the ≤2-fragment compact budget — pinned by
 `CoordinationPlaneSizeBudgetTest` — so escalation goes through `originateSigned`, structurally never

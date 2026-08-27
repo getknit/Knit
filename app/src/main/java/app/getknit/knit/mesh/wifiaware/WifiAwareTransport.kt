@@ -215,14 +215,18 @@ class WifiAwareTransport(
     // [attaching] guard if the framework silently drops an attach (mgr.attach with no onAttached/onAttachFailed).
     @Volatile private var attachStartedAt = 0L
 
-    // Consecutive failed attaches and the earliest elapsedRealtime the next one may run ([NanAttachPolicy]).
-    // Cleared by a successful attach, by Aware changing availability (a genuinely new fact about the radio,
-    // and the edge that must recover promptly), and by [stop]. The streak is only ever incremented on the
-    // [handler] thread, so the read-modify-write needs no atomic; @Volatile because the discovery loop reads
-    // the deadline ([rediscoverDelayMs]) and [stop] clears both from the caller's thread.
+    // Consecutive failed attaches, the earliest elapsedRealtime the next one may run, and whether the streak
+    // has spent [NanAttachPolicy]'s budget outright — each failed attach strands two binder objects in
+    // system_server, so this is a leak bound, not a politeness one. All three are cleared by a successful
+    // attach, by Aware changing availability (the one genuinely new fact about the radio), and by [stop];
+    // deliberately NOT by [heal], which says the app was opened, not that the radio changed. The streak is only
+    // ever incremented on the [handler] thread, so the read-modify-write needs no atomic; @Volatile because the
+    // discovery loop reads them ([rediscoverDelayMs]) and [stop] clears them from the caller's thread.
     @Volatile private var attachFailStreak = 0
 
     @Volatile private var attachRetryAfter = 0L
+
+    @Volatile private var attachAbandoned = false
 
     // The one accept-any responder: its ServerSocket, network callback, and the accept loop.
     @Volatile private var responderSocket: ServerSocket? = null
@@ -806,9 +810,10 @@ class WifiAwareTransport(
                 return@onHandler
             }
             if (session != null) return@onHandler
-            // Backed off after a run of failures ([NanAttachPolicy]): on a chipset that cannot give us a NAN
-            // iface at all, the loop's flat retry is 51k HAL round trips and no session to show for them.
-            if (SystemClock.elapsedRealtime() < attachRetryAfter) return@onHandler
+            // Backed off, or given up, after a run of failures ([NanAttachPolicy]): on a chipset that cannot
+            // give us a NAN iface at all, the loop's flat retry strands two binder objects in system_server
+            // every 3 s until AMS kills the process for it.
+            if (attachAbandoned || SystemClock.elapsedRealtime() < attachRetryAfter) return@onHandler
             // Self-heal a stuck guard: if a prior mgr.attach never called back within the watchdog, clear it so we
             // can retry (the chipset occasionally drops an attach silently after a session teardown).
             if (attaching.get() && SystemClock.elapsedRealtime() - attachStartedAt > ATTACH_WATCHDOG_MS) {
@@ -874,15 +879,21 @@ class WifiAwareTransport(
         cause: Throwable? = null,
     ) {
         attachFailStreak += 1
+        if (NanAttachPolicy.giveUp(attachFailStreak)) {
+            attachAbandoned = true
+            Log.e(TAG, "$what (streak $attachFailStreak) — this radio will not open; no further attaches", cause)
+            return
+        }
         val backoff = NanAttachPolicy.backoffMs(attachFailStreak)
         attachRetryAfter = SystemClock.elapsedRealtime() + backoff
         Log.w(TAG, "$what (streak $attachFailStreak) — next attach in ${backoff}ms", cause)
     }
 
-    /** A successful attach, or a new fact about the radio, ends the backoff episode. */
+    /** A successful attach, or a new fact about the radio, ends the backoff episode and refunds the budget. */
     private fun clearAttachBackoff() {
         attachFailStreak = 0
         attachRetryAfter = 0L
+        attachAbandoned = false
     }
 
     private fun startPublish(gen: Int) {
@@ -1351,7 +1362,9 @@ class WifiAwareTransport(
         // the loop's `session == null -> attach()`. Without this, a pure-responder node (nothing sync-wanted to
         // *initiate*) would wait a full REDISCOVER_IDLE_MS with no responder — the 2-minute post-serve wedge.
         // ...but no sooner than the attach backoff allows, so a radio that keeps refusing lets the loop sleep
-        // rather than waking on the fast cadence only for attach() to turn it away.
+        // rather than waking on the fast cadence only for attach() to turn it away. Once the budget is spent
+        // there is nothing left to wake for at all, so fall back to the plain idle cadence.
+        if (session == null && attachAbandoned) return REDISCOVER_IDLE_MS
         if (session == null) return maxOf(ATTACH_RETRY_MS, attachRetryAfter - SystemClock.elapsedRealtime())
         // Tick soon while a sync is still owed (a sync-wanted peer we initiate to, maybe backed off / busy)
         // so we retry promptly; hunt aggressively when we know of nobody; otherwise relax (a cue with a new
@@ -2492,8 +2505,9 @@ class WifiAwareTransport(
 
         // Loop cadence while detached (no Aware session): retry attach() promptly so a re-enable that couldn't
         // fire immediately after a reattach teardown recovers in seconds, not a full REDISCOVER_IDLE_MS. This is
-        // the *floor* only — after consecutive failures [NanAttachPolicy] stretches it out toward its cap, so a
-        // chipset that can never open a NAN iface is not retried at this cadence forever.
+        // the *floor* only — consecutive failures stretch it out along [NanAttachPolicy]'s curve and eventually
+        // stop it, because each failed attach strands two binder objects in system_server and AMS kills the
+        // process over enough of them (that is getknit/Knit#9, not a theoretical concern).
         const val ATTACH_RETRY_MS = 3_000L
 
         // Gap after a link/handshake ends before the next requestNetwork, so the framework releases the one

@@ -2,12 +2,14 @@ package app.getknit.knit
 
 import app.getknit.knit.mesh.wifiaware.NanAttachPolicy
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Unit tests for [NanAttachPolicy] — the backoff that stops a chipset which can never open a NAN iface from
- * being retried at the discovery loop's flat detached cadence forever (getknit/Knit#9).
+ * Unit tests for [NanAttachPolicy] — the retry budget that keeps a chipset which can never open a NAN
+ * interface from stranding enough binder objects in `system_server` for AMS to kill the process
+ * (getknit/Knit#9). The assertions are budget assertions: what a run of failures *costs*.
  */
 class NanAttachPolicyTest {
     // rand()=0.5 → zero offset, so the delay is exactly the un-jittered value (easy to assert).
@@ -16,8 +18,9 @@ class NanAttachPolicyTest {
     @Test
     fun theFirstFailureRetriesAtTheOldFlatCadence() {
         // The transient case this branch was written for — a chipset needing a beat after a reattach
-        // teardown — must be no slower than it was before the backoff existed.
+        // teardown — must be no slower than it was before the budget existed.
         assertEquals(3_000, NanAttachPolicy.backoffMs(1, noJitter))
+        assertFalse(NanAttachPolicy.giveUp(1))
     }
 
     @Test
@@ -27,31 +30,47 @@ class NanAttachPolicyTest {
         assertEquals(24_000, NanAttachPolicy.backoffMs(4, noJitter))
         assertEquals(48_000, NanAttachPolicy.backoffMs(5, noJitter))
         assertEquals(96_000, NanAttachPolicy.backoffMs(6, noJitter))
+        assertEquals(192_000, NanAttachPolicy.backoffMs(7, noJitter))
     }
 
     @Test
-    fun backoffSaturatesAtTheLoopIdleCadenceWithoutOverflow() {
-        assertEquals("streak 7 saturates at the loop's own idle cadence", 120_000, NanAttachPolicy.backoffMs(7, noJitter))
-        assertEquals(120_000, NanAttachPolicy.backoffMs(12, noJitter))
-        assertEquals(120_000, NanAttachPolicy.backoffMs(50, noJitter)) // no Long overflow on a big streak
-        assertEquals(120_000, NanAttachPolicy.backoffMs(Int.MAX_VALUE, noJitter))
+    fun backoffSaturatesAtTheHalfHourCapWithoutOverflow() {
+        assertEquals("streak 10 is the last below the cap", 1_536_000, NanAttachPolicy.backoffMs(10, noJitter))
+        assertEquals("streak 11 saturates", 1_800_000, NanAttachPolicy.backoffMs(11, noJitter))
+        assertEquals(1_800_000, NanAttachPolicy.backoffMs(40, noJitter))
+        assertEquals(1_800_000, NanAttachPolicy.backoffMs(Int.MAX_VALUE, noJitter)) // no Long overflow
     }
 
     @Test
-    fun aDeviceThatCanNeverAttachSettlesInsideAFewMinutes() {
-        // The #9 shape: ~51k attach attempts in ~43 h at the old flat 3 s, i.e. ~28.8k/day. Assert what the
-        // curve is actually worth — the 7th attempt (the first at the cap) lands ~3 min in, and every attempt
-        // after it is one per cap, so a full day of a radio that can never open costs ~725 attaches, not 28.8k.
-        val untilTheSeventhAttempt = (1..6).sumOf { NanAttachPolicy.backoffMs(it, noJitter) }
-        assertEquals(189_000, untilTheSeventhAttempt)
-        val perDay = 6 + (DAY_MS - untilTheSeventhAttempt) / NanAttachPolicy.MAX_BACKOFF_MS
-        assertTrue("a 40x cut on the old flat cadence: got $perDay/day", perDay < 800)
+    fun theBudgetIsSpentAfterAboutADayOfRefusals() {
+        assertFalse("59 consecutive failures still retries", NanAttachPolicy.giveUp(NanAttachPolicy.MAX_FAILURES - 1))
+        assertTrue(NanAttachPolicy.giveUp(NanAttachPolicy.MAX_FAILURES))
+        assertTrue(NanAttachPolicy.giveUp(NanAttachPolicy.MAX_FAILURES + 1))
+
+        // What the whole budget costs in wall-clock and in leaked binder objects. Two objects per failed
+        // attach; AMS's per-uid watermark is in the thousands, so the whole run must stay a rounding error.
+        val untilGiveUp = (1 until NanAttachPolicy.MAX_FAILURES).sumOf { NanAttachPolicy.backoffMs(it, noJitter) }
+        val hours = untilGiveUp / 3_600_000.0
+        assertTrue("about a day of trying before giving up: got ${"%.1f".format(hours)}h", hours in 24.0..28.0)
+        assertEquals("two binder objects per failure", 120, NanAttachPolicy.MAX_FAILURES * 2)
+    }
+
+    @Test
+    fun theOldFlatCadenceLeakedTwoOrdersOfMagnitudeMore() {
+        // The #9 shape: a flat 3 s retry is 28,800 failed attaches a day, i.e. ~57,600 stranded binder
+        // objects — AMS kills the uid within hours. The capped curve settles at 48 attempts a day.
+        val flatPerDay = DAY_MS / 3_000L
+        val cappedPerDay = DAY_MS / NanAttachPolicy.MAX_BACKOFF_MS
+        assertEquals(28_800, flatPerDay)
+        assertEquals(48, cappedPerDay)
+        assertTrue("a 600x cut before the give-up even applies", flatPerDay / cappedPerDay >= 600)
     }
 
     @Test
     fun streakBelowOneIsTreatedAsTheFirstFailure() {
         assertEquals(3_000, NanAttachPolicy.backoffMs(0, noJitter))
         assertEquals(3_000, NanAttachPolicy.backoffMs(-3, noJitter))
+        assertFalse(NanAttachPolicy.giveUp(0))
     }
 
     @Test

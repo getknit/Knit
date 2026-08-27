@@ -2660,3 +2660,50 @@ else, and the risk this ADR is really about arrives through a dependency. So `bu
 every `BitmapFactory.decode*` whose descriptor lacks a `BitmapFactory$Options`, prints the containing class
 and method, and fails above a budget of 2. Verified in both directions — 4 and FAIL before the fix, 2 and OK
 after, with the two survivors carrying the `IconCompat` signature.
+
+## 052. A Wi-Fi Aware attach that keeps failing backs off; `isAvailable` is not the stop signal
+
+The discovery loop's detached branch retried `WifiAwareManager.attach` at a flat `ATTACH_RETRY_MS` (3 s)
+forever. That is right for every failure it was written for — the chipset needing a beat after a
+`reattach()` teardown, Wi-Fi mid-toggle, another app briefly holding the single NAN iface — and it has no
+answer at all for a device where the attach can **never** succeed.
+
+**Nothing upstream says stop, and `isAvailable` is the trap.** It reports whether Aware is *enabled*, not
+whether an iface can be had, so on a chipset whose vendor HAL publishes no STA+NAN interface combination it
+stays `true` while every attach fails at `HalDevMgr: bestIfaceCreationProposal is null` with `wlan0` holding
+the only slot. `onAttachFailed` set `Degraded` and logged, the loop came back 3 s later, and that was the
+whole cycle. Field evidence from getknit/Knit#9 (OnePlus 8 `IN2010`, `kona`, LineageOS 23.2): the reporter's
+logcat has the framework's Aware client id at 51273 and the NAN iface id at 51296 while `wlan0` sat at
+`Id=22` — ~51 k binder round trips into `system_server` and as many HAL `createIface`/`removeIface` pairs,
+≈43 h at one per 3 s, for a session that was never going to open. Turning Wi-Fi off doesn't help either:
+then `isAvailable` goes false and the plane is simply Unavailable. On that device NAN has no reachable
+state, and the app should say so quietly rather than by polling.
+
+`mesh/wifiaware/NanAttachPolicy` is the pure sibling of `NanConnectPolicy` one layer up — that one paces a
+data-path handshake to a single peer, this one paces getting a session at all. Geometric from a
+`BASE_BACKOFF_MS` **equal to the old flat cadence** (a lone failure retries exactly as promptly as it always
+did, so the reattach-needs-a-beat case is unchanged) to a `MAX_BACKOFF_MS` cap **equal to
+`REDISCOVER_IDLE_MS`**: a radio we cannot open is polled no more often than a radio we have opened and have
+nothing to say on. The curve is 3→6→12→24→48→96→120 s, so the seventh attempt lands ~3 min in and a full day
+of a dead radio costs ~725 attaches instead of ~28.8 k. Jittered ±20 % like `NanConnectPolicy`, for a reason
+specific to this layer: what we are usually waiting on is *another app's* hold on the single iface, and an
+un-jittered poll can beat against a periodic holder and sample the same phase of it every time.
+
+**What ends an episode is the interesting half.** A successful attach, obviously — and it is recorded
+*before* the supersede check in `onAttached`, because the streak counts whether the radio opened, not
+whether we kept that particular session. Then the availability broadcast, **both** edges: Aware changing
+state is a genuinely new fact about the radio, so a streak that predates it says nothing about the next
+attempt, and the up edge attaches immediately rather than serving out a stale backoff. That is what keeps
+the common recovery — Wi-Fi off→on, airplane mode — as fast as it was.
+
+**The cost, stated plainly.** There is no broadcast for *another app* releasing the NAN iface, so polling is
+the only recovery there and it can now lag by up to one cap. Two minutes to notice a radio freed by someone
+else is the right price for not spending 43 h hammering one that will never be free. The gate lives inside
+`attach()` — a single choke point every caller funnels through — with `rediscoverDelayMs` also stretched to
+the deadline so the loop *sleeps* instead of waking on the fast cadence only to be turned away.
+
+Deliberately not done: no health state for "this device cannot do NAN". The plane already reports
+`Degraded`, `CompositeMeshTransport` still reads Healthy off Bluetooth, and a permanent-looking failure is
+not distinguishable at runtime from a long contended one — asserting otherwise in the UI would claim more
+than the evidence supports. `NanAttachPolicyTest` pins the curve, the cap, the overflow guard and the
+per-day bound on the JVM.

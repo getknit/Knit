@@ -47,3 +47,9 @@ Invariants for all Kotlin/Compose/data code. (Mesh-specific invariants are in `r
   blocked-ids) can't enroll, so hoist it **before** the transaction. A blob GC racing an *independent*
   inserter is only narrowed, not closed — the content-addressed blob self-heals via a `BlobExchange`
   re-pull. Finding #13 in `docs/ARCHITECTURE_REVIEW.md`.
+- **Never call `BitmapFactory` directly — decode through `data/ImageDecode.kt`.** `decodeOrientedBounded`
+  (a `Uri` or captured JPEG) and `decodeBoundedFromBytes` (a blob) do the `inJustDecodeBounds` pre-pass,
+  pick an `inSampleSize`, and downscale to an exact bound. A bare `BitmapFactory.decode*` trusts the
+  image's own pixel dimensions, and for anything off the mesh — a peer's avatar, an attachment — those are
+  attacker-chosen: a ~30 kB PNG at 12000² decodes to ~576 MB. detekt's `ForbiddenImport` enforces this on
+  our sources and `scripts/dex-bitmap-gate.sh` enforces it on the release dex, libraries included. ADR 051.

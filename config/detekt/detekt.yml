@@ -19,6 +19,10 @@
 #    by-design per AGENTS.md — raise the per-class function allowance rather than split them.
 #  - MagicNumber: theme color/typography literals live in property declarations; ignore those.
 #  - ReturnCount: the flagged functions are guard-clause early-returns (some lint-mandated).
+#  - ForbiddenImport: bans android.graphics.BitmapFactory outside data/ImageDecode.kt, so an unbounded
+#    decode of peer-supplied image bytes can't reappear (ADR 051). It is an *import* rule rather than
+#    ForbiddenMethodCall because detekt runs here without type resolution, which that rule requires.
+#    scripts/dex-bitmap-gate.sh is the matching check on the release dex, where library code is visible.
 
 complexity:
   CyclomaticComplexMethod:
@@ -42,6 +46,15 @@ naming:
 style:
   UnusedImport:
     active: true                           # not in detekt's default-on set; we want dead imports caught in CI
+  ForbiddenImport:
+    active: true                           # also off by default; ADR 051 — see the header note
+    excludes: ['**/data/ImageDecode.kt']   # the one file allowed to decode
+    forbiddenImports:
+      - value: 'android.graphics.BitmapFactory'
+        reason: >-
+          Decode through data/ImageDecode.kt (decodeOrientedBounded / decodeBoundedFromBytes) so every
+          decode is inSampleSize-bounded. A bare BitmapFactory.decode* call trusts the image's own pixel
+          dimensions, which for anything off the mesh is attacker-chosen. ADR 051.
   MagicNumber:
     ignorePropertyDeclaration: true        # theme/Color.kt + Type.kt literals
     ignoreLocalVariableDeclaration: true

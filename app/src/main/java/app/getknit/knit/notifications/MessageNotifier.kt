@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -16,6 +15,7 @@ import android.os.Build
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.StyleSpan
+import android.util.LruCache
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -27,6 +27,7 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import app.getknit.knit.MainActivity
 import app.getknit.knit.R
+import app.getknit.knit.data.decodeBoundedFromBytes
 import app.getknit.knit.data.message.ConversationKind
 import java.text.BreakIterator
 
@@ -99,6 +100,22 @@ class MessageNotifier(
 
     /** Guards [states]; every mutation + snapshot happens under it. */
     private val states = LinkedHashMap<String, ConvState>()
+
+    /**
+     * Decoded avatars, keyed by the content hash of their bytes. One post decodes the same JPEG once per
+     * message ([NotificationHistory] holds 8) plus self, and [postSummary] posts again right after — so
+     * without this a busy thread re-decodes one avatar ten times. Content-keyed, so a peer *changing*
+     * their avatar simply misses. Budgeted in bytes rather than entries because a 256² ARGB_8888 bitmap
+     * is 256 kB; [LruCache] is internally synchronized, which matters because [bitmapFor] runs outside
+     * the [states] lock.
+     */
+    private val avatarCache =
+        object : LruCache<Int, Bitmap>(AVATAR_CACHE_BYTES) {
+            override fun sizeOf(
+                key: Int,
+                value: Bitmap,
+            ): Int = value.allocationByteCount
+        }
 
     override fun createChannel() = NotificationChannels.ensure(context)
 
@@ -461,8 +478,21 @@ class MessageNotifier(
             ConversationKind.DM -> "?"
         }
 
-    private fun bitmapFor(bytes: ByteArray?): Bitmap? =
-        bytes?.let { runCatching { BitmapFactory.decodeByteArray(it, 0, it.size) }.getOrNull() }
+    /**
+     * Decodes an avatar for the notification, **bounded** to [AVATAR_PX] on each edge via
+     * [decodeBoundedFromBytes] — these bytes are peer-supplied (a profile frame off the mesh), and while
+     * the blob's byte size is bounded its *pixel* count is not, so a small, highly compressible image
+     * would otherwise decode to hundreds of MB. Null (unreadable bytes) falls back to a generated avatar
+     * at the caller; only successes are cached.
+     */
+    private fun bitmapFor(bytes: ByteArray?): Bitmap? {
+        if (bytes == null) return null
+        val key = bytes.contentHashCode()
+        avatarCache.get(key)?.let { return it }
+        val bitmap = runCatching { decodeBoundedFromBytes(bytes, AVATAR_PX) }.getOrNull() ?: return null
+        avatarCache.put(key, bitmap)
+        return bitmap
+    }
 
     /**
      * The photoless avatar for a conversation: the Nearby/broadcast room gets the Knit mesh mark (matching
@@ -652,6 +682,9 @@ class MessageNotifier(
 
         // Generated letter-avatar geometry/palette (source avatars are 256²; this matches closely enough).
         private const val AVATAR_PX = 256
+
+        // ~8 distinct 256² ARGB_8888 avatars resident — more than one notification ever shows.
+        private const val AVATAR_CACHE_BYTES = 2 * 1024 * 1024
         private const val HUE_STEPS = 360
         private const val AVATAR_SAT = 0.5f
         private const val AVATAR_VAL = 0.65f

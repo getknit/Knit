@@ -96,6 +96,11 @@ document:
   actually asked a relay for, ignores anything else the relay volunteers, and treats the relay's
   stated size limits as a claim to be capped rather than a fact. Relays were always untrusted with
   the contents of your messages; now they are untrusted with how much of your phone they can use.
+- A notification can no longer be used to exhaust your phone's memory. When someone messaged you, Knit
+  opened their profile photo at whatever size the picture claimed to be — and a picture that arrives from
+  someone else is theirs to choose. A tiny file can unpack into hundreds of megabytes. Knit now opens every
+  photo at the size it actually needs, and remembers the ones it has already opened, so a busy conversation
+  does the work once instead of once per message.
 
 ## [2.3.0](https://github.com/getknit/knit/releases/tag/v2.3.0) — 2026-08-24T05:56:14Z
 

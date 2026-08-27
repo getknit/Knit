@@ -15,6 +15,7 @@ import app.getknit.knit.mesh.FarPeerFrameSource
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshManager
 import app.getknit.knit.mesh.MeshMetrics
+import app.getknit.knit.mesh.MeshStartGate
 import app.getknit.knit.mesh.MeshTransport
 import app.getknit.knit.mesh.ProfileFrameSource
 import app.getknit.knit.mesh.StoreDigest
@@ -59,6 +60,8 @@ val meshModule =
         // backstop for an uncaught throw in a top-level child (e.g. a FramedLink writer coroutine).
         single<CoroutineScope> { CoroutineScope(SupervisorJob() + Dispatchers.Default + meshExceptionHandler) }
         single { MeshMetrics() }
+        // Whether a MeshService.start the system refused is still owed a retry (work item #32).
+        single { MeshStartGate() }
         // Content digest of this node's syncable state; shared between the forward-store impl (maintains the
         // message set), MeshManager (folds in profile changes), and WifiAwareTransport (cues it to neighbors) —
         // a singleton so none has to construct the other (MeshManager already depends on the transport).

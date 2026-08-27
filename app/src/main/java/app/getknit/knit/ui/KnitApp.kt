@@ -11,6 +11,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -31,6 +32,7 @@ import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshService
+import app.getknit.knit.mesh.MeshStartGate
 import app.getknit.knit.review.ReviewPrompter
 import app.getknit.knit.ui.addcontact.AddContactScreen
 import app.getknit.knit.ui.addcontact.ContactCardInbox
@@ -113,6 +115,7 @@ fun KnitApp(startRoute: String? = null) {
     val pendingCard by contactCardInbox.pending.collectAsStateWithLifecycle()
     val reviewPrompter = koinInject<ReviewPrompter>()
     val reviewInbox = koinInject<ReviewPromptInbox>()
+    val startGate = koinInject<MeshStartGate>()
     val showReviewPrompt by reviewInbox.pending.collectAsStateWithLifecycle()
     // Past onboarding once mesh permissions are granted (demo builds skip the gate).
     val onboarded = BuildConfig.SEED_DEMO || hasAllMeshPermissions(context)
@@ -125,9 +128,17 @@ fun KnitApp(startRoute: String? = null) {
     // Start the mesh service whenever the user is past onboarding (guard kept broad on purpose). Demo
     // builds never start it — there is no real mesh and the seeded data needs no transport.
     val backStackEntry by navController.currentBackStackEntryAsState()
+    // Read by the ON_RESUME observer below, whose DisposableEffect keys only on the lifecycle owner and
+    // would otherwise capture whichever route happened to be current when it was set up.
+    val currentRoute by rememberUpdatedState(backStackEntry?.destination?.route)
     LaunchedEffect(backStackEntry?.destination?.route) {
         val route = backStackEntry?.destination?.route
-        if (!BuildConfig.SEED_DEMO && route != null && route != Routes.ONBOARDING) MeshService.start(context)
+        if (!BuildConfig.SEED_DEMO && route != null && route != Routes.ONBOARDING) {
+            // The start can be refused outright when this lands after the app has been backgrounded — a task
+            // switch, a screen-off, an incoming call — so it reports rather than throws, and the refusal is
+            // recorded for [MeshStartGate] and retried on resume below. Work item #32.
+            startGate.record(MeshService.start(context))
+        }
     }
 
     // Nudge the mesh to rescan / re-advertise whenever the app returns to the foreground, so it
@@ -139,7 +150,16 @@ fun KnitApp(startRoute: String? = null) {
         DisposableEffect(lifecycleOwner) {
             val observer =
                 LifecycleEventObserver { _, event ->
-                    if (event == Lifecycle.Event.ON_RESUME) meshManager.heal()
+                    if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+                    // Foreground state is guaranteed here, so this is where a refused start gets its retry.
+                    // Unconditional rather than gated on [MeshStartGate], because a refusal isn't the only
+                    // way this composition can come back to a dead service (a stillbirth stopSelf'd into a
+                    // process the Activity kept alive, an OEM sweep that took the service and not us) and the
+                    // effect above only re-fires on a navigation the user may never make. Starting an
+                    // already-running service is an idempotent null-action onStartCommand — one binder call.
+                    val route = currentRoute
+                    if (route != null && route != Routes.ONBOARDING) startGate.record(MeshService.start(context))
+                    meshManager.heal()
                 }
             lifecycleOwner.lifecycle.addObserver(observer)
             onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }

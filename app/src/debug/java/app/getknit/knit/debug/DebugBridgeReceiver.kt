@@ -37,6 +37,7 @@ import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
+import app.getknit.knit.mesh.MeshStartGate
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.lora.BoardOwner
 import app.getknit.knit.mesh.lora.BoardSettings
@@ -143,6 +144,7 @@ class DebugBridgeReceiver :
     private val peers: PeerRepository by inject()
     private val groups: GroupRepository by inject()
     private val metrics: MeshMetrics by inject()
+    private val startGate: MeshStartGate by inject()
     private val identity: Identity by inject()
     private val settings: SettingsStore by inject()
     private val contactCards: app.getknit.knit.contacts.ContactCards by inject()
@@ -563,6 +565,10 @@ class DebugBridgeReceiver :
                 .put("self", JSONObject().put("nodeId", selfId).put("name", selfName))
                 .put("health", mesh.transportHealth.value.name)
                 .put("neighborCount", mesh.neighborCount.value)
+                // True when a MeshService.start was refused (backgrounded, unexempted) and is still owed the
+                // retry KnitApp's ON_RESUME observer performs — otherwise a dead mesh is indistinguishable
+                // from a live one with no peers. Work item #32.
+                .put("meshStartDeferred", startGate.deferred.value)
                 .put("reachable", reachable)
                 .put("typing", typing)
                 .put("metrics", metricsJson(metrics.snapshot()))

@@ -301,8 +301,37 @@ class MeshService : LifecycleService() {
         private const val ACTION_STOP = "app.getknit.knit.STOP_MESH"
         private const val ACTION_HEAL = "app.getknit.knit.HEAL_MESH"
 
-        fun start(context: Context) {
-            ContextCompat.startForegroundService(context, Intent(context, MeshService::class.java))
+        /**
+         * Ask the system to run the mesh in the foreground, reporting whether the request was **accepted**.
+         *
+         * Since Android 12 `Context.startForegroundService` itself throws
+         * `ForegroundServiceStartNotAllowedException` — at *this* call site, before the service is ever
+         * created, so [postForeground]'s catch is downstream of it and cannot see it — when the process is
+         * neither foreground nor exempt. Both guards are needed and neither is redundant:
+         * [canReclaimForegroundService] declines the starts we can predict will be refused, and the `catch`
+         * closes the gap between that check and the binder call landing, which is exactly the window this
+         * exists for (`KnitApp`'s route-keyed effect can be scheduled while foreground and land after a task
+         * switch, a screen-off or an incoming call has taken it away). The exception is an
+         * [IllegalStateException] subclass, so the catch needs no `Build.VERSION` dance on a minSdk-29 file —
+         * the same reasoning as [postForeground].
+         *
+         * A refusal is **not** a dropped start: the caller records it (`MeshStartGate`) and `KnitApp`'s
+         * `ON_RESUME` observer retries from a state where the foreground is guaranteed. Swallowing it
+         * silently would leave a messenger with no transport and a "searching" notification that never
+         * resolves. Work item #32; ADR 043.
+         */
+        fun start(context: Context): Boolean {
+            if (!canReclaimForegroundService(context)) {
+                Log.w(TAG, "mesh start refused (backgrounded, unexempted) — deferred to the next resume")
+                return false
+            }
+            return try {
+                ContextCompat.startForegroundService(context, Intent(context, MeshService::class.java))
+                true
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "mesh start refused at the call site — deferred to the next resume", e)
+                false
+            }
         }
 
         fun stop(context: Context) {

@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-24T05:56:14Z
+  updated: 2026-08-27T19:50:27Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -57,6 +57,20 @@ document:
   actually asked a relay for, ignores anything else the relay volunteers, and treats the relay's
   stated size limits as a claim to be capped rather than a fact. Relays were always untrusted with
   the contents of your messages; now they are untrusted with how much of your phone they can use.
+
+## [2.3.1](https://github.com/getknit/knit/releases/tag/v2.3.1) — 2026-08-27T19:50:27Z
+
+> One fix, for phones that were being shut down seconds after Knit opened.
+
+### Fixed
+
+- Knit no longer disappears seconds after you open it on a phone whose Wi-Fi chip will not run Wi-Fi
+  Aware. Some phones report Wi-Fi Aware as available and then refuse to hand it over while Wi-Fi is
+  connected, and Knit kept asking every three seconds, forever — each attempt costing the system a
+  little memory it never got back. Android eventually stopped the app for asking too often: within a
+  minute of opening it, over and over, with nothing in the logs to explain why. Knit now slows those
+  attempts down and gives up on a radio that keeps refusing, then picks it up again if Wi-Fi Aware
+  becomes usable. Bluetooth carried the mesh the whole time, which is why messages still went through.
 
 ## [2.3.0](https://github.com/getknit/knit/releases/tag/v2.3.0) — 2026-08-24T05:56:14Z
 

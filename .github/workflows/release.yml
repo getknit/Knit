@@ -47,7 +47,7 @@ concurrency:
 
 env:
   APK_DIR: app/build/outputs/apk/release
-  # apksigner lives in build-tools; AGP 9.3.0 resolves 36.0.0. Only used by jobs that inspect the APK.
+  # apksigner lives in build-tools; AGP 9.3.2 resolves 36.0.0. Only used by jobs that inspect the APK.
   BUILD_TOOLS: 36.0.0
 
 jobs:

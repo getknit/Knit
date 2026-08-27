@@ -1,6 +1,6 @@
 # Toolchain (bleeding-edge — do not "fix" these without reading why)
 
-This project intentionally runs on very new tooling (AGP 9.3.1, Gradle 9.7.0, Kotlin 2.4.10,
+This project intentionally runs on very new tooling (AGP 9.3.2, Gradle 9.7.0, Kotlin 2.4.10,
 Compose BOM 2026.08.00, compileSdk 37.1). That forces several non-obvious choices. **Read this before
 changing build config, dependencies, or the DI graph.**
 
@@ -34,7 +34,7 @@ Bumping `compileSdk` means installing that exact platform everywhere the build r
 of the package name (`platforms;android-37.1` ≠ `platforms;android-37`), and two CI files name it
 literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reproducibility job in
 `.github/workflows/release.yml`. Build-tools is *not* coupled to it — that tracks AGP's default revision
-(36.0.0 for AGP 9.3.1).
+(36.0.0 for AGP 9.3.2).
 
 ## Why these choices
 
@@ -42,7 +42,7 @@ literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reprod
   (dagger#5083 / #5099). Koin is pure-Kotlin runtime DI with no Gradle plugin / no annotation
   processor, so it can't be broken by AGP. Koin is started in `KnitApplication`; modules live in
   `app/src/main/java/app/getknit/knit/di/`.
-- **Built-in Kotlin is overridden to 2.4.10, not AGP's bundled 2.2.10.** AGP 9.3.1 ships KGP 2.2.10,
+- **Built-in Kotlin is overridden to 2.4.10, not AGP's bundled 2.2.10.** AGP 9.3.2 ships KGP 2.2.10,
   whose Kotlin-2.2 compiler cannot read class metadata produced by Kotlin 2.4 (this is what used to
   pin Coil to 3.3.0). The root `build.gradle.kts` puts KGP 2.4.10 on the buildscript classpath
   (`classpath(libs.kotlin.gradle.plugin)`) so built-in Kotlin compiles with 2.4.10 — a supported combo
@@ -59,7 +59,7 @@ literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reprod
 - **Stable releases only**, with one standing exception: `detekt` 2.0.0-alpha.x, because the 1.23.x
   stable line cannot run on Gradle 9 at all. So `navigation-compose` stays on 2.9.8 (2.10.0 is rc),
   `cameraX` on 1.6.1 (1.7.0 is alpha), `datastore` on 1.2.1 (1.3.0 is alpha), `robolectric` on the
-  4.16.x line (4.17 is beta), and AGP on 9.3.1 (9.4.0 is rc).
+  4.16.x line (4.17 is beta), and AGP on 9.3.2 (9.4.0 is rc).
 
 ## Static analysis: detekt / ktlint Gradle plugins
 

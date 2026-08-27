@@ -68,6 +68,11 @@ document:
 
 ### Changed
 
+- Knit is a smaller download and starts faster. The build strips out the parts of its bundled libraries
+  the app never actually calls — about four megabytes of code that was being shipped and loaded for no
+  reason. Nothing about what Knit does changed; there is just less of it to install and less for your
+  phone to hold in memory while it runs.
+
 - Nearby phones relaying your messages no longer learn what kind of attachment one carries. A photo and a
   voice note used to be told apart by a label sent alongside them in the clear; that label now travels
   encrypted with the message, where only the person you sent it to can read it. Relays still see roughly

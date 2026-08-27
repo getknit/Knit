@@ -18,8 +18,10 @@ doc). **Don't start a deferred item without explicit direction.**
 - **R8 obfuscation (name mangling)** is enabled on release/staging (was shrink + optimize only, behind
   `-dontobfuscate`). The wire stays safe by construction — kotlinx.serialization compile-time descriptors +
   the frozen wire/identity DTOs pinned unrenamed in `keepRules/knit-r8.keep` — and `FileKind`'s file-header
-  token is decoupled from its enum constant name (`FileKind.wire`). See decisions ADR 012. Deferred: tighten
-  the broad library `{ *; }` keeps to minimal targeted keeps (bigger size win, larger test surface).
+  token is decoupled from its enum constant name (`FileKind.wire`). See decisions ADR 012. The broad library
+  `{ *; }` keeps are **no longer deferred**: ADR 050 dropped the Tink / ARSCLib / apksig ones (97% rates,
+  dex 9.9 → 6.0 MB) and added `scripts/r8-dex-gate.sh` to CI so a library's consumer keep rule can't quietly
+  undo it. Still pinned by choice: `net.zetetic.**`, `org.tensorflow.lite.**`, `org.xmlpull.v1.**`.
 - **Forward secrecy for DMs is implemented** — the epoch-rekey ratchet (crypto scheme v2,
   `docs/FORWARD_SECRECY_RATCHET.md`; ADR 016): X3DH-style bootstrap off a signed prekey published in the
   profile, per-epoch X25519 rekeying, session state in the `ratchet_*` tables, capability-gated dual-stack

@@ -7,10 +7,16 @@
 # (no @SerialName / no polymorphism / no reflective lookup), which R8 does NOT rewrite — so renaming is
 # byte-safe as long as the $$serializer infra is kept (below). We also pin the frozen wire/identity DTOs
 # unrenamed as belt-and-suspenders. The one name-coupled path (the FileKind enum on the JSON file-header) is
-# fixed in code (FileKind.wire / FileKind.fromWire), so it needs no keep rule. The generous `{ *; }` keeps on
-# the native/reflective libraries are meant to be tightened once obfuscation is verified on-device. If
-# assembleRelease reports missing classes, append the -dontwarn lines AGP writes to
-# app/build/outputs/mapping/release/missing_rules.txt.
+# fixed in code (FileKind.wire / FileKind.fromWire), so it needs no keep rule.
+#
+# KEEP RULES ARE A COST. Every `-keep` here blocks shrinking AND optimization AND obfuscation over whatever
+# it matches, which is why Play Console's three rates move together. The blanket keeps on Tink, ARSCLib and
+# apksig were dropped in ADR 050 (they were 93% of everything R8 was forbidden to touch). What remains is
+# pinned for a reason recorded inline. Before adding a rule, prefer `-keepclassmembers` over `-keep` and add
+# `allowobfuscation` / `allowoptimization` / `allowshrinking` so only the one property that matters is
+# pinned; check the impact with `./gradlew :app:analyzeReleaseR8Config`. If assembleRelease reports missing
+# classes, append the -dontwarn lines AGP writes to app/build/outputs/mapping/release/missing_rules.txt —
+# a -dontwarn silences a warning without blocking anything, a -keep does not.
 
 # Keep just enough attributes to symbolicate crashes (mapping.txt maps the rest). SourceFile+LineNumberTable
 # are the load-bearing pair for readable stack traces once names are mangled; Signature/InnerClasses/
@@ -46,9 +52,18 @@
 -keep class app.getknit.knit.data.crypto.IdentityKeyStore$StoredPrekey { *; }
 
 # ---- Tink (E2E crypto) -----------------------------------------------------------------------------------
-# HIGHEST risk: HybridConfig/SignatureConfig register key managers reflectively (+ protobuf). A stripped
-# manager fails SILENTLY at getPrimitive(), not at load — verify seal/open + sign/verify on an R8 build.
--keep class com.google.crypto.tink.** { *; }
+# NOT pinned. Tink ships the one consumer rule it needs (META-INF/proguard/protobuf.pro: `<fields>` of the
+# shaded GeneratedMessageLite subclasses, applied automatically) and is otherwise designed to be shrunk.
+# TinkInit (mesh/crypto/Crypto.kt) calls HybridConfig.register() / SignatureConfig.register(), which
+# reference their key managers by static field — R8 traces them — and KeyTemplates.get(String) is a lookup
+# in the registry those calls populate, not a Class.forName. The app's surface is narrow and all direct:
+# HybridEncrypt/Decrypt, PublicKeySign/Verify, KeysetHandle, RegistryConfiguration, TinkProtoKeysetFormat,
+# InsecureSecretKeyAccess, Hpke{Parameters,PublicKey,PrivateKey}, Ed25519{Parameters,PublicKey}, util.Bytes.
+# A blanket `-keep com.google.crypto.tink.** { *; }` used to live here; it alone blocked 30,085 items and
+# 1.79 MB of dex (21.6% of the whole app) from all three transforms — see ADR 050.
+# STILL THE HIGHEST-RISK SURFACE: a missing key manager fails SILENTLY at getPrimitive(), not at load, so
+# any change here must be re-verified functionally (seal/open + sign/verify) on a minified build, not by
+# checking that the app launches.
 -dontwarn com.google.crypto.tink.**
 
 # ---- SQLCipher (at-rest DB encryption) -------------------------------------------------------------------
@@ -63,8 +78,12 @@
 -dontwarn org.tensorflow.lite.**
 
 # ---- Offline "Share Knit app": ARSCLib + apksig (ui/invite/ApkMerger) ------------------------------------
--keep class com.reandroid.** { *; }
--keep class com.android.apksig.** { *; }
+# NOT pinned either. Both are reached only from ui/invite/ApkMerger.kt + ui/invite/ShareSigningKey.kt, and
+# only through six direct entry points — ApkBundle, ApkModule, AndroidManifest, ResXmlElement, ApkSigner,
+# KeyConfig — so R8 traces the whole live surface from ordinary call sites. Blanket keeps here cost 26,371
+# items and 1.62 MB of dex; most of that was com.reandroid.dex (657 KB), an APK *dex*-rewriting subtree the
+# share path never touches (it repacks resources and re-signs). See ADR 050.
+# Verify by actually producing a shared APK and installing it — the merge path is not covered by any test.
 -dontwarn com.reandroid.**
 -dontwarn com.android.apksig.**
 
@@ -78,6 +97,17 @@
 # consistent (their cascade renames stop too). Crash reproduced on-device 2026-07-09; see decisions ADR 012.
 -keep class org.xmlpull.v1.** { *; }
 -dontwarn org.xmlpull.v1.**
+# ...and a second, subtler consequence of that same duplication, found when ADR 050 dropped the blanket
+# ARSCLib keep. Because `org.xmlpull.v1.XmlPullParser` is a *program* interface here, R8 full mode reasons
+# about it under the closed-world assumption: it counts the implementors it can see. The only ones in the
+# APK are ARSCLib's (KXmlParser, ResXmlPullParser) — the framework's android.content.res.XmlBlock$Parser is
+# a library class implementing the *library* copy of the interface, which the program copy shadows, so R8
+# does not count it. Shrink ARSCLib's away and R8 concludes the interface is uninhabited, every value of
+# that type must be null, and it compiles `parser.next()` down to a literal `throw null`. Compose's
+# painterResource() then dies with an NPE inside seekToStartTag on the first vector drawable — which is a
+# chat-list avatar, so: crash on the first screen. Keeping one implementor alive is enough to stop the
+# inference; renaming and optimizing it are fine, only its removal is not.
+-keep,allowobfuscation,allowoptimization class * implements org.xmlpull.v1.XmlPullParser
 
 # ---- Google Play In-App Review (optional GMS; pre-gated + failures swallowed at runtime) ------------------
 -dontwarn com.google.android.gms.**

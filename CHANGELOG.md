@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-26T19:38:04Z
+  updated: 2026-08-27T08:42:14Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -80,6 +80,12 @@ document:
 
 ### Fixed
 
+- Knit no longer shuts itself down on a phone whose Wi-Fi chip will not run Wi-Fi Aware. Some phones
+  report Wi-Fi Aware as available and then refuse to hand it over while Wi-Fi is connected, and Knit kept
+  asking every few seconds. Android eventually stopped the app for asking too often — within a minute of
+  opening it, over and over, with nothing in the logs to explain why. Knit now slows those attempts down
+  and gives up on a radio that keeps refusing, then picks it up again if Wi-Fi Aware becomes usable.
+  Bluetooth carried the mesh the whole time, which is why messages still went through.
 - Knit no longer gets stuck restarting on a phone where the on-device checking model won't run. The model
   that screens messages and photos runs in native code, and on unusual hardware it could close the app a
   few seconds after opening, every time, with nothing to show for it. Knit now notices that pattern, turns

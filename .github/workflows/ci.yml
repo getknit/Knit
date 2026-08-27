@@ -8,6 +8,12 @@ name: CI
 # by the repo's Git hooks. The *.tflite moderation models are ordinary Git blobs (NOT LFS — see
 # .gitattributes and .agents/context/distribution.md), so a plain checkout is enough; the build's
 # checkModerationModels task hard-fails if one ever arrives as a pointer stub.
+#
+# ACTION PINS: every JS action here is held at a major that runs on Node 24 — GitHub's runners force
+# Node 20 actions onto 24 and warn about it, and the Node 20 runtime is going away. gradle/actions is
+# deliberately kept at v5, the last MIT release: v6 moves caching into `gradle-actions-caching`, a
+# proprietary component governed by Gradle's Terms of Use rather than the MIT licence, and it loads
+# whenever caching is on (it is, by default). Don't "upgrade" that one.
 
 on:
   push:
@@ -26,20 +32,20 @@ jobs:
     name: Build & unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v5
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --stacktrace --console=plain
       - name: JVM unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace --console=plain
       - name: Upload unit-test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-report
           path: app/build/reports/tests/testDebugUnitTest/
@@ -50,13 +56,13 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true # advisory, mirroring .gitlab-ci.yml allow_failure; enforced locally by Git hooks
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v5
       - name: detekt
         run: ./gradlew detekt --stacktrace --console=plain
       - name: ktlint

@@ -10,9 +10,14 @@ import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -80,6 +85,7 @@ class LoraMeshTransportTest {
         config: kotlinx.coroutines.flow.Flow<LoraConfig?> = MutableStateFlow(LoraConfig("AA:$nodeNum", 0)),
         farFrames: suspend (String) -> List<WireEnvelope> = { emptyList() },
         channelName: String = KnitChannel.NAME,
+        pace: LoraPacePolicy = LoraPacePolicy(minGapMs = 0),
         now: () -> Long,
     ): Rig {
         val link = FakeMeshtasticLink(nodeNum, air, channelName)
@@ -95,7 +101,7 @@ class LoraMeshTransportTest {
                 metrics = metrics,
                 clock = now,
                 wallClock = now,
-                pace = LoraPacePolicy(minGapMs = 0),
+                pace = pace,
             )
         val received = mutableListOf<InboundFrame>()
         scope.launch { transport.inbound.collect { received += it } }
@@ -619,4 +625,121 @@ class LoraMeshTransportTest {
             runCurrent()
             assertEquals(battery, a.transport.status.value.battery)
         }
+
+    /**
+     * A board that fills its queue part-way through a fragmented frame refuses the rest, and the frame is
+     * requeued whole. It must resume, not restart: the fragments the board already took are on the air and
+     * their airtime is booked, so re-sending them books the cost a second time. Because the ledger only ever
+     * grows on a retry, that inflated the hourly budget past 100 % — after which it refused every other frame
+     * on the plane, which is the state the pacer then spun in.
+     *
+     * The invariant is exact: **what the ledger has booked equals what the board was actually handed.**
+     */
+    @Test
+    fun aFrameTheBoardRefusesPartWayResumesInsteadOfRebookingItsAirtime() =
+        runTest {
+            val pace = LoraPacePolicy(minGapMs = 0)
+            val a = rig(FakeMeshtasticAir(), 1u, "alice", backgroundScope, pace = pace) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+
+            // Room for one fragment, then the board is full: the rest of the frame comes back Busy.
+            a.link.queueFills = true
+            a.link.free = 1
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = incompressibleBody(600)))
+            runCurrent()
+            val partial = a.link.sent.size
+            assertTrue("the frame really did fragment and stall part-way", partial in 1 until LoraMeshTransport.FRAG_CAP)
+            assertEquals("the rest of it is queued", 1, pace.pending)
+
+            // The board drains; the frame must pick up where it stopped.
+            a.link.queueFills = false
+            a.link.free = 16
+            advanceTimeBy(1_000)
+            runCurrent()
+            assertEquals("the frame finished", 0, pace.pending)
+            assertTrue("it made progress past the stall", a.link.sent.size > partial)
+
+            // The defect is a *replayed* fragment: the board is handed one it already has, which costs real
+            // air and books it a second time. The ledger stays consistent with the board either way, so the
+            // duplicate is what has to be asserted on.
+            val distinct =
+                a.link.sent
+                    .mapTo(HashSet()) { it.toList() }
+                    .size
+            assertEquals("no fragment was handed to the board twice", a.link.sent.size, distinct)
+            assertEquals(
+                "and the ledger booked exactly what went out",
+                a.link.sent.sumOf { pace.airtime.timeOnAirMs(it.size) },
+                pace.airtime.usedMs(AirBucket.LIVE, testScheduler.currentTime),
+            )
+            a.transport.stop()
+        }
+
+    private class SpinCap : RuntimeException("the pacer loop went round far more times than a suspending loop can")
+
+    /**
+     * The pacer must **suspend** when it holds frames it cannot send. With the hour's airtime spent, a live
+     * frame queued and the inter-packet gap long since elapsed, `take` returns null on every pass — and before
+     * the fix `waitForNextSend` derived a zero wait from a due time already in the past, so the loop never
+     * suspended: it pegged a core for the rest of the hour and, having no suspension point in it, could not
+     * even be cancelled by [LoraMeshTransport.stop].
+     *
+     * A spinning loop hangs the scheduler outright (virtual time cannot advance past a task that never
+     * yields), so the clock throws once it has been read more times than any suspending loop could manage.
+     * The scope swallows that, leaving the assertions below to report it.
+     */
+    @Test
+    fun thePacerSuspendsInsteadOfSpinningWhenTheBudgetIsSpent() =
+        runTest {
+            val airtime = LoraAirtime()
+            val pace = LoraPacePolicy(minGapMs = 3_000, airtime = airtime)
+            var at = 0L
+            var spent = 0L
+            while (spent < airtime.allowanceMs()) {
+                airtime.record(AirBucket.LIVE, 200, at)
+                spent += airtime.timeOnAirMs(200)
+                at += 3_000
+            }
+
+            var reads = 0
+            val clock = {
+                reads++
+                if (reads > SPIN_CAP) throw SpinCap()
+                at + testScheduler.currentTime
+            }
+            val scope =
+                CoroutineScope(
+                    StandardTestDispatcher(testScheduler) + SupervisorJob() + CoroutineExceptionHandler { _, _ -> },
+                )
+            val a = rig(FakeMeshtasticAir(), 1u, "alice", scope, pace = pace, now = clock)
+            a.transport.start()
+            runCurrent()
+
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = incompressibleBody(200)))
+            // Past the inter-packet gap, so nothing but the spent budget is holding the frame back — this is
+            // the window in which the old code's due time fell into the past.
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertEquals("the frame is queued, not sent — the budget is spent", 1, pace.pending)
+
+            val atRest = reads
+            advanceTimeBy(60_000)
+            runCurrent()
+            assertTrue(
+                "the pacer stayed parked over a quiet minute (${reads - atRest} clock reads; a spin blows past $SPIN_CAP)",
+                reads - atRest < IDLE_WAKES_PER_MINUTE,
+            )
+            assertTrue("the clock cap was never hit", reads <= SPIN_CAP)
+            a.transport.stop()
+            scope.cancel()
+        }
+
+    private companion object {
+        /** Far more clock reads than a loop that suspends between passes can make; a spin blows past it at once. */
+        const val SPIN_CAP = 5_000
+
+        /** A minute of idling costs a wake per [LoraMeshTransport.IDLE_TICK_MS] at worst, times a read or two. */
+        const val IDLE_WAKES_PER_MINUTE = 200
+    }
 }

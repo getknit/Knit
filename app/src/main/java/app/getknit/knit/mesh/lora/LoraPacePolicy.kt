@@ -26,6 +26,7 @@ internal class LoraPacePolicy(
     private var lastSentAt = Long.MIN_VALUE
     private var boardFree: Int? = null
     private var nakUntil = 0L
+    private var airtimeBlockedUntil = 0L
 
     /** Frames left in the queue that the airtime budget refused on the last [take]; diagnostics only. */
     var lastAirtimeRefusals = 0
@@ -41,6 +42,9 @@ internal class LoraPacePolicy(
     val pending: Int get() = queue.size
 
     fun enqueue(frame: OutboundFrame): Admission {
+        // A newcomer may fit where everything queued did not — a BOOTSTRAP frame always does — so the
+        // airtime deferral is a fact about the queue as it stood, not a standing cool-down.
+        airtimeBlockedUntil = 0L
         if (queue.size < queueCap) {
             queue.addLast(frame)
             return Admission.ACCEPTED
@@ -54,8 +58,20 @@ internal class LoraPacePolicy(
         return Admission.DROPPED_OLDEST
     }
 
-    /** The earliest time the next frame may go out (min gap since the last send, and any NAK cool-down). */
-    fun nextDueAt(): Long = maxOf(if (lastSentAt == Long.MIN_VALUE) 0L else lastSentAt + minGapMs, nakUntil)
+    /**
+     * The earliest time the next frame may go out: the min gap since the last send, any NAK cool-down, and —
+     * once [take] has found the whole queue over budget — the moment the rolling window next frees air.
+     *
+     * That last term is what keeps the caller's drain loop asleep. Without it a queue nothing may leave
+     * reports a due time already in the past, so the loop computes a zero wait, never suspends, and spins a
+     * core flat for as long as the budget stays spent (and, having no suspension point, cannot be cancelled).
+     */
+    fun nextDueAt(): Long =
+        maxOf(
+            if (lastSentAt == Long.MIN_VALUE) 0L else lastSentAt + minGapMs,
+            nakUntil,
+            airtimeBlockedUntil,
+        )
 
     /**
      * The next frame to send, or null when the queue is empty, the gap/cool-down has not elapsed, the board
@@ -82,7 +98,9 @@ internal class LoraPacePolicy(
         var best = -1
         for (i in queue.indices) {
             val frame = queue[i]
-            if (!airtime.admits(frame.bucket, frame.klass, frame.messages.map { it.size }, now)) {
+            // What is still owed, not the whole frame: a resumed frame's earlier fragments are already on the
+            // air and already booked, so charging admission for them again would refuse a frame that fits.
+            if (!airtime.admits(frame.bucket, frame.klass, frame.remaining.map { it.size }, now)) {
                 refused++
                 continue
             }
@@ -90,7 +108,14 @@ internal class LoraPacePolicy(
             if (best < 0 || frame.klass < queue[best].klass) best = i
         }
         lastAirtimeRefusals = refused
-        if (best < 0) return null
+        if (best < 0) {
+            // Every queued frame is over budget: defer to when the window returns some air. Null (an empty
+            // ledger, so the frame is simply bigger than the whole allowance) leaves the caller's own floor
+            // to pace the retry — that frame ages out through class shedding, not through a window.
+            airtimeBlockedUntil = airtime.nextReleaseAt(now) ?: 0L
+            return null
+        }
+        airtimeBlockedUntil = 0L
         lastSentAt = now
         return queue.removeAt(best)
     }
@@ -139,5 +164,22 @@ internal class OutboundFrame(
     /** Which hourly budget this frame spends from; see [AirBucket]. */
     val bucket: AirBucket = AirBucket.LIVE,
 ) {
+    /**
+     * How many of [messages] the board has already taken. A board that runs out of queue part-way through a
+     * fragmented frame refuses the rest, and the frame is requeued **whole** — so without this cursor it
+     * restarts at fragment 0, putting fragments the board already has back on a ~1 kbps medium and booking
+     * their airtime a second time. Since the ledger only ever grows on a retry, a frame that keeps hitting a
+     * full board inflates the hourly budget without bound until it refuses everything else on the plane.
+     */
+    var sentParts: Int = 0
+        private set
+
+    /** The fragments still owed to the board; the whole frame until one of them is refused part-way. */
+    val remaining: List<ByteArray> get() = if (sentParts == 0) messages else messages.drop(sentParts)
+
+    fun onPartSent() {
+        sentParts++
+    }
+
     val fragmented: Boolean get() = messages.size > 1
 }

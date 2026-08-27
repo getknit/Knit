@@ -3,6 +3,7 @@ package app.getknit.knit.mesh.lora
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LoraPacePolicyTest {
@@ -145,6 +146,55 @@ class LoraPacePolicyTest {
         pace.enqueue(frame("b"))
         pace.onNak(RoutingError.NO_CHANNEL, now = 1_000)
         assertNotNull("a NO_CHANNEL nak is not a rate limit", pace.take(3_000))
+    }
+
+    /**
+     * The regression behind the pacer spin: a queue nothing may leave must report a due time in the *future*.
+     * Before this, `nextDueAt()` still read "3 s after the last send" — already past — so the transport's
+     * drain loop computed a zero wait, never suspended, and spun a core until the window pruned.
+     */
+    @Test
+    fun aSaturatedBudgetDefersTheNextSendToWhenTheWindowFreesAir() {
+        val air = LoraAirtime()
+        val pace = LoraPacePolicy(minGapMs = 3_000, airtime = air)
+        var at = 0L
+        var spent = 0L
+        while (spent < air.allowanceMs()) {
+            air.record(AirBucket.LIVE, 200, at)
+            spent += air.timeOnAirMs(200)
+            at += 3_000
+        }
+        val big = OutboundFrame(messages = listOf(ByteArray(200)), label = "room", klass = FrameClass.ROOM)
+        pace.enqueue(big)
+
+        val now = at + 3_000
+        assertNull("the budget is spent, so nothing goes out", pace.take(now))
+        assertEquals(1, pace.lastAirtimeRefusals)
+        assertTrue(
+            "the next send is deferred to when the window returns air, not left in the past (${pace.nextDueAt()} <= $now)",
+            pace.nextDueAt() > now,
+        )
+        assertEquals("and that is the oldest sample's expiry", air.nextReleaseAt(now), pace.nextDueAt())
+    }
+
+    @Test
+    fun aNewFrameLiftsTheAirtimeDeferralSoTheBootstrapIsNotHeldBehindIt() {
+        val air = LoraAirtime()
+        val pace = LoraPacePolicy(minGapMs = 0, airtime = air)
+        var at = 0L
+        var spent = 0L
+        while (spent < air.allowanceMs()) {
+            air.record(AirBucket.LIVE, 200, at)
+            spent += air.timeOnAirMs(200)
+            at += 3_000
+        }
+        pace.enqueue(OutboundFrame(messages = listOf(ByteArray(200)), label = "room"))
+        assertNull(pace.take(at))
+        assertTrue("deferred", pace.nextDueAt() > at)
+
+        // A profile is always admitted, so the deferral the room post earned must not strand it.
+        pace.enqueue(OutboundFrame(messages = listOf(ByteArray(200)), label = "profile", klass = FrameClass.BOOTSTRAP))
+        assertEquals("profile", pace.take(at)?.label)
     }
 
     @Test

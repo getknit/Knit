@@ -55,7 +55,19 @@ internal class FakeMeshtasticLink(
 
     override val battery = MutableStateFlow<BoardBattery?>(null)
 
-    var free = 16
+    /** The board's free-slot count. Assigning it also publishes a [queue] update, as a real QueueStatus does. */
+    var free: Int = 16
+        set(value) {
+            field = value
+            _queue.value = QueueInfo(free = value, maxlen = 16, atMs = 0)
+        }
+
+    /**
+     * When set, each accepted send costs a queue slot, the way a real board's does — so a fragmented frame
+     * can run the board out of room part-way and get [SendResult.Busy] for the rest of itself. Off by
+     * default: most tests want a board that always has room.
+     */
+    var queueFills = false
     private var nextId = 1u
     val sent = mutableListOf<ByteArray>()
 
@@ -68,6 +80,7 @@ internal class FakeMeshtasticLink(
         if (free == 0) return SendResult.Busy
         sent += payload
         val id = nextId++
+        if (queueFills) free--
         air.broadcast(nodeNum, channelIndex, portnum, payload)
         return SendResult.Queued(id, QueueInfo(free, 16, 0))
     }

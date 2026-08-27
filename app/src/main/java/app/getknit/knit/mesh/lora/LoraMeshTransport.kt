@@ -201,7 +201,17 @@ internal class LoraMeshTransport(
         jobs += scope.launch { config.collect(::onConfig) }
         jobs += scope.launch { link.state.collect(::onLinkState) }
         jobs += scope.launch { link.packets.collect(::onLoraPacket) }
-        jobs += scope.launch { link.queue.collect { it?.let { q -> pace.onQueueStatus(q.free) } } }
+        // Nudge the pacer too: a board that was full is the one state [waitForNextSend] can only wait out on
+        // its floor, and this is the event that ends it.
+        jobs +=
+            scope.launch {
+                link.queue.collect {
+                    it?.let { q ->
+                        pace.onQueueStatus(q.free)
+                        if (q.free > 0) wake.trySend(Unit)
+                    }
+                }
+            }
         jobs += scope.launch { link.outcomes.collect(::onNak) }
         jobs += scope.launch { link.battery.collect { publishStatus() } }
         jobs += scope.launch { pacerLoop() }
@@ -596,12 +606,22 @@ internal class LoraMeshTransport(
         }
     }
 
+    /**
+     * Parks the pacer until the queue could plausibly move: a wake (something enqueued, the board's queue
+     * freed, [heal]), or the pacer's own due time.
+     *
+     * The floor is load-bearing, exactly as it is in [gossipLoop]. A queue can be non-empty while nothing may
+     * leave it — the board reports no headroom, or the hour's airtime is spent — and [LoraPacePolicy.take]
+     * says only "not now", not "not until". A due time already in the past then yields a zero wait, and
+     * `withTimeoutOrNull(0)` returns without suspending: the loop spins a core flat until the condition
+     * clears, and with no suspension point in it, [stop] cannot even cancel it.
+     */
     private suspend fun waitForNextSend() {
         if (pace.pending == 0) {
             wake.receive()
         } else {
-            val wait = (pace.nextDueAt() - clock()).coerceAtLeast(0)
-            withTimeoutOrNull(wait) { wake.receive() }
+            val due = pace.nextDueAt() - clock()
+            withTimeoutOrNull(if (due > 0) due else IDLE_TICK_MS) { wake.receive() }
         }
     }
 
@@ -612,7 +632,10 @@ internal class LoraMeshTransport(
             log("lora send skipped: slot $ch is not the Knit channel — set this board up")
             return
         }
-        for (message in frame.messages) {
+        // Resume where the board left off. A frame refused part-way is requeued whole, and re-sending the
+        // fragments it already holds would both duplicate them on the air and book their airtime again — the
+        // ledger only grows on a retry, so that inflates the hourly budget until it refuses the whole plane.
+        for (message in frame.remaining) {
             if (!sendMessage(message, ch, frame)) return
         }
         metrics.onLoraSent()
@@ -631,6 +654,7 @@ internal class LoraMeshTransport(
             is SendResult.Queued -> {
                 pace.onQueueStatus(result.queue.free)
                 pace.airtime.record(frame.bucket, message.size, clock())
+                frame.onPartSent()
                 true
             }
 
@@ -840,7 +864,11 @@ internal class LoraMeshTransport(
         const val CANDIDATE_SLACK = 3 // ask custody for more than we can send: some won't encode or are deduped
         const val HEX = 16
 
-        /** A floor on the gossip loop's wait, so a zero-length wait can never become a busy loop. */
+        /**
+         * A floor on the gossip and pacer loops' waits, so a zero-length wait can never become a busy loop.
+         * Both compute their wait from a transmit point that can already be in the past while transmitting is
+         * still impossible (the board down, its queue full, the hour's airtime spent).
+         */
         const val IDLE_TICK_MS = 1_000L
 
         // Bytes a ToRadio{packet} adds around the Data.payload (3-B ATT header + MeshPacket/Data framing +

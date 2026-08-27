@@ -154,6 +154,16 @@ internal class LoraAirtime(
         if (bucket == AirBucket.LIVE) liveUsedMs += ms else bridgeUsedMs += ms
     }
 
+    /**
+     * When the rolling window next hands air back — the oldest booked sample's expiry — or null when the
+     * ledger is empty. A caller the budget just refused has nothing to gain by asking again before this, so
+     * it is what the pacer sleeps until rather than re-asking a question whose answer cannot have changed.
+     */
+    fun nextReleaseAt(now: Long): Long? {
+        prune(now)
+        return samples.firstOrNull()?.let { it.atMs + windowMs }
+    }
+
     fun snapshot(now: Long): AirtimeSnapshot {
         prune(now)
         val cfg = radio

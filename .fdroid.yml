@@ -78,7 +78,7 @@ Builds:
 
   - versionName: 2.3.1
     versionCode: 16
-    commit: v2.3.1
+    commit: 210478b90b0fab8489a523107b56f4e2a118d264
     subdir: app
     gradle:
       - yes

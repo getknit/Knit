@@ -81,6 +81,49 @@ class NanAttachPolicyTest {
         assertTrue("upper bound ≈ +20 %: got $hi", hi in 3_590..3_600)
     }
 
+    @Test
+    fun theRateFloorSurvivesAStreakThatIsRefundedEveryTime() {
+        // getknit/Knit#9, second act: 2.3.1's availability receiver refunded the streak on every Aware
+        // broadcast, so the backoff was recomputed from 1 forever and never actually delayed anything. The
+        // reporter's log shows attaches 3.5 ms apart. The floor is the bound that does not care why.
+        var now = 0L
+        var lastAttach = -NanAttachPolicy.MIN_ATTACH_INTERVAL_MS // nothing attached yet
+        var attaches = 0
+        // 40 s of broadcasts arriving every 4 ms
+        repeat(10_000) {
+            now += 4
+            if (!NanAttachPolicy.tooSoon(now - lastAttach)) {
+                lastAttach = now
+                attaches++
+            }
+        }
+        assertEquals("one attach per 3 s floor, not one per broadcast", 14, attaches)
+        assertTrue("the storm itself was three orders of magnitude bigger", 10_000 / attaches > 700)
+    }
+
+    @Test
+    fun theFloorIsInvisibleToAnythingAlreadyPacingItself() {
+        assertTrue(NanAttachPolicy.tooSoon(0))
+        assertTrue(NanAttachPolicy.tooSoon(NanAttachPolicy.MIN_ATTACH_INTERVAL_MS - 1))
+        assertFalse(NanAttachPolicy.tooSoon(NanAttachPolicy.MIN_ATTACH_INTERVAL_MS))
+        // The shortest delay the streak can ask for is the floor itself, so the two never disagree.
+        assertFalse(NanAttachPolicy.tooSoon(NanAttachPolicy.backoffMs(1) { 1.0 }))
+    }
+
+    @Test
+    fun theLifetimeCapBoundsTheLeakWhateverTheRefundsDo() {
+        assertFalse(NanAttachPolicy.leakBudgetSpent(NanAttachPolicy.MAX_LIFETIME_FAILURES - 1))
+        assertTrue(NanAttachPolicy.leakBudgetSpent(NanAttachPolicy.MAX_LIFETIME_FAILURES))
+
+        // Two binder objects per failed attach. AMS's per-uid watermark is in the thousands, so this is the
+        // bound that makes the kill unreachable even if every other gate is being refunded in a loop.
+        assertEquals("400 binder objects, ever", 400, NanAttachPolicy.MAX_LIFETIME_FAILURES * 2)
+        assertTrue(
+            "the process bound must outlast a full streak, or it would preempt the ordinary path",
+            NanAttachPolicy.MAX_LIFETIME_FAILURES > NanAttachPolicy.MAX_FAILURES,
+        )
+    }
+
     private companion object {
         const val DAY_MS = 24 * 60 * 60 * 1_000L
     }

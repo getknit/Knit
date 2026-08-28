@@ -21,7 +21,8 @@ import kotlinx.coroutines.flow.map
 class SettingsStore(
     private val dataStore: DataStore<Preferences>,
 ) : InboundSettings,
-    ModelLoadJournal {
+    ModelLoadJournal,
+    NanAttachJournal {
     override val displayName: Flow<String> = dataStore.data.map { it[KEY_NAME] ?: "" }
     val status: Flow<String> = dataStore.data.map { it[KEY_STATUS] ?: "" }
 
@@ -444,6 +445,12 @@ class SettingsStore(
         }
     }
 
+    override suspend fun awareGiveUpStamp(): String = dataStore.data.map { it[KEY_AWARE_GIVE_UP_STAMP].orEmpty() }.first()
+
+    override suspend fun setAwareGiveUpStamp(stamp: String) {
+        dataStore.edit { it[KEY_AWARE_GIVE_UP_STAMP] = stamp }
+    }
+
     private fun Preferences.modelLoadState(model: String) =
         ModelLoadState(
             stamp = this[modelStampKey(model)].orEmpty(),
@@ -465,6 +472,7 @@ class SettingsStore(
         const val LAST_READ_PREFIX = "last_read_"
         const val MODEL_LOAD_PREFIX = "model_load_"
 
+        val KEY_AWARE_GIVE_UP_STAMP = stringPreferencesKey("aware_give_up_stamp")
         val KEY_NAME = stringPreferencesKey("display_name")
         val KEY_STATUS = stringPreferencesKey("status")
         val KEY_AVATAR_UPDATED_AT = longPreferencesKey("avatar_updated_at")

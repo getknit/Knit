@@ -9,6 +9,7 @@ import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.relay.RelayStatusRepository
+import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.BridgeFrameSource
 import app.getknit.knit.mesh.CompositeMeshTransport
 import app.getknit.knit.mesh.FarPeerFrameSource
@@ -92,7 +93,7 @@ val meshModule =
                         // explicit SDK_INT guard — redundant with isSupported()'s own — is what lint reads to
                         // clear the @RequiresApi companion/constructor calls on this pre-31-reachable line.
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && WifiAwareTransport.isSupported(ctx)) {
-                            add(WifiAwareTransport(ctx, get(), get(), get(), get(), get()))
+                            add(WifiAwareTransport(ctx, get(), get(), get(), get(), get(), get<SettingsStore>()))
                         }
                         // The LoRa (Meshtastic) plane rides LAST — lowest send-preference, fast-plane only.
                         // Gated on the flag; the classes stay in the APK but are never resolved when off.

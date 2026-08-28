@@ -27,7 +27,25 @@ import kotlin.random.Random
  * day, ~57.6 k leaked binder objects, and an AMS kill within hours — getknit/Knit#9 (OnePlus 8 `IN2010`,
  * LineageOS 23.2), where the framework's Aware client id had passed 51 k while `wlan0` sat at 22.
  *
- * So the curve is set by a **leak budget**, not by a retry cadence anyone would otherwise choose:
+ * ## Three bounds, because the first one had a hole
+ *
+ * The streak curve below shipped in 2.3.1 and did not fix that device. The transport refunded the streak on
+ * every Aware availability broadcast, reading it as "the radio came back" — but a chipset that cannot produce
+ * a NAN interface re-broadcasts Aware state after each refused attach with `isAvailable` still `true`. Attach,
+ * fail, broadcast, refund, attach: the reporter's log shows `streak 1` on every line, 3.5 ms apart, ~286
+ * attaches a second, dead inside ten. A budget is only worth what its refund path is worth, so there are now
+ * three bounds and they fail independently:
+ *
+ * - [backoffMs] / [giveUp] pace the **consecutive** streak. This is the useful behaviour and the only one a
+ *   healthy radio ever meets. It is refundable, because a genuine change in the radio really does make a past
+ *   streak meaningless.
+ * - [tooSoon] floors the **rate**, whatever the streak says. Nothing refunds it, so a bug in the refunding
+ *   costs one attach per [MIN_ATTACH_INTERVAL_MS] rather than three hundred a second.
+ * - [leakBudgetSpent] caps the **total** for the life of the process, refunded only by an attach that actually
+ *   succeeds. This is the bound that makes the AMS kill unreachable: [MAX_LIFETIME_FAILURES] failures is 400
+ *   binder objects against a watermark in the thousands, no matter what the other two do.
+ *
+ * ## The streak curve
  *
  * - [BASE_BACKOFF_MS] equals the old flat cadence, so a *lone* failure — the chipset needing a beat after a
  *   `reattach()` teardown, Wi-Fi mid-toggle — retries exactly as promptly as it always did.
@@ -38,10 +56,10 @@ import kotlin.random.Random
  *   objects, a couple of per cent of the budget. A radio that has refused for a day is not coming back on its
  *   own, and the caller re-arms on any genuinely new fact about it (see the transport's `clearAttachBackoff`).
  *
- * **What the cap costs, stated plainly.** There is no broadcast for *another app* releasing the NAN interface,
+ * **What the caps cost, stated plainly.** There is no broadcast for *another app* releasing the NAN interface,
  * so polling is the only recovery there and it now lags by up to half an hour — and after a day of refusals it
- * stops entirely until Aware availability changes. That is the trade: the alternative is a mesh app that
- * silently kills itself on any device whose chipset won't give it an interface.
+ * stops entirely until Aware availability actually changes. That is the trade: the alternative is a mesh app
+ * that silently kills itself on any device whose chipset won't give it an interface.
  */
 internal object NanAttachPolicy {
     /** Matches `WifiAwareTransport.ATTACH_RETRY_MS`, so the first retry after a lone failure is unchanged. */
@@ -53,11 +71,36 @@ internal object NanAttachPolicy {
     /** Consecutive failures before we stop attaching until a new fact arrives — ~26 h, ~120 leaked objects. */
     const val MAX_FAILURES = 60
 
+    /**
+     * Hard floor between two `mgr.attach` calls, deliberately the same 3 s as [BASE_BACKOFF_MS] so it is
+     * invisible to every path that was already pacing itself. It is not a second copy of the backoff: nothing
+     * refunds it, which is the whole point. It is the bound that holds when the refundable one is being
+     * refunded in a loop.
+     */
+    const val MIN_ATTACH_INTERVAL_MS = 3_000L
+
+    /**
+     * Failed attaches over the life of the process before Aware is shut off outright — refunded only by an
+     * attach that succeeds, and by nothing else at all. Three full streaks' worth, so it never preempts the
+     * ordinary [MAX_FAILURES] path, and 400 binder objects even if it is reached.
+     */
+    const val MAX_LIFETIME_FAILURES = 200
+
     private const val JITTER_FRACTION = 0.2
     private const val MAX_SHIFT = 16 // BASE shl 16 already dwarfs the cap; bound the shift so the Long can't wrap
 
     /** Whether a streak of [streak] consecutive failures has spent the budget: stop attaching, don't back off. */
     fun giveUp(streak: Int): Boolean = streak >= MAX_FAILURES
+
+    /**
+     * Whether an attach [sinceLastAttachMs] after the previous one is too soon to issue. Checked *before* the
+     * streak, so it also covers callers that legitimately attach outside the backoff (`reattach`, the
+     * availability edge, `start`) — on a healthy radio those are minutes apart and never see it.
+     */
+    fun tooSoon(sinceLastAttachMs: Long): Boolean = sinceLastAttachMs < MIN_ATTACH_INTERVAL_MS
+
+    /** Whether [total] failed attaches this process have spent the un-refundable leak budget. */
+    fun leakBudgetSpent(total: Int): Boolean = total >= MAX_LIFETIME_FAILURES
 
     /**
      * How long to wait before the [streak]-th consecutive failed attach is retried (1 = the first):

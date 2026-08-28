@@ -32,6 +32,8 @@ import android.util.Log
 import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import app.getknit.knit.BuildConfig
+import app.getknit.knit.data.settings.NanAttachJournal
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.DigestTracker
 import app.getknit.knit.mesh.FastPathDrop
@@ -125,11 +127,17 @@ class WifiAwareTransport(
     private val metrics: MeshMetrics,
     private val powerState: PowerStateSource,
     private val storeDigest: StoreDigest,
+    private val attachJournal: NanAttachJournal,
 ) : MeshTransport {
     private val appContext = context.applicationContext
     private val awareManager = appContext.getSystemService(Context.WIFI_AWARE_SERVICE) as WifiAwareManager?
     private val connectivity =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    // What a give-up is recorded under ([NanAttachJournal]): both halves are resets. A new app version may
+    // change the attach path, and a ROM update is exactly the event that can fix a vendor HAL that publishes no
+    // STA+NAN interface combination — getknit/Knit#9 is a LineageOS device.
+    private val giveUpStamp = "${BuildConfig.VERSION_CODE}:${Build.FINGERPRINT}"
 
     /** False on hardware without Wi-Fi Aware — the transport stays [TransportHealth.Unavailable] and the UI gates. */
     private val hasHardware =
@@ -211,22 +219,34 @@ class WifiAwareTransport(
     @Volatile private var attachGen = 0
     private val reattaching = AtomicBoolean(false)
 
-    // elapsedRealtime the current attach() called mgr.attach(); lets a later attach() self-heal a stuck
-    // [attaching] guard if the framework silently drops an attach (mgr.attach with no onAttached/onAttachFailed).
+    // elapsedRealtime the last attach() called mgr.attach(). Two jobs: it lets a later attach() self-heal a
+    // stuck [attaching] guard if the framework silently drops an attach (mgr.attach with no
+    // onAttached/onAttachFailed), and it is the floor on how often we may call mgr.attach at all
+    // ([NanAttachPolicy.tooSoon]) — never cleared by anything, which is what makes the floor hold.
     @Volatile private var attachStartedAt = 0L
 
-    // Consecutive failed attaches, the earliest elapsedRealtime the next one may run, and whether the streak
-    // has spent [NanAttachPolicy]'s budget outright — each failed attach strands two binder objects in
-    // system_server, so this is a leak bound, not a politeness one. All three are cleared by a successful
-    // attach, by Aware changing availability (the one genuinely new fact about the radio), and by [stop];
-    // deliberately NOT by [heal], which says the app was opened, not that the radio changed. The streak is only
-    // ever incremented on the [handler] thread, so the read-modify-write needs no atomic; @Volatile because the
-    // discovery loop reads them ([rediscoverDelayMs]) and [stop] clears them from the caller's thread.
+    // Consecutive failed attaches, the earliest elapsedRealtime the next one may run, and whether we have
+    // stopped attaching outright — each failed attach strands two binder objects in system_server, so this is a
+    // leak bound, not a politeness one. All three are cleared by a successful attach, by Aware coming back
+    // (the one genuinely new fact about the radio), and by [stop]; deliberately NOT by [heal], which says the
+    // app was opened, not that the radio changed. The streak is only ever incremented on the [handler] thread,
+    // so the read-modify-write needs no atomic; @Volatile because the discovery loop reads them
+    // ([rediscoverDelayMs]) and [stop] clears them from the caller's thread.
     @Volatile private var attachFailStreak = 0
 
     @Volatile private var attachRetryAfter = 0L
 
     @Volatile private var attachAbandoned = false
+
+    // Failed attaches over the whole life of the process. The streak above is refundable on purpose; this is
+    // not, except by an attach that actually succeeds ([noteAttachSucceeded]). It exists because 2.3.1 shipped
+    // the streak with a refund path that a refusing chipset could drive in a loop — see [availabilityReceiver]
+    // and [NanAttachPolicy]. A bound is only worth what its refund path is worth, so this one has none.
+    @Volatile private var attachFailTotal = 0
+
+    // Last availability the receiver was told about, so it can tell a genuine false→true transition from a
+    // broadcast that merely repeats `true`. Null until the first one arrives; see [availabilityReceiver].
+    @Volatile private var lastAvailable: Boolean? = null
 
     // The one accept-any responder: its ServerSocket, network callback, and the accept loop.
     @Volatile private var responderSocket: ServerSocket? = null
@@ -459,6 +479,12 @@ class WifiAwareTransport(
                         1
                     },
                 )
+            // A radio that refused for a day last time is still refusing. MeshService is START_STICKY, so
+            // without this every AMS kill hands the next process a fresh budget to spend re-learning it.
+            if (runCatching { attachJournal.awareGiveUpStamp() }.getOrNull() == giveUpStamp) {
+                attachAbandoned = true
+                Log.w(TAG, "Wi-Fi Aware was abandoned under this build/ROM; not attaching until availability changes")
+            }
             registerAvailability()
             attach()
             loopJob = scope.launch { discoveryLoop() }
@@ -814,6 +840,9 @@ class WifiAwareTransport(
             // give us a NAN iface at all, the loop's flat retry strands two binder objects in system_server
             // every 3 s until AMS kills the process for it.
             if (attachAbandoned || SystemClock.elapsedRealtime() < attachRetryAfter) return@onHandler
+            // ...and no faster than the floor, whatever the streak says. Every other gate here is refundable by
+            // something; this one is not, so it is what holds if a refund path ever runs in a loop again.
+            if (NanAttachPolicy.tooSoon(SystemClock.elapsedRealtime() - attachStartedAt)) return@onHandler
             // Self-heal a stuck guard: if a prior mgr.attach never called back within the watchdog, clear it so we
             // can retry (the chipset occasionally drops an attach silently after a session teardown).
             if (attaching.get() && SystemClock.elapsedRealtime() - attachStartedAt > ATTACH_WATCHDOG_MS) {
@@ -826,7 +855,7 @@ class WifiAwareTransport(
                 object : AttachCallback() {
                     override fun onAttached(newSession: WifiAwareSession) {
                         attaching.set(false)
-                        clearAttachBackoff() // before the supersede check: the radio opened, which is all the streak counts
+                        noteAttachSucceeded() // before the supersede check: the radio opened, which is all that counts
                         if (gen != attachGen || session != null) { // superseded by a newer attach — never orphan it
                             runCatching { newSession.close() }
                             return
@@ -879,9 +908,13 @@ class WifiAwareTransport(
         cause: Throwable? = null,
     ) {
         attachFailStreak += 1
+        attachFailTotal += 1
+        if (NanAttachPolicy.leakBudgetSpent(attachFailTotal)) {
+            abandonAttach("$what (total $attachFailTotal) — this process has spent its attach budget", cause)
+            return
+        }
         if (NanAttachPolicy.giveUp(attachFailStreak)) {
-            attachAbandoned = true
-            Log.e(TAG, "$what (streak $attachFailStreak) — this radio will not open; no further attaches", cause)
+            abandonAttach("$what (streak $attachFailStreak) — this radio will not open", cause)
             return
         }
         val backoff = NanAttachPolicy.backoffMs(attachFailStreak)
@@ -889,11 +922,37 @@ class WifiAwareTransport(
         Log.w(TAG, "$what (streak $attachFailStreak) — next attach in ${backoff}ms", cause)
     }
 
-    /** A successful attach, or a new fact about the radio, ends the backoff episode and refunds the budget. */
+    /**
+     * Stop attaching, and remember it across the process death that may well follow (`MeshService` is
+     * `START_STICKY`). The durable half is keyed by app version + ROM fingerprint, so a new build or a flashed
+     * ROM re-arms on its own — see [NanAttachJournal].
+     */
+    private fun abandonAttach(
+        why: String,
+        cause: Throwable?,
+    ) {
+        attachAbandoned = true
+        Log.e(TAG, "$why; no further attaches", cause)
+        scope.launch { runCatching { attachJournal.setAwareGiveUpStamp(giveUpStamp) } }
+    }
+
+    /**
+     * A new fact about the radio ends the backoff episode: a fresh streak, and a fresh chance for a give-up
+     * that a Wi-Fi toggle or a ROM change may have invalidated. It deliberately does **not** refund
+     * [attachFailTotal] — nothing but an attach that works does that, because this is the path that was being
+     * driven in a loop on getknit/Knit#9 and the leak bound has to survive its own callers.
+     */
     private fun clearAttachBackoff() {
         attachFailStreak = 0
         attachRetryAfter = 0L
         attachAbandoned = false
+    }
+
+    /** As [clearAttachBackoff], plus the two things only a working radio may refund. */
+    private fun noteAttachSucceeded() {
+        clearAttachBackoff()
+        attachFailTotal = 0
+        scope.launch { runCatching { attachJournal.setAwareGiveUpStamp("") } }
     }
 
     private fun startPublish(gen: Int) {
@@ -2332,16 +2391,25 @@ class WifiAwareTransport(
                 intent: Intent,
             ) {
                 val mgr = awareManager ?: return
-                if (mgr.isAvailable) {
+                val available = mgr.isAvailable
+                val wasAvailable = lastAvailable
+                lastAvailable = available
+                if (available) {
                     // While a deliberate session cycle settles, the loop owns the re-attach — an early attach
                     // here is the exact race the settle exists to prevent. (Availability broadcasts also lag
                     // many seconds behind the real state on a screen-off device, so this edge is stale anyway.)
                     if (sessionCycleSettleStartedAt != 0L) return
                     onHandler {
-                        // Aware just came back: a new fact about the radio, so a failure streak that predates it
+                        // Aware came *back*: a new fact about the radio, so a failure streak that predates it
                         // says nothing about this attempt. Attach now rather than serving out a stale backoff.
-                        clearAttachBackoff()
-                        attach() // already on the handler; the attaching/session guards make a redundant call a no-op
+                        //
+                        // Only on the real false→true edge, though. This action fires on every Aware state
+                        // change, and a chipset that cannot produce a NAN interface re-broadcasts after each
+                        // refused attach with isAvailable still true. 2.3.1 refunded the streak on those repeats
+                        // and re-attached ~3.5 ms later — getknit/Knit#9's second act, ~286 attaches a second
+                        // and an AMS binder-object kill inside ten. A repeat of `true` is not news.
+                        if (wasAvailable == false) clearAttachBackoff()
+                        attach() // already on the handler; the attaching/session/floor guards no-op a redundant call
                     }
                 } else {
                     onHandler {
@@ -2382,6 +2450,7 @@ class WifiAwareTransport(
      */
     private fun registerAvailability() {
         if (availabilityRegistered) return
+        lastAvailable = awareManager?.isAvailable // seed the edge, so the first broadcast is compared, not assumed
         availabilityRegistered =
             runCatching {
                 ContextCompat.registerReceiver(

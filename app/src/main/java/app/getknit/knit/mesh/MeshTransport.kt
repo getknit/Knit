@@ -9,6 +9,20 @@ import kotlinx.coroutines.flow.emptyFlow
 import java.io.File
 
 /**
+ * What the originator of a [MeshTransport.longRangeFanout] frame knows about it that the plane cannot read
+ * off the sealed bytes. Only a frame *we* originate carries a hint; everything relayed is [CONTENT], because
+ * a DM, its ✓✓, a reaction and a group-key seed are wire-indistinguishable (ADR 039 §3) and the plane must
+ * not guess.
+ */
+enum class FanoutHint {
+    /** A message, or anything we cannot classify — worth its airslot. */
+    CONTENT,
+
+    /** Our own delivery receipt: feedback, not content. A scarce medium sheds it first and never spends its last air on it. */
+    TICK,
+}
+
+/**
  * A directly-connected mesh neighbor, identified by its node id. [protoVersion]/[capabilities] are the
  * peer's advertised protocol version and feature bits parsed from the endpoint-info advert (Wi-Fi Aware
  * `serviceSpecificInfo` / the BLE service-data payload; see
@@ -296,8 +310,15 @@ interface MeshTransport {
      * chat frames (`FrameFanout.shouldLongRangeFanout`, ADR 039). The transport size-gates and dedups; the
      * receiver's [MeshRouter] SeenSet drops any copy that also arrives another way. Default no-op — a radio
      * with a data path (Bluetooth, Wi-Fi Aware) and the fakes ignore it.
+     *
+     * [hint] is what the originator knows and the plane cannot read off a sealed frame: a [FanoutHint.TICK]
+     * is our own delivery receipt, which a scarce medium may shed before content (ADR 054). A relayed frame
+     * is opaque and stays [FanoutHint.CONTENT].
      */
-    fun longRangeFanout(wire: WireEnvelope) {}
+    fun longRangeFanout(
+        wire: WireEnvelope,
+        hint: FanoutHint = FanoutHint.CONTENT,
+    ) {}
 
     /**
      * Sends a file (avatar or attachment) tagged with [meta] to a single neighbor. Returns whether the

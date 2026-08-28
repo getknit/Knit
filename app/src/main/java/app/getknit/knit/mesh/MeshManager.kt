@@ -36,6 +36,7 @@ import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.lora.LoraCtl
 import app.getknit.knit.mesh.lora.LoraFramePolicy
+import app.getknit.knit.mesh.lora.LoraSizeHint
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
@@ -89,6 +90,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+
+/** What one inline ack costs inside a DM's ciphertext (a 22-char frame id plus its CBOR header), ADR 054. */
+internal const val INLINE_ACK_BYTES = 23
+
+/** Most receipts one reply carries inline (ADR 054) — beyond this the standalone coalesced tick is the cheaper form. */
+internal const val MAX_INLINE_ACKS = 4
 
 /**
  * Orchestrates the mesh: owns the [MeshTransport] and [MeshRouter], handles delivery of new frames
@@ -226,6 +233,17 @@ class MeshManager(
             flushScope = { sessionScope },
         )
 
+    // The ✓✓ for a DM that arrived over the LoRa board waits here (ADR 054): a burst from one author becomes
+    // one sealed tick, and a reply we send meanwhile carries the acks inline (sendChat). The flush is the
+    // group escalation's own path — one originated ctl frame, hinted TICK so the board ranks it as feedback —
+    // falling back per id to the cleartext receipt, exactly as AckSync does. heal() is the backstop timer.
+    internal val dmAcks =
+        DmAckCoalescer(
+            now = clock,
+            flush = { authorId, ackIds -> flushDmAcks(authorId, ackIds) },
+            flushScope = { sessionScope },
+        )
+
     // Bounded in-memory buffer of frames dropped for a missing sender key: parked alongside the key
     // request in verifyInbound and replayed through the deliver path once handleProfile pins the key, so
     // a frame that raced ahead of its sender's profile still lands. The inbound complement of flushPendingFor.
@@ -273,6 +291,8 @@ class MeshManager(
             groupRatchet = groupRatchet,
             clock = clock,
             originate = ::originateSigned,
+            originateTick = { originateSigned(it, FanoutHint.TICK) },
+            dmAcks = dmAcks,
             flushPending = ::flushPendingFor,
             classifyText = ::isTextFlagged,
             resealUnacked = ::resealRecentDmsTo,
@@ -507,6 +527,7 @@ class MeshManager(
             blobExchange.sweepExpired()
             keyExchange.retryMissing()
             ackSync.retryPending() // re-send broadcast/group ticks we still owe absent authors (+ age out old ones)
+            dmAcks.flushDue() // tick the LoRa-held DM receipts whose hold has run out (ADR 054)
             ratchet.sweep(clock()) // retire epoch privs / skipped keys — the ratchet's PFS window enforcement
             groupRatchet.sweep(clock()) // retire group chains / skipped keys — the group PFS window
             groupRoots.sweep(clock()) // drop rotated-away group roots past their drain window
@@ -605,6 +626,10 @@ class MeshManager(
         // DM or group: end-to-end encrypt. The attachment (if any) is encrypted to its own key and
         // re-addressed by its ciphertext hash; body/mentions/attachment refs go into the sealed content.
         val sealedAttachment = attachment?.let { sealAttachment(it) }
+        // The piggyback (ADR 054): a DM to a peer that reads inline acks carries the receipts we still owe
+        // it for DMs that came over the board, in place of a standalone tick that would cost ~3 s of LoRa
+        // air. Attached only in the v2 arm of the seal; a v1 fallback or a parked DM gives them back.
+        val inlineAcks = inlineAcksFor(recipientId, group, text, replying = replyTo != null, attached = attachment != null)
         val content =
             MessageContent(
                 body = text,
@@ -614,7 +639,11 @@ class MeshManager(
                 attachmentKey = sealedAttachment?.key,
                 replyTo = replyTo,
             )
-        val envelope = sealEnvelopeFor(id, me, sentAt, recipientId, group, content)
+        val envelope = sealEnvelopeFor(id, me, sentAt, recipientId, group, content, inlineAcks)
+        if (inlineAcks.isNotEmpty() && recipientId != null) {
+            val carried = envelope?.v == EncEnvelope.VERSION_RATCHET
+            if (carried) metrics.onReceiptCoalesced(inlineAcks.size) else dmAcks.giveBack(recipientId, inlineAcks)
+        }
         // Persist our own plaintext copy regardless, so the sender always sees their message. A DM whose
         // recipient key isn't known yet is flagged pendingKey so handleProfile can retransmit it when the
         // recipient's profile (carrying the key) finally arrives (groups stay unsent, as before).
@@ -704,6 +733,8 @@ class MeshManager(
         recipientId: String?,
         group: GroupInfo?,
         content: MessageContent,
+        // Receipts to carry inline (ADR 054) — v2 DM arm only; every other form seals [content] as given.
+        inlineAcks: List<String> = emptyList(),
     ): EncEnvelope? {
         val thread = group?.id ?: recipientId.orEmpty()
         val aad = MessageCrypto.header(id, me, sentAt, thread)
@@ -712,7 +743,8 @@ class MeshManager(
             val bundle = peer?.pubKey?.let { PublicKeyBundle.decode(it) }
             val capable = bundle != null && (peer.capabilities ?: 0L) and Protocol.CAP_RATCHET != 0L
             if (capable) {
-                val sealed = ratchet.sealDm(recipientId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), content.encode(), aad, clock())
+                val plaintext = content.copy(acks = inlineAcks.takeIf { it.isNotEmpty() }).encode()
+                val sealed = ratchet.sealDm(recipientId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, clock())
                 if (sealed != null) {
                     metrics.onDmSealedV2()
                     return sealed
@@ -1235,9 +1267,46 @@ class MeshManager(
         ackIds: List<String>,
     ): Boolean {
         val env = sealDeliveryTickEnvelope(authorId, ackIds) ?: return false
-        originateSigned(env)
+        originateSigned(env, FanoutHint.TICK)
         metrics.onReceiptCustodied()
         return true
+    }
+
+    /**
+     * The LoRa-held receipts a DM to [recipientId] may carry inline (ADR 054): none for a group or a peer
+     * without [Protocol.CAP_INLINE_ACK], and only as many as the hop's body budget for this form leaves room
+     * for — acks that pushed the frame past the 3-packet ceiling would lose the message to save a tick.
+     * Taken out of the coalescer here; [sendChat] gives them back if the seal falls short of v2.
+     */
+    private suspend fun inlineAcksFor(
+        recipientId: String?,
+        group: GroupInfo?,
+        text: String,
+        replying: Boolean,
+        attached: Boolean,
+    ): List<String> {
+        if (recipientId == null || group != null || dmAcks.pending(recipientId).isEmpty()) return emptyList()
+        val peer = peers.find(recipientId) ?: return emptyList()
+        if ((peer.capabilities ?: 0L) and Protocol.CAP_INLINE_ACK == 0L) return emptyList()
+        val room = LoraSizeHint.budget(LoraSizeHint.DM_BODY_BYTES, replying, attached) - LoraSizeHint.utf8Length(text)
+        val fit = (room / INLINE_ACK_BYTES).coerceIn(0, MAX_INLINE_ACKS)
+        return if (fit == 0) emptyList() else dmAcks.take(recipientId, fit)
+    }
+
+    /**
+     * Flushes a coalesced batch of LoRa-held DM receipts (ADR 054): one sealed tick covering every id, or —
+     * the seal failing (author unpinned meanwhile) — the cleartext receipt per id, AckSync's fallback rule.
+     */
+    private suspend fun flushDmAcks(
+        authorId: String,
+        ackIds: List<String>,
+    ) {
+        if (originateDeliveryTick(authorId, ackIds)) {
+            metrics.onReceiptCoalesced(ackIds.size - 1)
+            return
+        }
+        val me = identity.nodeId()
+        ackIds.forEach { pipeline.ackCleartext(it, me) }
     }
 
     /**
@@ -1917,12 +1986,15 @@ class MeshManager(
      * so we re-offer it to neighbors that join later. The single origination choke; non-storable frames
      * are simply not carried.
      */
-    private suspend fun originateSigned(env: RelayEnvelope) {
+    private suspend fun originateSigned(
+        env: RelayEnvelope,
+        hint: FanoutHint = FanoutHint.CONTENT,
+    ) {
         val wire = sign(env)
         router.originate(wire, env.id)
         forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_SELF)
         if (shouldFastFanout(env)) transport.fastFanout(wire)
-        if (shouldLongRangeFanout(env)) transport.longRangeFanout(wire)
+        if (shouldLongRangeFanout(env)) transport.longRangeFanout(wire, hint)
         // Our own sends are the latency-sensitive case, so nudge the Internet plane instead of waiting for
         // its tick. Relayed frames ride the next heal round — they are already in flight on the radios.
         scopeSync?.onCustodyChanged()
@@ -2176,6 +2248,7 @@ class MeshManager(
         const val AVATAR_MIME = "image/jpeg"
 
         /** How far back the post-reset DM re-seal reaches — the custody TTL (older frames left the mesh). */
+
         const val RESEAL_WINDOW_MS = 24 * 60 * 60_000L
 
         /** How many carried DM-form frames a long-range plane re-offers per first hearing of a peer (≤ 3 packets each). */

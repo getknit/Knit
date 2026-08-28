@@ -119,6 +119,12 @@ class InboundPipeline(
     // anchor). Defaults to the real clock; mirrors the house convention — MeshManager, ForwardSync, AckSync.
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val originate: suspend (RelayEnvelope) -> Unit,
+    // The same choke for a frame that is our own delivery receipt, so the long-range plane can rank it as
+    // feedback rather than content (`FanoutHint.TICK`, ADR 054). Defaults to [originate] for the test rigs.
+    private val originateTick: suspend (RelayEnvelope) -> Unit = originate,
+    // Holds the ✓✓ for a DM that arrived over the LoRa board so a burst becomes one tick and a reply can
+    // carry the acks (ADR 054) — MeshManager's [DmAckCoalescer]; null (the rigs' default) acks instantly.
+    private val dmAcks: DmAckCoalescer? = null,
     private val flushPending: suspend (String) -> Unit,
     private val classifyText: suspend (String, String, Boolean) -> Boolean,
     // Re-seals our recent unacked DMs to a peer whose ratchet session was just replaced (the recovery
@@ -588,7 +594,7 @@ class InboundPipeline(
         // inbound DMs (digests match, so a re-serve means genuine divergence, e.g. our copy was
         // quota-evicted), and re-custody above already restored the row for the next exchange.
         if (messages.exists(env.id)) {
-            acknowledge(env, me)
+            acknowledge(env, me, plane)
             return
         }
         when {
@@ -704,8 +710,42 @@ class InboundPipeline(
             conversationId,
             plane,
             plain.attachmentKey,
-            persist = { row -> commit { messages.save(row) } },
+            persist = persistWithInlineAcks(env, plain, plane, commit),
         )
+    }
+
+    /**
+     * The v2 persist hook: the message row and the receipts the reply carries inline (ADR 054's piggyback)
+     * land in one commit — the same per-id guard as a sealed tick, txn outer and session lock inner.
+     */
+    private fun persistWithInlineAcks(
+        env: RelayEnvelope,
+        plain: MessageContent,
+        plane: DeliveryPlane,
+        commit: suspend (suspend () -> Unit) -> Boolean,
+    ): suspend (MessageEntity) -> Unit =
+        { row ->
+            commit {
+                messages.save(row)
+                applyInlineAcks(env, plain, plane)
+            }
+        }
+
+    /**
+     * Applies the acks a **plain** sealed DM carries inline (`MessageContent.acks` outside a ctl frame — the
+     * `CAP_INLINE_ACK` form, ADR 054), bounded and guarded exactly like a `CTL_RECEIPT` batch. Runs once per
+     * frame: a re-delivery never reaches the decrypt (the exists-gate), so nothing re-applies.
+     */
+    private suspend fun applyInlineAcks(
+        env: RelayEnvelope,
+        plain: MessageContent,
+        plane: DeliveryPlane,
+    ) {
+        plain.acks
+            .orEmpty()
+            .distinct()
+            .take(MAX_RECEIPT_ACKS)
+            .forEach { applySealedReceipt(env, it, plane) }
     }
 
     /**
@@ -1804,7 +1844,7 @@ class InboundPipeline(
         }
         // Ack unconditionally (even on a re-delivery): the receipt floods back to the sender and, for a
         // DM, doubles as the vaccine that purges this message from any carrier that missed the first ack.
-        acknowledge(env, me)
+        acknowledge(env, me, plane)
     }
 
     /**
@@ -1822,27 +1862,21 @@ class InboundPipeline(
     private suspend fun acknowledge(
         env: RelayEnvelope,
         me: String,
+        plane: DeliveryPlane,
     ) {
         if (env.recipientId == me) {
+            // A DM off the board holds its ✓✓ (ADR 054): a burst from one author becomes one sealed tick and a
+            // reply we send meanwhile carries the acks for free — over LoRa the tick costs as much air as the
+            // message. Every other plane keeps the instant receipt, and an author who could not read a sealed
+            // one keeps the cleartext form (there is nothing to coalesce there).
+            val coalescer = dmAcks
+            if (plane == DeliveryPlane.LoRa && coalescer != null && canSealDmReceipt(env.senderId)) {
+                coalescer.hold(env.senderId, env.id)
+                metrics.onLoraTickDeferred()
+                return
+            }
             if (sealDmReceipt(env, me)) return
-            // Legacy cleartext receipt. sentAt is load-bearing for its custody: every store derives the
-            // frame-global expiry from it (sentAt + TTL, ADR 006), so an unset 0 computes a 1970 expiry
-            // and is refused dead-on-arrival at every node — the receipt would flood live but never be
-            // carried (work item #16).
-            val ack =
-                RelayEnvelope(
-                    type = FrameType.RECEIPT,
-                    id = FrameId.new(),
-                    senderId = me,
-                    sentAt = clock(),
-                    payload = WireCodec.encodePayload(ReceiptContent(env.id)),
-                )
-            originate(ack)
-            // Self-vaccinate: this cleartext receipt purges the delivered DM from every carrier that sees
-            // it, and our own custody copy must follow the identical rule (ADR 006 — a liveness rule that
-            // differs per node churns digests forever). onAck's recipient guard passes by construction
-            // (our row's recipientId is us) and tombstones the id against re-plants.
-            forwardSync.onAck(env.id, me)
+            ackCleartext(env.id, me)
         } else {
             // Broadcast/group: a unicast, point-to-point (relay = false) tick straight to the author when
             // it has a path — no NDP required (a fast-fanned message gets its receipt too). A GROUP tick
@@ -1851,6 +1885,40 @@ class InboundPipeline(
             // exactly like the message it acks. Broadcast-room ticks stay best-effort-only by design.
             ackSync.owe(env.id, env.senderId, escalatable = env.group != null)
         }
+    }
+
+    /**
+     * The legacy cleartext receipt for [ackId] — what an author who cannot read a sealed one gets, and the
+     * coalescer's per-id fallback when a held batch fails to seal (`MeshManager.flushDmAcks`). sentAt is
+     * load-bearing for its custody: every store derives the frame-global expiry from it (sentAt + TTL, ADR
+     * 006), so an unset 0 computes a 1970 expiry and is refused dead-on-arrival at every node — the receipt
+     * would flood live but never be carried (work item #16).
+     */
+    internal suspend fun ackCleartext(
+        ackId: String,
+        me: String,
+    ) {
+        val ack =
+            RelayEnvelope(
+                type = FrameType.RECEIPT,
+                id = FrameId.new(),
+                senderId = me,
+                sentAt = clock(),
+                payload = WireCodec.encodePayload(ReceiptContent(ackId)),
+            )
+        originate(ack)
+        // Self-vaccinate: this cleartext receipt purges the delivered DM from every carrier that sees
+        // it, and our own custody copy must follow the identical rule (ADR 006 — a liveness rule that
+        // differs per node churns digests forever). onAck's recipient guard passes by construction
+        // (our row's recipientId is us) and tombstones the id against re-plants.
+        forwardSync.onAck(ackId, me)
+    }
+
+    /** Whether [authorId] could read a sealed receipt: a pinned bundle carrying `CAP_RATCHET` (the seal itself may still fail). */
+    private suspend fun canSealDmReceipt(authorId: String): Boolean {
+        val peer = peers.find(authorId) ?: return false
+        if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return false
+        return peer.pubKey?.let { PublicKeyBundle.decode(it) } != null
     }
 
     /**
@@ -1885,7 +1953,7 @@ class InboundPipeline(
                     metrics.onReceiptSealedFallback()
                     return false
                 }
-        originate(
+        originateTick(
             RelayEnvelope(
                 type = FrameType.CHAT,
                 id = id,

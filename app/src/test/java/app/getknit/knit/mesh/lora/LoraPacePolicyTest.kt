@@ -59,12 +59,29 @@ class LoraPacePolicyTest {
     @Test
     fun dequeueGoesByClassThenFifoWithinIt() {
         val pace = LoraPacePolicy(minGapMs = 0)
+        pace.enqueue(frame("tick", FrameClass.TICK))
         pace.enqueue(frame("room"))
         pace.enqueue(frame("dm", FrameClass.DM))
         pace.enqueue(frame("profile", FrameClass.BOOTSTRAP))
         // ADR 044 changed this from plain FIFO: the bridge enqueues gossip and backfill in bursts nobody is
         // waiting for, and at a 3-second gap those would put a live message seconds behind for no reason.
-        assertEquals("class governs send order too", listOf("profile", "dm", "room"), drain(pace))
+        assertEquals("class governs send order too", listOf("profile", "dm", "room", "tick"), drain(pace))
+    }
+
+    /** ADR 054: our own ✓✓ is the first thing a full queue gives up, whichever side of the cap it arrives on. */
+    @Test
+    fun aFullQueueShedsATickBeforeTheRoomAndATickAloneAtTheBottomYields() {
+        val pace = LoraPacePolicy(queueCap = 2)
+        pace.enqueue(frame("tick", FrameClass.TICK))
+        pace.enqueue(frame("room"))
+        assertEquals(LoraPacePolicy.Admission.DROPPED_OLDEST, pace.enqueue(frame("dm", FrameClass.DM)))
+        assertEquals(listOf("dm", "room"), drain(pace))
+
+        val again = LoraPacePolicy(queueCap = 2)
+        again.enqueue(frame("room"))
+        again.enqueue(frame("dm", FrameClass.DM))
+        assertEquals("a tick cannot displace content", LoraPacePolicy.Admission.REFUSED, again.enqueue(frame("tick", FrameClass.TICK)))
+        assertEquals(listOf("dm", "room"), drain(again))
     }
 
     @Test

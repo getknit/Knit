@@ -1,6 +1,7 @@
 package app.getknit.knit
 
 import app.getknit.knit.mesh.CompositeMeshTransport
+import app.getknit.knit.mesh.FanoutHint
 import app.getknit.knit.mesh.FileKind
 import app.getknit.knit.mesh.FileMeta
 import app.getknit.knit.mesh.InboundFrame
@@ -63,6 +64,7 @@ class CompositeMeshTransportTest {
         val sentDigests = mutableListOf<Pair<Peer, List<String>>>()
         val fastFanouts = mutableListOf<WireEnvelope>()
         val longRangeFanouts = mutableListOf<WireEnvelope>()
+        val longRangeHints = mutableListOf<FanoutHint>()
         val fastSends = mutableListOf<Peer>()
         val suppressCalls = mutableListOf<Set<String>>()
         val foreignCalls = mutableListOf<Set<String>>()
@@ -106,8 +108,12 @@ class CompositeMeshTransportTest {
             fastFanouts += wire
         }
 
-        override fun longRangeFanout(wire: WireEnvelope) {
+        override fun longRangeFanout(
+            wire: WireEnvelope,
+            hint: FanoutHint,
+        ) {
             longRangeFanouts += wire
+            longRangeHints += hint
         }
 
         override fun fastSend(
@@ -518,11 +524,14 @@ class CompositeMeshTransportTest {
             bt.setNeighbors(Peer("p"))
             advanceUntilIdle()
             composite.longRangeFanout(wire())
+            composite.longRangeFanout(wire(), FanoutHint.TICK)
             advanceUntilIdle()
             // Every child is offered the frame and decides for itself (only a no-data-path plane acts on it) —
             // there is no send() fallback: the router's flood already carries a DM over a link child's links.
-            assertEquals(1, bt.longRangeFanouts.size)
-            assertEquals(1, nan.longRangeFanouts.size)
+            assertEquals(2, bt.longRangeFanouts.size)
+            assertEquals(2, nan.longRangeFanouts.size)
+            // The originator's hint reaches every child unchanged (ADR 054).
+            assertEquals(listOf(FanoutHint.CONTENT, FanoutHint.TICK), nan.longRangeHints)
             assertTrue("no flood duplicate over the link child", bt.sends.isEmpty())
             assertTrue("the coordination-plane blast is a different path", nan.fastFanouts.isEmpty())
         }

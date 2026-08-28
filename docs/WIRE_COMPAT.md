@@ -250,6 +250,16 @@ What did **not** move, and why it is worth recording: group photos needed no wir
 `groupupdate` already carries `GroupInfo.photoHash` in cleartext and is already scope-eligible, so only
 the client's attachment-reference reader had to learn about it.
 
+**Precedent — the DB v19 field reuse a third time (inline delivery acks, ADR 054).** `MessageContent.acks`
+— the batched-receipt list — populated on a **plain** sealed DM chat, not only on a `CTL_RECEIPT`, so a
+reply carries the receipts its author owes the recipient in place of a standalone tick. The field's
+meaning ("frame ids this frame acknowledges") is unchanged; the sender attaches it only toward a pinned
+profile carrying `Protocol.CAP_INLINE_ACK = 0x40` (the next append-only bit), and an older receiver — which
+reads `acks` only on a ctl frame — is never sent one and still gets the standalone tick, so nothing degrades
+even if the gate is wrong. No `EncEnvelope.v` or `MessageContent.MAX_SUPPORTED` bump, no ctl, no DB change,
+no golden vector moved (`ProtocolTest` round-trips `LOCAL_CAPABILITIES` symbolically). *Metadata cost:* none
+on the wire — ~23 B per ack inside the ciphertext, which is what keeps it off a carrier's view.
+
 **Precedent — the fifth additive content change, splitting a field's two jobs (profiles on the spool
 plane, ADR 022).** `ProfileContent.version: Long?`. Rule 1: nullable, absent from every frame that does not
 set it, so `profileContent`/`profileContentPrekey` did not move and only a new `profileContentVersion`

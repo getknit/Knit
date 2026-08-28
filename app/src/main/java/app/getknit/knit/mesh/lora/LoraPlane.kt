@@ -26,6 +26,12 @@ data class LoraFacts(
     val dms: Boolean = false,
     /** The board's battery while [plane] is [LoraPlane.Live] (the Profile row shows it); never a reach input. */
     val battery: BoardBattery? = null,
+    /**
+     * Whether the plane has spent its airtime window (ADR 054): a DM to a peer only the board can hear will
+     * wait for air, and the chat says so instead of looking delivered-and-ignored. A threshold, not a
+     * percentage, so a busy plane does not re-emit the facts on every packet. False unless [plane] is Live.
+     */
+    val airtimeSpent: Boolean = false,
 )
 
 /**

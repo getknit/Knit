@@ -157,6 +157,7 @@ class MeshMetrics {
     private val receiptsSealed = AtomicLong()
     private val receiptsSealedFallback = AtomicLong()
     private val receiptsCustodied = AtomicLong()
+    private val receiptsCoalesced = AtomicLong()
     private val reactionsSealed = AtomicLong()
     private val reactionsSealedFallback = AtomicLong()
     private val groupSealedRatchet = AtomicLong()
@@ -210,6 +211,8 @@ class MeshMetrics {
     private val loraBridged = AtomicLong()
     private val loraBridgeRefused = AtomicLong()
     private val loraPassive = AtomicLong()
+    private val loraSkippedLinked = AtomicLong()
+    private val loraTickDeferred = AtomicLong()
 
     /** A frame this device authored and injected into the mesh. */
     fun onOriginated() {
@@ -311,6 +314,14 @@ class MeshMetrics {
     /** A batched group tick originated into custody (one frame, however many acks it carries). */
     fun onReceiptCustodied() {
         receiptsCustodied.incrementAndGet()
+    }
+
+    /**
+     * DM receipts that rode together instead of alone (ADR 054): `ids − 1` per coalesced tick, plus every ack
+     * a reply carried inline. The field oracle for the LoRa airtime saving — each one is a ~3 s frame not sent.
+     */
+    fun onReceiptCoalesced(count: Int) {
+        receiptsCoalesced.addAndGet(count.toLong())
     }
 
     /** A reaction sealed as a v2 ctl frame (DM or group form). */
@@ -581,6 +592,20 @@ class MeshMetrics {
         loraPassive.incrementAndGet()
     }
 
+    /**
+     * A DM-form frame kept off LoRa because its recipient is us or a peer a higher-preference plane holds a
+     * live link to (ADR 054) — the link carries it. Climbing while texting a pocket-mate is the gate working;
+     * climbing while a far peer starves means the link set is wrong.
+     */
+    fun onLoraSkippedLinked() {
+        loraSkippedLinked.incrementAndGet()
+    }
+
+    /** A DM arrived over the board and its ✓✓ was held for the coalescer instead of sealed at once (ADR 054). */
+    fun onLoraTickDeferred() {
+        loraTickDeferred.incrementAndGet()
+    }
+
     @Suppress("LongMethod") // a flat field-by-field copy — one line per counter; splitting it would only scatter it
     fun snapshot(): Snapshot {
         val byReason = drops.mapValues { it.value.get() }
@@ -607,6 +632,7 @@ class MeshMetrics {
             receiptsSealed = receiptsSealed.get(),
             receiptsSealedFallback = receiptsSealedFallback.get(),
             receiptsCustodied = receiptsCustodied.get(),
+            receiptsCoalesced = receiptsCoalesced.get(),
             reactionsSealed = reactionsSealed.get(),
             reactionsSealedFallback = reactionsSealedFallback.get(),
             groupSealedRatchet = groupSealedRatchet.get(),
@@ -657,6 +683,8 @@ class MeshMetrics {
             loraBridged = loraBridged.get(),
             loraBridgeRefused = loraBridgeRefused.get(),
             loraPassive = loraPassive.get(),
+            loraSkippedLinked = loraSkippedLinked.get(),
+            loraTickDeferred = loraTickDeferred.get(),
         )
     }
 
@@ -682,6 +710,7 @@ class MeshMetrics {
         val receiptsSealed: Long = 0,
         val receiptsSealedFallback: Long = 0,
         val receiptsCustodied: Long = 0,
+        val receiptsCoalesced: Long = 0,
         val reactionsSealed: Long = 0,
         val reactionsSealedFallback: Long = 0,
         val groupSealedRatchet: Long = 0,
@@ -732,5 +761,7 @@ class MeshMetrics {
         val loraBridged: Long = 0,
         val loraBridgeRefused: Long = 0,
         val loraPassive: Long = 0,
+        val loraSkippedLinked: Long = 0,
+        val loraTickDeferred: Long = 0,
     )
 }

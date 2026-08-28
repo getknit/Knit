@@ -30,7 +30,7 @@ internal data class AirtimeSnapshot(
 
 /**
  * The LoRa plane's airtime governor: turns a packet size into milliseconds on air, keeps a rolling
- * one-hour ledger of what we have spent, and answers whether one more packet fits its bucket's budget.
+ * [WINDOW_MS] ledger of what we have spent, and answers whether one more packet fits its bucket's budget.
  *
  * Before this existed the only regulator was reactive — the board's `DUTY_CYCLE_LIMIT` NAK, which arrives
  * *after* the medium has already been abused, and [LoraPacePolicy]'s fixed 3-second gap, which by itself
@@ -41,18 +41,21 @@ internal data class AirtimeSnapshot(
  * capped at [bridgeShare] of it, so a busy bridge degrades into serving less history rather than into
  * delaying somebody's message. A [FrameClass.BOOTSTRAP] frame is always admitted and merely recorded —
  * nothing verifies without the author's profile, so refusing it would cost more airtime than it saves
- * (every frame that peer sends afterwards is undecodable and re-served forever).
+ * (every frame that peer sends afterwards is undecodable and re-served forever). A [FrameClass.TICK] —
+ * our own delivery receipt — is refused once a window is [tickTailShare] from spent, so the last of the air
+ * always goes to content (ADR 054): a ✓✓ heals on re-delivery, a message somebody is waiting for does not.
  *
- * The allowance itself is `min(the region's duty cycle, a politeness ceiling) x a safety factor`. The
- * region and modem preset are read off the board ([LoraRadioConfig]); until the handshake reports them we
- * assume [FALLBACK_PERCENT], which is below every real region's limit. Pure and clock-driven by the caller,
- * like [LoraPacePolicy] — the transport owns the actual clock.
+ * The allowance itself is `min(the region's duty cycle, a politeness ceiling) x a safety factor` of the
+ * window. The region and modem preset are read off the board ([LoraRadioConfig]); until the handshake
+ * reports them we assume [FALLBACK_PERCENT], which is below every real region's limit. Pure and
+ * clock-driven by the caller, like [LoraPacePolicy] — the transport owns the actual clock.
  */
 internal class LoraAirtime(
     private val windowMs: Long = WINDOW_MS,
     private val safety: Double = SAFETY,
     private val bridgeShare: Double = BRIDGE_SHARE,
     private val politeCeilingPercent: Double = POLITE_CEILING_PERCENT,
+    private val tickTailShare: Double = TICK_TAIL_SHARE,
 ) {
     private class Sample(
         val atMs: Long,
@@ -92,7 +95,7 @@ internal class LoraAirtime(
         return ((PREAMBLE_SYMBOLS + payloadSymbols) * symbolMs).toLong().coerceAtLeast(1)
     }
 
-    /** The one-hour allowance, in milliseconds of air, before the per-bucket split. */
+    /** The window's allowance, in milliseconds of air, before the per-bucket split. */
     fun allowanceMs(): Long {
         val cfg = radio
         val percent =
@@ -126,8 +129,9 @@ internal class LoraAirtime(
      * Whether a whole frame — [payloadSizes] is one entry per packet it fragments into — fits [bucket]'s
      * budget. Admission is all-or-nothing per frame: half a fragmented message on the air is pure waste, so
      * a frame that does not fit entirely waits rather than starting. A [FrameClass.BOOTSTRAP] frame is
-     * always admitted (see the class doc). Note [AirBucket.BRIDGE] spending counts against **both** budgets:
-     * the bridge is a share of the one allowance, not a second allowance beside it.
+     * always admitted and a [FrameClass.TICK] stops at the tail (see the class doc). Note [AirBucket.BRIDGE]
+     * spending counts against **both** budgets: the bridge is a share of the one allowance, not a second
+     * allowance beside it.
      */
     fun admits(
         bucket: AirBucket,
@@ -138,7 +142,9 @@ internal class LoraAirtime(
         if (klass == FrameClass.BOOTSTRAP) return true
         prune(now)
         val cost = payloadSizes.sumOf { timeOnAirMs(it) }
-        if (liveUsedMs + bridgeUsedMs + cost > budgetMs(AirBucket.LIVE)) return false
+        val used = liveUsedMs + bridgeUsedMs
+        if (used + cost > budgetMs(AirBucket.LIVE)) return false
+        if (klass == FrameClass.TICK && used + cost > (budgetMs(AirBucket.LIVE) * (1 - tickTailShare)).toLong()) return false
         return bucket != AirBucket.BRIDGE || bridgeUsedMs + cost <= budgetMs(AirBucket.BRIDGE)
     }
 
@@ -189,8 +195,15 @@ internal class LoraAirtime(
     }
 
     companion object {
-        /** The rolling window every budget is expressed over. */
-        const val WINDOW_MS = 60 * 60_000L
+        /**
+         * The rolling window every budget is expressed over. It was an hour (ADR 044) — the unit the EU duty
+         * cycle is written in — which let a burst of chat spend the whole allowance in minutes and then left
+         * the plane dark for the rest of it. Fifteen minutes at the same percentage keeps the hourly total
+         * and the politeness figure, caps a burst at a quarter of it, and bounds a dark spell at one window.
+         * Windows straddle, so the worst hour is 5/4 of the nominal — ≤ 6.25 % — still under the 10 % the
+         * EU firmware refuses at (ADR 054).
+         */
+        const val WINDOW_MS = 15 * 60_000L
 
         /**
          * How much of the legal allowance Knit will use. We share the band with everyone else's Meshtastic
@@ -200,6 +213,9 @@ internal class LoraAirtime(
 
         /** The share of the allowance reserved for gossip + backfill; live traffic may use all of it. */
         const val BRIDGE_SHARE = 0.30
+
+        /** The last share of a window a [FrameClass.TICK] may not spend — it is kept for content. */
+        const val TICK_TAIL_SHARE = 0.25
 
         /**
          * The cap Knit applies even where the law does not. Most regions run at 100 % duty, but a phone that

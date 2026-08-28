@@ -79,6 +79,29 @@ class LoraStatusRepositoryTest {
         }
 
     @Test
+    fun `a spent airtime window rides the facts only while the link is live`() =
+        runTest {
+            val spent =
+                AirtimeSnapshot(
+                    ModemPreset.LONG_FAST,
+                    LoraRegion.OTHER,
+                    known = true,
+                    liveUsedMs = 40_000,
+                    liveBudgetMs = 45_000,
+                    bridgeUsedMs = 1_000,
+                    bridgeBudgetMs = 13_500,
+                )
+            val roomy = spent.copy(liveUsedMs = 20_000)
+            status.value = LoraStatus(state = LinkState.Idle, airtime = spent)
+            assertEquals(LoraFacts(LoraPlane.Down, dms = true), repo.facts.first())
+            status.value = LoraStatus(state = ready, airtime = spent)
+            assertEquals(LoraFacts(LoraPlane.Live, dms = true, airtimeSpent = true), repo.facts.first())
+            // Live and bridge spending count together, against the live budget — as the governor admits them.
+            status.value = LoraStatus(state = ready, airtime = roomy)
+            assertEquals(LoraFacts(LoraPlane.Live, dms = true, airtimeSpent = false), repo.facts.first())
+        }
+
+    @Test
     fun `the battery rides the facts only while the link is live`() =
         runTest {
             val battery = BoardBattery(percent = 78, voltage = 3.92f, powered = false)

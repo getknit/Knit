@@ -88,6 +88,15 @@ class ChatLoraIndicatorTest {
     }
 
     @Test
+    fun theSaturatedVariantSaysMessagesAreDelayedAndExplainsWhy() {
+        render(loraReach = LoraReach.LoraOnlySaturated)
+        compose.onNodeWithText("Over LoRa only — airtime is used up, messages are delayed").assertIsDisplayed()
+
+        compose.onNodeWithTag("chat_lora_notice").performClick()
+        compose.onNodeWithText("LoRa airtime is used up").assertIsDisplayed()
+    }
+
+    @Test
     fun aQuietReachShowsNoNotice() {
         render(loraReach = LoraReach.Silent, loraCarry = LoraCarry.Dm)
         compose.onNodeWithTag("chat_lora_notice").assertDoesNotExist()

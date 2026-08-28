@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.lora
 
+import app.getknit.knit.mesh.FanoutHint
 import app.getknit.knit.mesh.InboundFrame
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.MeshTransport
@@ -41,9 +42,10 @@ import java.util.concurrent.atomic.AtomicLong
  * - [neighbors] is always empty, so the reliable flood, custody digest sync, key requests, blob pulls and
  *   the `watchNeighbors` hooks never touch a ~1 kbps link — [send]/[sendFile]/[sendDigest] are no-ops.
  * - [fastFanout]/[longRangeFanout]/[fastSend] are the only outbound paths: they decode the envelope (never
- *   re-encoding it — `sig`/`signed` pass through [FastFrameCodec] byte-exact), apply [LoraFramePolicy],
- *   compact/fragment via [LoraFrameCodec], and pace the result ([LoraPacePolicy]) onto the board. The
- *   long-range path is what carries sealed DM-form chat (ADR 039); this plane is the only one it exists for.
+ *   re-encoding it — `sig`/`signed` pass through [FastFrameCodec] byte-exact), apply [LoraFramePolicy], skip
+ *   a DM-form frame a live link already carries ([coveredByLink], ADR 054), compact/fragment via
+ *   [LoraFrameCodec], and pace the result ([LoraPacePolicy]) onto the board. The long-range path is what
+ *   carries sealed DM-form chat (ADR 039); this plane is the only one it exists for.
  * - inbound packets are decoded/reassembled and injected into [inbound] exactly like the Wi-Fi Aware fast
  *   plane's `emitFastWire`, so the router's dedup/verify/custody/relay all run unchanged.
  * - [shortRange] is false: a LoRa sighting doesn't imply proximity, so siblings ignore its `reachable` set.
@@ -271,9 +273,12 @@ internal class LoraMeshTransport(
 
     // --- outbound (fast plane only) ---
 
-    override fun fastFanout(wire: WireEnvelope) = fanout(wire, "fanout")
+    override fun fastFanout(wire: WireEnvelope) = fanout(wire, "fanout", FanoutHint.CONTENT)
 
-    override fun longRangeFanout(wire: WireEnvelope) = fanout(wire, "far")
+    override fun longRangeFanout(
+        wire: WireEnvelope,
+        hint: FanoutHint,
+    ) = fanout(wire, "far", hint)
 
     /**
      * The one fan-out: the composite's coordination-plane blast ([fastFanout] — room + cleartext metadata) and
@@ -283,6 +288,7 @@ internal class LoraMeshTransport(
     private fun fanout(
         wire: WireEnvelope,
         label: String,
+        hint: FanoutHint,
     ) {
         if (!mayTransmit()) return // another board in this pocket is the gateway; it will carry this frame
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return
@@ -292,6 +298,10 @@ internal class LoraMeshTransport(
         }
         if (!LoraFramePolicy.eligible(env, wire, LoraFramePolicy.Path.FANOUT)) return
         if (LoraFramePolicy.isDmForm(env) && currentConfig?.dms != true) return // the user keeps DMs off this plane
+        if (coveredByLink(env)) {
+            metrics.onLoraSkippedLinked() // a live link carries it; a ~1 kbps medium must not pay for it twice
+            return
+        }
         if (!LoraFramePolicy.isFresh(env, wallClock())) {
             metrics.onLoraSuppressed() // a custody re-serve of an old frame — custody's business, not a live plane's
             return
@@ -301,7 +311,7 @@ internal class LoraMeshTransport(
             metrics.onLoraSuppressed() // already sent/received over LoRa within the window
             return
         }
-        enqueue(parts, "$label:${env.type}", classOf(env))
+        enqueue(parts, "$label:${env.type}", classOf(env, hint))
     }
 
     override fun fastSend(
@@ -324,7 +334,8 @@ internal class LoraMeshTransport(
         val label = "send:${env.type}->${to.nodeId}"
         val parts = encodeOrNull(wire, label) ?: return
         if (!sigSeen.add(sigKey(wire))) return
-        enqueue(parts, label, classOf(env))
+        // The targeted path admits only receipts and sealed ticks (LoraFramePolicy), so it needs no hint.
+        enqueue(parts, label, classOf(env, FanoutHint.TICK))
     }
 
     override suspend fun send(
@@ -368,11 +379,18 @@ internal class LoraMeshTransport(
         wake.trySend(Unit)
     }
 
-    /** The pacing class of a frame: the profile is the key bootstrap, a DM outranks ambient room traffic. */
-    private fun classOf(env: RelayEnvelope): FrameClass =
+    /**
+     * The pacing class of a frame: the profile is the key bootstrap, a DM outranks ambient room traffic, and a
+     * sealed tick the originator has vouched for ([FanoutHint.TICK]) ranks below everything — feedback, not
+     * content (ADR 054). A relayed DM-form frame is opaque and stays DM class whatever it really is.
+     */
+    private fun classOf(
+        env: RelayEnvelope,
+        hint: FanoutHint,
+    ): FrameClass =
         when {
             env.type == FrameType.PROFILE -> FrameClass.BOOTSTRAP
-            LoraFramePolicy.isDmForm(env) -> FrameClass.DM
+            LoraFramePolicy.isDmForm(env) -> if (hint == FanoutHint.TICK) FrameClass.TICK else FrameClass.DM
             else -> FrameClass.ROOM
         }
 
@@ -476,6 +494,23 @@ internal class LoraMeshTransport(
         return channels.any { it.index == index && it.name == KnitChannel.NAME }
     }
 
+    /**
+     * Whether a DM-form frame is addressed to us, or to a peer a higher-preference plane holds a **live link**
+     * to (ADR 054). Either way it already has a data path — the BLE/NAN flood, or it is ours and delivered — so
+     * a ~1 kbps medium buys nothing by carrying it. Before this gate, texting a pocket-mate over Bluetooth
+     * spent the whole airtime budget on DMs and ✓✓s that never needed the board (the composite's
+     * [longRangeFanout] is unconditional and the gateway re-fans every relayed DM-form frame), and a far peer
+     * then went without for the rest of the window.
+     *
+     * Links, never sightings — the same reading as the election and [fastSend]: a sighting is not a data path,
+     * and refusing on one would take away a far peer's only route (ADR 044's field amendment).
+     */
+    private fun coveredByLink(env: RelayEnvelope): Boolean {
+        if (!LoraFramePolicy.isDmForm(env)) return false
+        val to = env.recipientId ?: return false
+        return to == selfIdCached || to in linkedPeers
+    }
+
     /** Whether we may put anything on the air at all. A passive gateway listens and relays, but never transmits. */
     private fun mayTransmit(): Boolean {
         if (role == LoraGatewayPolicy.Role.ACTIVE) return true
@@ -575,6 +610,10 @@ internal class LoraMeshTransport(
     /** Enqueues one backfilled frame; false when it can't ride (too big, or already on the air this window). */
     private fun serveOne(wire: WireEnvelope): Boolean {
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return false
+        if (coveredByLink(env)) {
+            metrics.onLoraSkippedLinked() // the far pocket would only ever be a carrier for a frame its addressee already holds
+            return false
+        }
         val label = "bridge:${env.id}"
         val parts = encodeOrNull(wire, label) ?: return false
         if (!sigSeen.add(sigKey(wire))) {
@@ -583,7 +622,7 @@ internal class LoraMeshTransport(
         }
         // Its natural class, so a room post still cannot evict a DM in the queue, but the BRIDGE bucket, so
         // every byte of it is metered as the backfill it is.
-        enqueue(parts, label, classOf(env), AirBucket.BRIDGE)
+        enqueue(parts, label, classOf(env, FanoutHint.CONTENT), AirBucket.BRIDGE)
         return true
     }
 
@@ -640,7 +679,7 @@ internal class LoraMeshTransport(
         }
         metrics.onLoraSent()
         if (frame.fragmented) metrics.onLoraFragSent()
-        if (frame.klass == FrameClass.DM) metrics.onLoraDmSent()
+        if (frame.klass == FrameClass.DM || frame.klass == FrameClass.TICK) metrics.onLoraDmSent() // both DM-form
         log("lora tx ${frame.label} parts=${frame.messages.size}")
     }
 

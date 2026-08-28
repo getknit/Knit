@@ -21,6 +21,9 @@ enum class LoraReach {
 
     /** As [LoraOnly], but private messages over LoRa are switched off — so nothing reaches them at all. */
     LoraOnlyDmsOff,
+
+    /** As [LoraOnly], but the board has spent its airtime window (ADR 054): messages wait for air, minutes not seconds. */
+    LoraOnlySaturated,
 }
 
 /**
@@ -49,6 +52,7 @@ fun loraReachFor(
         kinds != setOf(TransportKind.LoRa) -> LoraReach.Silent
         relayReach == RelayReach.Covered -> LoraReach.Silent
         !facts.dms -> LoraReach.LoraOnlyDmsOff
+        facts.airtimeSpent -> LoraReach.LoraOnlySaturated
         else -> LoraReach.LoraOnly
     }
 

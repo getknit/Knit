@@ -79,7 +79,12 @@ doc). **Don't start a deferred item without explicit direction.**
   closes the **multi-board-per-clique** deferral above, an airtime governor reading the board's region and
   modem preset, and digest-driven backfill of what a far gateway's offer shows it lacks — behind
   `SettingsStore.loraBridgeEnabled` (default on). Live traffic already crossed before this and was not
-  rebuilt. **Still owed:** the **four-device two-pocket trial** in `context/lora-bridge.md`. Still deferred
+  rebuilt. **Still owed:** the **four-device two-pocket trial** in `context/lora-bridge.md`. **Airtime shaping
+  SHIPPED** (2026-08-27, ADR 054): the recipient gate (a DM-form frame to a linked peer or to self never rides
+  the board), a 15-min budget window at the same 5 %, a `TICK` class that sheds first and never spends a
+  window's tail, coalesced DM receipts (`DmAckCoalescer`, ≤ 45 s hold, one tick per burst) piggybacked on a
+  reply behind `CAP_INLINE_ACK`, and the saturated-chat notice. **Still owed:** its three-phone trial
+  (`context/lora-bridge.md`). Still deferred
   here: an **IBLT/Bloom offer body** (48 prefixes is a window — the upgrade if a busy pocket's oldest frames
   start falling off it), **acknowledged backfill** (a served frame lost to the air waits for the next round),
   and **faster passive-to-active takeover** when an active gateway's phone dies without leaving

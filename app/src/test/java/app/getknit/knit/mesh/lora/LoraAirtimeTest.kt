@@ -102,6 +102,37 @@ class LoraAirtimeTest {
     }
 
     @Test
+    fun theWindowIsFifteenMinutesSoAWorstCaseHourStaysUnderTheEuRefusalPoint() {
+        assertEquals(15 * 60_000L, LoraAirtime.WINDOW_MS)
+        val air = LoraAirtime().apply { onRadioConfig(radio(region = LoraRegion.EU_868)) }
+        // Rolling windows straddle an hour, so five can partly overlap it: 5/4 of the nominal allowance.
+        val worstHourPercent = air.allowanceMs() * 5 / 4 * 100.0 / (60 * 60_000L)
+        assertTrue(
+            "worst hour $worstHourPercent % must stay under the firmware's 10 %",
+            worstHourPercent < LoraRegion.EU_868.dutyCyclePercent,
+        )
+    }
+
+    @Test
+    fun aTickNeverSpendsTheTailOfAWindowButContentStillDoes() {
+        val air = LoraAirtime().apply { onRadioConfig(radio()) }
+        val packet = listOf(MeshtasticProto.MAX_PAYLOAD)
+        var now = 0L
+        while (air.admits(AirBucket.LIVE, FrameClass.TICK, packet, now)) {
+            air.record(AirBucket.LIVE, MeshtasticProto.MAX_PAYLOAD, now)
+            now += 3_000
+        }
+        val tail = (air.budgetMs(AirBucket.LIVE) * LoraAirtime.TICK_TAIL_SHARE).toLong()
+        assertTrue(
+            "ticks stop at the tail",
+            air.usedMs(AirBucket.LIVE, now) >= air.budgetMs(AirBucket.LIVE) - tail - air.timeOnAirMs(MeshtasticProto.MAX_PAYLOAD),
+        )
+        assertFalse(air.admits(AirBucket.LIVE, FrameClass.TICK, packet, now))
+        assertTrue("a DM still has the tail", air.admits(AirBucket.LIVE, FrameClass.DM, packet, now))
+        assertTrue("so does the room", air.admits(AirBucket.LIVE, FrameClass.ROOM, packet, now))
+    }
+
+    @Test
     fun spendingAgesOutOfTheRollingWindow() {
         val air = LoraAirtime().apply { onRadioConfig(radio()) }
         air.record(AirBucket.LIVE, MeshtasticProto.MAX_PAYLOAD, 0)

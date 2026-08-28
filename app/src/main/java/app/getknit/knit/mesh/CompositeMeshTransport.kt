@@ -348,8 +348,11 @@ class CompositeMeshTransport(
      * no-op; only a plane with no data path overrides it). Deliberately NO `send(wire, null)` fallback for a
      * link child — the router's flood already carries the frame over its links, so that would only double-flood.
      */
-    override fun longRangeFanout(wire: WireEnvelope) {
-        for (child in children) child.longRangeFanout(wire)
+    override fun longRangeFanout(
+        wire: WireEnvelope,
+        hint: FanoutHint,
+    ) {
+        for (child in children) child.longRangeFanout(wire, hint)
     }
 
     /** First child (preference order) that currently holds a live data-path link to [nodeId], or null. */

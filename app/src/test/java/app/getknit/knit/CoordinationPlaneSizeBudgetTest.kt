@@ -1,6 +1,9 @@
 package app.getknit.knit
 
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.DmAckCoalescer
+import app.getknit.knit.mesh.INLINE_ACK_BYTES
+import app.getknit.knit.mesh.MAX_INLINE_ACKS
 import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
@@ -9,6 +12,7 @@ import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.link.FastFrameCodec
 import app.getknit.knit.mesh.lora.LoraFrameCodec
+import app.getknit.knit.mesh.lora.LoraMeshTransport
 import app.getknit.knit.mesh.lora.LoraSizeHint
 import app.getknit.knit.mesh.lora.MeshtasticProto
 import app.getknit.knit.mesh.protocol.ChatContent
@@ -429,6 +433,9 @@ class CoordinationPlaneSizeBudgetTest {
 
     // --- budgets: the LoRa hop (Meshtastic Data.payload cap = 233 B, <= 3 fragments) ---
 
+    /** The largest `Data.payload` a board behind a 255-byte BLE MTU takes in one write (`LoraMeshTransport.TORADIO_OVERHEAD`). */
+    private val esp32PayloadCap = 255 - LoraMeshTransport.TORADIO_OVERHEAD
+
     /** Part count for [wire] on the LoRa hop, or null when no encoding fits <= 3 fragments. */
     private fun loraParts(wire: WireEnvelope): Int? = LoraFrameCodec.encode(wire, fragId = 1)?.size
 
@@ -496,6 +503,42 @@ class CoordinationPlaneSizeBudgetTest {
 
         val huge = alice.sign(sealer.dm(FrameId.new(), body = "c".repeat(TextLimits.MESSAGE)))
         assertEquals("a max-length DM is loraTooBig — it rides the radios and custody instead", null, loraParts(huge))
+    }
+
+    /**
+     * ADR 054: a coalesced DM tick at its cap replaces up to twelve single ticks, so it must still cross the
+     * board — checked at the real ESP32 cap (MTU 255 → a 222-B `Data.payload`), not just the nominal 233.
+     */
+    @Test
+    fun aCoalescedDmTickFitsTheLoraHop() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        sealer.confirm()
+        val acks = List(DmAckCoalescer.MAX_LORA_TICK_ACKS) { FrameId.new() }
+        val tick = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, acks = acks))
+        report("coalesced-dm-tick-${acks.size}", tick, alice)
+        val parts =
+            checkNotNull(LoraFrameCodec.encode(tick, fragId = 1, maxPayload = esp32PayloadCap)) {
+                "a coalesced tick at its cap must fit the LoRa hop"
+            }
+        assertTrue("coalesced tick in <= 3 LoRa packets at the ESP32 cap (was ${parts.size})", parts.size <= FastFrameCodec.MAX_PARTS)
+    }
+
+    /**
+     * ADR 054: a DM at the composer's budget that also carries its full complement of inline acks must still
+     * cross the board — `MeshManager.inlineAcksFor` reserves [INLINE_ACK_BYTES] per ack out of the same budget.
+     */
+    @Test
+    fun aBudgetDmWithInlineAcksStillFitsTheLoraHop() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        val body = "a".repeat(LoraSizeHint.DM_BODY_BYTES - MAX_INLINE_ACKS * INLINE_ACK_BYTES)
+        val dm = alice.sign(sealer.dm(FrameId.new(), body = body, acks = List(MAX_INLINE_ACKS) { FrameId.new() }))
+        report("sealed-dm-budget-with-inline-acks-init", dm, alice)
+        val parts = checkNotNull(loraParts(dm)) { "a budget DM with inline acks must fit the LoRa hop" }
+        assertTrue("budget DM + inline acks in <= 3 LoRa packets (was $parts)", parts <= FastFrameCodec.MAX_PARTS)
     }
 
     /**

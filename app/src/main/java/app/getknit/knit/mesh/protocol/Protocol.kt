@@ -63,9 +63,19 @@ object Protocol {
      */
     const val CAP_FAST_COMPACT = 0x20L
 
+    /**
+     * Inline delivery acks (ADR 054): this build applies `MessageContent.acks` on a **plain** sealed DM chat,
+     * not only on a `CTL_RECEIPT`, so a reply can carry the receipts its author owes the recipient in place
+     * of a standalone tick (over LoRa a tick costs as much air as the message). A send-time input like
+     * [CAP_RATCHET]: a sender attaches acks only toward a pinned profile carrying this bit, and an older
+     * receiver — which reads the field only on a ctl frame — is never sent one, so its ✓✓ still arrives as
+     * a tick. Additive per docs/WIRE_COMPAT.md: an existing field populated in a new case, gated on a bit.
+     */
+    const val CAP_INLINE_ACK = 0x40L
+
     /** This build's advertised capability bitfield. */
     val LOCAL_CAPABILITIES: Long =
-        CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT
+        CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT or CAP_INLINE_ACK
 
     private const val SEP = '|'
 

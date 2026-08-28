@@ -863,6 +863,7 @@ class DebugBridgeReceiver :
             .put("receiptsSealed", snap.receiptsSealed)
             .put("receiptsSealedFallback", snap.receiptsSealedFallback)
             .put("receiptsCustodied", snap.receiptsCustodied)
+            .put("receiptsCoalesced", snap.receiptsCoalesced)
             .put("reactionsSealed", snap.reactionsSealed)
             .put("reactionsSealedFallback", snap.reactionsSealedFallback)
             .put("dropsByReason", JSONObject(snap.dropsByReason.mapKeys { it.key.name }))
@@ -907,6 +908,8 @@ class DebugBridgeReceiver :
             .put("loraBridged", snap.loraBridged)
             .put("loraBridgeRefused", snap.loraBridgeRefused)
             .put("loraPassive", snap.loraPassive)
+            .put("loraSkippedLinked", snap.loraSkippedLinked)
+            .put("loraTickDeferred", snap.loraTickDeferred)
 
     /**
      * Dumps the DM ratchet's per-peer state and, with `--es reset <peerNodeId>`, forces a session reset

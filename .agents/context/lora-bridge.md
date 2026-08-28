@@ -19,6 +19,10 @@ blob pulls never touch the ~1 kbps link — `send`/`sendFile`/`sendDigest` are n
   receipt/reaction, a session reset, a group-key seed and an escalated group tick are wire-indistinguishable
   and all ride. `shouldLongRangeFanout` (`mesh/FrameFanout.kt`) is what feeds it, from `originateSigned` and
   `onDeliver` — never widen `shouldFastFanout` for this; that predicate is the NAN coordination plane's.
+  **The recipient gate (ADR 054):** a DM-form frame addressed to us, or to a peer BLE/NAN holds a **live link**
+  to (`coveredByLink`, read off `linkedPeers` — links, never sightings), is skipped on this path and on the
+  bridge backfill before the sig-dedup slot is spent: the link carries it. Counted `loraSkippedLinked`. The
+  originator's `FanoutHint` (`CONTENT`/`TICK`) rides beside the frame — see Pacing.
 - **TARGETED** (`fastSend`, unchanged): `receipt`, and `chat && !wire.relay && recipientId == to` (AckSync's
   sealed `CTL_RECEIPT` tick — a flooded DM never rides this path, so no `fastSend` caller can widen it).
 
@@ -104,9 +108,12 @@ must never need an event to recover. Closes ADR 038's "one board per clique" res
 > gap between heard and linked is visible rather than inferred.
 
 **An airtime governor.** `LoraAirtime` (pure): time-on-air from the LoRa formula at the board's own preset
-(233 B at LongFast ≈ 2 s), a rolling hour, and one allowance = `min(region duty cycle, 10 % politeness) × 0.5`.
+(233 B at LongFast ≈ 2 s), a rolling **15-minute window** (ADR 054 — it was an hour, and a burst of chat then
+blacked the plane out for the rest of it; the hourly total is unchanged, the worst straddling hour ≤ 6.25 %),
+and one allowance = `min(region duty cycle, 10 % politeness) × 0.5` of the window — **45 s of air at LongFast**.
 `AirBucket.LIVE` may spend all of it; `AirBucket.BRIDGE` (offers + backfill + the ADR 039 re-offer) is capped
-at 30 %, so backfill degrades before live chat does. `FrameClass.BOOTSTRAP` is always admitted. Region + preset
+at 30 %, so backfill degrades before live chat does. `FrameClass.BOOTSTRAP` is always admitted;
+`FrameClass.TICK` (our own delivery receipts, see Pacing) never spends the last 25 % of a window. Region + preset
 are read off the board (`FromRadio.config` → `Config.LoRaConfig`, pinned by `MeshtasticProtoTest`; conservative
 5 % until reported). `LoraPacePolicy.take` consults it, skipping a refused frame rather than blocking behind
 it, and **dequeue is now by class then FIFO** (a reversal of ADR 039 §5 — bursts of backfill must not queue-jump
@@ -129,14 +136,17 @@ phone-level send.
 
 ## Pacing
 
-`LoraPacePolicy` (pure): 3 s min inter-packet gap, a 16-frame queue, NAK back-off (rate/duty → a 60 s
-cool-down), hold while `queueFree == 0`, and (ADR 044) a hold while the frame's [AirBucket] budget is spent —
-a refused frame is skipped rather than blocking the queue behind it. When full the queue **sheds by class** (`FrameClass`: BOOTSTRAP >
-DM > ROOM): the oldest **whole** frame (never a lone fragment) of the lowest class present goes, the
-newcomer included — a room post alone at the bottom is `REFUSED` rather than evicting a DM, and nothing ever
-evicts the profile bootstrap. Dequeue runs the same class order forwards since ADR 044 (highest class first,
-FIFO within it — bursts of gossip/backfill must not queue-jump a live message). Both eviction and refusal
-count as `loraDroppedQueue`.
+`LoraPacePolicy` (pure): 3 s min inter-packet gap, a 32-frame queue (ADR 054 — sized to hold a 15-minute
+wait), NAK back-off (rate/duty → a 60 s cool-down), hold while `queueFree == 0`, and (ADR 044) a hold while the
+frame's [AirBucket] budget is spent — a refused frame is skipped rather than blocking the queue behind it.
+When full the queue **sheds by class** (`FrameClass`: BOOTSTRAP > GOSSIP > DM > ROOM > TICK): the oldest
+**whole** frame (never a lone fragment) of the lowest class present goes, the newcomer included — a room post
+alone at the bottom is `REFUSED` rather than evicting a DM, and nothing ever evicts the profile bootstrap.
+`TICK` is a frame **we** originated as a delivery receipt, said so by `FanoutHint.TICK` on
+`MeshTransport.longRangeFanout` (the transport cannot read a sealed frame); a relayed DM-form frame stays `DM`,
+and every `fastSend` frame is a tick by policy. Dequeue runs the same class order forwards since ADR 044
+(highest class first, FIFO within it — bursts of gossip/backfill must not queue-jump a live message). Both
+eviction and refusal count as `loraDroppedQueue`.
 
 **Freshness gate** (fan-out paths only, room included): a `chat`/`reaction` whose `sentAt` is more than
 15 min old (`LoraFramePolicy.FRESH_MS`) is a custody re-serve and is not fanned — without it a newcomer's
@@ -172,7 +182,19 @@ key req/ack, escalated ticks — crosses opaquely and is bounded by the group lo
 bytes (a DM with an image arrives as text plus a loading placeholder until a radio/spool path exists —
 `blobreq` never rides LoRa; `AttachmentDeferPolicy` already ignores LoRa sightings), and DMs beyond the
 size ceiling. A board-less recipient behind another board-holder gets live DMs via that phone's relay but
-no re-offer (no routing table). Airtime is SMS pace: ~2 packets per DM plus ~2 per receipt at ~2.5 s each.
+no re-offer (no routing table).
+
+**The ✓✓ is coalesced (ADR 054).** A DM that arrived over the board does not seal its receipt at once:
+`InboundPipeline.acknowledge` holds it in `mesh/DmAckCoalescer` for ≤ 45 s (anchored on the oldest held id;
+re-deliveries inside the hold add nothing), then `MeshManager.flushDmAcks` originates **one** sealed tick
+(`ack`/`acks`, ≤ 12 ids — pinned to fit 3 packets at the ESP32 cap), hinted `TICK`. If we send the author a
+DM meanwhile, `sendChat` carries up to 4 pending ids inline as `MessageContent.acks` on the plain DM instead
+(`Protocol.CAP_INLINE_ACK` on the author's profile; 23 B each reserved out of the composer's LoRa body budget
+so a reply can never become `loraTooBig` to save a tick; a v1 fallback gives them back) and no tick goes out.
+DMs off the phone radios keep the instant receipt; an author who cannot read a sealed tick keeps the cleartext
+form. Airtime: ~2 packets per DM; a receipt is ~0.2 s riding a reply, ~3 s standalone — an exchange costs
+~4 s of the 45-s window instead of ~7 s. `heal()` is the flush backstop; a process death inside the hold
+loses the pending acks and the peer's next re-offer heals it. Counted `loraTickDeferred`, `receiptsCoalesced`.
 
 **Metadata.** Content stays end-to-end sealed, but a DM's cleartext `senderId`/`recipientId`, timing and
 size now travel on the public-PSK rendezvous channel at kilometre range. `SettingsStore.loraDmEnabled`
@@ -300,7 +322,8 @@ set_module_config=35, begin_edit_settings=64, commit_edit_settings=65, session_p
   Profile row reads "On · <board> · connected / not connected".
 - **Chat.** `LoraNotice` (`chat_lora_notice`, `ui/chat/LoraReach.kt`) under the relay notice for a DM whose
   peer only the board has heard (`peerTransports[peer] == {LoRa}`, plane live, not relay-covered), with a
-  DMs-off variant; the composer's "long message" hint (`chat_lora_size_hint`) when the draft exceeds
+  DMs-off variant and (ADR 054) a **saturated** variant — `LoraFacts.airtimeSpent`, ≥ 90 % of the window's
+  live budget while live — that says messages are delayed; the composer's "long message" hint (`chat_lora_size_hint`) when the draft exceeds
   `LoraSizeHint`'s budget for its `LoraCarry` form (room 400 B, DM 320 B, −260 B replying, −170 B with a
   photo; pinned in `CoordinationPlaneSizeBudgetTest`).
 - **Battery (ADR 041).** The board's own `DeviceMetrics` — its `FromRadio.node_info` (the entry whose `num`
@@ -362,6 +385,13 @@ where no other Knit board is listening. Set the Meshtastic app's device to **Non
   (`loraDmSent` flat) while a room post crosses. Rejoin a BLE clique after an hour of history:
   `loraSuppressed` climbs, `loraDroppedQueue` stays 0.
 
+- Airtime (ADR 054), the three-phone trial: A + C linked over BLE, B far over LoRa, boards on A and B. (1) A ↔ C
+  text 20 messages over BLE → on A `loraSkippedLinked` climbs by ~40 (DMs + ✓✓s), `loraSent` and
+  `airtime.liveMs` stay flat, ✓✓ instant, B's board hears nothing. (2) A ↔ B text over LoRa: each ✓✓ lands on A
+  within ~45 s or with B's reply; `loraTickDeferred`/`receiptsCoalesced` climb; a burst of three from A yields
+  one tick from B. (3) A burst past the window: `airtime.liveMs` reaches `liveBudgetMs`, the chat notice
+  appears on A for B, `loraDroppedQueue == 0`, the queue drains within 15 min, ticks yield first.
+  (4) `loraNak == 0` throughout, EU boards included.
 - Bridge (ADR 044), the four-device trial: pocket A = board-holder + one more phone, pocket B likewise, the
   two pockets out of BLE/NAN range of each other. `…debug.LORA` shows `role: ACTIVE` on both board-holders and
   a real `radio` (region/preset off the board, not `(assumed)`). (1) A room post from A's **board-less** phone

@@ -10,7 +10,7 @@ package app.getknit.knit.mesh.lora
  * included, so a frame that is alone at the bottom yields instead of evicting anything — and the **oldest
  * whole frame** within it (never a lone fragment, which would strand a half-delivered message). So a room
  * post never evicts a DM, and nothing evicts the profile bootstrap. A rate/duty-cycle NAK widens the gap for
- * a cool-down window, and since ADR 044 an injected [LoraAirtime] holds an hourly budget the queue is drained
+ * a cool-down window, and since ADR 044 an injected [LoraAirtime] holds a rolling budget the queue is drained
  * against — so a frame can also wait because the plane has spent its share of the medium, not just because
  * the gap has not elapsed. Dequeue runs the same class order forwards (see [take]). Tested on the JVM
  * ([app.getknit.knit.mesh.lora.LoraPacePolicyTest]).
@@ -138,8 +138,10 @@ internal class LoraPacePolicy(
         const val MIN_GAP_MS = 3_000L
 
         // Raised from 12 with the bridge (ADR 044): backfill can enqueue a small burst behind live traffic,
-        // and class shedding — not the cap — is what protects the live frames.
-        const val QUEUE_CAP_FRAMES = 16
+        // and class shedding — not the cap — is what protects the live frames. Doubled again with the 15-min
+        // airtime window (ADR 054): a burst that outruns the window now waits ≤ 15 min for air, and a queue
+        // that can hold that wait (≤ ~700 B a frame) sheds nothing a later window would have carried.
+        const val QUEUE_CAP_FRAMES = 32
         const val NAK_BACKOFF_MS = 60_000L
     }
 }
@@ -147,14 +149,16 @@ internal class LoraPacePolicy(
 /**
  * The pacing class of a queued frame, highest first: the profile is the key bootstrap (nothing verifies
  * without it), the gossip offer is one packet that decides what the *next* several will be (dropping it
- * costs more air than sending it), a sealed DM outranks ambient room traffic, and the Nearby room is the
- * class the queue sheds first under airtime pressure.
+ * costs more air than sending it), a sealed DM outranks ambient room traffic, the Nearby room comes next,
+ * and our own delivery tick ([TICK], ADR 054 — only a frame the originator vouched for, see
+ * `FanoutHint`) is what the queue sheds first: feedback, not content, and it heals on re-delivery.
  *
- * This is the **queue-shedding** order only. What a frame costs against the hourly budget is
+ * This is the **queue-shedding** order only. What a frame costs against the rolling budget is
  * [AirBucket], which is orthogonal: a backfilled DM keeps DM class here — so a room post cannot evict it —
- * while spending from the bridge budget there.
+ * while spending from the bridge budget there. [LoraAirtime] reads one class beyond the bucket: a [TICK]
+ * never spends the last share of a window.
  */
-internal enum class FrameClass { BOOTSTRAP, GOSSIP, DM, ROOM }
+internal enum class FrameClass { BOOTSTRAP, GOSSIP, DM, ROOM, TICK }
 
 /** A whole frame queued for the LoRa hop: its already-encoded fragment messages, a diagnostic label, its class. */
 internal class OutboundFrame(

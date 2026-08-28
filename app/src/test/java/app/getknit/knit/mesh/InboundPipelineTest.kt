@@ -263,6 +263,8 @@ class InboundPipelineTest {
         val groupRatchetStore = GroupRatchetRepository(db.groupRatchetDao())
         val groupRatchet = GroupRatchetSessions(store = groupRatchetStore, mutex = ratchetMutex)
         val originated = mutableListOf<RelayEnvelope>()
+        val dmFlushes = mutableListOf<Pair<String, List<String>>>()
+        val dmAcks = DmAckCoalescer(now = { nowMs }, flush = { a, ids -> dmFlushes += a to ids })
 
         /**
          * The pipeline's clock. Fixed by default so every existing test behaves exactly as before; a test
@@ -339,6 +341,7 @@ class InboundPipelineTest {
                     groupRatchet = groupRatchet,
                     clock = { nowMs },
                     originate = { originated += it },
+                    dmAcks = dmAcks,
                     flushPending = { flushed += it },
                     classifyText = { _, _, _ -> if (failClassify) error("moderation boom") else false },
                     resealUnacked = { resealed += it },
@@ -3005,6 +3008,95 @@ class InboundPipelineTest {
             // Sealed-era custody contract: the delivered DM stays in our own custody (nobody purges;
             // it ages out on the TTL with every carrier's copy — that convergence IS the retirement).
             assertTrue(rig.forwardStore.has("v2-cap1"))
+        }
+
+    /**
+     * ADR 054: a DM off the board holds its ✓✓ for the coalescer — no instant seal, one id however many
+     * copies re-deliver inside the hold — and the batch flushes once as one tick when the hold runs out.
+     */
+    @Test
+    fun aDmHeardOverLoraHoldsItsReceiptThenTicksOnce() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("lora-1", "hello from the hills"), kind = TransportKind.LoRa)
+
+            assertEquals("hello from the hills", rig.msgMap["lora-1"]?.body)
+            assertTrue("no instant receipt", rig.originated.none { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+            assertEquals(0L, rig.metrics.snapshot().receiptsSealed)
+            assertEquals(1L, rig.metrics.snapshot().loraTickDeferred)
+            assertEquals(listOf("lora-1"), rig.dmAcks.pending(alice.nodeId))
+
+            // A second DM joins the batch; a re-delivery of the first (the exists-gate) adds nothing.
+            rig.deliver(alice, author.dm("lora-2", "still here"), kind = TransportKind.LoRa)
+            rig.deliver(alice, author.dm("lora-1", "hello from the hills"), kind = TransportKind.LoRa)
+            assertEquals(listOf("lora-1", "lora-2"), rig.dmAcks.pending(alice.nodeId))
+            assertEquals(3L, rig.metrics.snapshot().loraTickDeferred)
+
+            rig.nowMs += DmAckCoalescer.HOLD_MS
+            rig.dmAcks.flushDue()
+            assertEquals(listOf(alice.nodeId to listOf("lora-1", "lora-2")), rig.dmFlushes)
+            assertTrue(rig.dmAcks.pending(alice.nodeId).isEmpty())
+        }
+
+    /** The hold is a LoRa-only trade: a DM off the phone radios keeps today's instant sealed receipt. */
+    @Test
+    fun aDmHeardOverBluetoothStillAcksInstantly() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+
+            rig.deliver(alice, V2Author(alice, rig).dm("ble-1", "next door"), kind = TransportKind.Bluetooth)
+
+            assertEquals(1L, rig.metrics.snapshot().receiptsSealed)
+            assertEquals(0L, rig.metrics.snapshot().loraTickDeferred)
+            assertTrue(rig.dmAcks.pending(alice.nodeId).isEmpty())
+        }
+
+    /** An author who cannot read a sealed receipt gets the cleartext one at once — there is nothing to coalesce. */
+    @Test
+    fun anIncapableAuthorsLoraDmKeepsTheInstantCleartextReceipt() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+
+            rig.deliver(alice, rig.dmChat(alice, rig.self, id = "lora-clear", body = "hi"), kind = TransportKind.LoRa)
+
+            assertTrue(rig.originated.any { it.type == FrameType.RECEIPT })
+            assertTrue(rig.dmAcks.pending(alice.nodeId).isEmpty())
+            assertEquals(0L, rig.metrics.snapshot().loraTickDeferred)
+        }
+
+    /**
+     * ADR 054's piggyback, receive side: a plain sealed DM's `acks` flip our ticks under the same forged-ack
+     * guard as a `CTL_RECEIPT` (an id addressed to someone else never flips), and a re-delivered copy never
+     * re-applies them — the exists-gate stops it before the decrypt.
+     */
+    @Test
+    fun aPlainDmCarryingInlineAcksFlipsThoseTicksUnderTheForgedAckGuard() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val author = V2Author(alice, rig)
+            rig.msgMap["dm-out"] =
+                MessageEntity(id = "dm-out", senderId = rig.self.nodeId, recipientId = alice.nodeId, body = "", sentAt = 1L)
+            rig.msgMap["dm-x"] =
+                MessageEntity(id = "dm-x", senderId = rig.self.nodeId, recipientId = "someone-else", body = "", sentAt = 1L)
+
+            rig.deliver(alice, author.dm("reply-1", "thanks", acks = listOf("dm-out", "dm-x")))
+
+            assertEquals("thanks", rig.msgMap["reply-1"]?.body)
+            coVerify(exactly = 1) { rig.messages.markReceived("dm-out", DeliveryPlane.Nearby) }
+            coVerify(exactly = 0) { rig.messages.markReceived("dm-x", any()) }
+
+            rig.deliver(alice, author.dm("reply-1", "thanks", acks = listOf("dm-out", "dm-x")))
+            coVerify(exactly = 1) { rig.messages.markReceived("dm-out", any()) }
         }
 
     @Test

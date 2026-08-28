@@ -559,7 +559,7 @@
     <string name="lora_bridge_title">Bridge distant groups</string>
     <string name="lora_bridge_subtitle">Pass on messages between groups too far apart to reach each other, including ones you did not send, using a small capped share of airtime. Off, you also stop receiving what you missed.</string>
     <string name="lora_role_passive">Another Knit board nearby is bridging — this one is listening</string>
-    <string name="lora_airtime">Airtime %1$d%% of this hour\'s budget</string>
+    <string name="lora_airtime">Airtime %1$d%% of the current budget</string>
     <string name="lora_radio_config">Radio %1$s</string>
 
     <string name="lora_summary_off">Off</string>
@@ -613,6 +613,9 @@
     <string name="chat_lora_only_dms_off">In LoRa range only — private messages over LoRa are off</string>
     <string name="chat_lora_only_dms_off_title">Private messages over LoRa are off</string>
     <string name="chat_lora_only_dms_off_body">%1$s was last heard over the LoRa radio, not Wi-Fi or Bluetooth, and private messages are set to stay on the phone-to-phone radios. Turn on “Private messages over LoRa” in LoRa radio settings to reach them now.</string>
+    <string name="chat_lora_saturated">Over LoRa only — airtime is used up, messages are delayed</string>
+    <string name="chat_lora_saturated_title">LoRa airtime is used up</string>
+    <string name="chat_lora_saturated_body">%1$s can only be reached over the LoRa radio, and the radio has used its share of the airwaves for now. New messages wait their turn and arrive over the next few minutes; delivery ticks may take longer still.</string>
     <string name="chat_lora_long_message">Long message — it may not reach people over LoRa</string>
 
     <!-- Message details ("Message info", from a message's long-press menu) -->

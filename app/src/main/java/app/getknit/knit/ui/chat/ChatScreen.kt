@@ -904,16 +904,17 @@ internal fun ChatScreenContent(
     }
 
     if (showLoraInfo) {
-        val dmsOff = state.loraReach == LoraReach.LoraOnlyDmsOff
+        val (loraTitle, loraBody) =
+            when (state.loraReach) {
+                LoraReach.LoraOnlyDmsOff -> R.string.chat_lora_only_dms_off_title to R.string.chat_lora_only_dms_off_body
+                LoraReach.LoraOnlySaturated -> R.string.chat_lora_saturated_title to R.string.chat_lora_saturated_body
+                LoraReach.LoraOnly, LoraReach.Silent -> R.string.chat_lora_only_title to R.string.chat_lora_only_body
+            }
         AlertDialog(
             onDismissRequest = { showLoraInfo = false },
             icon = { Icon(Icons.Outlined.Sensors, contentDescription = null) },
-            title = {
-                Text(stringResource(if (dmsOff) R.string.chat_lora_only_dms_off_title else R.string.chat_lora_only_title))
-            },
-            text = {
-                Text(stringResource(if (dmsOff) R.string.chat_lora_only_dms_off_body else R.string.chat_lora_only_body, state.title))
-            },
+            title = { Text(stringResource(loraTitle)) },
+            text = { Text(stringResource(loraBody, state.title)) },
             confirmButton = {
                 TextButton(onClick = { showLoraInfo = false }) {
                     Text(stringResource(R.string.action_close))
@@ -1018,6 +1019,7 @@ private fun LoraNotice(
         when (reach) {
             LoraReach.LoraOnly -> R.string.chat_lora_only
             LoraReach.LoraOnlyDmsOff -> R.string.chat_lora_only_dms_off
+            LoraReach.LoraOnlySaturated -> R.string.chat_lora_saturated
             LoraReach.Silent -> return
         }
     Surface(

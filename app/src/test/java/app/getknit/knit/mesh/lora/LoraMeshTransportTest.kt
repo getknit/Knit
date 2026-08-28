@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.lora
 
+import app.getknit.knit.mesh.FanoutHint
 import app.getknit.knit.mesh.InboundFrame
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.Peer
@@ -29,6 +30,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // one rig, many scenarios — splitting it would duplicate the rig, not clarify
 class LoraMeshTransportTest {
     private var sigCounter = 0
 
@@ -251,7 +253,8 @@ class LoraMeshTransportTest {
 
             // A custody re-serve: a room post / DM stamped 20 min ago re-enters the pipeline and is re-fanned.
             a.transport.fastFanout(frame(FrameType.CHAT, "carol", body = "old room post", sentAt = 0L))
-            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "alice", body = "old dm", sentAt = 0L))
+            // (Addressed to a third party: a DM to *us* is refused by the recipient gate before freshness is asked.)
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "dave", body = "old dm", sentAt = 0L))
             advanceTimeBy(4_000)
             runCurrent()
             assertEquals("stale chat never rides a live plane", baseline, a.link.sent.size)
@@ -264,7 +267,7 @@ class LoraMeshTransportTest {
             assertEquals("an old profile still rides", baseline + 1, a.link.sent.size)
 
             val now = testScheduler.currentTime
-            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "alice", body = "fresh dm", sentAt = now))
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "dave", body = "fresh dm", sentAt = now))
             advanceTimeBy(4_000)
             runCurrent()
             assertEquals("a fresh DM rides", baseline + 2, a.link.sent.size)
@@ -733,6 +736,87 @@ class LoraMeshTransportTest {
             assertTrue("the clock cap was never hit", reads <= SPIN_CAP)
             a.transport.stop()
             scope.cancel()
+        }
+
+    /**
+     * The recipient gate (ADR 054). A DM-form frame whose recipient a higher-preference plane holds a live
+     * link to — or who is us — already has a data path, so it must not spend LoRa air: before this, texting a
+     * pocket-mate over Bluetooth spent the whole airtime budget on DMs and ✓✓s nobody needed over the board,
+     * and a far peer then went without. A *sighting* is not coverage (the field lesson of ADR 044's amendment).
+     */
+    @Test
+    fun aDmFormFrameToALinkedPeerOrToSelfNeverRidesTheFanOut() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+            val afterBeacon = a.link.sent.size
+
+            // bob is on a live BLE/NAN link: our DM to him and a relayed ✓✓ toward him both stay off the air,
+            // as does a DM addressed to us that the composite re-fans on relay (we are its only reader).
+            a.transport.suppressDataPath(setOf("bob"))
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "sealed"))
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "bob", body = "sealed tick"))
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "alice", body = "sealed"))
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertEquals("nothing on the air for a linked or self recipient", afterBeacon, a.link.sent.size)
+            assertEquals(3L, a.metrics.snapshot().loraSkippedLinked)
+            assertEquals("the sig dedup slot was not burned", 0L, a.metrics.snapshot().loraSuppressed)
+
+            // A sighting is not a link: the same DM to a merely-sighted bob rides.
+            a.transport.suppressDataPath(emptySet())
+            a.transport.onForeignReachable(setOf("bob"))
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "sealed"))
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertTrue("a DM to a sighted-but-unlinked peer rides", a.link.sent.size > afterBeacon)
+            assertEquals(1L, a.metrics.snapshot().loraDmSent)
+
+            // The room is addressed to nobody and the gate never touches it.
+            val beforeRoom = a.link.sent.size
+            a.transport.suppressDataPath(setOf("bob"))
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "room post"))
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertTrue("a room post still rides", a.link.sent.size > beforeRoom)
+            a.transport.stop()
+        }
+
+    /**
+     * The originator's [FanoutHint.TICK] lands as [FrameClass.TICK] (ADR 054): with the queue full, a DM evicts a
+     * hinted tick, and a tick arriving behind a DM yields — while the same bytes without the hint are DM class
+     * and stand their ground. A relayed frame never carries the hint, so the plane never guesses.
+     */
+    @Test
+    fun aHintedTickIsTheFirstThingAFullQueueGivesUp() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val pace = LoraPacePolicy(minGapMs = 0, queueCap = 1)
+            val a = rig(air, 1u, "alice", backgroundScope, pace = pace) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(5_000) // the profile beacon drains
+            runCurrent()
+            // Hold the board's queue full so nothing leaves the pacer while the two frames meet.
+            pace.onQueueStatus(0)
+
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "tick"), FanoutHint.TICK)
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "dm"))
+            assertEquals("the DM evicted the tick", 1L, a.metrics.snapshot().loraDroppedQueue)
+            assertEquals(1, pace.pending)
+
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "tick 2"), FanoutHint.TICK)
+            assertEquals("a tick behind a DM yields", 2L, a.metrics.snapshot().loraDroppedQueue)
+
+            // The same bytes without the hint are content: within one class the oldest goes, so the newcomer stays.
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "bob", body = "relayed dm-form"))
+            assertEquals(3L, a.metrics.snapshot().loraDroppedQueue)
+            assertEquals(1, pace.pending)
+            a.transport.stop()
         }
 
     private companion object {

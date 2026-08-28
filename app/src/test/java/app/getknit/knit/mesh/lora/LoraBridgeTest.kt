@@ -240,6 +240,40 @@ class LoraBridgeTest {
             )
         }
 
+    /**
+     * The recipient gate on the bridge (ADR 054): a DM-form frame addressed to a peer this gateway holds a
+     * live link to — or to the gateway itself — is never served across, however the far offer reads. The far
+     * pocket would only ever be a carrier for it, and the link (or our own inbox) already has it.
+     */
+    @Test
+    fun theBridgeNeverServesADmFormFrameItsAddresseeAlreadyHolds() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            a.transport.suppressDataPath(setOf("a2")) // a2 is on a live link in pocket A
+            runCurrent()
+
+            val toLinked = frame("a3", body = "dm for a2", recipientId = "a2")
+            val toSelf = frame("a3", body = "dm for alice", recipientId = "alice")
+            val toFar = frame("a3", body = "dm for b2", recipientId = "b2")
+            val room = frame("a3", body = "room post")
+            a.custody.held += listOf(toLinked, toSelf, toFar, room)
+
+            advanceTimeBy(toFirstOffer)
+            runCurrent()
+            advanceTimeBy(30_000)
+            runCurrent()
+
+            assertTrue("the DM for a far peer crosses", b.received.any { it.envelope.id == idOf(toFar) })
+            assertTrue("the room post crosses", b.received.any { it.envelope.id == idOf(room) })
+            assertFalse("the DM for a linked peer stays off the air", b.received.any { it.envelope.id == idOf(toLinked) })
+            assertFalse("the DM for the gateway itself stays off the air", b.received.any { it.envelope.id == idOf(toSelf) })
+            assertEquals(2L, a.metrics.snapshot().loraSkippedLinked)
+        }
+
     @Test
     fun theBridgeServesOnlyWhatTheOfferDoesNotName() =
         runTest {

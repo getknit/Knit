@@ -68,6 +68,9 @@ land atomically; a crash re-processes cleanly on re-serve):
   recipient received it". The one asymmetry to preserve: the **row** is gated on roster membership
   (`InboundPipeline.ackerFor`) because the null arm would otherwise let any signed node write itself into
   that list; the **tick** is not, and must never inherit that gate.
+- A **plain** sealed DM chat may carry `acks` too — the inline form (ADR 054, gated on the author having seen
+  our `CAP_INLINE_ACK`): applied per id under the same guard, in the same commit as the message row, once per
+  frame (the exists-gate stops a re-delivery before the decrypt, so nothing re-applies).
 - `CTL_REACTION` → `ReactionRepository.apply(messageId, sender, emoji, frame.sentAt)` — the same
   table and the same LWW clock as the cleartext path, so mixed-form retract/replace races converge
   regardless of which form each emit rode. Orphan-permissive (target may not have arrived; the 24 h
@@ -109,6 +112,8 @@ the purge left zero), bounded by the existing quotas (1000 global / 200 per send
 | Context | Condition | Receipt | Reaction |
 |---|---|---|---|
 | DM, author/peer capable | pinned bundle + `CAP_RATCHET` (+ prekey/session for the seal) | sealed ctl DM, `relay = true`, flooded + custodied, `sentAt` stamped (custody derives expiry from it) | sealed ctl DM, `relay = true` |
+| DM **delivered over the LoRa plane**, author capable (ADR 054) | as above, `DeliveryPlane.LoRa` | held ≤ 45 s in `DmAckCoalescer` (re-deliveries fold in), then ONE sealed ctl DM (`ack`/`acks`, ≤ 12 ids) originated `relay = true`, hinted `TICK`; a failed seal falls back per id to the cleartext receipt | as above |
+| DM delivered over LoRa, and we reply within the hold | author's profile carries `CAP_INLINE_ACK` | up to 4 ids ride **inline** as `acks` on the plain sealed reply (v2 arm only; 23 B each reserved out of the LoRa body budget); no standalone tick | — |
 | DM, incapable / seal failed | — | cleartext receipt (still purges everywhere, incl. self-vaccinate) | cleartext reaction |
 | Group message delivered | author capable, live-linked | sealed single-ack ctl DM over the link: `relay = false`, sealed **once**, never custodied | — |
 | Group message delivered | author capable, absent | acks batch per author (≤64, 45 s debounce), then ONE sealed ctl DM (`acks`) **originated `relay = true`** — flooded + custodied + spool-eligible (ADR 033) | — |
@@ -180,5 +185,9 @@ the gate) — exactly as their undecryptable group chats already do since the gr
 | tick seal budget | 1 chain key per owed tick / per escalated batch | AckSync seal-once cache; ≤500 owed entries / 24 h |
 | `TICK_BATCH_DEBOUNCE_MS` | 45 s | how long an absent author's acks accumulate before escalating (heal is the backstop) |
 | `MAX_BATCH_ACKS` | 64 | ids per escalated tick (overflow flushes early); receiver applies ≤ 2× (128) |
+| `DmAckCoalescer.HOLD_MS` | 45 s | how long a LoRa-delivered DM's receipt waits for company (ADR 054; `heal` is the backstop) |
+| `DmAckCoalescer.MAX_LORA_TICK_ACKS` | 12 | ids per coalesced DM tick — pinned to fit 3 LoRa packets at the ESP32 cap |
+| `MAX_INLINE_ACKS` / `INLINE_ACK_BYTES` | 4 / 23 B | ids one reply carries inline, and what each costs out of the composer's LoRa body budget |
+| `Protocol.CAP_INLINE_ACK` | `0x40` | the receiver applies `acks` on a plain sealed DM (append-only bit) |
 | pending / escalated ledgers | ≤500 ids / ≤1000 ids, 24 h | in-memory, evict-oldest; loss = one benign duplicate |
 | ack tombstone (cleartext era) | 24 h | unchanged `ForwardSync` |

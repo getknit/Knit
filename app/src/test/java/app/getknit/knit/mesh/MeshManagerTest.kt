@@ -112,6 +112,7 @@ class MeshManagerTest {
     private class RecordingTransport : MeshTransport {
         val sent = mutableListOf<Pair<WireEnvelope, Peer?>>()
         val longRangeFanouts = mutableListOf<WireEnvelope>()
+        val longRangeHints = mutableListOf<FanoutHint>()
         override val neighbors = MutableStateFlow<Set<Peer>>(emptySet()).asStateFlow()
         override val health = MutableStateFlow(TransportHealth.Healthy).asStateFlow()
         override val inbound = MutableSharedFlow<InboundFrame>().asSharedFlow()
@@ -130,8 +131,12 @@ class MeshManagerTest {
             sent += wire to to
         }
 
-        override fun longRangeFanout(wire: WireEnvelope) {
+        override fun longRangeFanout(
+            wire: WireEnvelope,
+            hint: FanoutHint,
+        ) {
             longRangeFanouts += wire
+            longRangeHints += hint
         }
 
         override suspend fun sendFile(
@@ -708,6 +713,121 @@ class MeshManagerTest {
                 updatedAt = 1L,
             )
     }
+
+    /** Pins [p] with an explicit capability set plus a prekey — for the inline-ack gate (ADR 054). */
+    private fun Rig.pinWithCaps(
+        p: Party,
+        prekeyPub: ByteArray,
+        capabilities: Long,
+    ) {
+        coEvery { peers.find(p.nodeId) } returns
+            PeerEntity(
+                nodeId = p.nodeId,
+                pubKey = p.bundle.encoded,
+                capabilities = capabilities,
+                prekeyId = 1,
+                prekeyPub = b64(prekeyPub),
+                prekeyProfileAt = 1L,
+                updatedAt = 1L,
+            )
+    }
+
+    /** ADR 054: LoRa-held receipts flush as ONE originated sealed tick, hinted TICK for the board, counted as coalesced. */
+    @Test
+    fun heldLoraReceiptsFlushAsOneHintedTick() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            rig.manager.dmAcks.hold(rig.bob.nodeId, "in-1")
+            rig.manager.dmAcks.hold(rig.bob.nodeId, "in-2")
+            rig.clockNow += DmAckCoalescer.HOLD_MS
+            rig.manager.dmAcks.flushDue()
+            advanceUntilIdle()
+
+            val tick = rig.sentChatFrames().single()
+            assertEquals(rig.bob.nodeId, tick.recipientId)
+            assertEquals(listOf(FanoutHint.TICK), rig.transport.longRangeHints)
+            assertEquals(1L, rig.metrics.snapshot().receiptsCustodied)
+            assertEquals(1L, rig.metrics.snapshot().receiptsCoalesced)
+            assertTrue(
+                rig.manager.dmAcks
+                    .pending(rig.bob.nodeId)
+                    .isEmpty(),
+            )
+        }
+
+    /**
+     * ADR 054's piggyback: a DM to a peer that reads inline acks carries the receipts we owe it inside the
+     * ciphertext (the only place they can go), and takes them out of the coalescer so no tick follows; a peer
+     * whose profile lacks the bit is never sent one and keeps its standalone tick.
+     */
+    @Test
+    fun aDmToAnInlineAckCapablePeerCarriesThePendingAcksAndOneWithoutTheBitDoesNot() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            assertTrue(rig.manager.sendChat("plain", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+            val bare =
+                WireCodec
+                    .decodePayload<ChatContent>(rig.sentChatFrames().last().payload)!!
+                    .enc!!
+                    .ct.size
+
+            // Real-length ids: the size check below is what pins INLINE_ACK_BYTES to the wire.
+            rig.manager.dmAcks.hold(rig.bob.nodeId, "in-1".padEnd(22, 'x'))
+            rig.manager.dmAcks.hold(rig.bob.nodeId, "in-2".padEnd(22, 'x'))
+            assertTrue(rig.manager.sendChat("plain", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+            val carrying =
+                WireCodec
+                    .decodePayload<ChatContent>(rig.sentChatFrames().last().payload)!!
+                    .enc!!
+                    .ct.size
+            val grew = carrying - bare
+            // Two 22-char ids plus the `acks` key and array header — nothing else in the frame changed.
+            assertTrue("the two ids ride inside the ciphertext (+$grew B)", grew in 2 * INLINE_ACK_BYTES..2 * INLINE_ACK_BYTES + 12)
+            assertTrue(
+                "taken out of the coalescer — no standalone tick will follow",
+                rig.manager.dmAcks
+                    .pending(rig.bob.nodeId)
+                    .isEmpty(),
+            )
+            assertEquals(2L, rig.metrics.snapshot().receiptsCoalesced)
+            assertEquals("a reply is content, never a tick", listOf(FanoutHint.CONTENT, FanoutHint.CONTENT), rig.transport.longRangeHints)
+
+            val carol = party()
+            rig.pinWithCaps(carol, RatchetCrypto.generateKeyPair().pub, Protocol.LOCAL_CAPABILITIES and Protocol.CAP_INLINE_ACK.inv())
+            rig.manager.dmAcks.hold(carol.nodeId, "c-1")
+            assertTrue(rig.manager.sendChat("plain", recipientId = carol.nodeId))
+            advanceUntilIdle()
+            assertEquals(listOf("c-1"), rig.manager.dmAcks.pending(carol.nodeId))
+            assertEquals(2L, rig.metrics.snapshot().receiptsCoalesced)
+        }
+
+    /** A seal that falls back to v1 cannot carry inline acks (a v1 reader never looks): they go back to the coalescer. */
+    @Test
+    fun aV1FallbackGivesTheInlineAcksBack() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            // Capability bits without a pinned prekey: the seal falls back to v1 (the AND-gate case).
+            coEvery { rig.peers.find(rig.bob.nodeId) } returns
+                PeerEntity(
+                    nodeId = rig.bob.nodeId,
+                    pubKey = rig.bob.bundle.encoded,
+                    capabilities = Protocol.LOCAL_CAPABILITIES,
+                    updatedAt = 1L,
+                )
+            rig.manager.dmAcks.hold(rig.bob.nodeId, "in-1")
+
+            assertTrue(rig.manager.sendChat("careful", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+
+            val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
+            assertEquals(1, enc.v)
+            assertEquals("given back for the standalone tick", listOf("in-1"), rig.manager.dmAcks.pending(rig.bob.nodeId))
+            assertEquals(0L, rig.metrics.snapshot().receiptsCoalesced)
+        }
 
     @Test
     fun aDmToARatchetCapablePeerSealsV2() =

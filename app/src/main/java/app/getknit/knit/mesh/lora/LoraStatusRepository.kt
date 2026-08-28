@@ -36,7 +36,15 @@ internal class LoraStatusRepository(
                     plane = plane,
                     dms = enabled && dms,
                     battery = status.battery.takeIf { plane == LoraPlane.Live },
+                    airtimeSpent = plane == LoraPlane.Live && status.airtime?.let(::saturated) == true,
                 )
             }.distinctUntilChanged()
         }
+
+    private fun saturated(air: AirtimeSnapshot): Boolean = air.liveUsedMs + air.bridgeUsedMs >= air.liveBudgetMs * AIRTIME_SPENT_SHARE
+
+    companion object {
+        /** How full the window must be before a LoRa-only DM is told it will wait — a whole packet short of refusal. */
+        const val AIRTIME_SPENT_SHARE = 0.9
+    }
 }

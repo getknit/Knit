@@ -42,6 +42,17 @@ class LoraReachTest {
     }
 
     @Test
+    fun `with the airtime window spent a LoRa-only DM is told it will wait`() {
+        val spent = LoraFacts(LoraPlane.Live, dms = true, airtimeSpent = true)
+        assertEquals(LoraReach.LoraOnlySaturated, loraReachFor("ana", spent, boardOnly, RelayReach.Silent))
+        // Only where the LoRa-only notice would have shown: a better carrier or the room still says nothing…
+        assertEquals(LoraReach.Silent, loraReachFor("ana", spent, setOf(TransportKind.LoRa, TransportKind.Bluetooth), RelayReach.Silent))
+        assertEquals(LoraReach.Silent, loraReachFor(Conversations.NEARBY, spent, boardOnly, RelayReach.Room))
+        // …and the DMs-off notice outranks it (nothing is going out at all, spent or not).
+        assertEquals(LoraReach.LoraOnlyDmsOff, loraReachFor("ana", spent.copy(dms = false), boardOnly, RelayReach.Silent))
+    }
+
+    @Test
     fun `a draft rides LoRa as a room post or a DM, never in a group or with the switch off`() {
         assertEquals(LoraCarry.Room, loraCarryFor(Conversations.NEARBY, isGroup = false, facts = live))
         assertEquals(LoraCarry.Dm, loraCarryFor("ana", isGroup = false, facts = live))

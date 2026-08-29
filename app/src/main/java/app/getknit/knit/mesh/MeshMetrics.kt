@@ -206,6 +206,7 @@ class MeshMetrics {
     private val loraDmSent = AtomicLong()
     private val loraDmReceived = AtomicLong()
     private val loraReoffered = AtomicLong()
+    private val loraProfileRefanSkipped = AtomicLong()
     private val loraOfferSent = AtomicLong()
     private val loraOfferReceived = AtomicLong()
     private val loraBridged = AtomicLong()
@@ -564,6 +565,15 @@ class MeshMetrics {
         loraReoffered.incrementAndGet()
     }
 
+    /**
+     * A relayed `profile` the fan-out declined to put on the air again: the same publish already rode this
+     * plane inside the re-fan window (ADR 057). Against [loraSent] this is the measure of the redundancy
+     * that made profiles 79 % of one lab gateway's LoRa traffic.
+     */
+    fun onLoraProfileRefanSkipped() {
+        loraProfileRefanSkipped.incrementAndGet()
+    }
+
     /** A gossip OFFER we published — one packet naming the custody window this gateway holds (ADR 044). */
     fun onLoraOfferSent() {
         loraOfferSent.incrementAndGet()
@@ -678,6 +688,7 @@ class MeshMetrics {
             loraDmSent = loraDmSent.get(),
             loraDmReceived = loraDmReceived.get(),
             loraReoffered = loraReoffered.get(),
+            loraProfileRefanSkipped = loraProfileRefanSkipped.get(),
             loraOfferSent = loraOfferSent.get(),
             loraOfferReceived = loraOfferReceived.get(),
             loraBridged = loraBridged.get(),
@@ -756,6 +767,7 @@ class MeshMetrics {
         val loraDmSent: Long = 0,
         val loraDmReceived: Long = 0,
         val loraReoffered: Long = 0,
+        val loraProfileRefanSkipped: Long = 0,
         val loraOfferSent: Long = 0,
         val loraOfferReceived: Long = 0,
         val loraBridged: Long = 0,

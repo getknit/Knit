@@ -116,8 +116,7 @@ at 30 %, so backfill degrades before live chat does; `AirBucket.BOOTSTRAP` (a li
 relayed — paired to `FrameClass.BOOTSTRAP` by `AirBucket.defaultFor`) is capped at 25 % and is the **one class
 judged outside the total**, so the key bootstrap still rides a spent window (ADR 056). It used to be admitted
 unconditionally *and* recorded, which is a budget with no floor: on the lab gateway 79 % of every LoRa frame
-ever sent was a profile, because a relayed one is gated only by the 10-minute signature dedup and
-`MeshRouter`'s SeenSet lapses on the same 10 minutes. A backfilled profile stays on `BRIDGE` — re-served
+ever sent was a profile (see the re-fan gate below). A backfilled profile stays on `BRIDGE` — re-served
 history, not bootstrap. `FrameClass.TICK` (our own delivery receipts, see Pacing) never spends the last 25 %
 of a window. Region + preset
 are read off the board (`FromRadio.config` → `Config.LoRaConfig`, pinned by `MeshtasticProtoTest`; conservative
@@ -139,6 +138,18 @@ re-serve — no wire change, no custody rule touched. `SettingsStore.loraBridgeE
 **Multi-hop is Meshtastic's job.** A frame injected at a far gateway can't be re-transmitted (sig dedup) and a
 second board there is PASSIVE, so a third pocket is reached by the board's own 3-hop flood, not by a second
 phone-level send.
+
+**One fan-out per publish (ADR 057).** A relayed `profile` used to be gated only by `sigSeen`, whose 10-minute
+TTL matches `MeshRouter`'s SeenSet — so a profile that kept arriving looked first-seen again on every lapse and
+re-fanned forever (`isFresh` exempts profiles from the staleness check on purpose: a profile's `sentAt` is a
+publish stamp, hours old by design). A second set, `profileSeen`, keyed on the **frame id** (stable per publish,
+new on republish) with `PROFILE_REFAN_MS` = 12 h = `MeshManager.PROFILE_REPUBLISH_MS`, now holds it. Checked
+before `sigSeen` and after `encodeOrNull` — a held profile must leave the signature slot free for the backfill,
+and an unencodable frame must not consume a window it never rode. `serveOne` is deliberately **not** gated:
+the digest-driven backfill is what repairs a genuinely lost profile now (this plane refuses `keyreq`, so a far
+pocket cannot ask). Our own `sendSelfProfile` beacon is not gated either — its 5-min floor and 60-s
+first-hearing gap are event-driven, and "a new listener appeared" is exactly when re-sending is the point.
+Counter: `loraProfileRefanSkipped`.
 
 ## Pacing
 
@@ -380,7 +391,8 @@ where no other Knit board is listening. Set the Meshtastic app's device to **Non
   `--ez on <true|false>`, `--ez bridge <true|false>`; no extras dumps
   `state/boardNodeNum/snr/rssi/queueFree/heard/role/pocketLinks/pocketSightings/gatewaysHeard/radio/airtime/counters`
   (`airtime` carries `liveMs`/`bridgeMs`/`bootstrapMs` against their budgets — `loraSent − loraDmSent −
-  loraOfferSent` is the profile + room count, and profiles are the fragmented ones). It is the
+  loraOfferSent` is the profile + room count, and profiles are the fragmented ones; `loraProfileRefanSkipped`
+  against `loraSent` is the re-fan redundancy). It is the
   two-board oracle. `…debug.LORATX --es text <s>` sends a raw payload straight to the board (board-side
   sanity via `meshtastic --noproto`). `…debug.LORAPROV` sets the board up headlessly; `--es mode restore` undoes it.
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips

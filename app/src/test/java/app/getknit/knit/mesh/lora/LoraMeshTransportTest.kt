@@ -682,6 +682,47 @@ class LoraMeshTransportTest {
         }
 
     /**
+     * ADR 057. A relayed `profile` was gated only by [LoraMeshTransport.SIG_TTL_MS] — the same 10 minutes as
+     * `MeshRouter`'s SeenSet — so a profile that kept arriving looked first-seen again on every lapse and
+     * re-fanned indefinitely. `LoraFramePolicy.isFresh` exempts a profile from the staleness check (its
+     * `sentAt` is a publish stamp, hours old by design), so nothing else stopped it either. Now it rides once
+     * per **publish**, and a republish — which mints a new frame id — rides on its own merits.
+     */
+    @Test
+    fun aProfileIsFannedOncePerPublishNotOnEverySeenSetLapse() =
+        runTest {
+            val a = rig(FakeMeshtasticAir(), 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+
+            val published = frame(FrameType.PROFILE, "carol", body = "x".repeat(20))
+            var before = a.link.sent.size
+            a.transport.fastFanout(published)
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("a profile rides the first time it is seen", before + 1, a.link.sent.size)
+
+            // Past the flood-suppression window: this is where the old behaviour started over, and over.
+            advanceTimeBy(LoraMeshTransport.SIG_TTL_MS + 60_000)
+            runCurrent()
+            before = a.link.sent.size
+            a.transport.fastFanout(published)
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("the same publish is not put back on the air", before, a.link.sent.size)
+            assertEquals(1L, a.metrics.snapshot().loraProfileRefanSkipped)
+            assertEquals("and it is not counted as an ordinary dedup", 0L, a.metrics.snapshot().loraSuppressed)
+
+            // A republish stamps a new frame id, so it is a different fact and rides.
+            before = a.link.sent.size
+            a.transport.fastFanout(frame(FrameType.PROFILE, "carol", body = "x".repeat(20)))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("a republished profile still rides", before + 1, a.link.sent.size)
+            a.transport.stop()
+        }
+
+    /**
      * ADR 056. A relayed `profile` is the key bootstrap, so it is judged outside the window's total — but it
      * has its own share, and once that is gone it waits like anything else. Before the cap, `admits` returned
      * true for every BOOTSTRAP frame *and* recorded it, so a profile re-fanned on each SeenSet lapse could

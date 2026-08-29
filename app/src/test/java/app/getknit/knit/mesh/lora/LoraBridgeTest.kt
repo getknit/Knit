@@ -274,6 +274,47 @@ class LoraBridgeTest {
             assertEquals(2L, a.metrics.snapshot().loraSkippedLinked)
         }
 
+    /**
+     * ADR 057 stops the fan-out re-offering a profile publish it has already put on the air. That must not
+     * take the *repair* path with it: a far gateway whose offer says it lacks a profile still has to be
+     * served one, or a pocket that came up after the fan-out never gets a key it cannot ask for (the
+     * plane refuses `keyreq`). `serveOne` is deliberately not gated on the publish dedup.
+     */
+    @Test
+    fun theBridgeStillServesAProfileTheFanOutHasStoppedReOffering() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+
+            // The fan-out puts carol's profile on the air once, to a horizon that is currently empty, and
+            // then holds that publish back however many times it is re-offered (ADR 057).
+            val carol = frame("carol", type = FrameType.PROFILE, body = "p")
+            a.custody.held += carol
+            a.transport.fastFanout(carol)
+            advanceTimeBy(4_000)
+            runCurrent()
+            a.transport.fastFanout(carol)
+            runCurrent()
+            assertEquals("the fan-out stops re-offering the same publish", 1L, a.metrics.snapshot().loraProfileRefanSkipped)
+
+            // A far pocket comes up afterwards, having never heard it — and cannot ask for it, since this
+            // plane refuses `keyreq`. Its offer names what it holds, and the repair path must still answer.
+            // Past SIG_TTL_MS, the separate 10-minute gate the fan-out already consumed for this signature.
+            advanceTimeBy(LoraMeshTransport.SIG_TTL_MS + 60_000)
+            runCurrent()
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            b.transport.start()
+            runCurrent()
+            advanceTimeBy(toFirstOffer)
+            runCurrent()
+            advanceTimeBy(30_000)
+            runCurrent()
+
+            assertTrue("the backfill still repairs a profile a far pocket lacks", b.received.any { it.envelope.id == idOf(carol) })
+        }
+
     @Test
     fun theBridgeServesOnlyWhatTheOfferDoesNotName() =
         runTest {

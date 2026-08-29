@@ -56,8 +56,12 @@ import java.util.concurrent.atomic.AtomicLong
  * Key bootstrap over LoRa (the far side has never seen the author's profile) rides two paths: the mesh's
  * existing `watchReachable` reflood, plus a self-profile beacon this transport sends on session-up (under a
  * 5-min floor) and on first hearing a peer (under a 60-s gap, so a two-sided bootstrap completes without a
- * periodic beacon — [beaconProfile]). [clock] is monotonic (pacing, dedup, linger); [wallClock] is the
- * epoch clock a frame's `sentAt` is stamped in, read only by the freshness gate. Pure/Android-free — the
+ * periodic beacon — [beaconProfile]). A **relayed** profile is fanned once per publish ([profileSeen],
+ * ADR 057) rather than on every flood-dedup lapse, and repaired — when a far pocket really lacks one — by
+ * the bridge's digest-driven backfill rather than by re-offering it to everyone.
+ *
+ * [clock] is monotonic (pacing, dedup, linger); [wallClock] is the epoch clock a frame's `sentAt` is stamped
+ * in, read only by the freshness gate. Pure/Android-free — the
  * only `android.bluetooth.*` sits behind the [MeshtasticLink]/[MeshtasticGattDialer] seam.
  */
 @Suppress("TooManyFunctions", "LongParameterList")
@@ -108,6 +112,16 @@ internal class LoraMeshTransport(
     // re-calls fastFanout on relay), and (b) AckSync's verbatim 24 h tick retries are dropped inside the
     // receiver's own SeenSet window.
     private val sigSeen = SeenSet(ttlMillis = SIG_TTL_MS, clock = clock)
+
+    /**
+     * Profile publishes this plane has already put on the air, keyed on the frame id — which
+     * `MeshManager.currentProfileEnvelope` derives from the publish stamp, so it is stable for a publish and
+     * new for the next one. Separate from [sigSeen] because the two answer different questions on very
+     * different clocks: [sigSeen] asks "is this frame in flight right now" (10 min, the flood-suppression
+     * window), this one asks "does the LoRa horizon already have this profile" — and the answer holds until
+     * the author republishes. See [PROFILE_REFAN_MS] and ADR 057.
+     */
+    private val profileSeen = SeenSet(ttlMillis = PROFILE_REFAN_MS, clock = clock)
     private val fragSeq = AtomicInteger()
     private val reassembler = FragReassembler<UInt>(now = clock, capacity = FRAG_CAP, timeoutMs = FRAG_TIMEOUT_MS)
 
@@ -307,6 +321,14 @@ internal class LoraMeshTransport(
             return
         }
         val parts = encodeOrNull(wire, "$label:${env.type}") ?: return
+        // Checked before [sigSeen] deliberately: a profile held back here must leave the signature slot free,
+        // because the bridge's digest-driven backfill is the path that repairs a lost one and it takes that
+        // slot for itself (serveOne). Both come after encodeOrNull for the same reason — a frame that cannot
+        // be encoded must not consume a window it never rode.
+        if (env.type == FrameType.PROFILE && !profileSeen.add(env.id)) {
+            metrics.onLoraProfileRefanSkipped()
+            return
+        }
         if (!sigSeen.add(sigKey(wire))) {
             metrics.onLoraSuppressed() // already sent/received over LoRa within the window
             return
@@ -607,7 +629,13 @@ internal class LoraMeshTransport(
         log("lora bridge served=$served/$allowance to ${offer.publisher.toULong().toString(HEX)}")
     }
 
-    /** Enqueues one backfilled frame; false when it can't ride (too big, or already on the air this window). */
+    /**
+     * Enqueues one backfilled frame; false when it can't ride (too big, or already on the air this window).
+     *
+     * Deliberately **not** gated on [profileSeen]: this is the digest-driven repair path, so a far gateway
+     * that says it lacks a profile must be served one even though the fan-out has stopped re-offering it to
+     * the horizon at large (ADR 057). `LoraFramePolicy.backfillRank` already serves profiles first.
+     */
     private fun serveOne(wire: WireEnvelope): Boolean {
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return false
         if (coveredByLink(env)) {
@@ -893,6 +921,19 @@ internal class LoraMeshTransport(
         const val REACHABLE_LINGER_MS = 45 * 60_000L
         const val LINGER_SWEEP_MS = 60_000L
         const val PROFILE_FLOOR_MS = 5 * 60_000L
+
+        /**
+         * How long a profile publish that has ridden this plane is not re-fanned for — the author's own
+         * republish period (`MeshManager.PROFILE_REPUBLISH_MS`), because a republish mints a new frame id and
+         * rides on its own merits, so anything shorter only re-sends bytes the horizon already has.
+         *
+         * It was effectively 10 minutes, and not by design: a relayed profile was gated only by [sigSeen],
+         * whose TTL matches `MeshRouter`'s SeenSet, so a profile that kept arriving looked first-seen again on
+         * every lapse and re-fanned forever. `LoraFramePolicy.isFresh` exempts a profile from the staleness
+         * check (its `sentAt` is a publish stamp, hours old by design), so nothing else stopped it either. On
+         * the lab gateway that made profiles 79 % of every LoRa frame the phone had ever sent (ADR 057).
+         */
+        const val PROFILE_REFAN_MS = 12 * 60 * 60_000L
         const val FIRST_HEARING_GAP_MS = 60_000L
         const val NEVER = Long.MIN_VALUE
 

@@ -923,6 +923,7 @@ class DebugBridgeReceiver :
             .put("loraDmSent", snap.loraDmSent)
             .put("loraDmReceived", snap.loraDmReceived)
             .put("loraReoffered", snap.loraReoffered)
+            .put("loraProfileRefanSkipped", snap.loraProfileRefanSkipped)
             .put("loraOfferSent", snap.loraOfferSent)
             .put("loraOfferReceived", snap.loraOfferReceived)
             .put("loraBridged", snap.loraBridged)

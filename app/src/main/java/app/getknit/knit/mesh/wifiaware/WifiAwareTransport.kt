@@ -486,6 +486,18 @@ class WifiAwareTransport(
                 Log.w(TAG, "Wi-Fi Aware was abandoned under this build/ROM; not attaching until availability changes")
             }
             registerAvailability()
+            NanFaultInjector.bind(
+                onAvailability = ::handleAvailabilityChanged,
+                status = {
+                    NanAttachSnapshot(
+                        attached = session != null,
+                        streak = attachFailStreak,
+                        total = attachFailTotal,
+                        abandoned = attachAbandoned,
+                        retryInMs = (attachRetryAfter - SystemClock.elapsedRealtime()).coerceAtLeast(0L),
+                    )
+                },
+            )
             attach()
             loopJob = scope.launch { discoveryLoop() }
             powerJob = scope.launch { powerState.state.drop(1).collect { healSignal.trySend(Unit) } }
@@ -708,6 +720,7 @@ class WifiAwareTransport(
         diagJob?.cancel()
         watchdogJob?.cancel()
         unregisterAvailability()
+        NanFaultInjector.bind(onAvailability = null, status = null)
         peers.keys.toList().forEach { teardownPeer(it) }
         stopResponder()
         runCatching { publishSession?.close() }
@@ -890,6 +903,15 @@ class WifiAwareTransport(
                             if (mgr.isAvailable) TransportHealth.Degraded else TransportHealth.Unavailable
                     }
                 }
+            if (NanFaultInjector.shouldFailAttach()) {
+                // Debug builds only, and armed only by `…debug.NANFAIL` — see [NanFaultInjector]. Placed after
+                // attachStartedAt is stamped so the injected run is paced by the real floor, not around it.
+                attaching.set(false)
+                reattaching.set(false)
+                _health.value = TransportHealth.Degraded
+                noteAttachFailed("Wi-Fi Aware attach failed (debug fault)")
+                return@onHandler
+            }
             runCatching { mgr.attach(cb, handler) }.onFailure {
                 attaching.set(false)
                 reattaching.set(false)
@@ -2390,54 +2412,61 @@ class WifiAwareTransport(
                 context: Context,
                 intent: Intent,
             ) {
-                val mgr = awareManager ?: return
-                val available = mgr.isAvailable
-                val wasAvailable = lastAvailable
-                lastAvailable = available
-                if (available) {
-                    // While a deliberate session cycle settles, the loop owns the re-attach — an early attach
-                    // here is the exact race the settle exists to prevent. (Availability broadcasts also lag
-                    // many seconds behind the real state on a screen-off device, so this edge is stale anyway.)
-                    if (sessionCycleSettleStartedAt != 0L) return
-                    onHandler {
-                        // Aware came *back*: a new fact about the radio, so a failure streak that predates it
-                        // says nothing about this attempt. Attach now rather than serving out a stale backoff.
-                        //
-                        // Only on the real false→true edge, though. This action fires on every Aware state
-                        // change, and a chipset that cannot produce a NAN interface re-broadcasts after each
-                        // refused attach with isAvailable still true. 2.3.1 refunded the streak on those repeats
-                        // and re-attached ~3.5 ms later — getknit/Knit#9's second act, ~286 attaches a second
-                        // and an AMS binder-object kill inside ten. A repeat of `true` is not news.
-                        if (wasAvailable == false) clearAttachBackoff()
-                        attach() // already on the handler; the attaching/session/floor guards no-op a redundant call
-                    }
-                } else {
-                    onHandler {
-                        if (sessionCycleSettleStartedAt != 0L) Log.i(TAG, "session cycle: NAN down broadcast observed")
-                        _health.value = TransportHealth.Unavailable // Wi-Fi Aware switched off (Wi-Fi off / airplane mode)
-                        peers.keys.toList().forEach { teardownPeer(it) }
-                        ++attachGen // invalidate in-flight discovery callbacks from the torn-down generation
-                        stopResponder()
-                        runCatching { publishSession?.close() }
-                        runCatching { subscribeSession?.close() }
-                        runCatching { session?.close() }
-                        session = null
-                        publishSession = null
-                        subscribeSession = null
-                        attaching.set(false)
-                        subscribing.set(false)
-                        reattaching.set(false)
-                        clearAttachBackoff() // symmetric with the up edge; the streak can't outlive the radio it measured
-                        synchronized(lock) { accepting = 0 }
-                        cueTarget.clear()
-                        lastSeenAt.clear()
-                        reachablePeers.clear()
-                        _neighbors.value = emptySet() // symmetric with stop(); teardownPeer already recomputes it empty
-                        _reachable.value = emptySet()
-                    }
-                }
+                handleAvailabilityChanged(awareManager?.isAvailable ?: return)
             }
         }
+
+    /**
+     * One Aware availability notification, from the broadcast or from [NanFaultInjector] in a debug build.
+     * Split out of the receiver so the lab can drive it directly: the getknit/Knit#9 storm is a chipset
+     * re-broadcasting `true` after every refused attach, and that is not reachable from outside the app.
+     */
+    private fun handleAvailabilityChanged(available: Boolean) {
+        val wasAvailable = lastAvailable
+        lastAvailable = available
+        if (available) {
+            // While a deliberate session cycle settles, the loop owns the re-attach — an early attach
+            // here is the exact race the settle exists to prevent. (Availability broadcasts also lag
+            // many seconds behind the real state on a screen-off device, so this edge is stale anyway.)
+            if (sessionCycleSettleStartedAt != 0L) return
+            onHandler {
+                // Aware came *back*: a new fact about the radio, so a failure streak that predates it
+                // says nothing about this attempt. Attach now rather than serving out a stale backoff.
+                //
+                // Only on the real false→true edge, though. This action fires on every Aware state
+                // change, and a chipset that cannot produce a NAN interface re-broadcasts after each
+                // refused attach with isAvailable still true. 2.3.1 refunded the streak on those repeats
+                // and re-attached ~3.5 ms later — getknit/Knit#9's second act, ~286 attaches a second
+                // and an AMS binder-object kill inside ten. A repeat of `true` is not news.
+                if (wasAvailable == false) clearAttachBackoff()
+                attach() // already on the handler; the attaching/session/floor guards no-op a redundant call
+            }
+        } else {
+            onHandler {
+                if (sessionCycleSettleStartedAt != 0L) Log.i(TAG, "session cycle: NAN down broadcast observed")
+                _health.value = TransportHealth.Unavailable // Wi-Fi Aware switched off (Wi-Fi off / airplane mode)
+                peers.keys.toList().forEach { teardownPeer(it) }
+                ++attachGen // invalidate in-flight discovery callbacks from the torn-down generation
+                stopResponder()
+                runCatching { publishSession?.close() }
+                runCatching { subscribeSession?.close() }
+                runCatching { session?.close() }
+                session = null
+                publishSession = null
+                subscribeSession = null
+                attaching.set(false)
+                subscribing.set(false)
+                reattaching.set(false)
+                clearAttachBackoff() // symmetric with the up edge; the streak can't outlive the radio it measured
+                synchronized(lock) { accepting = 0 }
+                cueTarget.clear()
+                lastSeenAt.clear()
+                reachablePeers.clear()
+                _neighbors.value = emptySet() // symmetric with stop(); teardownPeer already recomputes it empty
+                _reachable.value = emptySet()
+            }
+        }
+    }
 
     /**
      * Subscribe to Wi-Fi Aware availability. Two deliberate details, both about surviving a non-stock ROM:

@@ -1,0 +1,88 @@
+package app.getknit.knit.mesh.wifiaware
+
+import app.getknit.knit.BuildConfig
+
+/** What the attach budget looks like right now, for the debug bridge's reply. */
+internal data class NanAttachSnapshot(
+    val attached: Boolean,
+    val streak: Int,
+    val total: Int,
+    val abandoned: Boolean,
+    val retryInMs: Long,
+)
+
+/**
+ * Debug-only fault injection for [WifiAwareTransport]'s attach path, so getknit/Knit#9 can be reproduced on
+ * hardware that does not have the bug.
+ *
+ * The failure it reproduces is not something a lab Pixel can be talked into. It needs a vendor HAL with no
+ * STA+NAN interface combination, so that `attach` fails at `bestIfaceCreationProposal is null` while
+ * `WifiAwareManager.isAvailable` still reports `true` — and, for ADR 055's half of it, a chipset that
+ * re-broadcasts Aware state after each refusal, which is what let a refusal drive its own retry budget
+ * refund. Neither is reachable from outside the app: another app holding an Aware session does not block
+ * ours (the framework multiplexes clients onto one interface), and `ACTION_WIFI_AWARE_STATE_CHANGED` is a
+ * protected broadcast that would not reach our `RECEIVER_NOT_EXPORTED` receiver anyway.
+ *
+ * So both halves are injected at the seam instead, driven by `…debug.NANFAIL` and `…debug.NANSTORM`:
+ * [shouldFailAttach] forces an attach down its failure path, and [notifyAvailability] calls exactly what the
+ * availability receiver calls, including the `lastAvailable` edge check that ADR 055 added.
+ *
+ * **Inert unless [BuildConfig.DEBUG]**, checked in every method rather than at the call sites, and the
+ * transport binds nothing in a release build — the `ModelLoadGuard.injectDebugFaultIfArmed` pattern, minus
+ * its build-time flag, because a lab harness wants to arm and re-arm this while the app is running.
+ *
+ * **What it does not reproduce: the leak itself.** A forced failure returns before `mgr.attach`, so no binder
+ * objects are stranded in `system_server` and `dumpsys activity binder-proxies` stays flat. What it measures
+ * is how many attaches the bounds *allow*, which is that number divided by two — the right assertion for
+ * ADR 055, and not a demonstration that ADR 052's leak is gone.
+ */
+internal object NanFaultInjector {
+    @Volatile private var failuresLeft = 0
+
+    @Volatile private var availability: ((Boolean) -> Unit)? = null
+
+    @Volatile private var snapshot: (() -> NanAttachSnapshot)? = null
+
+    /** Whether a transport is running and has bound its hooks — false in release, and before `start()`. */
+    val bound: Boolean get() = BuildConfig.DEBUG && availability != null
+
+    /** Called by [WifiAwareTransport.start]; `null`s clear it on `stop()`. */
+    fun bind(
+        onAvailability: ((Boolean) -> Unit)?,
+        status: (() -> NanAttachSnapshot)?,
+    ) {
+        if (!BuildConfig.DEBUG) return
+        availability = onAvailability
+        snapshot = status
+        if (onAvailability == null) failuresLeft = 0
+    }
+
+    /** Arms the next [count] attaches to take their failure path; 0 disarms. Returns what is now armed. */
+    fun armFailures(count: Int): Int {
+        if (!BuildConfig.DEBUG) return 0
+        failuresLeft = count.coerceAtLeast(0)
+        return failuresLeft
+    }
+
+    /** Whether this attach should fail without ever reaching `mgr.attach` — consumes one of the armed count. */
+    fun shouldFailAttach(): Boolean {
+        if (!BuildConfig.DEBUG) return false
+        val left = failuresLeft
+        if (left <= 0) return false
+        failuresLeft = left - 1
+        return true
+    }
+
+    /**
+     * Delivers a synthetic Aware availability notification, exactly as the broadcast receiver would. `true`
+     * repeated is the getknit/Knit#9 storm (which must refund nothing); alternating `false`/`true` is the
+     * negative control (a genuine radio recovery, which must still refund and reattach promptly).
+     */
+    fun notifyAvailability(available: Boolean): Boolean {
+        val hook = if (BuildConfig.DEBUG) availability else null
+        hook?.invoke(available)
+        return hook != null
+    }
+
+    fun status(): NanAttachSnapshot? = if (BuildConfig.DEBUG) snapshot?.invoke() else null
+}

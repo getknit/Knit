@@ -96,6 +96,28 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   (a real fault → latched on the next launch); `kill` is the **negative control** — SIGKILL is recorded
   exactly as a force-stop is, so it must never latch no matter how often it fires.
 - `…debug.REACT` — `--es id <messageId> --es emoji <emoji>`. `…debug.HEAL` — nudge rescan/re-advertise.
+- `…debug.NANFAIL` / `…debug.NANSTORM` — reproduce **getknit/Knit#9** (ADR 052 + 055) on hardware that does
+  not have the bug. `NANFAIL --ei count N` arms N Wi-Fi Aware attaches to take their failure path without
+  reaching `mgr.attach` (0 disarms) — the stand-in for a vendor HAL with no STA+NAN interface combination.
+  `NANSTORM --ei count N --ei hz H` then replays the availability storm: synthetic Aware notifications
+  straight into `WifiAwareTransport.handleAvailabilityChanged`. Both halves have to be injected, because
+  neither is reachable from outside the app — another app holding an Aware session does **not** block ours
+  (the framework multiplexes clients onto one interface, so "hold a lock on NAN" is aimed a layer too high),
+  and `ACTION_WIFI_AWARE_STATE_CHANGED` is a protected broadcast that would not reach our
+  `RECEIVER_NOT_EXPORTED` receiver even from the `shell` uid.
+  - The measurement is the reply's `attachesAllowed` (`failuresAfter - failuresBefore`). Repeating
+    `available` (the default) must let through roughly `elapsedMs / 3000` and no more — the `NanAttachPolicy`
+    rate floor. Before ADR 055 it tracked the broadcast count instead: 3.5 ms apart, ~286 a second.
+  - `--ez cycle true` alternates false/true — genuine radio recoveries, the **negative control**. Those must
+    still refund the streak and reattach promptly, which is the behaviour the fix could plausibly break.
+    A real Wi-Fi off→on is the other half of that control, and must be done **by hand on the device**: never
+    toggle Wi-Fi over adb on a lab Pixel (`rules/devices.md`).
+  - **Validate the harness against `v2.3.1` before trusting it.** That build has the bug; if `NANSTORM` does
+    not kill it there, it proves nothing about a build where it doesn't.
+  - What it does **not** reproduce is the leak: a forced failure returns before `mgr.attach`, so nothing is
+    stranded in `system_server` and `dumpsys activity binder-proxies` stays flat. It measures attaches
+    allowed, which is that count halved. The reply's `localBinders`/`binderDeathRecipients`
+    (`android.os.Debug`) are this process's own counts, not the per-uid count AMS actually kills on.
 - `…debug.FLAGMSG` — injects one inbound message **the text moderator flagged** (the UI collapses it behind a
   tap-to-reveal) as the newest row of `--es conv <id>` (default `nearby`), from `--es from <peerNodeId>`
   (default a synthetic sender) with body `--es text <body>`. The radio-less build never receives a real

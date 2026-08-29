@@ -11,6 +11,8 @@ import android.graphics.Movie
 import android.graphics.drawable.AnimatedImageDrawable
 import android.net.Uri
 import android.os.Build
+import android.os.Debug
+import android.os.SystemClock
 import android.util.Log
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.crash.ProcessExitReasons
@@ -43,6 +45,7 @@ import app.getknit.knit.mesh.lora.BoardOwner
 import app.getknit.knit.mesh.lora.BoardSettings
 import app.getknit.knit.mesh.lora.ProvisionMode
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.wifiaware.NanFaultInjector
 import app.getknit.knit.moderation.ModelLoadGuard
 import app.getknit.knit.moderation.ModelLoadPolicy
 import app.getknit.knit.moderation.modelGuardStamp
@@ -52,6 +55,7 @@ import app.getknit.knit.review.ReviewPrompter
 import app.getknit.knit.ui.chat.buildReplySnippet
 import app.getknit.knit.ui.invite.prepareKnitApk
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -128,6 +132,14 @@ import java.nio.ByteBuffer
  *   heuristic. Every gate in the recovery path returns silently, so a peer we hold no prekey for, one
  *   inside its 6 h floor, and one whose heuristic has not counted three distinct failures all look the
  *   same from outside; the dump says which, and the force unwedges a pair that broke before a fix shipped.
+ * - [ACTION_NANFAIL] — arms `--ei count N` Wi-Fi Aware attaches to take their failure path without ever
+ *   reaching `mgr.attach` (0 disarms). The lab stand-in for a chipset that cannot produce a NAN interface;
+ *   see `NanFaultInjector` for what it does and does not reproduce.
+ * - [ACTION_NANSTORM] — replays getknit/Knit#9's availability storm: `--ei count N` (default 100) synthetic
+ *   Aware availability notifications at `--ei hz H` (default 300). Repeats `true` by default, which must
+ *   refund nothing; `--ez cycle true` alternates false/true instead — genuine radio recoveries, the negative
+ *   control that must still refund and reattach. The reply's `failuresBefore`/`failuresAfter` is the
+ *   measurement: how many attaches the bounds actually let through.
  * - [ACTION_HEAL] — nudges the transport to rescan/re-advertise.
  *
  * Each action replies as a one-line JSON object: it is returned via the ordered-broadcast result
@@ -253,6 +265,14 @@ class DebugBridgeReceiver :
 
                         ACTION_LORAPROV -> {
                             handleLoraProv(intent)
+                        }
+
+                        ACTION_NANFAIL -> {
+                            handleNanFail(intent)
+                        }
+
+                        ACTION_NANSTORM -> {
+                            handleNanStorm(intent)
                         }
 
                         ACTION_HEAL -> {
@@ -1227,6 +1247,64 @@ class DebugBridgeReceiver :
         return reply("ok", "group ready").put("groupId", groupId).put("members", members.size)
     }
 
+    /**
+     * Arms (or disarms, with `count` 0 or absent) forced Wi-Fi Aware attach failures — the lab stand-in for
+     * getknit/Knit#9's chipset. Pair it with [ACTION_NANSTORM]: the failures are what make the attach path
+     * reachable at all, since a transport that is attached returns from `attach()` before any of it.
+     */
+    private fun handleNanFail(intent: Intent): JSONObject {
+        val count = intent.getIntExtra("count", 0)
+        val armed = NanFaultInjector.armFailures(count)
+        val what = if (armed > 0) "armed $armed forced attach failures" else "fault injection disarmed"
+        return reply("ok", what).put("armed", armed).withNanState()
+    }
+
+    /**
+     * Replays the availability storm from getknit/Knit#9 (ADR 055) against the running transport, and reports
+     * how many attaches got through. Pre-fix that number tracked the broadcast count; post-fix the rate floor
+     * holds it near `elapsedMs / 3000`, whatever the storm does.
+     */
+    private suspend fun handleNanStorm(intent: Intent): JSONObject {
+        if (!NanFaultInjector.bound) return reply("error", "Wi-Fi Aware transport is not running")
+        val count = intent.getIntExtra("count", 100).coerceIn(1, 100_000)
+        val hz = intent.getIntExtra("hz", 300).coerceIn(1, 10_000)
+        val cycle = intent.getBooleanExtra("cycle", false)
+        val before = NanFaultInjector.status()
+        val periodMs = 1_000L / hz
+        val startedAt = SystemClock.elapsedRealtime()
+        repeat(count) { i ->
+            // Repeating `true` is the bug's shape; alternating is a run of genuine recoveries.
+            NanFaultInjector.notifyAvailability(!cycle || i % 2 == 1)
+            if (periodMs > 0) delay(periodMs)
+        }
+        val elapsed = SystemClock.elapsedRealtime() - startedAt
+        val after = NanFaultInjector.status()
+        return reply("ok", if (cycle) "storm sent (alternating edges)" else "storm sent (repeated available)")
+            .put("sent", count)
+            .put("elapsedMs", elapsed)
+            .put("ratePerSec", if (elapsed > 0) count * 1_000L / elapsed else -1)
+            .put("failuresBefore", before?.total ?: -1)
+            .put("failuresAfter", after?.total ?: -1)
+            .put("attachesAllowed", (after?.total ?: 0) - (before?.total ?: 0))
+            .withNanState()
+    }
+
+    /**
+     * Folds the attach budget and this process's Binder-object counts into a reply. The local count is the
+     * closest in-process proxy for what AMS is actually watching, which is the count *system_server* holds
+     * against our uid — for that, read `adb shell dumpsys activity binder-proxies`.
+     */
+    private fun JSONObject.withNanState(): JSONObject {
+        val nan = NanFaultInjector.status()
+        return put("attached", nan?.attached ?: false)
+            .put("streak", nan?.streak ?: -1)
+            .put("failTotal", nan?.total ?: -1)
+            .put("abandoned", nan?.abandoned ?: false)
+            .put("retryInMs", nan?.retryInMs ?: -1)
+            .put("localBinders", Debug.getBinderLocalObjectCount())
+            .put("binderDeathRecipients", Debug.getBinderDeathObjectCount())
+    }
+
     private companion object {
         const val TAG = "KnitBridge"
 
@@ -1241,6 +1319,8 @@ class DebugBridgeReceiver :
         const val ACTION_WEBPCONV = "app.getknit.knit.debug.WEBPCONV"
         const val ACTION_WEBPCHECK = "app.getknit.knit.debug.WEBPCHECK"
         const val ACTION_HEAL = "app.getknit.knit.debug.HEAL"
+        const val ACTION_NANFAIL = "app.getknit.knit.debug.NANFAIL"
+        const val ACTION_NANSTORM = "app.getknit.knit.debug.NANSTORM"
         const val ACTION_REQNOTIF = "app.getknit.knit.debug.REQNOTIF"
         const val ACTION_FLAGMSG = "app.getknit.knit.debug.FLAGMSG"
         const val ACTION_MKGROUP = "app.getknit.knit.debug.MKGROUP"

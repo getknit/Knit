@@ -38,9 +38,11 @@ import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
+import app.getknit.knit.mesh.crypto.sealBytes
 import app.getknit.knit.mesh.protocol.BlobReqContent
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
+import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.GroupKeyPayload
@@ -2148,12 +2150,17 @@ class InboundPipelineTest {
             pr: ProfilePayload? = null,
             acks: List<String>? = null,
             sentAt: Long = 5L,
+            /** Seal crypto scheme v3 (derived nonce, compact plaintext, header-bound AAD) instead of v2. */
+            v3: Boolean = false,
+            /** Overrides the envelope's nonce field after sealing — the malformed-shape tests. */
+            nonceOverride: ByteArray? = null,
             mutateHeader: (RatchetHeader) -> RatchetHeader = { it },
         ): RelayEnvelope {
             val to = rig.self.nodeId
             val aad = MessageCrypto.header(id, party.nodeId, sentAt, to)
-            val plain = MessageContent(body = body, ctl = ctl, gk = gk, ack = ack, rp = rp, pr = pr, acks = acks).encode()
-            val sealed = checkNotNull(engine.seal(session, plain, aad, rig.selfSpk.pub, now = 5L))
+            val (plain, scheme) = MessageContent(body = body, ctl = ctl, gk = gk, ack = ack, rp = rp, pr = pr, acks = acks).sealBytes(v3)
+            check(!v3 || scheme == EncEnvelope.VERSION_DM_V3) { "fixture asked for v3 but the content has no compact form" }
+            val sealed = checkNotNull(engine.seal(session, plain, aad, rig.selfSpk.pub, now = 5L, v3 = v3))
             session = sealed.session
             val h = sealed.header
             val header =
@@ -2178,8 +2185,8 @@ class InboundPipelineTest {
                         ChatContent(
                             enc =
                                 EncEnvelope(
-                                    v = EncEnvelope.VERSION_RATCHET,
-                                    nonce = sealed.nonce,
+                                    v = scheme,
+                                    nonce = nonceOverride ?: sealed.nonce ?: ByteArray(0),
                                     ct = sealed.ct,
                                     keys = emptyList(),
                                     r = header,
@@ -3032,6 +3039,209 @@ class InboundPipelineTest {
             // Sealed-era custody contract: the delivered DM stays in our own custody (nobody purges;
             // it ages out on the TTL with every carrier's copy — that convergence IS the retirement).
             assertTrue(rig.forwardStore.has("v2-cap1"))
+        }
+
+    // --- crypto scheme v3 and the unsigned door (ADR 059) ---
+
+    /** The unsigned form of [env]: `relay = false`, an empty signature — what `MeshManager.sealDeliveryTick` sends a v3 author. */
+    private fun unsigned(env: RelayEnvelope): WireEnvelope =
+        WireEnvelope(relay = false, sig = ByteArray(0), signed = WireCodec.encodeEnvelope(env))
+
+    /** [env] with its ciphertext replaced by garbage under the same (v3) header — a forgery that will fail the AEAD. */
+    private fun forged(env: RelayEnvelope): RelayEnvelope {
+        val enc = checkNotNull(WireCodec.decodePayload<ChatContent>(env.payload)?.enc)
+        val junk =
+            EncEnvelope(
+                v = enc.v,
+                nonce = enc.nonce,
+                ct = ByteArray(enc.ct.size) { (it * 37 + 11).toByte() },
+                keys = emptyList(),
+                r = enc.r,
+            )
+        return RelayEnvelope(
+            env.type,
+            env.id,
+            env.senderId,
+            env.sentAt,
+            env.recipientId,
+            env.group,
+            WireCodec.encodePayload(ChatContent(enc = junk)),
+        )
+    }
+
+    /** Our outbound DM [id] to [peer], as the forged-ack guard and the custody store know it after a real send. */
+    private suspend fun Rig.ownDmTo(
+        peer: Party,
+        id: String,
+    ) {
+        msgMap[id] = MessageEntity(id = id, senderId = self.nodeId, recipientId = peer.nodeId, body = "", sentAt = 1L)
+        val outbound = dmChat(self, peer, id = id, body = "hi")
+        forwardSync.onSeen(self.sign(outbound), outbound, ForwardStore.ORIGIN_SELF)
+    }
+
+    @Test
+    fun anUnsignedV3TickFromAPinnedPeerAppliesTheReceipt() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val dmOut = FrameId.new()
+            rig.ownDmTo(alice, dmOut)
+
+            val tick = V2Author(alice, rig).dm("tick-1", "", ctl = MessageContent.CTL_RECEIPT, ack = dmOut, v3 = true)
+            rig.pipeline.onDeliver(unsigned(tick), tick, alice.nodeId, TransportKind.Bluetooth)
+
+            coVerify(exactly = 1) { rig.messages.markReceived(dmOut, DeliveryPlane.Nearby) }
+            assertEquals(0L, rig.drops(DropReason.UNSIGNED_REFUSED))
+            assertEquals(0L, rig.drops(DropReason.SIG_INVALID))
+            // A ctl frame, so no row, no ack-of-an-ack, and — being relay = false — nothing custodied.
+            assertFalse(rig.msgMap.containsKey("tick-1"))
+            assertTrue(rig.originated.none { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+            assertFalse(rig.forwardStore.has("tick-1"))
+        }
+
+    @Test
+    fun theUnsignedDoorRefusesEveryOtherShape() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val dmOut = FrameId.new()
+            rig.ownDmTo(alice, dmOut)
+            val author = V2Author(alice, rig)
+
+            // Flooded: the signature is what every relay and carrier would need, so an empty one is refused.
+            val flooded = author.dm("u-relay", "", ctl = MessageContent.CTL_RECEIPT, ack = dmOut, v3 = true)
+            rig.pipeline.onDeliver(
+                WireEnvelope(relay = true, sig = ByteArray(0), signed = WireCodec.encodeEnvelope(flooded)),
+                flooded,
+                alice.nodeId,
+            )
+            assertEquals(1L, rig.drops(DropReason.UNSIGNED_REFUSED))
+            assertFalse("never custodied either", rig.forwardStore.has("u-relay"))
+
+            // Addressed to someone else: not our tick, not our session.
+            val foreign = author.dm("u-foreign", "", ctl = MessageContent.CTL_RECEIPT, ack = dmOut, v3 = true)
+            val reAddressed = RelayEnvelope(foreign.type, foreign.id, foreign.senderId, foreign.sentAt, bob.nodeId, null, foreign.payload)
+            rig.pipeline.onDeliver(unsigned(reAddressed), reAddressed, alice.nodeId)
+            assertEquals(2L, rig.drops(DropReason.UNSIGNED_REFUSED))
+
+            // A v2 envelope: the right shape at the door, the wrong scheme behind it.
+            val v2 = author.dm("u-v2", "", ctl = MessageContent.CTL_RECEIPT, ack = dmOut)
+            rig.pipeline.onDeliver(unsigned(v2), v2, alice.nodeId)
+            assertEquals(3L, rig.drops(DropReason.UNSIGNED_REFUSED))
+
+            // A cleartext DM with no seal at all.
+            val clear = rig.dmChat(alice, rig.self, id = "u-clear", body = "hello")
+            rig.pipeline.onDeliver(unsigned(clear), clear, alice.nodeId)
+            assertEquals(4L, rig.drops(DropReason.UNSIGNED_REFUSED))
+            assertFalse(rig.msgMap.containsKey("u-clear"))
+
+            // A v3 plain chat with its signature stripped: it OPENS, and is refused anyway — before commit, so
+            // the chain index is untouched and the genuine signed copy still delivers afterwards.
+            val plain = author.dm("u-plain", "a real message", v3 = true)
+            rig.pipeline.onDeliver(unsigned(plain), plain, alice.nodeId)
+            assertEquals(5L, rig.drops(DropReason.UNSIGNED_REFUSED))
+            assertFalse(rig.msgMap.containsKey("u-plain"))
+            rig.deliver(alice, plain)
+            assertEquals("a real message", rig.msgMap["u-plain"]?.body)
+
+            coVerify(exactly = 0) { rig.messages.markReceived(dmOut, any()) }
+            assertEquals(0, rig.resetsSent())
+        }
+
+    @Test
+    fun aMisshapenNonceIsABadHeaderNeverAResetTrigger() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val author = V2Author(alice, rig)
+
+            // v3 must carry the field empty; v2 must carry twelve bytes.
+            rig.deliver(alice, author.dm("v3-with-nonce", "x", v3 = true, nonceOverride = ByteArray(12)))
+            rig.deliver(alice, author.dm("v2-without-nonce", "y", nonceOverride = ByteArray(0)))
+            rig.deliver(alice, author.dm("v2-short-nonce", "z", nonceOverride = ByteArray(3)))
+
+            assertEquals(3L, rig.drops(DropReason.RATCHET_BAD_HEADER))
+            assertEquals(0L, rig.drops(DropReason.RATCHET_AEAD_FAIL))
+            assertEquals(0, rig.resetsSent())
+            assertTrue(rig.msgMap.isEmpty())
+        }
+
+    @Test
+    fun forgedUnsignedFramesFeedNeitherTheResetHeuristicNorTheExistsGate() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val author = V2Author(alice, rig)
+            // A live session, so the forgeries carry a header the receiver can resolve — the worst case.
+            val real1 = FrameId.new()
+            rig.deliver(alice, author.dm(real1, "hello", v3 = true))
+            assertEquals("hello", rig.msgMap[real1]?.body)
+            // (The genuine DM earned its one sealed receipt; nothing below may add another.)
+            val receiptsBefore = rig.originated.count { it.type == FrameType.CHAT && it.recipientId == alice.nodeId }
+            assertEquals(1, receiptsBefore)
+
+            repeat(RatchetSessions.RESET_DISTINCT_FRAMES) { i ->
+                val f = forged(author.dm("forged-$i", "", ctl = MessageContent.CTL_RECEIPT, ack = real1, v3 = true))
+                rig.pipeline.onDeliver(unsigned(f), f, alice.nodeId)
+            }
+            assertEquals(RatchetSessions.RESET_DISTINCT_FRAMES.toLong(), rig.drops(DropReason.RATCHET_AEAD_FAIL))
+            assertEquals("forgeries anyone can mint must never buy a session reset", 0, rig.resetsSent())
+
+            // A forgery naming an id we already hold must not make us re-acknowledge it: the unsigned door
+            // never takes the exists-gate shortcut.
+            val oracle = forged(author.dm(real1, "", ctl = MessageContent.CTL_RECEIPT, ack = real1, v3 = true))
+            rig.pipeline.onDeliver(unsigned(oracle), oracle, alice.nodeId)
+            assertEquals(receiptsBefore, rig.originated.count { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+            assertTrue(rig.originated.none { it.type == FrameType.RECEIPT })
+
+            // And the genuine session is unharmed: the next real v3 frame still opens.
+            rig.deliver(alice, author.dm("real-2", "still here", v3 = true))
+            assertEquals("still here", rig.msgMap["real-2"]?.body)
+
+            // An unsigned tick from a sender we have never pinned is a missing-key drop, not an unsigned refusal.
+            val stranger = party()
+            val orphan = V2Author(stranger, rig).dm("orphan", "", ctl = MessageContent.CTL_RECEIPT, ack = real1, v3 = true)
+            rig.pipeline.onDeliver(unsigned(orphan), orphan, stranger.nodeId)
+            assertEquals(1L, rig.drops(DropReason.NO_SENDER_KEY))
+            assertEquals(0L, rig.drops(DropReason.UNSIGNED_REFUSED))
+        }
+
+    @Test
+    fun aV3DmDecryptsWithItsCompactContentAndItsInlineAcks() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val mine1 = FrameId.new()
+            val mine2 = FrameId.new()
+            rig.ownDmTo(alice, mine1)
+            rig.ownDmTo(alice, mine2)
+            val author = V2Author(alice, rig)
+
+            // A real frame id: the receipt names it, and the compact codec carries only canonical ids.
+            val dmId = FrameId.new()
+            val frame = author.dm(dmId, "compact hello", acks = listOf(mine1, mine2), v3 = true)
+            val enc = checkNotNull(WireCodec.decodePayload<ChatContent>(frame.payload)?.enc)
+            assertEquals(EncEnvelope.VERSION_DM_V3, enc.v)
+            assertEquals(0, enc.nonce.size)
+            rig.deliver(alice, frame, kind = TransportKind.Bluetooth)
+
+            assertEquals("compact hello", rig.msgMap[dmId]?.body)
+            coVerify(exactly = 1) { rig.messages.markReceived(mine1, DeliveryPlane.Nearby) }
+            coVerify(exactly = 1) { rig.messages.markReceived(mine2, DeliveryPlane.Nearby) }
+            // The instant receipt back to a v3 author seals v3 — and, being originated, stays signed and custodied.
+            val receipt = rig.originated.single { it.type == FrameType.CHAT && it.recipientId == alice.nodeId }
+            val receiptEnc = checkNotNull(WireCodec.decodePayload<ChatContent>(receipt.payload)?.enc)
+            assertEquals(EncEnvelope.VERSION_DM_V3, receiptEnc.v)
+            assertEquals(0, receiptEnc.nonce.size)
+            assertEquals(1L, rig.metrics.snapshot().receiptsSealed)
+            assertEquals(1L, rig.metrics.snapshot().dmSealedV3)
+            assertEquals(0L, rig.metrics.snapshot().ticksUnsigned)
         }
 
     /**

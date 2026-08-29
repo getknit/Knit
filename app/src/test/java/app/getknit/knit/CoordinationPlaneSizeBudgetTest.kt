@@ -10,6 +10,7 @@ import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.TinkInit
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
+import app.getknit.knit.mesh.crypto.sealBytes
 import app.getknit.knit.mesh.link.FastFrameCodec
 import app.getknit.knit.mesh.lora.LoraFrameCodec
 import app.getknit.knit.mesh.lora.LoraMeshTransport
@@ -39,7 +40,9 @@ import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.hybrid.HpkePrivateKey
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
@@ -119,9 +122,11 @@ class CoordinationPlaneSizeBudgetTest {
             attachmentKey: String? = null,
             replyTo: ReplyRef? = null,
             pr: ProfilePayload? = null,
+            /** Seal crypto scheme v3 — derived nonce, compact plaintext (ADR 059) — instead of v2. */
+            v3: Boolean = false,
         ): RelayEnvelope {
             val aad = MessageCrypto.header(id, party.nodeId, SENT_AT, to.nodeId)
-            val plain =
+            val (plain, scheme) =
                 MessageContent(
                     body = body,
                     attachmentHash = attachmentHash,
@@ -133,8 +138,9 @@ class CoordinationPlaneSizeBudgetTest {
                     acks = acks,
                     replyTo = replyTo,
                     pr = pr,
-                ).encode()
-            val sealed = checkNotNull(engine.seal(session, plain, aad, toSpk.pub, now = SESSION_AT))
+                ).sealBytes(v3)
+            check(!v3 || scheme == EncEnvelope.VERSION_DM_V3) { "fixture asked for v3 but the content has no compact form" }
+            val sealed = checkNotNull(engine.seal(session, plain, aad, toSpk.pub, now = SESSION_AT, v3 = v3))
             session = sealed.session
             val h = sealed.header
             return RelayEnvelope(
@@ -149,8 +155,8 @@ class CoordinationPlaneSizeBudgetTest {
                             attachmentHash = attachmentHash,
                             enc =
                                 EncEnvelope(
-                                    v = EncEnvelope.VERSION_RATCHET,
-                                    nonce = sealed.nonce,
+                                    v = scheme,
+                                    nonce = sealed.nonce ?: ByteArray(0),
                                     ct = sealed.ct,
                                     keys = emptyList(),
                                     r =
@@ -210,6 +216,31 @@ class CoordinationPlaneSizeBudgetTest {
         val compact: Int,
         val parts: Int,
     )
+
+    /**
+     * The unsigned form (ADR 059): the v3 live-link tick, `relay = false`, no signature — its AEAD is the
+     * authenticator. Reported like [report] minus the signature checks, plus the packet count at every cap.
+     */
+    private fun reportUnsigned(
+        label: String,
+        wire: WireEnvelope,
+    ): ByteArray {
+        assertEquals("the unsigned form", 0, wire.sig.size)
+        assertFalse(wire.relay)
+        val compact = checkNotNull(FastFrameCodec.encodeCompact(wire)) { "$label must be compact-encodable" }
+        val deflated = if ((compact[1].toInt() and 0x02) != 0) "deflated" else "stored"
+        val lora = checkNotNull(loraParts(wire))
+        val esp32 = checkNotNull(LoraFrameCodec.encode(wire, fragId = 1, maxPayload = esp32PayloadCap)).size
+        println(
+            "size-budget: $label legacy=${legacySize(wire)}B compact=${compact.size}B ($deflated) " +
+                "parts@255=${if (compact.size <= WifiAwareTransport.COORD_MSG_MAX) 1 else "2+"} " +
+                "parts@233=$lora parts@$esp32PayloadCap=$esp32",
+        )
+        val decoded = checkNotNull(FastFrameCodec.decodeCompact(compact)) { "$label compact round-trip" }
+        assertEquals(0, decoded.sig.size)
+        assertArrayEquals(wire.signed, decoded.signed)
+        return compact
+    }
 
     // --- fixtures ---
 
@@ -406,6 +437,62 @@ class CoordinationPlaneSizeBudgetTest {
         assertTrue(sizes.parts <= 2)
     }
 
+    // --- budgets: crypto scheme v3 (ADR 059) — the derived nonce, the compact plaintext, and the unsigned live-link tick ---
+
+    /**
+     * The v3 unsigned tick is the one-packet form on every plane: one Wi-Fi Aware message (255), one nominal
+     * LoRa packet (233), and one packet at the MTU-255 ESP32 boards' measured cap. The signed v3 DM ✓✓ keeps
+     * its signature and custody and stays two packets — round 2's transcoder is what takes that one down.
+     */
+    @Test
+    fun theUnsignedV3TickFitsOnePacketOnEveryPlane() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        sealer.confirm()
+        val env = sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, ack = FrameId.new(), v3 = true)
+        val unsigned = WireEnvelope(relay = false, sig = ByteArray(0), signed = WireCodec.encodeEnvelope(env))
+        val compact = reportUnsigned("unsigned-v3-tick", unsigned)
+        assertTrue("one Wi-Fi Aware message (was 2)", compact.size <= WifiAwareTransport.COORD_MSG_MAX)
+        assertEquals("one nominal LoRa packet (was 2)", 1, loraParts(unsigned))
+        assertEquals(
+            "one packet at the ESP32 cap of $esp32PayloadCap (needs the measured TORADIO_OVERHEAD; was 2)",
+            1,
+            checkNotNull(LoraFrameCodec.encode(unsigned, fragId = 1, maxPayload = esp32PayloadCap)).size,
+        )
+
+        // The same tick signed and v2 — what a peer without the bit still gets — is the two-packet form.
+        val signedV2 = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, ack = FrameId.new()), relay = false)
+        assertEquals(2, report("sealed-receipt-steady-v2", signedV2, alice).parts)
+    }
+
+    @Test
+    fun v3KeepsTheSignedFormsTwoPacketsButLighter() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        val init = alice.sign(sealer.dm(FrameId.new(), body = "a".repeat(100), v3 = true))
+        report("sealed-dm-100char-init-v3", init, alice)
+        assertTrue(checkNotNull(loraParts(init)) <= FastFrameCodec.MAX_PARTS)
+        sealer.confirm()
+        val receipt = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, ack = FrameId.new(), v3 = true))
+        val receiptV2 = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, ack = FrameId.new()))
+        val v3 = report("sealed-receipt-steady-v3", receipt, alice)
+        val v2 = report("sealed-receipt-steady-v2", receiptV2, alice)
+        assertTrue("the signed v3 ✓✓ is ≥ 25 B lighter than v2 (${v2.compact} → ${v3.compact})", v2.compact - v3.compact >= 25)
+        assertTrue("…and still custody-shaped: two packets", v3.parts == 2)
+        val dm = alice.sign(sealer.dm(FrameId.new(), body = "b".repeat(100), v3 = true))
+        report("sealed-dm-100char-steady-v3", dm, alice)
+        assertTrue("a 100-char v3 DM rides in 2 LoRa packets", checkNotNull(loraParts(dm)) <= 2)
+        val acks = List(DmAckCoalescer.MAX_LORA_TICK_ACKS) { FrameId.new() }
+        val batch = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, acks = acks, v3 = true))
+        val batchV2 = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, acks = acks))
+        val batchSizes = report("coalesced-dm-tick-12-v3", batch, alice)
+        val v2Batch = report("coalesced-dm-tick-12-v2", batchV2, alice)
+        assertTrue("raw ids: ≥ 72 B lighter than the v2 batch", v2Batch.compact - batchSizes.compact >= 72)
+        assertTrue(checkNotNull(LoraFrameCodec.encode(batch, fragId = 1, maxPayload = esp32PayloadCap)).size <= FastFrameCodec.MAX_PARTS)
+    }
+
     @Test
     fun fragBudgetArithmetic() {
         // 3 parts x (cap - 4 B frag header) is the ceiling for any compact frame on this plane.
@@ -433,7 +520,10 @@ class CoordinationPlaneSizeBudgetTest {
 
     // --- budgets: the LoRa hop (Meshtastic Data.payload cap = 233 B, <= 3 fragments) ---
 
-    /** The largest `Data.payload` a board behind a 255-byte BLE MTU takes in one write (`LoraMeshTransport.TORADIO_OVERHEAD`). */
+    /**
+     * The largest `Data.payload` a board behind a 255-byte BLE MTU takes in one write
+     * (`LoraMeshTransport.TORADIO_OVERHEAD`, measured: 228).
+     */
     private val esp32PayloadCap = 255 - LoraMeshTransport.TORADIO_OVERHEAD
 
     /** Part count for [wire] on the LoRa hop, or null when no encoding fits <= 3 fragments. */

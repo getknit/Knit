@@ -34,6 +34,7 @@ import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
+import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
@@ -697,22 +698,21 @@ class MeshManagerTest {
 
     // --- the v2 (epoch-ratchet) send gate ---
 
-    /** Pins [p] as ratchet-capable: CAP_RATCHET advertised plus a pinned prekey, as handleProfile stores them. */
+    /**
+     * Pins [p] as ratchet-capable — CAP_RATCHET advertised plus a pinned prekey, as handleProfile stores them —
+     * but WITHOUT `CAP_CRYPTO_V3`: the v2 peer every "seals v2" assertion below is about. [pinCryptoV3] is the
+     * current build's full set.
+     */
     private fun Rig.pinRatchetCapable(
         p: Party,
         prekeyPub: ByteArray,
-    ) {
-        coEvery { peers.find(p.nodeId) } returns
-            PeerEntity(
-                nodeId = p.nodeId,
-                pubKey = p.bundle.encoded,
-                capabilities = Protocol.LOCAL_CAPABILITIES,
-                prekeyId = 1,
-                prekeyPub = b64(prekeyPub),
-                prekeyProfileAt = 1L,
-                updatedAt = 1L,
-            )
-    }
+    ) = pinWithCaps(p, prekeyPub, Protocol.LOCAL_CAPABILITIES and Protocol.CAP_CRYPTO_V3.inv())
+
+    /** Pins [p] with this build's whole capability set — a peer that reads crypto scheme v3 (ADR 059). */
+    private fun Rig.pinCryptoV3(
+        p: Party,
+        prekeyPub: ByteArray,
+    ) = pinWithCaps(p, prekeyPub, Protocol.LOCAL_CAPABILITIES)
 
     /** Pins [p] with an explicit capability set plus a prekey — for the inline-ack gate (ADR 054). */
     private fun Rig.pinWithCaps(
@@ -857,6 +857,78 @@ class MeshManagerTest {
             assertEquals(1, second.se)
             assertEquals(1, second.n)
             assertNotNull(second.init)
+        }
+
+    /** ADR 059: a peer whose pinned profile carries `CAP_CRYPTO_V3` gets the compact scheme — still signed, still custodied. */
+    @Test
+    fun aDmToACryptoV3PeerSealsV3() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinCryptoV3(rig.bob, RatchetCrypto.generateKeyPair().pub)
+
+            assertTrue(rig.manager.sendChat("fs hello", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+
+            val (wire, _) = rig.transport.sent.single()
+            assertEquals("a flooded DM keeps its signature", 64, wire.sig.size)
+            assertTrue(wire.relay)
+            val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
+            assertEquals(EncEnvelope.VERSION_DM_V3, enc.v)
+            assertEquals("the nonce is derived, the field rides empty", 0, enc.nonce.size)
+            assertTrue(enc.keys.isEmpty())
+            assertNotNull(enc.r)
+            assertEquals(1L, rig.metrics.snapshot().dmSealedV3)
+            assertEquals("v3 is still a ratchet seal", 1L, rig.metrics.snapshot().dmSealedV2)
+
+            // Inline acks ride the v3 arm too, and are taken out of the coalescer like on v2.
+            rig.manager.dmAcks.hold(rig.bob.nodeId, FrameId.new())
+            assertTrue(rig.manager.sendChat("reply", recipientId = rig.bob.nodeId))
+            advanceUntilIdle()
+            assertTrue(
+                rig.manager.dmAcks
+                    .pending(rig.bob.nodeId)
+                    .isEmpty(),
+            )
+            assertEquals(1L, rig.metrics.snapshot().receiptsCoalesced)
+        }
+
+    /** ADR 059: the coalesced LoRa tick toward a v3 author is v3 but ORIGINATED — flooded, custodied, and therefore signed. */
+    @Test
+    fun theCoalescedTickToAV3AuthorIsV3AndStillSigned() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinCryptoV3(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            rig.manager.dmAcks.hold(rig.bob.nodeId, FrameId.new())
+            rig.manager.dmAcks.hold(rig.bob.nodeId, FrameId.new())
+            rig.clockNow += DmAckCoalescer.HOLD_MS
+            rig.manager.dmAcks.flushDue()
+            advanceUntilIdle()
+
+            val (wire, _) = rig.transport.sent.single()
+            assertEquals(64, wire.sig.size)
+            assertTrue(wire.relay)
+            val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
+            assertEquals(EncEnvelope.VERSION_DM_V3, enc.v)
+            assertEquals(0, enc.nonce.size)
+            assertEquals(1L, rig.metrics.snapshot().receiptsCustodied)
+            assertEquals(0L, rig.metrics.snapshot().ticksUnsigned)
+        }
+
+    /** A tick acking an id the compact codec cannot carry falls back to v2 — and a v2 tick is never unsigned. */
+    @Test
+    fun aTickAckingANonCanonicalIdToAV3AuthorFallsBackToV2() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinCryptoV3(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            rig.manager.dmAcks.hold(rig.bob.nodeId, "not-a-frame-id")
+            rig.clockNow += DmAckCoalescer.HOLD_MS
+            rig.manager.dmAcks.flushDue()
+            advanceUntilIdle()
+
+            val enc = WireCodec.decodePayload<ChatContent>(rig.sentChatFrames().single().payload)!!.enc!!
+            assertEquals(EncEnvelope.VERSION_RATCHET, enc.v)
+            assertEquals(12, enc.nonce.size)
+            assertEquals(0L, rig.metrics.snapshot().dmSealedV3)
         }
 
     @Test

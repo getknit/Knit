@@ -80,6 +80,14 @@ enum class DropReason {
 
     /** Group key material present but wrong (stale/foreign mint era) — the post-wipe signal, never tamper. */
     GROUP_RATCHET_AEAD_FAIL,
+
+    /**
+     * An unsigned frame that was not the one shape the unsigned door admits — a `relay = false` v3 DM-form
+     * `CTL_RECEIPT` addressed to us (ADR 059) — or one that was, but did not open. Its own reason, kept
+     * apart from [SIG_INVALID], because an old build overhearing a v3 tick counts the latter and this must
+     * stay a clean "nothing legitimate looks like this" signal.
+     */
+    UNSIGNED_REFUSED,
 }
 
 /**
@@ -153,6 +161,8 @@ class MeshMetrics {
     private val framesReplayed = AtomicLong()
     private val receiptsResent = AtomicLong()
     private val dmSealedV2 = AtomicLong()
+    private val dmSealedV3 = AtomicLong()
+    private val ticksUnsigned = AtomicLong()
     private val dmSealedV1Fallback = AtomicLong()
     private val receiptsSealed = AtomicLong()
     private val receiptsSealedFallback = AtomicLong()
@@ -294,6 +304,16 @@ class MeshMetrics {
     /** An outbound DM sealed under the v2 epoch ratchet (forward-secret). */
     fun onDmSealedV2() {
         dmSealedV2.incrementAndGet()
+    }
+
+    /** An outbound DM-form frame sealed under crypto scheme v3 (derived nonce, compact plaintext — ADR 059). */
+    fun onDmSealedV3() {
+        dmSealedV3.incrementAndGet()
+    }
+
+    /** A live-link delivery tick sent unsigned (v3, `relay = false`) — the one-packet form on every fast plane. */
+    fun onTickUnsigned() {
+        ticksUnsigned.incrementAndGet()
     }
 
     /** A v2-eligible DM that fell back to the v1 static wrap (peer downgraded / no epoch base) — should
@@ -638,6 +658,8 @@ class MeshMetrics {
             framesReplayed = framesReplayed.get(),
             receiptsResent = receiptsResent.get(),
             dmSealedV2 = dmSealedV2.get(),
+            dmSealedV3 = dmSealedV3.get(),
+            ticksUnsigned = ticksUnsigned.get(),
             dmSealedV1Fallback = dmSealedV1Fallback.get(),
             receiptsSealed = receiptsSealed.get(),
             receiptsSealedFallback = receiptsSealedFallback.get(),
@@ -717,6 +739,8 @@ class MeshMetrics {
         val framesReplayed: Long = 0,
         val receiptsResent: Long = 0,
         val dmSealedV2: Long = 0,
+        val dmSealedV3: Long = 0,
+        val ticksUnsigned: Long = 0,
         val dmSealedV1Fallback: Long = 0,
         val receiptsSealed: Long = 0,
         val receiptsSealedFallback: Long = 0,

@@ -145,6 +145,61 @@ class RatchetCryptoTest {
         assertFalse(msg0.contentEquals(msg1))
     }
 
+    // --- crypto scheme v3: the derived nonce and the header binding (ADR 059) ---
+
+    @Test
+    fun theV3NonceMatchesTheReferenceAndIsBoundToTheAad() {
+        val msgKey = RatchetCrypto.messageKey(deterministicBytes(7))
+        val aad = "m1|alice|100|bob".toByteArray()
+
+        val nonce = RatchetCrypto.messageNonce(msgKey, aad)
+        assertEquals(12, nonce.size)
+        assertArrayEquals(referenceHkdf(msgKey, ByteArray(32), "knit/dm/v3/nonce".toByteArray() + aad, 12), nonce)
+        // A different frame (a different AAD) under the same key derives a different nonce — the rollback posture.
+        assertFalse(nonce.contentEquals(RatchetCrypto.messageNonce(msgKey, "m2|alice|100|bob".toByteArray())))
+        // And the label keeps it apart from the chain derivations of the same key.
+        assertFalse(nonce.contentEquals(RatchetCrypto.messageKey(msgKey).copyOf(12)))
+        assertFalse(nonce.contentEquals(RatchetCrypto.nextChainKey(msgKey).copyOf(12)))
+    }
+
+    @Test
+    fun theV3HeaderBindingLayoutIsFrozen() {
+        val ek = deterministicBytes(5)
+        val eph = deterministicBytes(6)
+        val label = "knit/dm/v3/hdr".toByteArray()
+
+        val bare =
+            RatchetCrypto.headerBindingBytes(
+                RatchetEngine.FrameHeader(se = 0x0102_0304, ek = ek, pe = 0x0000_0005, n = 0x0000_0600, flags = 1),
+            )
+        assertArrayEquals(label, bare.copyOfRange(0, label.size))
+        var at = label.size
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4), bare.copyOfRange(at, at + 4))
+        at += 4
+        assertArrayEquals(ek, bare.copyOfRange(at, at + 32))
+        at += 32
+        assertArrayEquals(byteArrayOf(0, 0, 0, 5), bare.copyOfRange(at, at + 4))
+        at += 4
+        assertArrayEquals(byteArrayOf(0, 0, 6, 0), bare.copyOfRange(at, at + 4))
+        at += 4
+        assertArrayEquals(byteArrayOf(1, 0), bare.copyOfRange(at, at + 2)) // flags, then "no init"
+        assertEquals(at + 2, bare.size)
+
+        val withInit =
+            RatchetCrypto.headerBindingBytes(
+                RatchetEngine.FrameHeader(
+                    se = 1,
+                    ek = ek,
+                    pe = 0,
+                    n = 0,
+                    init = RatchetEngine.InitPayload(eph, pkid = 0x0000_0007, at = 0x0102_0304_0506_0708L),
+                ),
+            )
+        val tail = withInit.copyOfRange(withInit.size - (1 + 32 + 4 + 8), withInit.size)
+        assertArrayEquals(byteArrayOf(1) + eph + byteArrayOf(0, 0, 0, 7) + byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8), tail)
+        assertFalse(bare.contentEquals(withInit))
+    }
+
     // --- signed-prekey bytes + exports ---
 
     @Test

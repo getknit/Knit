@@ -23,6 +23,11 @@ import kotlinx.serialization.encodeToByteArray
  *
  * [attachmentKey] is the base64 AES key for the (separately encrypted, content-addressed by ciphertext
  * hash) image blob referenced by [attachmentHash]; null for text-only messages.
+ *
+ * Note [v] is elided on the wire while it equals [VERSION] (`encodeDefaults = false`), so it cannot
+ * discriminate a second layout. The compact layout crypto scheme v3 carries — the same facts with integer
+ * keys and raw ids, [MessageContentV2] — is therefore discriminated by `EncEnvelope.v` and keeps a
+ * reserved label-0 version of its own; this class stays the domain object both layouts convert to.
  */
 @Serializable
 data class MessageContent(

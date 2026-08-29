@@ -63,6 +63,70 @@ class LoraMeshTransportTest {
 
     private fun profile(sender: String): WireEnvelope = frame(FrameType.PROFILE, sender, body = "x".repeat(20))
 
+    /**
+     * The unsigned form (ADR 059): a `relay = false` DM-form chat from [sender] to [to] with an EMPTY sig — the
+     * v3 live-link tick as the transport sees it (it never verifies; the policy admits it by shape).
+     */
+    private fun unsignedTick(
+        sender: String,
+        to: String,
+    ): WireEnvelope {
+        val env =
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = "tick-$sigCounter",
+                senderId = sender,
+                recipientId = to,
+                payload = WireCodec.encodePayload(ChatContent(body = "")),
+            )
+        sigCounter++
+        return WireEnvelope(relay = false, sig = ByteArray(0), signed = WireCodec.encodeEnvelope(env))
+    }
+
+    /**
+     * ADR 059: an unsigned tick has no signature to dedup on, so the window keys it by frame id — two ticks
+     * both ride, a verbatim resend does not.
+     */
+    @Test
+    fun unsignedTicksDedupByIdNotByTheirEmptySignature() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "ping"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            val before = b.link.sent.size
+
+            val first = unsignedTick("bob", "alice")
+            b.transport.fastSend(first, Peer("alice"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            val afterFirst = b.link.sent.size
+            assertEquals("an unsigned tick rides as one packet", before + 1, afterFirst)
+
+            b.transport.fastSend(unsignedTick("bob", "alice"), Peer("alice"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("a second unsigned tick with its own id is not shadowed by the first", afterFirst + 1, b.link.sent.size)
+
+            b.transport.fastSend(first, Peer("alice")) // AckSync's verbatim retry inside the window
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("the verbatim resend is suppressed", afterFirst + 1, b.link.sent.size)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    @Test
+    fun theToRadioOverheadIsMeasuredAndAnMtu255BoardTakes228BytePayloads() {
+        assertEquals(27, LoraMeshTransport.TORADIO_OVERHEAD)
+        assertEquals(228, 255 - LoraMeshTransport.TORADIO_OVERHEAD)
+    }
+
     /** A high-entropy body that will not deflate below the LoRa packet cap, so the frame truly fragments. */
     private fun incompressibleBody(chars: Int): String {
         val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

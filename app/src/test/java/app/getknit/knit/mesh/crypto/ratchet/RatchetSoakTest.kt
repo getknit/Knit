@@ -25,7 +25,8 @@ class RatchetSoakTest {
     private class Frame(
         val id: Int,
         val header: RatchetEngine.FrameHeader,
-        val nonce: ByteArray,
+        /** Null for a v3 frame: the nonce is derived, never carried. */
+        val nonce: ByteArray?,
         val ct: ByteArray,
         val expected: String,
     )
@@ -54,9 +55,10 @@ class RatchetSoakTest {
             body: String,
             now: Long,
             force: Boolean,
+            v3: Boolean = false,
         ): Frame {
             if (session == null) initiate(now)
-            val result = checkNotNull(engine.seal(checkNotNull(session), body.toByteArray(), AAD, peer.spk.pub, now, force))
+            val result = checkNotNull(engine.seal(checkNotNull(session), body.toByteArray(), AAD, peer.spk.pub, now, force, v3))
             session = result.session
             result.newLocalEpoch?.let { localEpochs[it.epoch] = it }
             return Frame(id, result.header, result.nonce, result.ct, body)
@@ -127,7 +129,16 @@ class RatchetSoakTest {
             now += random.nextLong(1L, 60_000L)
             // Sender action: seal a new frame (sometimes forcing an epoch), from a random side.
             val sender = if (random.nextBoolean()) a else b
-            val frame = sender.seal(nextId, "m$nextId from ${sender.nodeId} at step $step", now, force = random.nextInt(40) == 0)
+            // Mixed v2/v3 traffic on one session: the schemes share the chain, so every ladder rung, race and
+            // re-serve below must hold for a derived nonce exactly as for a carried one (ADR 059).
+            val frame =
+                sender.seal(
+                    nextId,
+                    "m$nextId from ${sender.nodeId} at step $step",
+                    now,
+                    force = random.nextInt(40) == 0,
+                    v3 = random.nextBoolean(),
+                )
             nextId++
             inFlight.addLast(sender.peer to frame)
 

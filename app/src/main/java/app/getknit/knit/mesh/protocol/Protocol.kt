@@ -73,9 +73,25 @@ object Protocol {
      */
     const val CAP_INLINE_ACK = 0x40L
 
+    // 0x80 is deliberately left unspent: it is the last capability bit a BLE advert carries
+    // (`BleAdvertPayload.CAP_MASK`), and the transport-local frame transcoder planned as the next round of
+    // frame compaction (roadmap) will need a bit the adverts can see. Bits from 0x100 up ride the pinned
+    // profile and the Wi-Fi Aware advert only.
+
+    /**
+     * Crypto scheme v3 (ADR 059): this build opens a `EncEnvelope.v = 3` DM — derived nonce, labeled
+     * compact plaintext — and accepts the **unsigned** `relay = false` sealed delivery tick that form makes
+     * possible. A send-time input exactly like [CAP_RATCHET]: a sender seals v3 only toward a pinned profile
+     * carrying this bit **and** [CAP_RATCHET] (one signed frame carries both plus the prekey — no stale
+     * window between them), never on the advert copy, and a peer without it keeps receiving v2 and signed
+     * ticks. Additive per docs/WIRE_COMPAT.md: a new scheme number behind a new bit.
+     */
+    const val CAP_CRYPTO_V3 = 0x100L
+
     /** This build's advertised capability bitfield. */
     val LOCAL_CAPABILITIES: Long =
-        CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT or CAP_INLINE_ACK
+        CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT or
+            CAP_INLINE_ACK or CAP_CRYPTO_V3
 
     private const val SEP = '|'
 

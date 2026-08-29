@@ -45,6 +45,13 @@ v1-wrapped**: a pre-ratchet build would decrypt a v1 ctl, strip the unknown fiel
 (`ignoreUnknownKeys`), and persist an empty message bubble — senders call `sealDm`/`sealGroup`
 directly and fall back to the **legacy cleartext frame**, never to v1 (pinned by test).
 
+**v3 (ADR 059).** Toward an author whose pinned profile carries `Protocol.CAP_CRYPTO_V3`, the same ctl rides
+crypto scheme v3 (`docs/FORWARD_SECRECY_RATCHET.md` §5): the plaintext is the labeled `MessageContentV2`
+layout — `ack`/`acks`/`rp.messageId` as raw 16-byte ids, a tick 21 B instead of 39, a twelve-ack batch
+72 B lighter — and the nonce is derived. The ids are canonical-or-nothing: an id the compact codec cannot
+round-trip makes the seal fall back to v2 (`MessageContent.sealBytes`). The live-link tick (§5) is where the
+signature goes too.
+
 Old builds: a sealed receipt/reaction is an ordinary v2 CHAT frame — `UNKNOWN_ENVELOPE_VERSION`
 drop-locally-still-relay, custodied opaquely (`canCarry`'s `enc != null` holds). Ratchet-era builds
 without these codes: decrypt, unknown ctl, silent no-op, chain advanced. Inbound **cleartext**
@@ -115,7 +122,7 @@ the purge left zero), bounded by the existing quotas (1000 global / 200 per send
 | DM **delivered over the LoRa plane**, author capable (ADR 054) | as above, `DeliveryPlane.LoRa` | held ≤ 45 s in `DmAckCoalescer` (re-deliveries fold in), then ONE sealed ctl DM (`ack`/`acks`, ≤ 12 ids) originated `relay = true`, hinted `TICK`; a failed seal falls back per id to the cleartext receipt | as above |
 | DM delivered over LoRa, and we reply within the hold | author's profile carries `CAP_INLINE_ACK` | up to 4 ids ride **inline** as `acks` on the plain sealed reply (v2 arm only; 23 B each reserved out of the LoRa body budget); no standalone tick | — |
 | DM, incapable / seal failed | — | cleartext receipt (still purges everywhere, incl. self-vaccinate) | cleartext reaction |
-| Group message delivered | author capable, live-linked | sealed single-ack ctl DM over the link: `relay = false`, sealed **once**, never custodied | — |
+| Group message delivered | author capable, live-linked | sealed single-ack ctl DM over the link: `relay = false`, sealed **once**, never custodied — and **unsigned** when it sealed v3 (ADR 059: the AEAD, with the header bound into its AAD, is the authenticator; ~222 B, one packet on every fast plane); signed toward a v2 author | — |
 | Group message delivered | author capable, absent | acks batch per author (≤64, 45 s debounce), then ONE sealed ctl DM (`acks`) **originated `relay = true`** — flooded + custodied + spool-eligible (ADR 033) | — |
 | Group message delivered | author incapable | cleartext tick (fresh id per retry, coordination-plane capable) | — |
 | Group reaction | every member ratchet-eligible | — | sealed group form via `sealGroup` (all-or-nothing; may mint + distribute a seed, like any group send) |
@@ -176,6 +183,16 @@ the gate) — exactly as their undecryptable group chats already do since the gr
 - The v1-fallback residual (cleartext receipts/reactions toward incapable peers/groups) shrinks as
   capability floods; `receiptsSealedFallback`/`reactionsSealedFallback` count it (Diagnostics).
 
+**The unsigned live-link tick (ADR 059).** Its authenticity rests on the pairwise ratchet AEAD alone: only
+the two session parties hold the message key, the associated data binds `id|sender|sentAt|recipient` *and*
+the ratchet header, and X3DH binds the initiator's identity key, so neither a forged init nor a re-labelled
+capture opens. What a forger can cost the recipient is one failed open (≈ 3-5× an Ed25519 verify, nothing
+persisted) — never a session reset (unsigned failures are kept out of the reset heuristic), never a
+receipt (the exists-gate is bypassed for unsigned frames), never a delivered message (only a `CTL_RECEIPT`
+may pass the door, refused before commit otherwise). Non-repudiation is not traded away for anything a
+human reads: the frame that goes unsigned is the receipt, and the signed, custodied forms of every other
+receipt and reaction are untouched.
+
 ## 8. Constants
 
 | Constant | Value | Tied to |
@@ -189,5 +206,6 @@ the gate) — exactly as their undecryptable group chats already do since the gr
 | `DmAckCoalescer.MAX_LORA_TICK_ACKS` | 12 | ids per coalesced DM tick — pinned to fit 3 LoRa packets at the ESP32 cap |
 | `MAX_INLINE_ACKS` / `INLINE_ACK_BYTES` | 4 / 23 B | ids one reply carries inline, and what each costs out of the composer's LoRa body budget |
 | `Protocol.CAP_INLINE_ACK` | `0x40` | the receiver applies `acks` on a plain sealed DM (append-only bit) |
+| `Protocol.CAP_CRYPTO_V3` | `0x100` | the receiver opens crypto scheme v3 and accepts the unsigned live-link tick (ADR 059; profile-only, above the BLE advert's 8 bits) |
 | pending / escalated ledgers | ≤500 ids / ≤1000 ids, 24 h | in-memory, evict-oldest; loss = one benign duplicate |
 | ack tombstone (cleartext era) | 24 h | unchanged `ForwardSync` |

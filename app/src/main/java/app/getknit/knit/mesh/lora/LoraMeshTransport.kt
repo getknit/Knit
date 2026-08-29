@@ -329,7 +329,7 @@ internal class LoraMeshTransport(
             metrics.onLoraProfileRefanSkipped()
             return
         }
-        if (!sigSeen.add(sigKey(wire))) {
+        if (!sigSeen.add(dedupKey(wire, env))) {
             metrics.onLoraSuppressed() // already sent/received over LoRa within the window
             return
         }
@@ -355,7 +355,7 @@ internal class LoraMeshTransport(
         if (!LoraFramePolicy.eligible(env, wire, LoraFramePolicy.Path.TARGETED, to.nodeId)) return
         val label = "send:${env.type}->${to.nodeId}"
         val parts = encodeOrNull(wire, label) ?: return
-        if (!sigSeen.add(sigKey(wire))) return
+        if (!sigSeen.add(dedupKey(wire, env))) return
         // The targeted path admits only receipts and sealed ticks (LoraFramePolicy), so it needs no hint.
         enqueue(parts, label, classOf(env, FanoutHint.TICK))
     }
@@ -467,7 +467,7 @@ internal class LoraMeshTransport(
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return
         if (!LoraFramePolicy.isDmForm(env) || env.recipientId != to) return
         val parts = encodeOrNull(wire, "reoffer:${env.id}") ?: return
-        if (!sigSeen.add(sigKey(wire))) return
+        if (!sigSeen.add(dedupKey(wire, env))) return
         // DM class so a room post can never evict it, BRIDGE bucket so it is metered as the backfill it is.
         enqueue(parts, "reoffer:${env.id}", FrameClass.DM, AirBucket.BRIDGE)
         metrics.onLoraReoffered()
@@ -644,7 +644,7 @@ internal class LoraMeshTransport(
         }
         val label = "bridge:${env.id}"
         val parts = encodeOrNull(wire, label) ?: return false
-        if (!sigSeen.add(sigKey(wire))) {
+        if (!sigSeen.add(dedupKey(wire, env))) {
             metrics.onLoraSuppressed()
             return false
         }
@@ -774,7 +774,7 @@ internal class LoraMeshTransport(
         }
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return
         if (env.senderId == selfIdCached) return // our own frame echoed back over the mesh
-        sigSeen.add(sigKey(wire)) // so the composite's relay re-fanout doesn't bounce it back over LoRa
+        sigSeen.add(dedupKey(wire, env)) // so the composite's relay re-fanout doesn't bounce it back over LoRa
         noteReachable(Peer(env.senderId))
         metrics.onLoraReceived()
         if (fragmented) metrics.onLoraReassembled()
@@ -905,6 +905,19 @@ internal class LoraMeshTransport(
             )
     }
 
+    /**
+     * The window's dedup key. Keyed on the signature rather than the frame id because a re-seal keeps its
+     * id (`resealAndFlood`) and carries a fresh signature that must not be suppressed by a ten-minute-old
+     * entry. An **unsigned** frame (the v3 live-link tick, ADR 059) has no signature to key on — every one
+     * would collapse to the empty key and the first would silence the rest for the window — so it keys on
+     * its id, which is exact for that form: AckSync seals a tick once and re-sends it verbatim, never
+     * re-sealing under the same id. A distinct namespace so the two kinds of key can never collide.
+     */
+    private fun dedupKey(
+        wire: WireEnvelope,
+        env: RelayEnvelope,
+    ): String = if (wire.sig.isEmpty()) "u:${env.id}" else sigKey(wire)
+
     private fun sigKey(wire: WireEnvelope): String {
         val n = minOf(SIG_KEY_BYTES, wire.sig.size)
         return buildString(n * 2) { for (i in 0 until n) append("%02x".format(wire.sig[i])) }
@@ -951,8 +964,15 @@ internal class LoraMeshTransport(
          */
         const val IDLE_TICK_MS = 1_000L
 
-        // Bytes a ToRadio{packet} adds around the Data.payload (3-B ATT header + MeshPacket/Data framing +
-        // fixed32 to/id + slack), so `mtu - this` is the payload that still fits one ATT write.
-        const val TORADIO_OVERHEAD = 33
+        /** The ATT write header: one opcode byte and a two-byte handle, so a write carries `mtu - 3` bytes. */
+        const val ATT_HEADER_BYTES = 3
+
+        /**
+         * Bytes a ToRadio{packet} adds around the Data.payload on the BLE write — the ATT header plus the
+         * measured protobuf framing ([MeshtasticProto.PACKET_OVERHEAD]) — so `mtu - this` is the largest
+         * payload that still fits one ATT write. Was a hand-set 33 with 6 B of unaccounted slack; at the
+         * MTU-255 ESP32 boards that slack was the difference between a one-packet v3 tick and two (ADR 059).
+         */
+        val TORADIO_OVERHEAD: Int = ATT_HEADER_BYTES + MeshtasticProto.PACKET_OVERHEAD
     }
 }

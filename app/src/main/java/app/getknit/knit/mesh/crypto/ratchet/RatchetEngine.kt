@@ -98,9 +98,10 @@ class RatchetEngine(
         val pub: ByteArray,
     )
 
+    /** A sealed frame; [nonce] is null for the v3 form, whose nonce is derived rather than carried. */
     class SealResult(
         val header: FrameHeader,
-        val nonce: ByteArray,
+        val nonce: ByteArray?,
         val ct: ByteArray,
         val session: SessionState,
         val newLocalEpoch: LocalEpoch?,
@@ -218,7 +219,9 @@ class RatchetEngine(
      * advance rule fires (see [needsNewEpoch]). [peerSpkPub] is the DH base while the peer has
      * contributed no epoch of their own yet (`pe = 0`). Returns null only if a fresh epoch is needed
      * and no base exists — callers gate on prekey presence, so that is an upstream bug, not a wire
-     * condition.
+     * condition. [v3] seals crypto scheme v3 (ADR 059): the ratchet header is bound into the AEAD's
+     * associated data and the nonce is derived from the message key (`RatchetCrypto.messageNonce`) instead
+     * of drawn at random and carried — the chain, epochs and header are exactly v2's.
      */
     fun seal(
         state: SessionState,
@@ -227,6 +230,7 @@ class RatchetEngine(
         peerSpkPub: ByteArray?,
         now: Long,
         forceNewEpoch: Boolean = false,
+        v3: Boolean = false,
     ): SealResult? {
         var session = state
         var newLocal: LocalEpoch? = null
@@ -238,7 +242,6 @@ class RatchetEngine(
         }
         val chainKey = checkNotNull(session.sendChainKey)
         val msgKey = RatchetCrypto.messageKey(chainKey)
-        val (nonce, ct) = AesGcm.encrypt(msgKey, plaintext, aad)
         val header =
             FrameHeader(
                 se = session.sendEpoch,
@@ -252,6 +255,18 @@ class RatchetEngine(
                         InitPayload(checkNotNull(session.initEphPub), session.initPkid, session.establishedAt)
                     },
             )
+        val nonce: ByteArray?
+        val ct: ByteArray
+        if (v3) {
+            // Nothing random rides the wire: the header goes into the AAD, the nonce comes out of the key.
+            val boundAad = aad + RatchetCrypto.headerBindingBytes(header)
+            nonce = null
+            ct = AesGcm.encrypt(msgKey, plaintext, boundAad, RatchetCrypto.messageNonce(msgKey, boundAad)).second
+        } else {
+            val sealed = AesGcm.encrypt(msgKey, plaintext, aad)
+            nonce = sealed.first
+            ct = sealed.second
+        }
         val advanced =
             session.copy(
                 sendChainKey = RatchetCrypto.nextChainKey(chainKey),
@@ -278,12 +293,13 @@ class RatchetEngine(
      * receive epoch (deriving-and-storing keys across any index gap), then a brand-new epoch derivation
      * — under the active root first and the draining [SessionState.prevRoot] second. An attached init
      * may establish, idempotently re-confirm, race-tiebreak, or replace the session; every mutation
-     * rides the returned [OpenDelta], and nothing is committed on failure.
+     * rides the returned [OpenDelta], and nothing is committed on failure. A null [nonce] is the v3 form
+     * (derived nonce, header bound into the AAD — see [seal]); the ladder is otherwise identical.
      */
     fun open(
         ctx: OpenContext,
         header: FrameHeader,
-        nonce: ByteArray,
+        nonce: ByteArray?,
         ct: ByteArray,
         aad: ByteArray,
         now: Long,
@@ -291,7 +307,7 @@ class RatchetEngine(
         if (!headerSane(header)) return OpenOutcome.Failed.BAD_HEADER
         val resolved = resolveSession(ctx, header, now) ?: return sessionFailure(ctx, header)
         if (!resolved.purge && ctx.skippedMsgKey != null) {
-            return decryptWith(ctx.skippedMsgKey, nonce, ct, aad) { plain ->
+            return decryptWith(ctx.skippedMsgKey, header, nonce, ct, aad) { plain ->
                 OpenOutcome.Opened(
                     plain,
                     OpenDelta(
@@ -517,7 +533,7 @@ class RatchetEngine(
         ctx: OpenContext,
         resolved: ResolvedSession,
         header: FrameHeader,
-        nonce: ByteArray,
+        nonce: ByteArray?,
         ct: ByteArray,
         aad: ByteArray,
         now: Long,
@@ -549,7 +565,7 @@ class RatchetEngine(
         chainKeyAtNext: ByteArray,
         next: Int,
         header: FrameHeader,
-        nonce: ByteArray,
+        nonce: ByteArray?,
         ct: ByteArray,
         aad: ByteArray,
         now: Long,
@@ -562,7 +578,7 @@ class RatchetEngine(
         }
         val msgKey = RatchetCrypto.messageKey(chainKey)
         val nextChain = RatchetCrypto.nextChainKey(chainKey)
-        return decryptWith(msgKey, nonce, ct, aad) { plain ->
+        return decryptWith(msgKey, header, nonce, ct, aad) { plain ->
             OpenOutcome.Opened(
                 plain,
                 OpenDelta(
@@ -608,14 +624,22 @@ class RatchetEngine(
         return out
     }
 
+    /**
+     * One AEAD attempt with [key]. A null [nonce] is the v3 form: the header is bound into the AAD and the
+     * nonce derives from the very key being tried — so every rung of the ladder and every root candidate
+     * derives its own, and a stored skipped key (all that `ratchet_skipped_keys` keeps) still opens.
+     */
     private inline fun decryptWith(
         key: ByteArray,
-        nonce: ByteArray,
+        header: FrameHeader,
+        nonce: ByteArray?,
         ct: ByteArray,
         aad: ByteArray,
         onSuccess: (ByteArray) -> OpenOutcome,
     ): OpenOutcome {
-        val plain = runCatching { AesGcm.decrypt(key, nonce, ct, aad) }.getOrNull()
+        val boundAad = if (nonce == null) aad + RatchetCrypto.headerBindingBytes(header) else aad
+        val iv = nonce ?: RatchetCrypto.messageNonce(key, boundAad)
+        val plain = runCatching { AesGcm.decrypt(key, iv, ct, boundAad) }.getOrNull()
         return if (plain == null) OpenOutcome.Failed.AEAD_FAIL else onSuccess(plain)
     }
 

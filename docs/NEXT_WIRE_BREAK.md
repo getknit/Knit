@@ -161,9 +161,11 @@ coordination-plane encoding, and stop consulting `Protocol.CAP_FAST_COMPACT` whe
 peer that does not advertise the bit. Once no such peer exists, the fallback and its gate are dead weight
 on every send path.
 
-**At the break.** Drop the `0x01` writer and reader. `0x02` stays burned either way. Note this is the one
-item on the list that is *purely* cleanup — it buys no capability and no privacy, so it should ride a break
-that is happening anyway and never motivate one.
+**At the break.** Drop the `0x01` writer and reader. `0x02` stays burned either way. If item 8 has landed
+the canonical form is already compact, so the `0x03` deflate and the `0x05` transcode (roadmap: "frame
+compaction, round 2") retire in the same pass and the fast planes carry the signed bytes as-is. Note this is
+the one item on the list that is *purely* cleanup — it buys no capability and no privacy, so it should ride
+a break that is happening anyway and never motivate one.
 
 ### 7. Decide what `Protocol.MIN_SUPPORTED` means
 
@@ -177,6 +179,40 @@ and 5 both want a way to say "below this, do not bother".
 **Watch out.** It is derived from the *unauthenticated* advert (`Protocol.parse`), so it can only ever be a
 routing/degradation hint — never a trust or security input. Anything that gates a privacy or integrity
 property on it repeats the mistake item 2 warns about.
+
+### 8. Make the transcoder's byte layout the canonical signed form
+
+**What.** Once the schema-aware `0x05` transcoder exists (`.agents/memory/roadmap.md`, "frame compaction,
+round 2"), the break is where its layout stops being a transport-local re-encoding and becomes what
+`WireCodec` emits and signs: integer map keys (`@CborLabel` + `preferCborLabelsOverNames`, kotlinx ≥ 1.11),
+raw 16-byte ids wherever a `FrameId`/`NodeId` rides as text today (`RelayEnvelope.id`/`senderId`/
+`recipientId`, `ReceiptContent.ackId`, `ReactionContent.messageId`, `GroupInfo.members`/`createdBy`/
+`departed`, `KeyReqContent.nodeIds`, `Mention.nodeId`, `ReplyRef.messageId`/`authorId`), `sentAt` in
+seconds, and a DM's `recipientId` as a short prefix rather than the full id.
+
+**Why it is parked.** Every one of these changes the signed bytes, so none is additive — and the transcoder
+gets nearly all of the byte savings *without* the break, which is exactly why a break should never be
+scheduled for this alone. What the transcoder cannot reach is what a re-encode must reproduce exactly: the
+full 16-B `recipientId` (a 4-B prefix would make an old relay read the DM as a room post, since
+`recipientId == null && group == null` *is* the room), the millisecond `sentAt`, and the text form of
+every id nested inside a content payload. Measured 2026-08-29: the break buys margin on the frames that
+matter (a tick's floor drops from ~135 B to ~110, a reaction's from ~218 to ~190, a 40-char DM's from ~220
+to ~190); it does **not** buy a one-packet 100-char DM, whose floor (sig 64 + ids 48 + ek 32 + ct 124)
+stays ~285 B under any layout.
+
+**At the break.** Switch `WireCodec` to the compact layout, regenerate `GoldenVectorTest`, and retire
+`0x03`/`0x05` alongside `0x01` (item 6). The `MessageContent` half — int labels and raw ids *inside* the
+ciphertext — is **not** on this list: it shipped additively as the v3 compact plaintext (ADR 059),
+discriminated by `EncEnvelope.v = 3` (a reserved label-0 version rides inside it — `MessageContent.v` is
+never emitted, so it could not gate) behind `CAP_CRYPTO_V3`, so the break only has to move what is outside
+the seal. One thing the break *can* reclaim that ADR 059 could not: v3 carries `nonce` as an empty byte
+string (7 B) because `canCarry` decodes the payload on every fielded build; once every carrier is past the
+break the field can go.
+
+**Watch out.** The recipient prefix changes what a relay sees: `isBroadcastRoom` (`LoraFramePolicy`,
+`FrameFanout`, `InboundPipeline`) keys on `recipientId == null`, and `ForwardStore`'s DM custody rule
+keys on the full id. `ScopeFrames.seal` seals `signed` opaquely, so the spool plane is unaffected — but
+`docs/SPOOL_PROTOCOL.md` §13 vectors carry frame bytes and move with `GoldenVectorTest`.
 
 ---
 

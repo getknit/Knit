@@ -33,7 +33,9 @@ import app.getknit.knit.mesh.crypto.b64d
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
+import app.getknit.knit.mesh.crypto.readsCryptoV3
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
+import app.getknit.knit.mesh.crypto.sealBytes
 import app.getknit.knit.mesh.lora.LoraCtl
 import app.getknit.knit.mesh.lora.LoraFramePolicy
 import app.getknit.knit.mesh.lora.LoraSizeHint
@@ -641,7 +643,7 @@ class MeshManager(
             )
         val envelope = sealEnvelopeFor(id, me, sentAt, recipientId, group, content, inlineAcks)
         if (inlineAcks.isNotEmpty() && recipientId != null) {
-            val carried = envelope?.v == EncEnvelope.VERSION_RATCHET
+            val carried = envelope != null && EncEnvelope.isDmRatchetVersion(envelope.v)
             if (carried) metrics.onReceiptCoalesced(inlineAcks.size) else dmAcks.giveBack(recipientId, inlineAcks)
         }
         // Persist our own plaintext copy regardless, so the sender always sees their message. A DM whose
@@ -743,10 +745,11 @@ class MeshManager(
             val bundle = peer?.pubKey?.let { PublicKeyBundle.decode(it) }
             val capable = bundle != null && (peer.capabilities ?: 0L) and Protocol.CAP_RATCHET != 0L
             if (capable) {
-                val plaintext = content.copy(acks = inlineAcks.takeIf { it.isNotEmpty() }).encode()
-                val sealed = ratchet.sealDm(recipientId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, clock())
+                val (plaintext, scheme) = content.copy(acks = inlineAcks.takeIf { it.isNotEmpty() }).sealBytes(peer.readsCryptoV3())
+                val sealed = ratchet.sealDm(recipientId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, clock(), scheme)
                 if (sealed != null) {
                     metrics.onDmSealedV2()
+                    if (scheme == EncEnvelope.VERSION_DM_V3) metrics.onDmSealedV3()
                     return sealed
                 }
                 metrics.onDmSealedV1Fallback()
@@ -1217,7 +1220,7 @@ class MeshManager(
     private suspend fun sealDeliveryTickEnvelope(
         authorId: String,
         ackIds: List<String>,
-    ): RelayEnvelope? {
+    ): SealedTick? {
         val peer = peers.find(authorId) ?: return null
         if ((peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L) return null
         val bundle = peer.pubKey?.let { PublicKeyBundle.decode(it) } ?: return null
@@ -1225,36 +1228,59 @@ class MeshManager(
         val id = FrameId.new()
         val now = clock()
         val aad = MessageCrypto.header(id, me, now, authorId)
-        val plaintext =
+        val (plaintext, scheme) =
             when (ackIds.size) {
                 1 -> MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = ackIds.single())
                 else -> MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, acks = ackIds)
-            }.encode()
+            }.sealBytes(peer.readsCryptoV3())
         val sealed =
-            ratchet.sealDm(authorId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, now)
+            ratchet.sealDm(authorId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, now, scheme)
                 ?: run {
                     metrics.onReceiptSealedFallback()
                     return null
                 }
         metrics.onReceiptSealed()
-        return RelayEnvelope(
-            type = FrameType.CHAT,
-            id = id,
-            senderId = me,
-            sentAt = now,
-            recipientId = authorId,
-            payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+        val v3 = scheme == EncEnvelope.VERSION_DM_V3
+        if (v3) metrics.onDmSealedV3()
+        return SealedTick(
+            env =
+                RelayEnvelope(
+                    type = FrameType.CHAT,
+                    id = id,
+                    senderId = me,
+                    sentAt = now,
+                    recipientId = authorId,
+                    payload = WireCodec.encodePayload(ChatContent(enc = sealed)),
+                ),
+            v3 = v3,
         )
     }
 
     /**
-     * The live-link form of the tick: signed `relay = false` (point-to-point like the cleartext tick it
-     * replaces — never flooded or custodied), for AckSync to send straight to a linked author.
+     * A sealed tick and the scheme it was actually sealed under — the unsigned decision below must follow
+     * the seal, not the capability read: a content the compact codec refused fell back to v2 and must stay
+     * signed.
+     */
+    private class SealedTick(
+        val env: RelayEnvelope,
+        val v3: Boolean,
+    )
+
+    /**
+     * The live-link form of the tick: `relay = false` (point-to-point like the cleartext tick it replaces —
+     * never flooded or custodied), for AckSync to send straight to a linked author. **Unsigned** when it
+     * sealed v3 (ADR 059): its AEAD's associated data binds id, sender, sentAt, recipient and the ratchet
+     * header, so the frame signature carried nothing the recipient could not already check — and the
+     * 64 bytes it cost were the difference between one packet and two on every fast plane. Signed as before
+     * toward a peer that seals v2.
      */
     private suspend fun sealDeliveryTick(
         authorId: String,
         ackIds: List<String>,
-    ): WireEnvelope? = sealDeliveryTickEnvelope(authorId, ackIds)?.let { sign(it, relay = false) }
+    ): WireEnvelope? =
+        sealDeliveryTickEnvelope(authorId, ackIds)?.let { tick ->
+            if (tick.v3) unsigned(tick.env).also { metrics.onTickUnsigned() } else sign(tick.env, relay = false)
+        }
 
     /**
      * The custody-escalated form: the same sealed tick ORIGINATED (`relay = true` — flooded, custodied,
@@ -1266,8 +1292,8 @@ class MeshManager(
         authorId: String,
         ackIds: List<String>,
     ): Boolean {
-        val env = sealDeliveryTickEnvelope(authorId, ackIds) ?: return false
-        originateSigned(env, FanoutHint.TICK)
+        val tick = sealDeliveryTickEnvelope(authorId, ackIds) ?: return false
+        originateSigned(tick.env, FanoutHint.TICK)
         metrics.onReceiptCustodied()
         return true
     }
@@ -1491,7 +1517,9 @@ class MeshManager(
         if (!capable) return false
         val id = FrameId.new()
         val aad = MessageCrypto.header(id, me, now, recipientId)
-        val sealed = ratchet.sealDm(recipientId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), content.encode(), aad, now) ?: return false
+        val (plaintext, scheme) = content.sealBytes(peer.readsCryptoV3())
+        val sealed = ratchet.sealDm(recipientId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, now, scheme) ?: return false
+        if (scheme == EncEnvelope.VERSION_DM_V3) metrics.onDmSealedV3()
         originateSigned(
             RelayEnvelope(
                 type = FrameType.CHAT,
@@ -1901,7 +1929,9 @@ class MeshManager(
         val id = FrameId.new()
         val now = clock()
         val aad = MessageCrypto.header(id, me, now, peerId)
-        val sealed = ratchet.sealDm(peerId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), payload.encode(), aad, now) ?: return false
+        val (plaintext, scheme) = payload.sealBytes(peer.readsCryptoV3())
+        val sealed = ratchet.sealDm(peerId, bundle.dhPublicKey(), ratchetPrekeyOf(peer), plaintext, aad, now, scheme) ?: return false
+        if (scheme == EncEnvelope.VERSION_DM_V3) metrics.onDmSealedV3()
         originateSigned(
             RelayEnvelope(
                 type = FrameType.CHAT,
@@ -2011,6 +2041,16 @@ class MeshManager(
         val signed = WireCodec.encodeEnvelope(env)
         return WireEnvelope(relay = relay, sig = messageCrypto.signRaw(signed), signed = signed)
     }
+
+    /**
+     * The unsigned point-to-point form (ADR 059): an empty signature, like the blob request. Only ever a
+     * `relay = false` v3 sealed tick — the ratchet AEAD, whose associated data binds id, sender, sentAt,
+     * recipient and the header, is its authenticator, and the receiver's unsigned door admits exactly that
+     * shape (`InboundPipeline.verifyInbound`). Anything flooded or custodied carries [sign]'s signature,
+     * because a carrier can verify a signature and cannot open a session.
+     */
+    private fun unsigned(env: RelayEnvelope): WireEnvelope =
+        WireEnvelope(relay = false, sig = ByteArray(0), signed = WireCodec.encodeEnvelope(env))
 
     /**
      * [ProfileFrameSource]: the current signed cleartext profile frame for the LoRa plane's key-bootstrap
@@ -2211,6 +2251,7 @@ class MeshManager(
                         "framesHeld=${s.framesHeld} framesReplayed=${s.framesReplayed} " +
                         "receiptsResent=${s.receiptsResent} " +
                         "receiptsSealed=${s.receiptsSealed}/${s.receiptsSealedFallback} " +
+                        "dmSealedV3=${s.dmSealedV3} ticksUnsigned=${s.ticksUnsigned} " +
                         "reactionsSealed=${s.reactionsSealed}/${s.reactionsSealedFallback} " +
                         "filesNan=${s.filesSentNan} filesBt=${s.filesSentBt} bulkTimeouts=${s.nanBulkGraceTimeouts}",
                 )

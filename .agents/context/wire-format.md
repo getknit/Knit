@@ -24,7 +24,8 @@ can evolve *additively* without another break. The three layers:
 
 **One signature authenticates every type**: `WireEnvelope.sig` is raw Ed25519 over `signed` (which
 binds `type`/`id`/`senderId`), verified byte-exact in `MeshManager.verifyInbound`; `blobreq` (with
-`relay = false`) is the only unsigned frame. `MeshManager` signs on origination; `verifyInbound` drops
+`relay = false`) and the v3 live-link delivery tick (ADR 059 — a `relay = false` DM-form chat addressed to
+us, authenticated by its ratchet AEAD) are the only unsigned frames. `MeshManager` signs on origination; `verifyInbound` drops
 any flooded frame whose signature is missing/invalid or whose key doesn't derive to `senderId`, but
 the router still relays unknown/unverifiable frames verbatim so an old build is never a black hole.
 `Protocol.VERSION`/`capabilities` ride (unauthenticated) in the Wi-Fi Aware `serviceSpecificInfo`

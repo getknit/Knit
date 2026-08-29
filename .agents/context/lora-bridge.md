@@ -186,7 +186,11 @@ and **439 B** with the init — 2 packets either way; the 3-packet ceiling (687 
 ≈ 335 with the init; an attachment *reference* costs ~167 B more and still fits; a `TextLimits.MESSAGE`-length
 DM is `loraTooBig` and rides the radios/custody. The ✓✓ is the recipient's sealed `CTL_RECEIPT` — a DM-form
 frame originated `relay = true`, so it crosses back on the same rule, and it re-runs on every re-delivery via
-the pre-decrypt exists-gate (which is how a tick lost over LoRa heals when the DM is re-offered).
+the pre-decrypt exists-gate (which is how a tick lost over LoRa heals when the DM is re-offered). Between two
+builds that read crypto scheme v3 (ADR 059) every sealed DM-form frame is ~30 B lighter (derived nonce,
+compact plaintext) — the DM ✓✓ still two packets (signed, custodied) — and AckSync's `relay = false` tick for
+a room or group post crosses **unsigned as one packet** (~222 B; at the MTU-255 ESP32 boards that needs the
+measured cap, `TORADIO_OVERHEAD` 27 → 228-B payloads, pinned by `CoordinationPlaneSizeBudgetTest`).
 
 **Re-offer on first hearing.** The plane has no custody sync, so a DM sent while the peer's board was off
 would be lost to it. On first hearing a peer (once per 45-min linger), after the beacon, the transport pulls

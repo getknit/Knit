@@ -18,11 +18,14 @@ import java.util.zip.Inflater
  * Compact frame ([TAG_COMPACT]):
  * ```
  * [0]    tag 0x03
- * [1]    flags: bit0 RELAY, bit1 DEFLATED, bits2-3 dictId (1 = DICT_V1), bits4-7 reserved (must be 0)
+ * [1]    flags: bit0 RELAY, bit1 DEFLATED, bits2-3 dictId (1 = DICT_V1), bit4 UNSIGNED (the sig field is
+ *        absent — the v3 point-to-point sealed tick, ADR 059, whose AEAD is its authenticator),
+ *        bits5-7 reserved (must be 0)
  * [2]    ttl (high nibble) / hops (low nibble), each saturated at 15 — legal values are ≤ DEFAULT_TTL=8,
  *        and saturating a hostile larger value can only tighten propagation, never loosen it
  * [3]    sig, 64 raw bytes (outside the deflate stream: 64 random bytes would only poison the
- *        Huffman histogram the compressible CBOR text needs)
+ *        Huffman histogram the compressible CBOR text needs) — omitted when UNSIGNED, so `signed`
+ *        starts at [3]
  * [67]   signed — verbatim (DEFLATED clear) or raw-deflate `nowrap` with the preset dict (DEFLATED set;
  *        kept only when strictly smaller, so a compact frame never out-grows its stored form)
  * ```
@@ -38,7 +41,9 @@ import java.util.zip.Inflater
  * ```
  *
  * Tag registry (append-only, like capability bits): `0x01` legacy tagged-CBOR frame (forever), `0x02`
- * burned (a since-removed nudge), `0x03` compact, `0x04` fragment. Tags stay non-printable
+ * burned (a since-removed nudge), `0x03` compact, `0x04` fragment. Flag bits are append-only too: a
+ * receiver drops any reserved bit it does not know, so a new bit is only ever emitted toward a peer whose
+ * capabilities say it reads it (UNSIGNED rides behind `Protocol.CAP_CRYPTO_V3`). Tags stay non-printable
  * (`0x00..0x1F`) so untagged cues — whose first byte is a printable node-id char — remain
  * distinguishable. [DICT_V1] is **frozen** once shipped (pinned by a SHA-256 golden test): a receiver
  * inflating with a different dictionary yields garbage that only dies later at decode/signature, so
@@ -60,8 +65,14 @@ internal object FastFrameCodec {
     /** Most parts one frame may split into — bounds reassembly state and the loss-probability cost. */
     const val MAX_PARTS = 3
 
-    /** Raw Ed25519 signature width; a [WireEnvelope] with any other [WireEnvelope.sig] size is unrepresentable. */
+    /**
+     * Raw Ed25519 signature width; a [WireEnvelope] with any other [WireEnvelope.sig] size is unrepresentable —
+     * except the empty one, which is the UNSIGNED form.
+     */
     const val SIG_BYTES = 64
+
+    /** Flags bit 4: no sig field — a `relay = false` v3 sealed tick authenticated by its AEAD (ADR 059). */
+    const val FLAG_UNSIGNED = 0x10
 
     /** Compact fixed header: tag + flags + ttl/hops. */
     const val HEADER_BYTES = 3
@@ -76,7 +87,7 @@ internal object FastFrameCodec {
     private const val FLAG_DEFLATED = 0x02
     private const val DICT_SHIFT = 2
     private const val DICT_MASK = 0x03
-    private const val RESERVED_MASK = 0xF0
+    private const val RESERVED_MASK = 0xE0
     private const val NIBBLE_MAX = 15
     private const val NIBBLE_BITS = 4
     private const val BYTE_MASK = 0xFF
@@ -93,23 +104,28 @@ internal object FastFrameCodec {
 
     /**
      * The one 0x03 frame for [wire] — deflated when that is strictly smaller, stored otherwise — or
-     * null when [wire] is unrepresentable ([WireEnvelope.sig] not exactly [SIG_BYTES], e.g. the
-     * unsigned blob-request form), in which case the caller falls back to legacy framing.
+     * null when [wire] is unrepresentable: a [WireEnvelope.sig] that is neither exactly [SIG_BYTES] nor
+     * empty. An empty sig is the UNSIGNED form (the sig field is simply absent); the caller decides
+     * whether the peer reads it. Note the unsigned blob request has never ridden this path — it goes
+     * over links — so the empty case here is, in practice, the v3 tick.
      */
     fun encodeCompact(wire: WireEnvelope): ByteArray? {
-        if (wire.sig.size != SIG_BYTES) return null
+        val unsigned = wire.sig.isEmpty()
+        if (!unsigned && wire.sig.size != SIG_BYTES) return null
         val deflated = deflateWithDict(wire.signed)
         val useDeflate = deflated.size < wire.signed.size
         val body = if (useDeflate) deflated else wire.signed
         var flags = 0
         if (wire.relay) flags = flags or FLAG_RELAY
         if (useDeflate) flags = flags or FLAG_DEFLATED or (DICT_ID_V1 shl DICT_SHIFT)
-        val out = ByteArray(HEADER_BYTES + SIG_BYTES + body.size)
+        if (unsigned) flags = flags or FLAG_UNSIGNED
+        val sigBytes = if (unsigned) 0 else SIG_BYTES
+        val out = ByteArray(HEADER_BYTES + sigBytes + body.size)
         out[0] = TAG_COMPACT
         out[1] = flags.toByte()
         out[2] = packTtlHops(wire.ttl, wire.hops)
         wire.sig.copyInto(out, HEADER_BYTES)
-        body.copyInto(out, HEADER_BYTES + SIG_BYTES)
+        body.copyInto(out, HEADER_BYTES + sigBytes)
         return out
     }
 
@@ -119,11 +135,13 @@ internal object FastFrameCodec {
      * backstop), an unknown dictId, or a deflate stream that fails to inflate.
      */
     fun decodeCompact(message: ByteArray): WireEnvelope? {
-        if (message.size < HEADER_BYTES + SIG_BYTES + 1 || message[0] != TAG_COMPACT) return null
+        if (message.size < HEADER_BYTES + 1 || message[0] != TAG_COMPACT) return null
         val flags = message[1].toInt() and BYTE_MASK
         if (flags and RESERVED_MASK != 0) return null
-        val sig = message.copyOfRange(HEADER_BYTES, HEADER_BYTES + SIG_BYTES)
-        val body = message.copyOfRange(HEADER_BYTES + SIG_BYTES, message.size)
+        val sigBytes = if (flags and FLAG_UNSIGNED != 0) 0 else SIG_BYTES
+        if (message.size < HEADER_BYTES + sigBytes + 1) return null
+        val sig = message.copyOfRange(HEADER_BYTES, HEADER_BYTES + sigBytes)
+        val body = message.copyOfRange(HEADER_BYTES + sigBytes, message.size)
         val signed =
             if (flags and FLAG_DEFLATED != 0) {
                 if ((flags shr DICT_SHIFT) and DICT_MASK != DICT_ID_V1) return null

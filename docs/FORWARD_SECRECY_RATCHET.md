@@ -5,7 +5,9 @@ receive → send → reset hardening → observability). The group scheme that b
 `docs/GROUP_FORWARD_SECRECY.md` (the v2 group form — both landed in this one unreleased bump). This document is the normative spec for the v2 DM
 crypto scheme; `mesh/crypto/ratchet/` is the reference implementation and
 `RatchetCryptoTest`/`RatchetEngineTest` are the executable anchors (an iOS/CryptoKit port implements
-this file, not the Kotlin).
+this file, not the Kotlin). Crypto scheme **v3** (ADR 059, 2026-08-29) is this same ratchet — chain, epochs,
+header and bootstrap unchanged — with a derived nonce, a header-bound AAD and a compact plaintext; §4, §5
+and §6 carry the deltas inline rather than as a separate document.
 
 ## 1. Why, and why this shape
 
@@ -106,10 +108,25 @@ msgKey_n     = HKDF(chainKey_n, salt = 0*32, info = "knit/dm/v2/mk", 32)
 chainKey_n+1 = HKDF(chainKey_n, salt = 0*32, info = "knit/dm/v2/ck", 32)
 ```
 
-AEAD: AES-256-GCM (12-byte random IV, 128-bit tag), key `msgKey_n`, **AAD = the unchanged v1
-header** `"$id|$senderId|$sentAt|$thread"`. A tampered ratchet header changes the derived key (the
-AEAD fails), and the whole content — header included — is under the frame's Ed25519 signature, which
-is verified before decrypt; the header needs no second integrity mechanism.
+AEAD: AES-256-GCM (128-bit tag), key `msgKey_n`. **v2:** a 12-byte random IV carried in
+`EncEnvelope.nonce`, **AAD = the unchanged v1 header** `"$id|$senderId|$sentAt|$thread"`. A tampered
+ratchet header changes the derived key (the AEAD fails), and the whole content — header included — is
+under the frame's Ed25519 signature, which is verified before decrypt; the header needs no second
+integrity mechanism. **v3 (ADR 059):** nothing random rides the wire —
+
+```
+aad_v3   = aad_v2 ‖ "knit/dm/v3/hdr" ‖ u32be(se) ‖ ek ‖ u32be(pe) ‖ u32be(n) ‖ u8(flags)
+                  ‖ (init ? 0x01 ‖ eph ‖ u32be(pkid) ‖ u64be(at) : 0x00)
+nonce_n  = HKDF(msgKey_n, salt = 0*32, info = "knit/dm/v3/nonce" ‖ aad_v3, 12)
+```
+
+The nonce derives from the **message** key, not the chain key, so a stored skipped key (all that
+`ratchet_skipped_keys` keeps) still opens its frame, and each rung of the open ladder and each root
+candidate derives its own; the AAD is mixed in so a send-chain rollback (a restored database re-sealing
+under the same index) gets a distinct nonce from the fresh frame id, restoring v2's (key, nonce) posture.
+Binding the header into the AAD is what makes the sentence above true for a frame that carries *no*
+signature (the unsigned live-link tick, §6): `flags` and `init.at` are the two header fields the derived
+key does not already bind.
 
 **`sessionRoot` is static per session — there is deliberately no cumulative root chain.** A chained
 root (`RK_n = KDF(RK_{n-1}, DH_n)`) requires processing a peer's epochs in order, and this mesh
@@ -167,10 +184,27 @@ existing `UNKNOWN_ENVELOPE_VERSION` drop-locally-still-relay path; `canCarry` ne
 (rule 5 of WIRE_COMPAT), so mixed-version meshes carry v2 custody exactly like v1. Steady-state
 overhead ≈ 50 B per frame (+ ~95 B while unconfirmed).
 
+`EncEnvelope` **v3** (ADR 059; `MAX_SUPPORTED_VERSION = 3`) is the DM form only, shaped so every fielded
+build still decodes — and therefore still *carries* — it:
+
+```
+EncEnvelope { v = 3, nonce = h'' (empty: derived, §4), ct, keys = [], r: RatchetHeader }   // header unchanged
+ct           = AES-GCM(msgKey_n, nonce_n, aad_v3, MessageContentV2)                          // the labeled plaintext
+```
+
+`nonce` stays a required field carried empty rather than becoming nullable because `canCarry` decodes the
+chat payload before custodying a frame: an envelope a pre-v3 build cannot decode is one no fielded build
+would carry, which is the per-build custody rule ADR 006 forbids. The plaintext is the compact
+`MessageContentV2` schema (integer keys, raw ids; `mesh/crypto/MessageContentV2.kt`), discriminated by the
+envelope version, with a reserved label-0 version of its own. Old builds: decode, `v > MAX_SUPPORTED_VERSION`,
+`UNKNOWN_ENVELOPE_VERSION`, carry. Group form stays v2; resets and group-key ctl DMs stay v2.
+
 Capability gating: `Protocol.CAP_RATCHET = 0x10` (append-only). Outbound v2 requires the peer's
 pinned, authenticated profile to carry **both** the capability bit **and** a valid `PrekeyInfo` —
 they travel on one signed frame, which is the stale-capability mitigation. Otherwise outbound stays
-v1 (kept indefinitely; inbound v1 accepted forever).
+v1 (kept indefinitely; inbound v1 accepted forever). Outbound **v3** additionally requires
+`Protocol.CAP_CRYPTO_V3 = 0x100` on the same pinned profile (`mesh/crypto/CryptoScheme`); a content the
+compact codec cannot represent canonically seals v2 instead, never mangled.
 
 ## 6. Receive ladder and delivery semantics
 
@@ -187,6 +221,15 @@ in-memory, 10 min, reset per mesh session). Two consequences are baked in:
   `RATCHET_NO_SESSION` / `RATCHET_EPOCH_GONE` / `DUPLICATE` (benign) / `BAD_HEADER` / `AEAD_FAIL`.
   All are delivery-local; the frame still relays and custodies (the no-throw contract of
   `onDeliver` holds — nothing in the v2 path throws out).
+
+- **The unsigned door (v3, ADR 059).** `verifyInbound` admits exactly one frame shape without a
+  signature — `chat`, `relay = false`, no group, addressed to us by a pinned sender other than us — and
+  judges only the shape; the AEAD (whose AAD now binds the header, §4) is the authenticator. The rest is
+  ordering: the unsigned check runs *before* the plaintext branch and *before* the exists-gate (an unsigned
+  frame never takes that shortcut — it is a receipt oracle otherwise), a frame that opens must be a
+  `CTL_RECEIPT` or it is refused *before* commit (a stripped-signature replay of a plain DM opens and must
+  not deliver; the chain index is untouched, the signed copy lands later), and an open failure is counted
+  but never fed to the reset heuristic. Drop reason `UNSIGNED_REFUSED` for every other empty-signature frame.
 
 Persistence is atomic: the engine returns `(plaintext, StateDelta)` and the pipeline commits the
 delta with the message row in one `withTransaction`. A crash before commit re-processes cleanly on

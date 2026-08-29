@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-28T06:27:40Z
+  updated: 2026-08-29T20:30:00Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -24,6 +24,10 @@ document:
 
 ### Added
 
+- Delivery ticks between up-to-date phones are smaller: the ✓ for a nearby-room or group post now crosses
+  a LoRa board or the Wi-Fi Aware fast lane in one packet instead of two, and every private message or
+  receipt between two current builds is a little lighter on the air. Nothing changes for an older phone —
+  it keeps receiving exactly what it did.
 - Two people with the same name are now told apart. When someone nearby uses a name Knit already knows,
   both show their alias after it — the two-word name Knit gives every device, like "Sam (JoyfulFerret)" —
   in the room, the chat list, Contacts, group members and notifications, and it goes away again when the

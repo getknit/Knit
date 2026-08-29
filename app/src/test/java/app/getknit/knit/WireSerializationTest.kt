@@ -27,6 +27,7 @@ import kotlinx.serialization.cbor.ByteString
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -283,6 +284,35 @@ class WireSerializationTest {
         val seenByOldBuild = WireCodec.decodePayload<EncEnvelopeV1Shape>(v2)
         assertEquals(EncEnvelope.VERSION_RATCHET, seenByOldBuild?.v)
         assertTrue(requireNotNull(seenByOldBuild).keys.isEmpty())
+    }
+
+    @Test
+    fun everyOlderDecoderShapeDecodesAV3Envelope() {
+        // ADR 059's executable reason for keeping `nonce` a required field and sending it EMPTY on v3: a
+        // build that cannot decode the envelope cannot carry it either (`canCarry` decodes the chat payload),
+        // so every fielded shape — the v1 one and the pre-`g` v2 one — must still decode the real v3 output
+        // and leave the version gate, not a parse error, to refuse it.
+        val v3 =
+            WireCodec.encodePayload(
+                EncEnvelope(
+                    v = EncEnvelope.VERSION_DM_V3,
+                    nonce = ByteArray(0),
+                    ct = byteArrayOf(2),
+                    keys = emptyList(),
+                    r = RatchetHeader(se = 1, ek = ByteArray(32), pe = 0, n = 0, init = RatchetInit(ByteArray(32), 1, 1L)),
+                ),
+            )
+        val v1Shape = requireNotNull(WireCodec.decodePayload<EncEnvelopeV1Shape>(v3))
+        assertEquals(EncEnvelope.VERSION_DM_V3, v1Shape.v)
+        assertEquals(0, v1Shape.nonce.size)
+        val v2Shape = requireNotNull(WireCodec.decodePayload<EncEnvelopeV2Shape>(v3))
+        assertEquals(EncEnvelope.VERSION_DM_V3, v2Shape.v)
+        assertNotNull(v2Shape.r)
+        // And the whole chat payload, as canCarry reads it.
+        assertNotNull(
+            WireCodec.decodePayload<ChatContent>(WireCodec.encodePayload(ChatContent(enc = WireCodec.decodePayload<EncEnvelope>(v3)!!))),
+        )
+        assertTrue("v3 sits inside this build's gate", EncEnvelope.VERSION_DM_V3 <= EncEnvelope.MAX_SUPPORTED_VERSION)
     }
 
     @Test

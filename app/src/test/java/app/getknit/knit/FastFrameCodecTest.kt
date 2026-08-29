@@ -110,9 +110,40 @@ class FastFrameCodecTest {
 
     @Test
     fun reservedFlagBitsAreRejected() {
-        val compact = checkNotNull(FastFrameCodec.encodeCompact(wire()))
-        compact[1] = (compact[1].toInt() or 0x10).toByte()
-        assertNull("an unknown future variant must drop, not mis-decode", FastFrameCodec.decodeCompact(compact))
+        for (bit in listOf(0x20, 0x40, 0x80)) {
+            val compact = checkNotNull(FastFrameCodec.encodeCompact(wire()))
+            compact[1] = (compact[1].toInt() or bit).toByte()
+            assertNull("an unknown future variant (bit $bit) must drop, not mis-decode", FastFrameCodec.decodeCompact(compact))
+        }
+    }
+
+    @Test
+    fun unsignedFrameRidesFlagBit4WithNoSigField() {
+        val original = wire(sig = ByteArray(0), relay = false, signed = cborSigned())
+        val compact = checkNotNull(FastFrameCodec.encodeCompact(original)) { "the empty sig is the UNSIGNED form, not an odd size" }
+        assertEquals(FastFrameCodec.TAG_COMPACT, compact[0])
+        assertTrue("flags bit 4 set", (compact[1].toInt() and FastFrameCodec.FLAG_UNSIGNED) != 0)
+        assertEquals("relay clear", 0, compact[1].toInt() and 0x01)
+        assertEquals(
+            "no sig field: exactly the header plus the body",
+            FastFrameCodec.HEADER_BYTES + (compact.size - FastFrameCodec.HEADER_BYTES),
+            compact.size,
+        )
+        assertEquals(
+            "64 bytes lighter than the signed form",
+            64,
+            checkNotNull(FastFrameCodec.encodeCompact(wire(signed = original.signed, relay = false))).size - compact.size,
+        )
+        val decoded = checkNotNull(FastFrameCodec.decodeCompact(compact))
+        assertEquals(0, decoded.sig.size)
+        assertFalse(decoded.relay)
+        assertArrayEquals(original.signed, decoded.signed)
+    }
+
+    @Test
+    fun anUnsignedFrameAsShortAsTheHeaderIsRejected() {
+        // Tag + flags(UNSIGNED) + ttl/hops and nothing after: no body to reconstruct.
+        assertNull(FastFrameCodec.decodeCompact(byteArrayOf(0x03, FastFrameCodec.FLAG_UNSIGNED.toByte(), 0x00)))
     }
 
     @Test
@@ -141,8 +172,9 @@ class FastFrameCodecTest {
 
     @Test
     fun oddSigSizeIsUnencodable() {
-        assertNull("legacy framing is the fallback for the unsigned form", FastFrameCodec.encodeCompact(wire(sig = ByteArray(0))))
         assertNull(FastFrameCodec.encodeCompact(wire(sig = rng.nextBytes(63))))
+        assertNull(FastFrameCodec.encodeCompact(wire(sig = rng.nextBytes(65))))
+        assertNull(FastFrameCodec.encodeCompact(wire(sig = rng.nextBytes(1))))
     }
 
     @Test

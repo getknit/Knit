@@ -515,4 +515,16 @@ class MeshtasticProtoTest {
     fun anElevenByteVarintIsRefused() {
         assertNull(MeshtasticProto.decodeFromRadio(hex("38 FF FF FF FF FF FF FF FF FF FF 01")))
     }
+
+    @Test
+    fun theFullPacketOverheadIsMeasuredNotGuessed() {
+        // ToRadio tag+len(3) + to fixed32(5) + channel varint(2) + decoded tag+len(3) + portnum varint(3)
+        // + payload tag+len(3) + id fixed32(5).
+        assertEquals(24, MeshtasticProto.PACKET_OVERHEAD)
+        val full = OutboundPacket(channelIndex = 7, id = UInt.MAX_VALUE, payload = ByteArray(MeshtasticProto.MAX_PAYLOAD))
+        assertEquals(MeshtasticProto.MAX_PAYLOAD + MeshtasticProto.PACKET_OVERHEAD, MeshtasticProto.encodePacket(full).size)
+        // A smaller channel index or id never costs more than the measured worst case.
+        val small = OutboundPacket(channelIndex = 0, id = 1u, payload = ByteArray(MeshtasticProto.MAX_PAYLOAD))
+        assertTrue(MeshtasticProto.encodePacket(small).size <= MeshtasticProto.MAX_PAYLOAD + MeshtasticProto.PACKET_OVERHEAD)
+    }
 }

@@ -55,6 +55,18 @@ object NodeId {
     /** The 16 raw id bytes for the BLE advert (the base32 string decoded). Inverse of [fromBytes]. */
     fun toBytes(nodeId: String): ByteArray = base32Decode(nodeId)
 
+    /**
+     * [toBytes] for an id that may not be one of ours: null unless [nodeId] is exactly [LENGTH] chars of
+     * the lowercase alphabet whose decoding re-encodes to the same string (the base32 decoder discards the
+     * two padding bits of the last char, so a round trip — not a pattern — is what proves canonical form).
+     * The v3 compact plaintext carries node ids raw and falls back to text for anything this refuses.
+     */
+    fun toBytesOrNull(nodeId: String): ByteArray? {
+        if (nodeId.length != LENGTH) return null
+        val bytes = runCatching { base32Decode(nodeId) }.getOrNull() ?: return null
+        return bytes.takeIf { it.size == BYTES && base32Encode(it) == nodeId }
+    }
+
     /** The 26-char id string for [BYTES] raw advert bytes (the bytes base32-encoded). Inverse of [toBytes]. */
     fun fromBytes(id: ByteArray): String = base32Encode(id)
 

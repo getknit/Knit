@@ -288,5 +288,16 @@ class ScopeFramesTest {
 
     private fun EncEnvelope.copyAsV1() = EncEnvelope(v = 1, nonce = nonce, ct = ct, keys = keys, r = r)
 
+    /** The v3 DM form (ADR 059): the same header, an empty (derived) nonce, one version higher. */
+    private fun EncEnvelope.copyAsV3() = EncEnvelope(v = EncEnvelope.VERSION_DM_V3, nonce = ByteArray(0), ct = ct, keys = keys, r = r)
+
+    @Test
+    fun `a v3 DM rides the scope and a v3 group form does not`() {
+        val v3 = envelope(FrameType.CHAT, alice, bob, ChatContent(enc = ratchetEnc().copyAsV3()))
+        assertTrue("v3 is the DM form's compact sibling and must stay spool-eligible", ScopeFrames.eligibleForDm(v3, alice, bob))
+        val v3GroupShaped = envelope(FrameType.CHAT, alice, bob, ChatContent(enc = ratchetEnc().copyAsV3().copyWithoutDmHeader()))
+        assertFalse(ScopeFrames.eligibleForDm(v3GroupShaped, alice, bob))
+    }
+
     private fun EncEnvelope.copyWithoutDmHeader() = EncEnvelope(v = v, nonce = nonce, ct = ct, keys = keys, r = null)
 }

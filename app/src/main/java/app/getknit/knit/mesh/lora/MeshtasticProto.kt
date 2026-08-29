@@ -15,6 +15,20 @@ internal object MeshtasticProto {
     /** `Data.payload`'s hard cap (`Constants.DATA_PAYLOAD_LEN`); a larger payload is refused before the radio. */
     const val MAX_PAYLOAD = 233
 
+    /**
+     * The bytes a `ToRadio { packet }` wraps around a maximum `Data.payload`, measured by encoding one
+     * rather than summed by hand (which is how the previous constant grew 6 B of "slack" nobody could
+     * account for): the ToRadio tag + length, `to` and `id` as fixed32, the worst-case channel index, the
+     * `decoded` submessage framing, the private-range portnum, and the payload's own tag + length. This is
+     * what a BLE write of a full packet costs above the payload; the ATT header is the transport's.
+     */
+    val PACKET_OVERHEAD: Int =
+        encodePacket(OutboundPacket(channelIndex = MAX_CHANNEL_INDEX, id = UInt.MAX_VALUE, payload = ByteArray(MAX_PAYLOAD))).size -
+            MAX_PAYLOAD
+
+    /** The highest channel index the firmware allows (`MAX_NUM_CHANNELS - 1`); the worst case for the varint. */
+    private const val MAX_CHANNEL_INDEX = 7
+
     /** `NodeNum` broadcast address (`0xFFFFFFFF`). */
     const val BROADCAST: UInt = 0xFFFFFFFFu
 

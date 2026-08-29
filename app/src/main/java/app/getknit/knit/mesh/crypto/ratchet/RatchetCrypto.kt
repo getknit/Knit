@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.crypto.ratchet
 
+import app.getknit.knit.mesh.crypto.AesGcm
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
 
@@ -10,11 +11,13 @@ import com.google.crypto.tink.subtle.X25519
  * since minSdk 29 can't use platform XDH), so everything here runs unchanged under JVM unit tests and
  * doubles as the normative reference for a non-Tink (iOS CryptoKit) implementation.
  *
- * Domain separation: every derivation is labeled under `knit/dm/v2/...`, disjoint from RFC 9180's HPKE
+ * Domain separation: every derivation is labeled under `knit/dm/v2/...` — plus the two `knit/dm/v3/...`
+ * labels the v3 scheme adds on top of the unchanged v2 chain (ADR 059) — disjoint from RFC 9180's HPKE
  * labels, so reusing the X25519 identity key for both HPKE (v1) and X3DH (v2) cannot cross-derive.
  *
  * All functions are deterministic except the keypair helpers; none of them touch Android, IO, or state.
  */
+@Suppress("TooManyFunctions") // the primitive layer: one function per derivation, and v3 added two
 object RatchetCrypto {
     const val KEY_BYTES = 32
 
@@ -31,6 +34,8 @@ object RatchetCrypto {
     private val LABEL_SPK = "knit/dm/v2/spk".toByteArray()
     private val LABEL_EXPORT_ROOT = "knit/dm/v2/export/root".toByteArray()
     private val LABEL_EXPORT_EPOCH = "knit/dm/v2/export/epoch".toByteArray()
+    private val LABEL_NONCE_V3 = "knit/dm/v3/nonce".toByteArray()
+    private val LABEL_HEADER_V3 = "knit/dm/v3/hdr".toByteArray()
 
     /** An X25519 keypair as raw RFC 7748 bytes (the only key shape the v2 wire ever carries). */
     class KeyPair(
@@ -128,6 +133,36 @@ object RatchetCrypto {
     fun nextChainKey(chainKey: ByteArray): ByteArray = Hkdf.computeHkdf(MAC, chainKey, ZERO_SALT, LABEL_CHAIN_KEY, KEY_BYTES)
 
     /**
+     * The v3 AES-GCM nonce for one message (crypto scheme v3, ADR 059): derived, never carried. Derived from
+     * the **message key** rather than the chain key so a stored skipped key — which is all
+     * `ratchet_skipped_keys` keeps — can still open its frame, and so each root candidate / ladder rung
+     * derives its own. [aad] is mixed in so that a send-chain rollback (a restored database re-sealing a
+     * different plaintext under the same chain index) still gets a distinct nonce from the fresh frame id
+     * the AAD carries — the same (key, nonce) posture v2's random IV had. Uniqueness under one key
+     * otherwise follows from the key itself being single-use.
+     */
+    fun messageNonce(
+        msgKey: ByteArray,
+        aad: ByteArray,
+    ): ByteArray = Hkdf.computeHkdf(MAC, msgKey, ZERO_SALT, LABEL_NONCE_V3 + aad, AesGcm.IV_BYTES)
+
+    /**
+     * The bytes a v3 frame binds its ratchet header with, appended to the caller's AAD. The v2 header needed
+     * no integrity mechanism of its own because the frame's Ed25519 signature covered it; the v3 unsigned
+     * point-to-point tick has no signature, and `flags` (bit 0 = a reset request) and `init.at` (the
+     * session-establishment clock) are the two header fields the derived key does not already bind — so the
+     * AEAD binds the whole header explicitly. An explicit layout, not the CBOR bytes, so it never depends on
+     * an encoder reproducing them canonically.
+     */
+    fun headerBindingBytes(header: RatchetEngine.FrameHeader): ByteArray {
+        val init = header.init
+        val initBytes =
+            if (init == null) byteArrayOf(0) else byteArrayOf(1) + init.eph + u32be(init.pkid) + u64be(init.at)
+        return LABEL_HEADER_V3 + u32be(header.se) + header.ek + u32be(header.pe) + u32be(header.n) +
+            byteArrayOf(header.flags.toByte()) + initBytes
+    }
+
+    /**
      * The bytes a signed prekey's detached Ed25519 signature covers. Detached (rather than leaning on
      * the profile frame signature alone) so a prekey stored apart from its frame stays re-verifiable.
      */
@@ -156,4 +191,7 @@ object RatchetCrypto {
             (value ushr 8).toByte(),
             value.toByte(),
         )
+
+    @Suppress("MagicNumber") // as above, eight lanes
+    private fun u64be(value: Long): ByteArray = ByteArray(Long.SIZE_BYTES) { i -> (value ushr (56 - 8 * i)).toByte() }
 }

@@ -114,7 +114,7 @@ object ScopeFrames {
                 (env.senderId == peerId && recipient == selfId)
         if (!pairMatches) return false
         val enc = WireCodec.decodePayload<ChatContent>(env.payload)?.enc ?: return false
-        return enc.v == EncEnvelope.VERSION_RATCHET && enc.r != null
+        return EncEnvelope.isDmRatchetVersion(enc.v) && enc.r != null
     }
 
     /**

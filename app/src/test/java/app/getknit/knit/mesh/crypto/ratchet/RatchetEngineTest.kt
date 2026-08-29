@@ -20,7 +20,8 @@ class RatchetEngineTest {
 
     private class Frame(
         val header: RatchetEngine.FrameHeader,
-        val nonce: ByteArray,
+        /** Null for a v3 frame: the nonce is derived, never carried. */
+        val nonce: ByteArray?,
         val ct: ByteArray,
     )
 
@@ -49,8 +50,9 @@ class RatchetEngineTest {
             plain: String,
             now: Long,
             force: Boolean = false,
+            v3: Boolean = false,
         ): Frame {
-            val result = checkNotNull(engine.seal(checkNotNull(session), plain.toByteArray(), AAD, peer.spk.pub, now, force))
+            val result = checkNotNull(engine.seal(checkNotNull(session), plain.toByteArray(), AAD, peer.spk.pub, now, force, v3))
             session = result.session
             result.newLocalEpoch?.let { localEpochs[it.epoch] = it }
             return Frame(result.header, result.nonce, result.ct)
@@ -367,6 +369,62 @@ class RatchetEngineTest {
         val frame = a.seal("hello", NOW)
         val tampered = Frame(frame.header, frame.nonce, frame.ct.copyOf().also { it[0] = (it[0] + 1).toByte() })
         assertTrue(b.open(tampered, NOW) === OpenOutcome.Failed.AEAD_FAIL)
+    }
+
+    // --- crypto scheme v3: a derived nonce and a header-bound AAD on the unchanged v2 chain (ADR 059) ---
+
+    @Test
+    fun aV3FrameCarriesNoNonceAndOpensOnEveryRungOfTheLadder() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+
+        // A fresh epoch derivation (the init frame), then the live chain.
+        val first = a.seal("v3 init", NOW, v3 = true)
+        assertNull("v3 derives its nonce; nothing random rides the wire", first.nonce)
+        assertEquals("v3 init", text(b.open(first, NOW)))
+        assertEquals("v3 live", text(b.open(a.seal("v3 live", NOW, v3 = true), NOW)))
+
+        // Out of order: the skipped index is opened later from its STORED message key alone, which is why
+        // the nonce derives from the message key rather than the chain key.
+        val skipped = a.seal("v3 skipped", NOW, v3 = true)
+        val later = a.seal("v3 later", NOW, v3 = true)
+        assertEquals("v3 later", text(b.open(later, NOW)))
+        assertEquals("v3 skipped", text(b.open(skipped, NOW)))
+
+        // A forced new epoch, and v2/v3 interleaved on the same session.
+        assertEquals("v3 new epoch", text(b.open(a.seal("v3 new epoch", NOW, force = true, v3 = true), NOW)))
+        assertEquals("v2 after v3", text(b.open(a.seal("v2 after v3", NOW), NOW)))
+        assertEquals("v3 after v2", text(b.open(a.seal("v3 after v2", NOW, v3 = true), NOW)))
+    }
+
+    @Test
+    fun aV3FrameOpenedAsV2OrAV2FrameOpenedAsV3IsAeadFail() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        val v3 = a.seal("hello", NOW, v3 = true)
+        // Hand it a nonce: the receiver then binds no header and uses the carried nonce — the wrong AAD and IV.
+        assertTrue(b.open(Frame(v3.header, ByteArray(12), v3.ct), NOW) === OpenOutcome.Failed.AEAD_FAIL)
+        val v2 = a.seal("hello again", NOW)
+        // Strip the nonce off a v2 frame: the receiver derives one and binds the header — again the wrong pair.
+        assertTrue(b.open(Frame(v2.header, null, v2.ct), NOW) === OpenOutcome.Failed.AEAD_FAIL)
+    }
+
+    @Test
+    fun aV3FrameBindsItsHeaderFlagsAndInitClock() {
+        val (a, b) = pair()
+        a.initiate(NOW)
+        val frame = a.seal("hello", NOW, v3 = true)
+        val h = frame.header
+        val init = checkNotNull(h.init)
+
+        // The two header fields the derived key does not already bind — a flipped reset flag and a moved
+        // establishment clock — must fail the AEAD rather than reach the session machinery.
+        val flagged = RatchetEngine.FrameHeader(h.se, h.ek, h.pe, h.n, h.init, flags = 1)
+        assertTrue(b.open(Frame(flagged, null, frame.ct), NOW) === OpenOutcome.Failed.AEAD_FAIL)
+        val movedClock = RatchetEngine.FrameHeader(h.se, h.ek, h.pe, h.n, RatchetEngine.InitPayload(init.eph, init.pkid, init.at + 1))
+        assertTrue(b.open(Frame(movedClock, null, frame.ct), NOW) === OpenOutcome.Failed.AEAD_FAIL)
+        // And the untouched frame still opens after the two refusals (nothing was committed).
+        assertEquals("hello", text(b.open(frame, NOW)))
     }
 
     // --- both-initiate race ---

@@ -2,6 +2,7 @@ package app.getknit.knit
 
 import app.getknit.knit.mesh.protocol.Protocol
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtocolTest {
@@ -30,6 +31,15 @@ class ProtocolTest {
         assertEquals("abcd1234", parsed.nodeId)
         assertEquals(0, parsed.protoVersion)
         assertEquals(0L, parsed.capabilities)
+    }
+
+    @Test
+    fun cryptoV3RidesTheProfileAboveTheBleAdvertsEightBits() {
+        // ADR 059: the bit is a send-time input read from the pinned profile; it deliberately sits above the
+        // 8 bits a BLE advert carries (0x80 stays reserved for the transcoder), and every local build claims it.
+        assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_CRYPTO_V3 != 0L)
+        assertTrue(Protocol.CAP_CRYPTO_V3 > 0xFFL)
+        assertEquals(0x100L, Protocol.CAP_CRYPTO_V3)
     }
 
     @Test

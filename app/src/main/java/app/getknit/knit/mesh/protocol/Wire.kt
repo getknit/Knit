@@ -70,7 +70,8 @@ object FrameType {
  * unsigned routing metadata a relay rewrites in flight; [relay] is whether [MeshRouter] floods it
  * onward (false for point-to-point control frames like a blob request — carried in the wrapper, not
  * derived from the type, so even an old relay honors a future point-to-point type). [sig] is the raw
- * Ed25519 signature over [signed] (empty for the unsigned blob request); [signed] is the canonical
+ * Ed25519 signature over [signed] (empty for the two unsigned forms: the blob request, and the v3
+ * point-to-point sealed delivery tick, which its ratchet AEAD authenticates instead — ADR 059); [signed] is the canonical
  * [RelayEnvelope] CBOR, forwarded byte-for-byte so every verifier reproduces the bytes the originator
  * signed. A plain (non-data) class: it holds [ByteArray]s, so value equality would be by reference
  * anyway; tests compare by decoding.
@@ -513,6 +514,17 @@ data class ProfilePayload(
  * v1 ↔ v2 discrimination is [v] alone; [r]/[g] are additive (nullable, ignored by older builds) per
  * docs/WIRE_COMPAT.md rule 1, with `@ByteString` bytes living inside the new [RatchetHeader]/
  * [RatchetInit] types rather than as defaulted fields here (rule 1's exception).
+ *
+ * **v3 (the compact DM form, ADR 059)** is v2's DM form with two things removed from the bytes and
+ * nothing removed from the shape: [nonce] rides **empty** (the AEAD nonce is derived from the single-use
+ * message key, `RatchetCrypto.messageNonce`), and the plaintext inside [ct] is the labeled
+ * [app.getknit.knit.mesh.crypto.MessageContentV2] schema rather than `MessageContent`'s named one. The
+ * ratchet header is additionally bound into the AEAD's associated data, which is what lets a
+ * `relay = false` v3 tick travel with no frame signature at all. [nonce] stays a required field rather
+ * than becoming nullable because a build that cannot decode the envelope cannot **carry** it either
+ * (`InboundPipeline.canCarry` decodes the chat payload), and custody must converge across builds
+ * (ADR 006) — so a v3 frame is shaped so that every fielded build decodes it, refuses it at the
+ * version gate, and keeps custodying it. Group form stays v2.
  */
 @Serializable
 class EncEnvelope(
@@ -525,10 +537,16 @@ class EncEnvelope(
 ) {
     companion object {
         /** Highest crypto-scheme version this build understands; a higher [v] is dropped on delivery. */
-        const val MAX_SUPPORTED_VERSION = 2
+        const val MAX_SUPPORTED_VERSION = 3
 
         /** The ratchet schemes (DM form requires [r]; group form requires [g] — see the class kdoc). */
         const val VERSION_RATCHET = 2
+
+        /** The compact DM form: v2's ratchet, an empty (derived) [nonce], the labeled plaintext — DM form only. */
+        const val VERSION_DM_V3 = 3
+
+        /** Whether [v] names a DM epoch-ratchet scheme (v2 or v3 — both carry [r]; the group form is v2 only). */
+        fun isDmRatchetVersion(v: Int): Boolean = v == VERSION_RATCHET || v == VERSION_DM_V3
     }
 }
 

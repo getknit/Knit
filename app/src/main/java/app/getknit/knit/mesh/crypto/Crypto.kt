@@ -41,13 +41,21 @@ object AesGcm {
 
     fun randomKey(): ByteArray = ByteArray(KEY_BYTES).also { SecureRandom().nextBytes(it) }
 
-    /** Encrypts [plain] under [key], returning the random (iv, ciphertext) pair. */
+    /** A fresh random 12-byte IV — the default for [encrypt]; the v3 ratchet derives its own instead. */
+    fun randomIv(): ByteArray = ByteArray(IV_BYTES).also { SecureRandom().nextBytes(it) }
+
+    /**
+     * Encrypts [plain] under [key], returning the (iv, ciphertext) pair. [iv] defaults to a fresh random
+     * one; the v3 DM ratchet passes a nonce derived from its single-use message key instead
+     * (`RatchetCrypto.messageNonce`), so the nonce never has to ride the wire. Never pass a caller-chosen
+     * IV under a key that is used more than once — GCM's whole security rests on (key, iv) uniqueness.
+     */
     fun encrypt(
         key: ByteArray,
         plain: ByteArray,
         aad: ByteArray,
+        iv: ByteArray = randomIv(),
     ): Pair<ByteArray, ByteArray> {
-        val iv = ByteArray(IV_BYTES).also { SecureRandom().nextBytes(it) }
         val cipher =
             Cipher.getInstance(TRANSFORMATION).apply {
                 init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(TAG_BITS, iv))
@@ -89,4 +97,23 @@ internal val cryptoCbor: Cbor =
         ignoreUnknownKeys = true
         encodeDefaults = false
         useDefiniteLengthEncoding = true
+    }
+
+/**
+ * The codec for the v3 sealed plaintext ([app.getknit.knit.mesh.crypto.MessageContentV2]): the same frozen
+ * flags as [cryptoCbor] plus integer map keys (`@CborLabel` wins over the property name) and byte strings
+ * for every `ByteArray`, including list elements, without per-element annotations. A separate instance,
+ * not a flag flip on [cryptoCbor]: nothing encoded by that codec carries a label today, so flipping it
+ * would be byte-neutral, but keeping the two apart makes "which layout is this" a property of the call
+ * site rather than of an annotation audit. Decoding is lenient either way — kotlinx maps a numeric key
+ * back to its labeled property regardless of this flag.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+internal val compactCbor: Cbor =
+    Cbor {
+        ignoreUnknownKeys = true
+        encodeDefaults = false
+        useDefiniteLengthEncoding = true
+        preferCborLabelsOverNames = true
+        alwaysUseByteString = true
     }

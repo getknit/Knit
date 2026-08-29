@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.protocol
 
 import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.crypto.MessageContent
+import app.getknit.knit.mesh.crypto.MessageContentV2
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.mesh.crypto.cryptoCbor
@@ -219,7 +220,63 @@ class GoldenVectorTest {
                 MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = "m1").encode(),
             "messageContentReceiptBatch" to
                 MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, acks = listOf("m1", "m2")).encode(),
+            // Crypto scheme v3 (ADR 059) — every fixture above stays byte-identical. The envelope is v2's DM
+            // form with `v = 3` and an EMPTY nonce (`40`); the unsigned wire envelope carries `sig` as the
+            // empty byte string; the compact plaintext is the labeled `MessageContentV2` layout with raw ids.
+            "encEnvelopeV3" to
+                WireCodec.encodePayload(
+                    EncEnvelope(
+                        v = EncEnvelope.VERSION_DM_V3,
+                        nonce = ByteArray(0),
+                        ct = bytes(48, 6),
+                        keys = emptyList(),
+                        r = RatchetHeader(se = 2, ek = bytes(32, 8), pe = 1, n = 5),
+                    ),
+                ),
+            "wireEnvelopeUnsigned" to WireCodec.encodeWire(WireEnvelope(relay = false, sig = ByteArray(0), signed = bytes(8, 2))),
+            "messageContentV2Plain" to compact(MessageContent(body = "hi there")),
+            "messageContentV2Receipt" to compact(MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = frameId(1))),
+            "messageContentV2ReceiptBatch" to
+                compact(MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, acks = listOf(frameId(1), frameId(2)))),
+            "messageContentV2Reaction" to
+                compact(
+                    MessageContent(
+                        body = "",
+                        ctl = MessageContent.CTL_REACTION,
+                        rp = ReactionPayload(messageId = frameId(1), emoji = "👍"),
+                    ),
+                ),
+            "messageContentV2Full" to
+                compact(
+                    MessageContent(
+                        body = "hi there",
+                        mentions = listOf(Mention(nodeId(3), "Ann")),
+                        attachmentHash = hex(bytes(32, 4)),
+                        attachmentMime = "image/webp",
+                        attachmentKey = b64(bytes(32, 5)),
+                        replyTo =
+                            ReplyRef(
+                                messageId = frameId(6),
+                                authorId = nodeId(3),
+                                author = "Ann",
+                                snippet = "see you",
+                                hasAttachment = true,
+                            ),
+                        pr = ProfilePayload(name = "Ann", status = "hiking", avatarHash = hex(bytes(32, 7)), version = 1700L),
+                    ),
+                ),
         )
+
+    private fun compact(content: MessageContent): ByteArray =
+        checkNotNull(MessageContentV2.encodeOrNull(content)) {
+            "fixture must be compact-encodable"
+        }
+
+    private fun frameId(seed: Int): String = FrameId.fromBytes(bytes(16, seed))
+
+    private fun nodeId(seed: Int): String = NodeId.fromBytes(bytes(16, seed))
+
+    private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
 
     @Test
     fun `every wire type matches its pinned definite-length CBOR`() {
@@ -346,6 +403,21 @@ class GoldenVectorTest {
                     "d1d8dfe66776657273696f6e02666d696e746572626161",
                 "messageContentReceipt" to "a364626f6479606363746c056361636b626d31",
                 "messageContentReceiptBatch" to "a364626f6479606363746c056461636b7382626d31626d32",
+                "encEnvelopeV3" to
+                    "a5617603656e6f6e6365406263745830060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb0209" +
+                    "10171e252c333a41484f646b657973806172a46273650262656b5820080f161d242b323940474e555c636a71787f868d949ba2a9b0b7" +
+                    "bec5ccd3dae162706501616e05",
+                "wireEnvelopeUnsigned" to "a36572656c6179f46373696740667369676e656448020910171e252c33",
+                "messageContentV2Plain" to "a101686869207468657265",
+                "messageContentV2Receipt" to "a20705085001080f161d242b323940474e555c636a",
+                "messageContentV2ReceiptBatch" to "a2070509825001080f161d242b323940474e555c636a50020910171e252c333a41484f565d646b",
+                "messageContentV2Reaction" to "a207060aa2015001080f161d242b323940474e555c636a0264f09f918d",
+                "messageContentV2Full" to
+                    "a7016868692074686572650281a20150030a11181f262d343b424950575e656c0263416e6e035820040b121920272e353c434a51585f" +
+                    "666d747b828990979ea5acb3bac1c8cfd6dd046a696d6167652f77656270055820050c131a21282f363d444b525960676e757c838a91" +
+                    "989fa6adb4bbc2c9d0d7de06a50150060d141b222930373e454c535a61686f0250030a11181f262d343b424950575e656c0363416e6e" +
+                    "046773656520796f7505f50ba40163416e6e026668696b696e67035820070e151c232a31383f464d545b626970777e858c939aa1a8af" +
+                    "b6bdc4cbd2d9e0041906a4",
             )
 
         const val BUNDLE_ENCODED =

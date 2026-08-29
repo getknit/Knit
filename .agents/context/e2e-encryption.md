@@ -1,7 +1,17 @@
 # End-to-end encryption (implemented)
 
 DMs and group chats are E2E-encrypted; the broadcast "Nearby" room stays plaintext by design (no fixed
-recipient set). Two crypto schemes coexist, discriminated by `EncEnvelope.v`:
+recipient set). Three crypto schemes coexist, discriminated by `EncEnvelope.v`:
+
+**v3 — v2's DM form, compacted (ADR 059).** The same ratchet, chain, epochs and header as v2 below, with a
+derived nonce (`RatchetCrypto.messageNonce`; the `nonce` field rides empty so every fielded build still
+decodes and *carries* the frame — `canCarry` decodes the payload), the ratchet header bound into the AEAD's
+associated data, and the labeled `MessageContentV2` plaintext (`mesh/crypto/MessageContentV2.kt`: integer
+keys, raw ids). Chosen per peer by `mesh/crypto/CryptoScheme` from the pinned profile's `CAP_RATCHET` +
+`CAP_CRYPTO_V3`; a content the compact codec cannot carry canonically seals v2 instead. What it buys:
+AckSync's `relay = false` live-link tick travels **unsigned** toward a v3 author — the AEAD is the
+authenticator — at ~222 B, one packet on every fast plane. Resets, group-key ctl DMs and the group form
+stay v2.
 
 **v2 — DMs, forward-secret (the epoch-rekey ratchet).** The default between current builds: outbound
 v2 whenever the peer's pinned profile advertises `Protocol.CAP_RATCHET` **and** carries a
@@ -70,7 +80,10 @@ for a DM/group message), and `MeshManager.verifyInbound` (the gate at the top of
 where a relay could forge a frame (e.g. a profile with a different name) under another node's `senderId`.
 Verification reuses the key path (`peers.find(senderId).pubKey` → `PublicKeyBundle.verifier()`, guarded
 by `NodeId.fromPublicKeyBundle == senderId`); a `profile` uses the `pubKey` in its own `ProfileContent`
-payload since first contact precedes any pin. `blobreq` stays unsigned. `EncEnvelope.v`/`MessageContent.v`
+payload since first contact precedes any pin. `blobreq` stays unsigned, and so is the v3 live-link tick — the
+one other shape `verifyInbound` admits without a signature (`relay = false`, DM-form chat addressed to us by a
+pinned peer), authenticated by its ratchet AEAD instead; every other empty-signature frame drops as
+`UNSIGNED_REFUSED`. `EncEnvelope.v`/`MessageContent.v`
 gate the crypto-scheme/content-schema versions (unknown ⇒ drop locally + count, but still relay — a
 delivery gate, never a relay gate; see `docs/WIRE_COMPAT.md`).
 

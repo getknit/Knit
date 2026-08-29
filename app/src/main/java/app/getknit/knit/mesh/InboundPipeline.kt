@@ -28,8 +28,10 @@ import app.getknit.knit.identity.IdentitySource
 import app.getknit.knit.identity.NodeId
 import app.getknit.knit.identity.PeerLabelIndex
 import app.getknit.knit.identity.displayNameFor
+import app.getknit.knit.mesh.crypto.AesGcm
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.MessageContent
+import app.getknit.knit.mesh.crypto.MessageContentV2
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.b64
@@ -39,6 +41,8 @@ import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
+import app.getknit.knit.mesh.crypto.readsCryptoV3
+import app.getknit.knit.mesh.crypto.sealBytes
 import app.getknit.knit.mesh.protocol.BlobReqContent
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.EncEnvelope
@@ -255,7 +259,7 @@ class InboundPipeline(
         val plane = planeOf(fromNodeId, kind)
         when (env.type) {
             FrameType.CHAT -> {
-                handleChat(env, plane)
+                handleChat(env, plane, signed = wire.sig.isNotEmpty())
             }
 
             FrameType.GROUP_UPDATE -> {
@@ -427,11 +431,27 @@ class InboundPipeline(
         }
 
     /**
+     * The one frame shape that may arrive unsigned (ADR 059): `relay = false` DM-form chat addressed to us
+     * by someone else — the live-link delivery tick. Everything a flooded frame's signature protects is
+     * either fixed by this shape (`type`, `group`, `relay`) or bound into the tick's AEAD (id, sender,
+     * sentAt, recipient, the ratchet header), so the shape plus a successful open is the whole check.
+     */
+    private suspend fun isUnsignedTickShape(
+        env: RelayEnvelope,
+        wire: WireEnvelope,
+    ): Boolean {
+        val me = identity.nodeId()
+        return env.type == FrameType.CHAT && !wire.relay && env.group == null && env.recipientId == me && env.senderId != me
+    }
+
+    /**
      * Authenticates a flooded frame: the frame [WireEnvelope.sig] must verify (byte-exact, over the
      * received [WireEnvelope.signed]) against a public-key bundle that derives back to the
      * [RelayEnvelope.senderId]. A profile carries that bundle in-band (first contact arrives before any
      * pin); every other type uses the sender's pinned key, so a frame from a peer whose profile we
-     * haven't received yet is dropped. The point-to-point blob request is unsigned by design. An unknown
+     * haven't received yet is dropped. The point-to-point blob request is unsigned by design, and so is the v3 live-link delivery
+     * tick (ADR 059) — for that one only its *shape* is judged here ([isUnsignedTickShape]); its ratchet AEAD
+     * is the authenticator, enforced in [decryptAndDeliver]. An unknown
      * future type falls through to the pinned-key path: if it verifies we still don't deliver it (the
      * [onDeliver] dispatch has no handler) but the router relays it onward.
      *
@@ -479,6 +499,14 @@ class InboundPipeline(
                 Log.w(TAG, "drop ${env.type} ${env.id} from ${env.senderId}: key does not match nodeId")
                 return false
             }
+            if (wire.sig.isEmpty()) {
+                // The unsigned door: exactly one shape — a point-to-point v3 sealed tick addressed to us — and
+                // only its shape is judged here. The pinned bundle above is still required: the session it
+                // names is what will open the frame, and nothing downstream may act on it before that opens.
+                if (isUnsignedTickShape(env, wire)) return true
+                metrics.onDropped(DropReason.UNSIGNED_REFUSED)
+                return false
+            }
             if (!MessageCrypto.verify(bundle, wire.sig, wire.signed)) {
                 metrics.onDropped(DropReason.SIG_INVALID)
                 Log.w(TAG, "drop ${env.type} ${env.id} from ${env.senderId}: bad/missing signature")
@@ -515,6 +543,9 @@ class InboundPipeline(
     private suspend fun handleChat(
         env: RelayEnvelope,
         plane: DeliveryPlane,
+        // False for the one frame shape verifyInbound admits without a signature (ADR 059); the decrypt
+        // path is what authenticates it, so it must know.
+        signed: Boolean = true,
     ) {
         val me = identity.nodeId()
         // Blocked sender: never persist, notify, or reconcile their group/roster state — we surface nothing
@@ -535,13 +566,13 @@ class InboundPipeline(
         // handled before the DM check below (which would otherwise treat them as broadcast).
         val group = env.group
         if (group != null) {
-            if (reconcileGroup(group, env.senderId, env.sentAt, me)) decryptAndDeliver(env, content, me, group.id, plane)
+            if (reconcileGroup(group, env.senderId, env.sentAt, me)) decryptAndDeliver(env, content, me, group.id, plane, signed)
             return
         }
         // A DM addressed to someone else: we're only relaying it (the router floods it onward). It
         // isn't ours, so don't persist, notify, or ack it.
         if (!Conversations.isForMe(env.recipientId, me)) return
-        decryptAndDeliver(env, content, me, Conversations.idFor(env.senderId, env.recipientId, me), plane)
+        decryptAndDeliver(env, content, me, Conversations.idFor(env.senderId, env.recipientId, me), plane, signed)
     }
 
     /**
@@ -581,8 +612,17 @@ class InboundPipeline(
         me: String,
         conversationId: String,
         plane: DeliveryPlane,
+        signed: Boolean = true,
     ) {
         val enc = content.enc
+        // The unsigned door (ADR 059) admits one envelope shape — v3, DM form — and it is judged before any
+        // other branch can act on the frame: its AEAD is the authenticator, so nothing may run ahead of a
+        // successful open. Not the plaintext branch, and not the exists-gate below, which would otherwise
+        // let anyone who overheard a DM id on the air make us seal and flood a receipt for it.
+        if (!signed && !admitsUnsigned(enc)) {
+            metrics.onDropped(DropReason.UNSIGNED_REFUSED)
+            return
+        }
         if (enc == null) {
             deliverChat(env, content, me, conversationId, plane)
             return
@@ -594,13 +634,14 @@ class InboundPipeline(
         // runs unconditionally, in whatever form acknowledge picks — rare now that we custody our own
         // inbound DMs (digests match, so a re-serve means genuine divergence, e.g. our copy was
         // quota-evicted), and re-custody above already restored the row for the next exchange.
-        if (messages.exists(env.id)) {
+        if (signed && messages.exists(env.id)) {
             acknowledge(env, me, plane)
             return
         }
         when {
             // v2's two forms share the version and split on addressing (see EncEnvelope's kdoc):
-            // group-addressed carries the sender-key header `g`, a DM the epoch-ratchet header `r`.
+            // group-addressed carries the sender-key header `g`, a DM the epoch-ratchet header `r`. The
+            // group form is v2 only; v3 (ADR 059) is the DM form's compact sibling and takes the same arm.
             enc.v == EncEnvelope.VERSION_RATCHET && env.group != null -> {
                 runCatching { decryptAndDeliverGroup(env, content, enc, me, conversationId, plane) }.getOrElse {
                     Log.w(TAG, "drop group ratchet chat ${env.id}: ${it.message}")
@@ -608,8 +649,8 @@ class InboundPipeline(
                 }
             }
 
-            enc.v == EncEnvelope.VERSION_RATCHET -> {
-                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId, plane) }.getOrElse {
+            EncEnvelope.isDmRatchetVersion(enc.v) -> {
+                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId, plane, signed) }.getOrElse {
                     Log.w(TAG, "drop v2 chat ${env.id}: ${it.message}")
                     metrics.onDropped(DropReason.DECRYPT_FAILED)
                 }
@@ -655,19 +696,21 @@ class InboundPipeline(
         me: String,
         conversationId: String,
         plane: DeliveryPlane,
+        signed: Boolean = true,
     ) {
         val wireHeader = enc.r
-        // v2 is DM-only; a group-addressed or header-less v2 envelope is malformed by construction.
+        // v2/v3 are DM-only; a group-addressed or header-less envelope is malformed by construction.
         if (wireHeader == null || env.group != null) {
             metrics.onDropped(DropReason.RATCHET_BAD_HEADER)
             return
         }
-        val peerIkPub =
-            peers
-                .find(env.senderId)
-                ?.pubKey
-                ?.let { PublicKeyBundle.decode(it) }
-                ?.dhPublicKey()
+        val v3 = enc.v == EncEnvelope.VERSION_DM_V3
+        if (!nonceShapeValid(enc)) {
+            metrics.onDropped(DropReason.RATCHET_BAD_HEADER)
+            return
+        }
+        val nonce = enc.nonce.takeIf { !v3 }
+        val peerIkPub = pinnedDhKey(env.senderId)
         if (peerIkPub == null) {
             // Unreachable in practice: verifyInbound already required the pinned bundle.
             metrics.onDropped(DropReason.NO_SENDER_KEY)
@@ -676,12 +719,12 @@ class InboundPipeline(
         val thread = env.recipientId.orEmpty()
         val aad = MessageCrypto.header(env.id, env.senderId, env.sentAt, thread)
         val now = System.currentTimeMillis()
-        val peek = ratchet.peekOpen(me, env.senderId, peerIkPub, wireHeader, enc.nonce, enc.ct, aad, now)
+        val peek = ratchet.peekOpen(me, env.senderId, peerIkPub, wireHeader, nonce, enc.ct, aad, now)
         if (peek !is RatchetEngine.OpenOutcome.Opened) {
-            onRatchetFailure(env, peek, me, now)
+            onRatchetFailure(env, peek, me, now, authenticated = signed)
             return
         }
-        val plain = MessageContent.decode(peek.plaintext)
+        val plain = decodePlaintext(enc, peek.plaintext)
         if (plain == null) {
             metrics.onDropped(DropReason.DECRYPT_FAILED)
             return
@@ -691,10 +734,11 @@ class InboundPipeline(
             Log.w(TAG, "drop chat ${env.id}: unsupported content v=${plain.v}")
             return
         }
+        if (unsignedButNotATick(signed, plain)) return
         val commit: suspend (suspend () -> Unit) -> Boolean = { onOpened ->
             val committed =
                 db.withTransaction {
-                    ratchet.commitOpen(me, env.senderId, peerIkPub, wireHeader, enc.nonce, enc.ct, aad, now, onOpened)
+                    ratchet.commitOpen(me, env.senderId, peerIkPub, wireHeader, nonce, enc.ct, aad, now, onOpened)
                 }
             // After the transaction and outside the session lock: the hook may seal an answer of its own.
             if (committed) onPeerFrameOpened(env.senderId, wireHeader.init != null)
@@ -1150,6 +1194,46 @@ class InboundPipeline(
         )
     }
 
+    /** The pinned peer's raw X25519 identity key — the ratchet's DH base — or null when it is not pinned. */
+    private suspend fun pinnedDhKey(nodeId: String): ByteArray? =
+        peers
+            .find(nodeId)
+            ?.pubKey
+            ?.let { PublicKeyBundle.decode(it) }
+            ?.dhPublicKey()
+
+    /** The one envelope shape the unsigned door admits (ADR 059): v3, the DM form, and nothing group-shaped. */
+    private fun admitsUnsigned(enc: EncEnvelope?): Boolean =
+        enc != null && enc.v == EncEnvelope.VERSION_DM_V3 && enc.r != null && enc.g == null
+
+    /**
+     * v2 carries its 12-byte nonce; v3 carries the field empty and derives it (ADR 059). Anything else is
+     * structurally malformed — its own drop, and like every BAD_HEADER never a reset trigger.
+     */
+    private fun nonceShapeValid(enc: EncEnvelope): Boolean =
+        if (enc.v == EncEnvelope.VERSION_DM_V3) enc.nonce.isEmpty() else enc.nonce.size == AesGcm.IV_BYTES
+
+    /** The plaintext schema follows the envelope version: v3 carries the labeled compact layout, v2 the named one. */
+    private fun decodePlaintext(
+        enc: EncEnvelope,
+        plaintext: ByteArray,
+    ): MessageContent? = if (enc.v == EncEnvelope.VERSION_DM_V3) MessageContentV2.decode(plaintext) else MessageContent.decode(plaintext)
+
+    /**
+     * An unsigned frame is a tick or nothing. It opened, so it is the session peer's — but a signature
+     * stripped off a captured plain DM and re-injected point-to-point would open just as well, and it must
+     * not deliver through this door (it would dodge custody and dedup the flooded copy away). Refused
+     * before commit, so the chain index is untouched and the signed copy still opens later.
+     */
+    private fun unsignedButNotATick(
+        signed: Boolean,
+        plain: MessageContent,
+    ): Boolean {
+        if (signed || plain.ctl == MessageContent.CTL_RECEIPT) return false
+        metrics.onDropped(DropReason.UNSIGNED_REFUSED)
+        return true
+    }
+
     /**
      * Maps a typed v2 open failure to its drop reason, and — for the two shapes that mean "the peer
      * assumes session state we don't have" (our DB wiped, or their epochs based on privs we retired) —
@@ -1160,6 +1244,8 @@ class InboundPipeline(
         outcome: RatchetEngine.OpenOutcome,
         me: String,
         now: Long,
+        // False for a frame the unsigned door admitted (ADR 059): counted, never a reset trigger.
+        authenticated: Boolean = true,
     ) {
         val reason =
             when (outcome) {
@@ -1194,7 +1280,10 @@ class InboundPipeline(
         // many distinct ids, not one id repeating. And a consumed index is proof we already decrypted that
         // frame, so the re-serve is our own delivered history — the one shape that can never mean divergence.
         // The desync it was proxying for is fixed at the source now, at all three sites that change a root.
-        if (reason in RESET_TRIGGERING_DROPS) {
+        // The unsigned tick (ADR 059) is the one frame that reaches here WITHOUT that signature check, and
+        // it is exactly why it may never feed the heuristic: three forged frames with distinct ids would
+        // otherwise buy an attacker a session reset per pair — a purge, a re-root, a day of re-seals.
+        if (authenticated && reason in RESET_TRIGGERING_DROPS) {
             maybeRequestReset(env, me, now)
         }
     }
@@ -1947,13 +2036,22 @@ class InboundPipeline(
         val now = clock()
         val id = FrameId.new()
         val aad = MessageCrypto.header(id, me, now, env.senderId)
-        val plaintext = MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = env.id).encode()
+        val (plaintext, scheme) = MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = env.id).sealBytes(peer.readsCryptoV3())
         val sealed =
-            ratchet.sealDm(env.senderId, bundle.dhPublicKey(), peerSpk = prekey, plaintext = plaintext, aad = aad, now = now)
+            ratchet.sealDm(
+                env.senderId,
+                bundle.dhPublicKey(),
+                peerSpk = prekey,
+                plaintext = plaintext,
+                aad = aad,
+                now = now,
+                scheme = scheme,
+            )
                 ?: run {
                     metrics.onReceiptSealedFallback()
                     return false
                 }
+        if (scheme == EncEnvelope.VERSION_DM_V3) metrics.onDmSealedV3()
         originateTick(
             RelayEnvelope(
                 type = FrameType.CHAT,

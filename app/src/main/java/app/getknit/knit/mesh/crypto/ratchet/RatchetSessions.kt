@@ -112,7 +112,7 @@ class RatchetSessions(
         peerId: String,
         peerIkPub: ByteArray,
         wireHeader: RatchetHeader,
-        nonce: ByteArray,
+        nonce: ByteArray?,
         ct: ByteArray,
         aad: ByteArray,
         now: Long,
@@ -133,7 +133,7 @@ class RatchetSessions(
         peerId: String,
         peerIkPub: ByteArray,
         wireHeader: RatchetHeader,
-        nonce: ByteArray,
+        nonce: ByteArray?,
         ct: ByteArray,
         aad: ByteArray,
         now: Long,
@@ -157,7 +157,9 @@ class RatchetSessions(
     /**
      * Seals one outbound DM under the peer's session, creating it (X3DH against [peerSpk]) on first
      * use and advancing epochs per the engine's rules. Runs read → seal → persist atomically under the
-     * session lock and returns the finished v2 [EncEnvelope]; the caller floods it and saves its own
+     * session lock and returns the finished [EncEnvelope] — v2, or v3 when [scheme] says the peer reads it
+     * (the caller decides that from the pinned profile, and [plaintext] must already be laid out for the
+     * scheme it names — `MessageContent.sealBytes`); the caller floods it and saves its own
      * plaintext row afterwards (a crash between this commit and the flood is just a chain hole the
      * receiver's skipped-key path absorbs — nothing received can be lost, unlike the open side).
      *
@@ -172,8 +174,10 @@ class RatchetSessions(
         plaintext: ByteArray,
         aad: ByteArray,
         now: Long,
+        scheme: Int = EncEnvelope.VERSION_RATCHET,
     ): EncEnvelope? =
         locked {
+            require(EncEnvelope.isDmRatchetVersion(scheme)) { "not a DM ratchet scheme: $scheme" }
             val existing = store.session(peerId)
             val initiation =
                 if (existing == null) {
@@ -183,12 +187,15 @@ class RatchetSessions(
                     null
                 }
             val session = initiation?.session ?: existing ?: return@locked null
-            val sealed = engine.seal(session, plaintext, aad, peerSpk?.pub, now) ?: return@locked null
+            val sealed =
+                engine.seal(session, plaintext, aad, peerSpk?.pub, now, v3 = scheme == EncEnvelope.VERSION_DM_V3)
+                    ?: return@locked null
             store.commitSend(sealed.session, initiation?.epoch ?: sealed.newLocalEpoch)
             val h = sealed.header
             EncEnvelope(
-                v = EncEnvelope.VERSION_RATCHET,
-                nonce = sealed.nonce,
+                v = scheme,
+                // v3 derives its nonce; the field still rides, empty, so a pre-v3 build decodes (and carries) the frame.
+                nonce = sealed.nonce ?: ByteArray(0),
                 ct = sealed.ct,
                 keys = emptyList(),
                 r =
@@ -279,7 +286,8 @@ class RatchetSessions(
             val h = sealed.header
             EncEnvelope(
                 v = EncEnvelope.VERSION_RATCHET,
-                nonce = sealed.nonce,
+                // A reset always seals v2 — the most compatible form toward a peer that may have reinstalled.
+                nonce = checkNotNull(sealed.nonce),
                 ct = sealed.ct,
                 keys = emptyList(),
                 r =

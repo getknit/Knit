@@ -41,8 +41,11 @@ Each evolves independently; bump the right one:
 - **`EncEnvelope.v`**: the E2E crypto scheme — `1` = static keys (AES-GCM + per-recipient HPKE wrap),
   `2` = the ratchet schemes (AES-GCM under a derived key, `keys` empty; the DM form's header rides
   `EncEnvelope.r` — `docs/FORWARD_SECRECY_RATCHET.md` — and the group sender-key form's rides
-  `EncEnvelope.g` — `docs/GROUP_FORWARD_SECRECY.md`; forms split on addressing, not on `v`).
-- **`MessageContent.v`**: the decrypted plaintext schema.
+  `EncEnvelope.g` — `docs/GROUP_FORWARD_SECRECY.md`; forms split on addressing, not on `v`),
+  `3` = the DM ratchet with a derived nonce (the field rides empty), a header-bound AAD and the labeled
+  `MessageContentV2` plaintext (ADR 059; `docs/FORWARD_SECRECY_RATCHET.md` §5).
+- **`MessageContent.v`**: the decrypted plaintext schema (never emitted while it equals the default — which
+  is why the v3 compact schema is discriminated by `EncEnvelope.v` and carries a label-0 version of its own).
 
 ## Rules that keep changes additive
 
@@ -366,8 +369,31 @@ wire-indistinguishable from any sealed DM); on the Internet plane, a pair scope'
 rather than per session era, bounded by the pending-plus-grace subscription window (§10.1), and the
 identity-file compromise row in §10.3 narrows to *conversation* scopes.
 
+**Precedent — the second additive crypto-scheme bump (`EncEnvelope.v` 2 → 3, ADR 059), the first
+un-populated `@ByteString`, and the second unsigned frame form.** Three lessons for the next one. (1) A
+scheme bump moves **every** equality branch with the constant: `InboundPipeline.decryptAndDeliver`'s DM arm,
+`MeshManager`'s inline-ack give-back, and `ScopeFrames.eligibleForDm` — the spool plane would silently have
+stopped carrying v3 DMs had that last one not been widened, and the group arms were deliberately *not*
+widened (the group form stays v2). (2) "Omit a field" is not additive even behind a version gate when a
+carrier decodes the type: `canCarry` decodes `ChatContent`, so a v3 envelope with no `nonce` would have
+been refused custody by every fielded build — a per-build custody rule (ADR 006). The field stays required
+and rides *empty*; `WireSerializationTest.everyOlderDecoderShapeDecodesAV3Envelope` decodes the real v3
+output through the v1- and v2-era decoder shapes as the executable proof. (3) A plaintext schema that never
+emits its version (`MessageContent.v` is elided while default) cannot gate anything, so the compact
+plaintext is discriminated by the envelope version and reserves a label-0 version inside itself. The
+unsigned live-link tick is a *receiver-shape* rule, not a wire change: `WireEnvelope.sig` was already allowed
+to be empty (`blobreq`); what is new is the one shape `verifyInbound` admits that way and the ordering that
+keeps it harmless (before the plaintext branch, before the exists-gate, ctl-only after the open, outside the
+reset heuristic). `FastFrameCodec` spent flags bit 4 for it — flag bits are append-only like tags and
+capability bits, and a new one is only emitted behind a capability because old receivers drop it.
+`GoldenVectorTest` gained seven vectors and moved none; `ScopeVectorTest`/`SpoolRecordsTest` untouched.
+*Metadata cost:* none on the mesh (a v3 frame is one byte of version away from a v2 one); the unsigned tick
+gives up Ed25519 non-repudiation for a frame that only ever says "delivered".
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
-but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + branch in
-`MeshManager.decrypt` (**together** — bumping MAX without the branch converts the clean
-unknown-version drop into `DECRYPT_FAILED` noise). New content schema ⇒ bump
-`MessageContent.MAX_SUPPORTED`.
+but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + every branch that
+tests the version (`InboundPipeline.decryptAndDeliver`, `MeshManager`'s inline-ack give-back,
+`ScopeFrames`) **together** — bumping MAX without the branches converts the clean unknown-version drop
+into `DECRYPT_FAILED` noise, and a missed equality branch silently routes the new version to an older
+path. New content schema ⇒ bump `MessageContent.MAX_SUPPORTED` (or, for the compact schema,
+`MessageContentV2.MAX_SUPPORTED`).

@@ -7,7 +7,7 @@ import org.junit.runner.RunWith
 
 /**
  * Black-box coverage of the chat-list **overflow menu** and the screens behind it. The menu is a real
- * `DropdownMenu` popup window, and its destinations (Verify / Diagnostics / Blocked / Donate) have no
+ * `DropdownMenu` popup window, and its destinations (Add contact / Diagnostics / Blocked / Donate) have no
  * in-process Compose test today — this is their only black-box coverage. Each is opened through the menu
  * and asserted by a stable screen `testTag` (Settings reuses its existing `profile_name` field); Back
  * returns to the seeded chat list.
@@ -23,7 +23,7 @@ class OverflowNavigationUiAutomatorTest : SeededUiAutomatorTest() {
         launch()
         openOverflow()
         assertText(str(R.string.settings_title))
-        assertText(str(R.string.verify_contact_title))
+        assertText(str(R.string.add_contact_title))
         assertText(str(R.string.diagnostics_title))
         assertText(str(R.string.blocked_users_title))
         assertText(str(R.string.donate_title))
@@ -34,7 +34,7 @@ class OverflowNavigationUiAutomatorTest : SeededUiAutomatorTest() {
     fun overflow_opensSettings() = openThenBack(R.string.settings_title, destTag = "profile_name")
 
     @Test
-    fun overflow_opensVerify() = openThenBack(R.string.verify_contact_title, destTag = "screen_verify")
+    fun overflow_opensAddContact() = openThenBack(R.string.add_contact_title, destTag = "screen_add_contact")
 
     @Test
     fun overflow_opensDiagnostics() = openThenBack(R.string.diagnostics_title, destTag = "screen_diagnostics")

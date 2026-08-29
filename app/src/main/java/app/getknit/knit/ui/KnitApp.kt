@@ -57,7 +57,6 @@ import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.ShareTargetScreen
 import app.getknit.knit.ui.theme.KnitMotion
 import app.getknit.knit.ui.theme.LocalReduceMotion
-import app.getknit.knit.ui.verify.VerifyContactScreen
 import org.koin.compose.koinInject
 
 // How far a screen slides as it fades: a twenty-fourth of the width. Enough to give the fade a direction
@@ -74,7 +73,6 @@ private object Routes {
     const val BLOCKED_USERS = "blocked"
     const val MESSAGE_REQUESTS = "requests"
     const val DONATE = "donate"
-    const val VERIFY = "verify"
     const val ADD_CONTACT = "addContact"
     const val INTERNET_RELAYS = "relays"
     const val LORA_RADIO = "lora"
@@ -279,7 +277,6 @@ fun KnitApp(startRoute: String? = null) {
                 onOpenBlockedUsers = { navController.navigate(Routes.BLOCKED_USERS) },
                 onOpenMessageRequests = { navController.navigate(Routes.MESSAGE_REQUESTS) },
                 onOpenDonate = { navController.navigate(Routes.DONATE) },
-                onOpenVerify = { navController.navigate(Routes.VERIFY) },
                 onOpenAddContact = { navController.navigate(Routes.ADD_CONTACT) },
             )
         }
@@ -437,9 +434,6 @@ fun KnitApp(startRoute: String? = null) {
                 onBack = { navController.popBackStack() },
                 rateUrl = remember { reviewPrompter.rateUrl() },
             )
-        }
-        composable(Routes.VERIFY) {
-            VerifyContactScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.ADD_CONTACT) {
             AddContactScreen(

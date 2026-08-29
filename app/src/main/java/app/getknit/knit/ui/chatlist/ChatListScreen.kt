@@ -48,7 +48,6 @@ import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PersonAdd
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -127,8 +126,7 @@ fun ChatListScreen(
     onOpenBlockedUsers: () -> Unit,
     onOpenMessageRequests: () -> Unit,
     onOpenDonate: () -> Unit,
-    onOpenVerify: () -> Unit,
-    onOpenAddContact: () -> Unit = {},
+    onOpenAddContact: () -> Unit,
     viewModel: ChatListViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -152,7 +150,6 @@ fun ChatListScreen(
         onOpenBlockedUsers = onOpenBlockedUsers,
         onOpenMessageRequests = onOpenMessageRequests,
         onOpenDonate = onOpenDonate,
-        onOpenVerify = onOpenVerify,
         onOpenAddContact = onOpenAddContact,
         onShareApp = { showShareApp = true },
         onOpenRadioSettings = { warning -> openRadioSettings(context, warning) },
@@ -216,9 +213,8 @@ internal fun ChatListScreenContent(
     onOpenBlockedUsers: () -> Unit,
     onOpenMessageRequests: () -> Unit,
     onOpenDonate: () -> Unit,
-    onOpenVerify: () -> Unit,
     onShareApp: () -> Unit,
-    onOpenAddContact: () -> Unit = {},
+    onOpenAddContact: () -> Unit,
     onOpenRadioSettings: (RadioWarning) -> Unit,
     onDismissRadioWarning: () -> Unit,
     onDeleteConversation: (conversationId: String) -> Unit,
@@ -281,14 +277,6 @@ internal fun ChatListScreenContent(
                                 onClick = {
                                     menuOpen = false
                                     onOpenProfile()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.verify_contact_title)) },
-                                leadingIcon = { Icon(Icons.Filled.QrCodeScanner, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    onOpenVerify()
                                 },
                             )
                             DropdownMenuItem(
@@ -952,7 +940,7 @@ fun ChatListScreenPopulatedPreview() =
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
             onOpenDonate = {},
-            onOpenVerify = {},
+            onOpenAddContact = {},
             onShareApp = {},
             onOpenRadioSettings = {},
             onDismissRadioWarning = {},
@@ -980,7 +968,7 @@ fun ChatListScreenRadioWarningPreview() =
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
             onOpenDonate = {},
-            onOpenVerify = {},
+            onOpenAddContact = {},
             onShareApp = {},
             onOpenRadioSettings = {},
             onDismissRadioWarning = {},
@@ -1003,7 +991,7 @@ fun ChatListScreenLoadingPreview() =
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
             onOpenDonate = {},
-            onOpenVerify = {},
+            onOpenAddContact = {},
             onShareApp = {},
             onOpenRadioSettings = {},
             onDismissRadioWarning = {},
@@ -1032,7 +1020,7 @@ fun ChatListScreenQuietPreview() =
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
             onOpenDonate = {},
-            onOpenVerify = {},
+            onOpenAddContact = {},
             onShareApp = {},
             onOpenRadioSettings = {},
             onDismissRadioWarning = {},

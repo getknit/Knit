@@ -150,7 +150,7 @@ as `resource-id="<tag>"` (the bare tag — some Android/uiautomator versions pre
 `chat_row_nearby`), `chatlist_fab`, `contacts_fab`, `contact_<nodeId>`, `onboarding_grant`,
 `onboarding_start`, `profile_name`, `profile_status`, `profile_save`, `chat_group_avatar` (opens group
 details), plus screen-root tags on the otherwise-untagged destinations — `screen_diagnostics`,
-`screen_blocked_users`, `screen_verify`, `screen_donate`, `screen_share_target`, `screen_profile_details`.
+`screen_blocked_users`, `screen_add_contact`, `screen_donate`, `screen_share_target`, `screen_profile_details`.
 Use these when you must drive the real UI; add more with the same snake_case, screen-prefixed convention.
 
 **Popups don't inherit `testTagsAsResourceId`.** A Compose `DropdownMenu` / `AlertDialog` renders in a

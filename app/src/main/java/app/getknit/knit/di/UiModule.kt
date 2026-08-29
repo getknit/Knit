@@ -16,7 +16,6 @@ import app.getknit.knit.ui.profile.ProfileDetailsViewModel
 import app.getknit.knit.ui.profile.ProfileViewModel
 import app.getknit.knit.ui.relay.InternetRelayViewModel
 import app.getknit.knit.ui.requests.MessageRequestsViewModel
-import app.getknit.knit.ui.verify.VerifyContactViewModel
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
@@ -76,8 +75,7 @@ val uiModule =
         }
         viewModel { BlockedUsersViewModel(get(), get()) }
         viewModel { MessageRequestsViewModel(get(), get(), get(), get(), get(), androidContext()) }
-        viewModel { VerifyContactViewModel(get(), get(), get()) }
-        viewModel { AddContactViewModel(get(), get()) }
+        viewModel { AddContactViewModel(get(), get(), get(), get(), get()) }
         viewModel { InternetRelayViewModel(get(), get()) }
         viewModel { LoraRadioViewModel(get(), get(), get()) }
     }

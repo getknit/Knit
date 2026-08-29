@@ -290,8 +290,7 @@
     <string name="verify_match">Verified — keys match.</string>
     <string name="verify_mismatch">Codes don\'t match. This may not be the right contact.</string>
 
-    <!-- Standalone "Verify contact" screen (chat-list overflow) -->
-    <string name="verify_contact_title">Verify contact</string>
+    <!-- The in-person half of the "Add contact" screen (chat-list overflow › Add contact) -->
     <string name="verify_standalone_caption">Show your code to someone nearby, or scan theirs, to add them as a verified contact — even if you\'ve never chatted.</string>
     <string name="verify_qr_caption_generic">Let them scan this code</string>
     <string name="verify_added">Verified — added to your contacts.</string>
@@ -305,7 +304,8 @@
     <string name="contact_link_chooser_title">Share your contact link</string>
     <string name="contact_link_share_text">Add me on Knit: %1$s</string>
     <string name="contact_link_copied">Link copied</string>
-    <string name="add_contact_title">Add by link</string>
+    <string name="add_contact_title">Add contact</string>
+    <string name="add_contact_link_title">Add by link</string>
     <string name="add_contact_caption">Paste a contact link someone sent you, or open it from the message it arrived in.</string>
     <string name="add_contact_input_label">Contact link</string>
     <string name="add_contact_input_hint">https://getknit.app/c#…</string>

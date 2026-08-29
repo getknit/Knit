@@ -67,9 +67,9 @@ data class PeerVerification(
  * Rendered in two places:
  *  - a peer's read-only profile ([app.getknit.knit.ui.profile.ProfileDetailsScreenContent]) passes a
  *    non-null [peer] and shows the full verification section; and
- *  - the standalone Verify-contact screen ([app.getknit.knit.ui.verify.VerifyContactScreenContent])
- *    passes `peer = null` — there is no bound contact until a code is scanned, so it shows only
- *    "share my code + scan theirs".
+ *  - the Add-contact screen ([app.getknit.knit.ui.addcontact.AddContactScreenContent]) passes
+ *    `peer = null` — there is no bound contact until a code is scanned, so it shows only "share my code
+ *    + scan theirs", above that screen's paste-a-link half.
  */
 @Composable
 fun EncryptionSection(
@@ -88,10 +88,14 @@ fun EncryptionSection(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            text = stringResource(R.string.verify_section_title),
-            style = MaterialTheme.typography.titleMedium,
-        )
+        // Standalone mode is the whole top half of the Add-contact screen, whose top bar already names it;
+        // a second "Encryption" heading there would label the screen twice.
+        if (peer != null) {
+            Text(
+                text = stringResource(R.string.verify_section_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
 
         if (peer != null && !peer.hasKey) {
             Text(

@@ -24,9 +24,9 @@ document:
 
 ### Added
 
-- Add a contact from a link. Too far apart to scan each other's code? Share your contact link (Verify
-  contact › Share my contact link) over any messenger, and add someone from theirs — tap it, share it to
-  Knit, or paste it under Add by link. Each of you ends up with the other's key pinned and in Contacts, no
+- Add a contact from a link. Too far apart to scan each other's code? Share your contact link (menu ›
+  Add contact › Share link) over any messenger, and add someone from theirs — tap it, share it to
+  Knit, or paste it into Add contact. Each of you ends up with the other's key pinned and in Contacts, no
   message needed; with Internet relays on, the two of you also meet at a relay before you have ever
   exchanged a message. A link is not a scan: compare safety numbers over a call if it matters who is on
   the other end.
@@ -67,6 +67,12 @@ document:
   pieces moved, photos left to the radios, and any errors a relay reported.
 
 ### Changed
+
+- Adding someone is one screen again. "Verify contact" and "Add by link" were two entries in the menu that
+  did halves of the same job; they are now a single **Add contact** screen — your code to be scanned, a
+  scanner for theirs, your link to send, and a box to paste the link they sent you. Nothing about how a
+  contact is added changed: a scan still verifies the key on the spot, and a link still asks you to compare
+  safety numbers before you trust who is on the other end.
 
 - Knit is a smaller download and starts faster. The build strips out the parts of its bundled libraries
   the app never actually calls — about four megabytes of code that was being shipped and loaded for no

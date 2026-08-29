@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.first
 /**
  * Turns a parsed [ContactCard] into a contact: previews what importing would do, then pins the key,
  * accepts the conversation and registers the intro (docs/CONTACT_CARD.md). The rules mirror the QR
- * scanner's (`VerifyContactViewModel`): a card is self-certifying, a pinned key is immutable — a
+ * scanner's (`AddContactViewModel.onScanned`): a card is self-certifying, a pinned key is immutable — a
  * differing key for a known node id is refused, never swapped in — and `updatedAt` is left untouched so
  * the peer's own profile frame still wins the last-writer-wins check and fills in what the card lacks.
  *

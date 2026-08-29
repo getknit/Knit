@@ -20,7 +20,8 @@ internal object LoraFrameCodec {
     /**
      * Compact-encodes [wire], splitting into ≤3 fragments sharing [fragId] when one message won't hold it.
      * [maxPayload] is the largest `Data.payload` a single packet may carry — capped at the protocol limit
-     * ([MeshtasticProto.MAX_PAYLOAD] = 233) but sized DOWN to the board's negotiated BLE MTU by the caller, so
+     * ([MeshtasticProto.MAX_PAYLOAD] = 231, the firmware's on-air limit less the private-portnum framing) but
+     * sized DOWN to the board's negotiated BLE MTU by the caller, so
      * a full fragment's `ToRadio` write fits one ATT operation (many ESP32 boards negotiate MTU 255, whose
      * ~252-byte usable write can't hold a 233-byte-payload packet — the "dial mtu 255" reconnect loop).
      */

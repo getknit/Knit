@@ -527,4 +527,14 @@ class MeshtasticProtoTest {
         val small = OutboundPacket(channelIndex = 0, id = 1u, payload = ByteArray(MeshtasticProto.MAX_PAYLOAD))
         assertTrue(MeshtasticProto.encodePacket(small).size <= MeshtasticProto.MAX_PAYLOAD + MeshtasticProto.PACKET_OVERHEAD)
     }
+
+    @Test
+    fun theOnAirPayloadCapIsTheFirmwareLimitLessThePrivatePortnumFraming() {
+        // Measured 2026-08-29 on a Heltec V4 (2.7.26): 231 bytes queue, 232 and 233 NAK TOO_LARGE — the proto's
+        // DATA_PAYLOAD_LEN (233) assumes a one-byte portnum, and PRIVATE_APP takes two.
+        assertEquals(6, MeshtasticProto.DATA_FRAMING)
+        assertEquals(231, MeshtasticProto.MAX_PAYLOAD)
+        assertEquals(MeshtasticProto.LORA_DATA_MAX, MeshtasticProto.MAX_PAYLOAD + MeshtasticProto.DATA_FRAMING)
+        assertTrue(MeshtasticProto.MAX_PAYLOAD < MeshtasticProto.DATA_PAYLOAD_LEN)
+    }
 }

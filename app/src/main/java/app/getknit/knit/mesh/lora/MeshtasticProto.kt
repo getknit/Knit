@@ -12,8 +12,32 @@ package app.getknit.knit.mesh.lora
  */
 @Suppress("TooManyFunctions") // a flat codec: one small encode/decode helper per Meshtastic message we speak
 internal object MeshtasticProto {
-    /** `Data.payload`'s hard cap (`Constants.DATA_PAYLOAD_LEN`); a larger payload is refused before the radio. */
-    const val MAX_PAYLOAD = 233
+    /**
+     * The protobuf's own `Constants.DATA_PAYLOAD_LEN`. Kept for reference only: it assumes a one-byte portnum,
+     * and Knit's `PRIVATE_APP` (256) takes two, so the cap that actually clears the radio is [MAX_PAYLOAD].
+     */
+    const val DATA_PAYLOAD_LEN = 233
+
+    /**
+     * The largest encoded `Data` message the firmware's router will transmit — `MAX_RHPACKETLEN` (256) minus
+     * the 16-byte packet header minus 3. Measured on a Heltec V4 on 2.7.26 (2026-08-29): a 231-byte
+     * `PRIVATE_APP` payload (237-byte `Data`) is queued, 232 and 233 come back `Routing.error_reason =
+     * TOO_LARGE`. Every packet that ever NAKed `TOO_LARGE` on the lab boards was one chunked at
+     * [DATA_PAYLOAD_LEN].
+     */
+    const val LORA_DATA_MAX = 237
+
+    /** What `Data` adds around a maximum payload: the two-byte private portnum and the payload's tag + length. */
+    val DATA_FRAMING: Int =
+        ProtoWriter()
+            .varint(DATA_PORTNUM, PORT_PRIVATE_APP)
+            .bytes(DATA_PAYLOAD, ByteArray(LORA_DATA_MAX))
+            .toByteArray()
+            .size -
+            LORA_DATA_MAX
+
+    /** `Data.payload`'s hard cap on the air for a Knit packet: [LORA_DATA_MAX] less [DATA_FRAMING] — 231. */
+    val MAX_PAYLOAD: Int = LORA_DATA_MAX - DATA_FRAMING
 
     /**
      * The bytes a `ToRadio { packet }` wraps around a maximum `Data.payload`, measured by encoding one

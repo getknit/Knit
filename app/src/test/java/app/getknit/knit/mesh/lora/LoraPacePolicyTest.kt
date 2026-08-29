@@ -254,4 +254,16 @@ class LoraPacePolicyTest {
     fun takeIsNullWhenEmpty() {
         assertNull(LoraPacePolicy().take(10_000))
     }
+
+    @Test
+    fun evictOversizeShedsOnlyFramesWithAPartPastTheCap() {
+        val pace = LoraPacePolicy()
+        pace.enqueue(OutboundFrame(listOf(ByteArray(233), ByteArray(40)), "chunked-at-the-old-max", FrameClass.DM))
+        pace.enqueue(OutboundFrame(listOf(ByteArray(120)), "fits", FrameClass.ROOM))
+        pace.enqueue(OutboundFrame(listOf(ByteArray(100), ByteArray(229)), "tail-too-big", FrameClass.ROOM))
+        assertEquals(2, pace.evictOversize(228))
+        assertEquals(1, pace.pending)
+        assertEquals("fits", pace.take(now = 0L)?.label)
+        assertEquals(0, pace.evictOversize(1))
+    }
 }

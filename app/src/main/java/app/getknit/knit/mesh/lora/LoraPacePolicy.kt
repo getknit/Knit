@@ -60,6 +60,18 @@ internal class LoraPacePolicy(
     }
 
     /**
+     * Drops every queued frame with a part larger than [cap] and returns how many went. The board's payload cap
+     * is only known once its session is Ready, and frames fanned out while it was still connecting were
+     * chunked for the pre-Ready floor; should a board negotiate a smaller MTU than that floor, those parts
+     * would fail every write and requeue forever, so they are shed here when the real cap lands.
+     */
+    fun evictOversize(cap: Int): Int {
+        val before = queue.size
+        queue.removeAll { frame -> frame.remaining.any { it.size > cap } }
+        return before - queue.size
+    }
+
+    /**
      * The earliest time the next frame may go out: the min gap since the last send, any NAK cool-down, and —
      * once [take] has found the whole queue over budget — the moment the rolling window next frees air.
      *

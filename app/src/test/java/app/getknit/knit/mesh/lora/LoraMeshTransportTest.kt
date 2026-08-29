@@ -28,6 +28,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.random.Random
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @Suppress("LargeClass") // one rig, many scenarios — splitting it would duplicate the rig, not clarify
@@ -125,7 +126,48 @@ class LoraMeshTransportTest {
     fun theToRadioOverheadIsMeasuredAndAnMtu255BoardTakes228BytePayloads() {
         assertEquals(27, LoraMeshTransport.TORADIO_OVERHEAD)
         assertEquals(228, 255 - LoraMeshTransport.TORADIO_OVERHEAD)
+        assertEquals(228, LoraMeshTransport.PRE_READY_PAYLOAD)
     }
+
+    /**
+     * A frame fanned out while the board is still connecting is chunked for the pre-Ready floor, never the
+     * protocol maximum. The `TOO_LARGE` NAKs the lab saw at every session-up were exactly these: the pacer
+     * drops one queued frame per tick while the link is not Ready, the rest of the start-up burst waits in the
+     * queue chunked at `maxPayload`'s initial value — 233 until this fix — and drains into the router the
+     * moment Ready lands. Once Ready, the negotiated cap (231 at MTU 512) applies to new frames.
+     */
+    @Test
+    fun framesFannedOutBeforeReadyAreChunkedForTheFloorAndNeverPastTheCap() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            // Incompressible bodies (random printable ASCII): the codec deflates text, so a repeated letter
+            // would ride in one packet and exercise no chunking at all.
+            val random = Random(11)
+
+            fun noise() = String(CharArray(450) { (0x21 + random.nextInt(0x5E)).toChar() }) // ~3 parts at either cap
+
+            a.link.readyOnStart = false // the board is still connecting when the mesh fans frames at us
+            a.transport.start()
+            runCurrent()
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = noise()))
+            a.link.ready() // the handshake completes (at MTU 512) with that frame still queued
+            runCurrent()
+            advanceTimeBy(30_000)
+            runCurrent()
+            val preReady = a.link.sent.toList()
+            assertTrue("the queued frame fragmented (${preReady.map { it.size }})", preReady.count { it.size >= 200 } >= 2)
+            assertTrue("every part fits an MTU-255 board", preReady.all { it.size <= LoraMeshTransport.PRE_READY_PAYLOAD })
+            assertTrue("and none was chunked at the old protocol maximum", preReady.none { it.size > 228 })
+
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = noise()))
+            advanceTimeBy(30_000)
+            runCurrent()
+            val afterReady = a.link.sent.drop(preReady.size)
+            assertTrue("after Ready the negotiated cap (231 at MTU 512) applies", afterReady.any { it.size == MeshtasticProto.MAX_PAYLOAD })
+            assertTrue(afterReady.all { it.size <= MeshtasticProto.MAX_PAYLOAD })
+            a.transport.stop()
+        }
 
     /** A high-entropy body that will not deflate below the LoRa packet cap, so the frame truly fragments. */
     private fun incompressibleBody(chars: Int): String {

@@ -2,7 +2,7 @@ package app.getknit.knit.mesh.lora
 
 /**
  * How long a draft may be before it risks not fitting the LoRa hop — the composer's "long message" hint
- * (ADR 040). The hop carries at most 3 × 229 = 687 compact bytes (`LoraFrameCodec`); everything above the
+ * (ADR 040). The hop carries at most 3 × 227 = 681 compact bytes (`LoraFrameCodec`); everything above the
  * body — envelope, signature, the X3DH init a DM carries until the peer's first reply — is fixed cost, so a
  * body budget is the honest way to say it before the send. The budgets are deliberately below the true
  * ceilings (a 100-char DM is 439 B with its init; ≈ 335 characters fit) and are pinned by

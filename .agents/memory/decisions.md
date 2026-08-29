@@ -3135,3 +3135,17 @@ AckSync seals a tick once and re-sends it verbatim. Counters: `dmSealedV3`, `tic
 and carries the signed DM ✓✓ in one packet; `DICT_V2` (`DICT_V1` now holds a dead `nonce` token; frozen,
 harmless); the profile-version seeding above; re-tuning `INLINE_ACK_BYTES` (23 B stays a conservative
 reservation for a 17-B compact ack).
+
+*Amendment (2026-08-29, lab).* Verifying this on the Pixel 9's board showed `loraNak = 10` for nine sends,
+all inside the first minute after session-up, and the counter carried no reason. Counting NAKs per
+`Routing.error_reason` (`loraNakByReason`) and reinstalling reproduced it at once: six `TOO_LARGE`. Raw
+`…debug.LORATX` sends pinned the firmware's limit — a 231-byte `PRIVATE_APP` payload queues, 232 and 233 come
+back `TOO_LARGE` — so the router transmits at most a 237-byte `Data`, and the proto's `DATA_PAYLOAD_LEN = 233`
+(which assumes a one-byte portnum) overshoots Knit's two-byte portnum by 2. Two things followed. `MeshtasticProto.MAX_PAYLOAD`
+is now derived, 237 less the measured 6 bytes of framing = 231, and every "233" downstream (the 687-B
+ceiling, the size hint's arithmetic) moved with it. And the NAKs were never from the negotiated cap at all —
+they were the frames the composite fans out while the board is still *connecting*, chunked at `maxPayload`'s
+initial value, which was the protocol maximum; `Ready` then drained them straight into `TOO_LARGE`. The
+initial cap is now the MTU-255 floor (`PRE_READY_PAYLOAD` = 228) and `Ready` evicts anything a smaller
+negotiated cap could never write. Pre-existing on every build since ADR 038, and invisible because the
+counter had no reason — which is the lesson, more than the two bytes.

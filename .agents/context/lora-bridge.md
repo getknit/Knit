@@ -30,8 +30,13 @@ Everything else (group-form chat, `groupupdate`/`groupleave`, `typing`, `blobreq
 
 Outbound decodes `wire.signed` only to apply the policy, then reuses `FastFrameCodec` (ADR 030) to
 compact/fragment: `sig`/`signed` pass through byte-exact, so this is **not a wire change** and the
-originator's signature verifies unchanged. Meshtastic `Data.payload` cap = 233 B → ≤ 3 fragments (ceiling
-`3 × 229 = 687 B` compact). Inbound mirrors `WifiAwareTransport.emitFastWire`: decode/reassemble →
+originator's signature verifies unchanged. Meshtastic `Data.payload` cap = **231 B** on the air for a Knit
+packet (`MeshtasticProto.MAX_PAYLOAD`: the firmware transmits at most a 237-byte `Data`, and the two-byte
+`PRIVATE_APP` portnum plus the payload framing take 6 — the proto's `DATA_PAYLOAD_LEN = 233` assumes a one-byte
+portnum; measured 2026-08-29: 231 queues, 232 NAKs `TOO_LARGE`) → ≤ 3 fragments (ceiling `3 × 227 = 681 B`
+compact); an MTU-255 board takes 228. Before the board reports its MTU the cap is the MTU-255 floor
+(`LoraMeshTransport.PRE_READY_PAYLOAD`), not the maximum — frames fanned out during the connect used to be
+chunked at 233 and every one came back `TOO_LARGE`. Inbound mirrors `WifiAwareTransport.emitFastWire`: decode/reassemble →
 `_inbound.tryEmit(InboundFrame(wire, env, fromNodeId = env.senderId))`, so the router's dedup / verify /
 custody / relay all run unchanged.
 
@@ -66,7 +71,10 @@ Golden byte vectors pin every field number; malformed input decodes to null, nev
   control. `rebooted`/unsolicited `my_info` → re-handshake.
 - Send `MeshPacket{to=0xFFFFFFFF, channel=idx, id=client nonzero, hop_limit omitted(=default 3),
   want_ack=false}`. NAKs: portnum ROUTING_APP(5), `request_id` = our id, `error_reason` (NO_CHANNEL 6,
-  TOO_LARGE 7, DUTY_CYCLE_LIMIT 9, RATE_LIMIT_EXCEEDED 38).
+  TOO_LARGE 7, DUTY_CYCLE_LIMIT 9, RATE_LIMIT_EXCEEDED 38) — counted per reason as `loraNakByReason`.
+- The router transmits at most a **237-byte `Data`** (`MeshtasticProto.LORA_DATA_MAX`, measured 2026-08-29 on a
+  Heltec V4 / 2.7.26 with `…debug.LORATX`: a 231-byte payload queues, 232 and 233 NAK `TOO_LARGE`). The ATT
+  MTU is the *other* limit (`mtu − 27` at MTU 255 = 228); the effective cap is the smaller of the two.
 
 ## Key bootstrap (the far side has never seen the author's profile)
 
@@ -108,7 +116,7 @@ must never need an event to recover. Closes ADR 038's "one board per clique" res
 > gap between heard and linked is visible rather than inferred.
 
 **An airtime governor.** `LoraAirtime` (pure): time-on-air from the LoRa formula at the board's own preset
-(233 B at LongFast ≈ 2 s), a rolling **15-minute window** (ADR 054 — it was an hour, and a burst of chat then
+(231 B at LongFast ≈ 2 s), a rolling **15-minute window** (ADR 054 — it was an hour, and a burst of chat then
 blacked the plane out for the rest of it; the hourly total is unchanged, the worst straddling hour ≤ 6.25 %),
 and one allowance = `min(region duty cycle, 10 % politeness) × 0.5` of the window — **45 s of air at LongFast**.
 `AirBucket.LIVE` may spend all of it; `AirBucket.BRIDGE` (offers + backfill + the ADR 039 re-offer) is capped
@@ -182,7 +190,7 @@ the far side needs only the pinned profile (key + `CAP_RATCHET` + prekey) the be
 attaches its init to every frame until the first reply, so no round trip is needed. The epoch ratchet
 tolerates a lossy hop by design (independent epochs, ≤ 200 skipped keys per epoch). Sizes
 (`CoordinationPlaneSizeBudgetTest.sealedDmsFitTheLoraHop`): a 100-char DM compacts to **387 B** steady-state
-and **439 B** with the init — 2 packets either way; the 3-packet ceiling (687 B) is ≈ 400 characters steady /
+and **439 B** with the init — 2 packets either way; the 3-packet ceiling (681 B) is ≈ 400 characters steady /
 ≈ 335 with the init; an attachment *reference* costs ~167 B more and still fits; a `TextLimits.MESSAGE`-length
 DM is `loraTooBig` and rides the radios/custody. The ✓✓ is the recipient's sealed `CTL_RECEIPT` — a DM-form
 frame originated `relay = true`, so it crosses back on the same rule, and it re-runs on every re-delivery via

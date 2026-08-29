@@ -518,7 +518,7 @@ class CoordinationPlaneSizeBudgetTest {
             ),
         )
 
-    // --- budgets: the LoRa hop (Meshtastic Data.payload cap = 233 B, <= 3 fragments) ---
+    // --- budgets: the LoRa hop (Meshtastic Data.payload cap = 231 B on the air, <= 3 fragments) ---
 
     /**
      * The largest `Data.payload` a board behind a 255-byte BLE MTU takes in one write
@@ -710,8 +710,10 @@ class CoordinationPlaneSizeBudgetTest {
 
     @Test
     fun loraFragmentCeilingArithmetic() {
-        // 3 parts x (233-B payload - 4-B fragment header) is the most any compact frame can carry over LoRa.
-        assertEquals(687, FastFrameCodec.MAX_PARTS * (MeshtasticProto.MAX_PAYLOAD - FastFrameCodec.FRAG_HEADER_BYTES))
+        // 3 parts x (231-B payload - 4-B fragment header) is the most any compact frame can carry over LoRa: the
+        // firmware transmits at most a 237-byte Data, and Knit's private portnum plus the payload framing take 6.
+        assertEquals(231, MeshtasticProto.MAX_PAYLOAD)
+        assertEquals(681, FastFrameCodec.MAX_PARTS * (MeshtasticProto.MAX_PAYLOAD - FastFrameCodec.FRAG_HEADER_BYTES))
     }
 
     private companion object {

@@ -94,9 +94,17 @@ internal class FakeMeshtasticLink(
         return provisionResult
     }
 
+    /** Off to model a board still connecting after [start]: the state parks at Connecting until [ready]. */
+    var readyOnStart = true
+
     override fun start(address: String) {
-        _state.value = LinkState.Ready(BoardInfo(nodeNum, "heltec-v4", "2.5.0"), listOf(ChannelInfo(0, channelName, 1)), 512)
+        if (readyOnStart) ready() else _state.value = LinkState.Connecting
         air.register(this)
+    }
+
+    /** The handshake completing (at ATT MTU 512, the ESP32 line's ceiling): what a real board reports last. */
+    fun ready() {
+        _state.value = LinkState.Ready(BoardInfo(nodeNum, "heltec-v4", "2.5.0"), listOf(ChannelInfo(0, channelName, 1)), 512)
     }
 
     override fun stop() {

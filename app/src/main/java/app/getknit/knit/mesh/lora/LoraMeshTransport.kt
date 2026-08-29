@@ -156,7 +156,10 @@ internal class LoraMeshTransport(
     // Largest Data.payload a single board packet may carry, sized DOWN from the negotiated BLE MTU on
     // session-up so a full fragment's ToRadio write fits one ATT op (ESP32 boards commonly cap at MTU 255).
     @Volatile
-    private var maxPayload: Int = MeshtasticProto.MAX_PAYLOAD
+    // The pre-Ready floor, not the protocol maximum: frames fanned out while the board is still connecting are
+    // chunked with this and drained the moment the session is Ready, so it has to fit the smallest MTU a real
+    // board negotiates. It used to be MAX_PAYLOAD — every one of those frames then came back TOO_LARGE.
+    private var maxPayload: Int = PRE_READY_PAYLOAD
 
     @Volatile
     private var selfIdCached: String? = null
@@ -875,6 +878,11 @@ internal class LoraMeshTransport(
             }
         if (state is LinkState.Ready) {
             maxPayload = (state.mtu - TORADIO_OVERHEAD).coerceIn(LoraFrameCodec.MIN_PAYLOAD, MeshtasticProto.MAX_PAYLOAD)
+            val evicted = pace.evictOversize(maxPayload)
+            if (evicted > 0) {
+                repeat(evicted) { metrics.onLoraTooBig() }
+                log("lora ready: evicted $evicted queued frame(s) chunked past the negotiated cap $maxPayload")
+            }
             metrics.onLoraSessionUp()
             pace.airtime.onRadioConfig(state.radio)
             log(
@@ -976,5 +984,14 @@ internal class LoraMeshTransport(
          * MTU-255 ESP32 boards that slack was the difference between a one-packet v3 tick and two (ADR 059).
          */
         val TORADIO_OVERHEAD: Int = ATT_HEADER_BYTES + MeshtasticProto.PACKET_OVERHEAD
+
+        /** The smallest ATT MTU a real board negotiates (the ESP32 line's 255); a failed negotiation is caught lower, at `MIN_MTU`. */
+        const val MTU_FLOOR = 255
+
+        /**
+         * The payload cap in force before a board has reported its MTU: what an [MTU_FLOOR] board takes, never
+         * more than [MeshtasticProto.MAX_PAYLOAD]. Ready replaces it with the negotiated figure.
+         */
+        val PRE_READY_PAYLOAD: Int = minOf(MeshtasticProto.MAX_PAYLOAD, MTU_FLOOR - TORADIO_OVERHEAD)
     }
 }

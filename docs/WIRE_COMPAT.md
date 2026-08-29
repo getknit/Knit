@@ -380,7 +380,10 @@ been refused custody by every fielded build — a per-build custody rule (ADR 00
 and rides *empty*; `WireSerializationTest.everyOlderDecoderShapeDecodesAV3Envelope` decodes the real v3
 output through the v1- and v2-era decoder shapes as the executable proof. (3) A plaintext schema that never
 emits its version (`MessageContent.v` is elided while default) cannot gate anything, so the compact
-plaintext is discriminated by the envelope version and reserves a label-0 version inside itself. The
+plaintext is discriminated by the envelope version and reserves a label-0 version inside itself (plus
+labels 12–13 for the additive follow-ons, padding and raw-seed group keys: a new label is additive under
+`ignoreUnknownKeys`, a new *form* — the group form — is a new version, pinned by
+`InboundPipelineTest.aV3GroupAddressedEnvelopeIsABadHeaderNeverAGroupFrame`). The
 unsigned live-link tick is a *receiver-shape* rule, not a wire change: `WireEnvelope.sig` was already allowed
 to be empty (`blobreq`); what is new is the one shape `verifyInbound` admits that way and the ordering that
 keeps it harmless (before the plaintext branch, before the exists-gate, ctl-only after the open, outside the

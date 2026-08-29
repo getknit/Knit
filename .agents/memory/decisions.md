@@ -3149,3 +3149,24 @@ initial value, which was the protocol maximum; `Ready` then drained them straigh
 initial cap is now the MTU-255 floor (`PRE_READY_PAYLOAD` = 228) and `Ready` evicts anything a smaller
 negotiated cap could never write. Pre-existing on every build since ADR 038, and invisible because the
 counter had no reason — which is the lesson, more than the two bytes.
+
+*Amendment (2026-08-29, pre-release review).* Asked whether anything else should ride the v3 number before it
+ships, the review found nothing scheme-bound: the AAD (`id|sender|sentAt|recipient` ‖ the labeled header
+binding, so a v2↔v3 relabel fails the AEAD), the nonce derivation, X3DH (identity on both sides, weekly SPK
+rotation with retention), the signing domains (SPK label, card label, scope `sig‖signed`, wire = a CBOR map —
+mutually unparseable) and the attachment seal all stand. Rejected on the mesh's terms: post-quantum KEM
+material (ML-KEM-768: 1184-B keys, 1088-B ciphertexts — the profile alone becomes ~8 LoRa packets), a
+key-committing AEAD (+32 B, and the header selects the key, so there is no attacker-steered multi-key trial),
+header encryption (relays and custody need the pair in the clear anyway), length padding and tag truncation.
+Two things were pinned while the number was still free. **v3 is the DM form by executable rule**
+(`InboundPipelineTest.aV3GroupAddressedEnvelopeIsABadHeaderNeverAGroupFrame`): a group-addressed v3
+envelope is `RATCHET_BAD_HEADER` on every v3 build — refused before the group engine, the key-request
+heuristic and the reset heuristic — so a compact group form cannot reuse the number; it takes **v4**,
+roster-gated on every member's pinned capability, and rides round 2's capability bit if it ships in the same
+release (else a bit of its own). And `MessageContentV2` **reserves labels 12 and 13**: `pad`, a length-hiding
+byte string the reader discards, and `gk`, the group-key payload with raw 32-B seeds (44 B each as base64
+today, which is why the group-key ctl DMs still seal v2). Both are additive under `ignoreUnknownKeys` — a
+new *label* is additive, a new *form* is a new version. Noted as policy rather than scheme, for the roadmap:
+marking a frame seen only after it verifies (a forged frame with a real id shadows the genuine one for the
+SeenSet window — every type, pre-existing), and the epoch cadence (`MAX_EPOCH_AGE_MS` = 24 h bounds
+post-compromise recovery; `ek` already rides every frame, so a shorter cadence costs nothing on the wire).

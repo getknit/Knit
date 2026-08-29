@@ -542,7 +542,11 @@ class EncEnvelope(
         /** The ratchet schemes (DM form requires [r]; group form requires [g] — see the class kdoc). */
         const val VERSION_RATCHET = 2
 
-        /** The compact DM form: v2's ratchet, an empty (derived) [nonce], the labeled plaintext — DM form only. */
+        /**
+         * The compact DM form: v2's ratchet, an empty (derived) [nonce], the labeled plaintext — DM form
+         * only. A group-addressed v3 envelope is malformed (`RATCHET_BAD_HEADER`) on every v3 build, so a
+         * compact group form is a new version, never a v3 variant (ADR 059).
+         */
         const val VERSION_DM_V3 = 3
 
         /** Whether [v] names a DM epoch-ratchet scheme (v2 or v3 — both carry [r]; the group form is v2 only). */

@@ -33,7 +33,8 @@ import kotlinx.serialization.encodeToByteArray
  * pattern match would accept strings that come back different. No shipped build ever minted a
  * non-canonical id for anything that gets acked, reacted to or quoted, so the fallback is hostile-input
  * hygiene rather than a compatibility path, but it is what keeps this codec unable to lose a frame.
- * [MessageContent.gk] is not modelled (the group-key ctls stay v2) and refuses the same way.
+ * [MessageContent.gk] is not modelled (the group-key ctls stay v2; label 13 is reserved for a raw-seed form)
+ * and refuses the same way.
  *
  * Nested types are this codec's own rather than the domain's: `Mention`/`ReplyRef`/`ReactionPayload`/
  * `ProfilePayload` are shared with the cleartext `ChatContent`, whose shape is frozen (docs/WIRE_COMPAT.md
@@ -159,6 +160,13 @@ internal object MessageContentV2 {
     private const val HASH_BYTES = 32
     private const val HEX_RADIX = 16
 
+    /**
+     * The top-level layout. Labels are append-only. **12 and 13 are reserved** for the two additive
+     * follow-ons — `12 = pad`, a length-hiding byte string a reader discards, and `13 = gk`, the group-key
+     * payload with raw 32-byte seeds (44 B each as base64 today) — both readable by this build already,
+     * since `ignoreUnknownKeys` skips a label it does not model: a new label is additive, a new *form* (the
+     * group form) is a new envelope version. Never recycle a label.
+     */
     @Serializable
     @Suppress("MagicNumber") // the CBOR labels are the layout itself, pinned by GoldenVectorTest
     private class Wire(

@@ -197,7 +197,10 @@ chat payload before custodying a frame: an envelope a pre-v3 build cannot decode
 would carry, which is the per-build custody rule ADR 006 forbids. The plaintext is the compact
 `MessageContentV2` schema (integer keys, raw ids; `mesh/crypto/MessageContentV2.kt`), discriminated by the
 envelope version, with a reserved label-0 version of its own. Old builds: decode, `v > MAX_SUPPORTED_VERSION`,
-`UNKNOWN_ENVELOPE_VERSION`, carry. Group form stays v2; resets and group-key ctl DMs stay v2.
+`UNKNOWN_ENVELOPE_VERSION`, carry. Group form stays v2 — and v3 is the DM form *by rule*: a group-addressed
+v3 envelope is `RATCHET_BAD_HEADER` on every v3 build, so a compact group form is a v4 (roster-gated), never a
+v3 variant. Resets and group-key ctl DMs stay v2; `MessageContentV2` reserves label 13 for a raw-seed `gk`
+and label 12 for length padding, both additive under `ignoreUnknownKeys`.
 
 Capability gating: `Protocol.CAP_RATCHET = 0x10` (append-only). Outbound v2 requires the peer's
 pinned, authenticated profile to carry **both** the capability bit **and** a valid `PrekeyInfo` —

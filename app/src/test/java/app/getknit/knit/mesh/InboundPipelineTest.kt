@@ -3945,6 +3945,56 @@ class InboundPipelineTest {
         }
 
     @Test
+    fun aV3GroupAddressedEnvelopeIsABadHeaderNeverAGroupFrame() =
+        runTest {
+            // v3 is the DM form only (ADR 059): a group-addressed v3 envelope, even one carrying a
+            // well-formed `g`, routes to the DM arm and is refused there as structural — before the group
+            // engine, the group key-request heuristic, and the reset heuristic. This is the executable
+            // half of "a compact group form takes v4": a v3 build drops it rather than misrouting it.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+
+            fun chatFramesToAlice() = rig.originated.count { it.type == FrameType.CHAT && it.recipientId == alice.nodeId }
+
+            // Three distinct ids: enough to fire the group key-request heuristic, were it ever reached.
+            repeat(3) { i ->
+                rig.deliver(
+                    alice,
+                    RelayEnvelope(
+                        type = FrameType.CHAT,
+                        id = "v3-grouped-$i",
+                        senderId = alice.nodeId,
+                        sentAt = 5L,
+                        group = group,
+                        payload =
+                            WireCodec.encodePayload(
+                                ChatContent(
+                                    enc =
+                                        EncEnvelope(
+                                            v = EncEnvelope.VERSION_DM_V3,
+                                            nonce = ByteArray(0),
+                                            ct = ByteArray(4),
+                                            keys = emptyList(),
+                                            g = GroupRatchetHeader(se = 1, n = i),
+                                        ),
+                                ),
+                            ),
+                    ),
+                )
+            }
+
+            assertEquals(3L, rig.drops(DropReason.RATCHET_BAD_HEADER))
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_BAD_HEADER))
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_AEAD_FAIL))
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+            assertEquals(0, chatFramesToAlice())
+            assertEquals(0, rig.resetsSent())
+            assertTrue(rig.msgMap.isEmpty())
+        }
+
+    @Test
     fun threeDistinctUndecryptableGroupFramesTriggerOneRateLimitedKeyRequest() =
         runTest {
             val rig = Rig(backgroundScope)

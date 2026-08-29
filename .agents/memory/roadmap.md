@@ -237,7 +237,10 @@ doc). **Don't start a deferred item without explicit direction.**
   canonical bytes. Gating: NAN per peer on a new capability bit (`0x80` is the
   last one a BLE advert carries — `BleAdvertPayload` byte 0); LoRa has **no per-peer gate**, so a flag-day
   is acceptable only while `LORA_PLANE` is debug-only, and the `LoraCtl` OFFER needs a capability byte
-  before that plane ships. Ride-along: trim `LoraMeshTransport.TORADIO_OVERHEAD` 33 → 27 (the exact
+  before that plane ships. Same bit, if it ships in the same release: the compact **group form as v4**
+  (derived nonce + labeled plaintext for `g`, roster-gated on every member's pinned capability; ~12 + 20–40 B
+  a post, no packet-count change on its own) — v3 is the DM form by executable rule (ADR 059 amendment), so
+  it cannot reuse the number. Ride-along: trim `LoraMeshTransport.TORADIO_OVERHEAD` 33 → 27 (the exact
   `ToRadio{packet{to, channel, decoded{portnum, payload}, id}}` framing + 3-B ATT header) — done with ADR 059
   (now measured off `MeshtasticProto.encodePacket`; verified 2026-08-29 on the lab Pixel 9's MTU-255 ESP32 board —
   `lora ready … mtu=255 maxPayload=228`, fragmented 228-B writes accepted, no write errors). Rejected on measurement: `ek` elision (ratchet advance rule 2 rekeys on
@@ -249,6 +252,14 @@ doc). **Don't start a deferred item without explicit direction.**
   clock on first run, so a reinstalled peer's stale `CAP_CRYPTO_V3` (and `CAP_RATCHET`) pin can be cleared by
   its next profile rather than by its edit count climbing back; and re-tune `INLINE_ACK_BYTES` (23) for the
   17-B compact ack.
+- **Crypto hardening that is policy, not scheme** (from the 2026-08-29 pre-release review of v3, ADR 059
+  amendment) — neither needs a version number, so neither rode v3: (1) mark a frame *seen* only after it
+  verifies — today a forged frame carrying a real id shadows the genuine one for the SeenSet window (10 min,
+  every frame type, pre-existing); (2) shorten the DM epoch cadence (`RatchetEngine.MAX_EPOCH_AGE_MS` = 24 h
+  bounds post-compromise recovery to a day; `ek` already rides every frame, so a shorter cadence costs
+  nothing on the wire — check the epoch-row/TTL budget first). Rejected outright for the mesh: post-quantum
+  KEM material (ML-KEM-768 keys/ciphertexts are 1.1–1.2 kB), key-committing AEAD, header encryption, length
+  padding (label 12 exists if ever wanted), tag truncation.
 - **True DM routing** — DMs still flood; only the addressed recipient delivers/acks. Store-and-forward now
   *carries* undelivered DMs (`context/store-and-forward.md`), but there is still no routing table.
 - **Group key-gap retransmit (v1-fallback residual only)** — the group ratchet's outbox +

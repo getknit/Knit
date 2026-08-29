@@ -190,7 +190,8 @@ the pre-decrypt exists-gate (which is how a tick lost over LoRa heals when the D
 builds that read crypto scheme v3 (ADR 059) every sealed DM-form frame is ~30 B lighter (derived nonce,
 compact plaintext) — the DM ✓✓ still two packets (signed, custodied) — and AckSync's `relay = false` tick for
 a room or group post crosses **unsigned as one packet** (~222 B; at the MTU-255 ESP32 boards that needs the
-measured cap, `TORADIO_OVERHEAD` 27 → 228-B payloads, pinned by `CoordinationPlaneSizeBudgetTest`).
+measured cap, `TORADIO_OVERHEAD` 27 → 228-B payloads, pinned by `CoordinationPlaneSizeBudgetTest`; verified on the
+lab Pixel 9's MTU-255 ESP32 board 2026-08-29 — `lora ready … mtu=255 maxPayload=228`, fragmented 228-B writes accepted).
 
 **Re-offer on first hearing.** The plane has no custody sync, so a DM sent while the peer's board was off
 would be lost to it. On first hearing a peer (once per 45-min linger), after the beacon, the transport pulls

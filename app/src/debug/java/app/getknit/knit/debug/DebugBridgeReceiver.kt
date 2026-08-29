@@ -871,6 +871,8 @@ class DebugBridgeReceiver :
             .put("framesReplayed", snap.framesReplayed)
             .put("receiptsResent", snap.receiptsResent)
             .put("dmSealedV2", snap.dmSealedV2)
+            .put("dmSealedV3", snap.dmSealedV3)
+            .put("ticksUnsigned", snap.ticksUnsigned)
             .put("groupSealedRatchet", snap.groupSealedRatchet)
             .put("groupSealedV1Fallback", snap.groupSealedV1Fallback)
             .put("groupSeedsSent", snap.groupSeedsSent)

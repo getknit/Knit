@@ -239,7 +239,8 @@ doc). **Don't start a deferred item without explicit direction.**
   is acceptable only while `LORA_PLANE` is debug-only, and the `LoraCtl` OFFER needs a capability byte
   before that plane ships. Ride-along: trim `LoraMeshTransport.TORADIO_OVERHEAD` 33 → 27 (the exact
   `ToRadio{packet{to, channel, decoded{portnum, payload}, id}}` framing + 3-B ATT header) — done with ADR 059
-  (now measured off `MeshtasticProto.encodePacket`; the MTU-255 board check is still owed). Rejected on measurement: `ek` elision (ratchet advance rule 2 rekeys on
+  (now measured off `MeshtasticProto.encodePacket`; verified 2026-08-29 on the lab Pixel 9's MTU-255 ESP32 board —
+  `lora ready … mtu=255 maxPayload=228`, fragmented 228-B writes accepted, no write errors). Rejected on measurement: `ek` elision (ratchet advance rule 2 rekeys on
   every conversational turnaround, so only the 2nd+ frame of a one-sided burst could elide —
   `docs/FORWARD_SECRECY_RATCHET.md` §4), any further dictionary work, and dropping the signature on
   *flooded* frames (custody and relays verify `senderId`). Structural floor: a 100-char sealed DM is

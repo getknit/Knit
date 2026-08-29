@@ -622,6 +622,7 @@ class LoraMeshTransportTest {
             a.link.emitNak(id = 5u, reason = RoutingError.DUTY_CYCLE_LIMIT)
             runCurrent()
             assertEquals(1L, a.metrics.snapshot().loraNak)
+            assertEquals("attributable, not just counted", mapOf("DUTY_CYCLE_LIMIT" to 1L), a.metrics.snapshot().loraNakByReason)
             a.transport.stop()
         }
 

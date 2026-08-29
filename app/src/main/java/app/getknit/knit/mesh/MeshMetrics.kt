@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh
 
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -212,6 +213,7 @@ class MeshMetrics {
     private val loraDroppedQueue = AtomicLong()
     private val loraSuppressed = AtomicLong()
     private val loraNak = AtomicLong()
+    private val loraNakByReason = ConcurrentHashMap<String, AtomicLong>()
     private val loraSessionUps = AtomicLong()
     private val loraDmSent = AtomicLong()
     private val loraDmReceived = AtomicLong()
@@ -557,9 +559,15 @@ class MeshMetrics {
         loraSuppressed.incrementAndGet()
     }
 
-    /** A routing NAK from the board (rate/duty-cycle/no-channel/too-large); a rising count means airtime pressure. */
-    fun onLoraNak() {
+    /**
+     * A routing NAK from the board, by its `Routing.error_reason` name (rate/duty-cycle/no-channel/too-large…);
+     * a rising count means airtime pressure — or, per reason, something structural (a `TOO_LARGE` says the
+     * payload cap is wrong, a `NO_CHANNEL` that the bound slot is gone). The total was all the field ever
+     * saw until a lab session logged ten NAKs nobody could attribute (2026-08-29).
+     */
+    fun onLoraNak(reason: String = "UNKNOWN") {
         loraNak.incrementAndGet()
+        loraNakByReason.getOrPut(reason) { AtomicLong() }.incrementAndGet()
     }
 
     /** The LoRa board session reached Ready — context for the received/sent counts (how often it links). */
@@ -706,6 +714,7 @@ class MeshMetrics {
             loraDroppedQueue = loraDroppedQueue.get(),
             loraSuppressed = loraSuppressed.get(),
             loraNak = loraNak.get(),
+            loraNakByReason = loraNakByReason.mapValues { it.value.get() },
             loraSessionUps = loraSessionUps.get(),
             loraDmSent = loraDmSent.get(),
             loraDmReceived = loraDmReceived.get(),
@@ -787,6 +796,7 @@ class MeshMetrics {
         val loraDroppedQueue: Long = 0,
         val loraSuppressed: Long = 0,
         val loraNak: Long = 0,
+        val loraNakByReason: Map<String, Long> = emptyMap(),
         val loraSessionUps: Long = 0,
         val loraDmSent: Long = 0,
         val loraDmReceived: Long = 0,

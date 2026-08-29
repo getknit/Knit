@@ -921,6 +921,7 @@ class DebugBridgeReceiver :
             .put("loraDroppedQueue", snap.loraDroppedQueue)
             .put("loraSuppressed", snap.loraSuppressed)
             .put("loraNak", snap.loraNak)
+            .put("loraNakByReason", JSONObject(snap.loraNakByReason))
             .put("loraSessionUps", snap.loraSessionUps)
             .put("loraDmSent", snap.loraDmSent)
             .put("loraDmReceived", snap.loraDmReceived)

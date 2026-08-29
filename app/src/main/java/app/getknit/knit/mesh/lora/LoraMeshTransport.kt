@@ -726,7 +726,8 @@ internal class LoraMeshTransport(
             }
 
             is SendResult.Nak -> {
-                metrics.onLoraNak()
+                metrics.onLoraNak(result.reason.name)
+                log("lora nak id=${result.id} reason=${result.reason} label=${frame.label}")
                 pace.onNak(result.reason, clock())
                 false
             }
@@ -747,7 +748,8 @@ internal class LoraMeshTransport(
     }
 
     private fun onNak(outcome: PacketOutcome) {
-        metrics.onLoraNak()
+        metrics.onLoraNak(outcome.reason.name)
+        log("lora nak id=${outcome.id} reason=${outcome.reason} (late)")
         pace.onNak(outcome.reason, clock())
     }
 

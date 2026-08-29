@@ -70,7 +70,10 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   locked lab device. `--es address <MAC>` (+ `--es name <n>`) binds a bonded board, `--ei channel <idx>`
   sets the channel index, `--ez on <true|false>` flips the switch; no extras dumps
   `state/boardNodeNum/snr/rssi/queueFree/heard/counters`. The counters (`loraSent`/`loraReceived`/
-  `loraReassembled`/`loraNak`/`loraTooBig`) are the two-board range oracle. `…debug.LORATX --es text <s>`
+  `loraReassembled`/`loraNak`/`loraTooBig`) are the two-board range oracle; `loraNakByReason` (the board's
+  `Routing.error_reason` names) says *why* a NAK happened — `TOO_LARGE` means the payload cap is wrong,
+  `DUTY_CYCLE_LIMIT`/`RATE_LIMIT_EXCEEDED` mean airtime pressure — and every NAK is also logged as
+  `lora nak id=… reason=…` under `LoraMeshTransport`. `…debug.LORATX --es text <s>`
   sends a raw payload straight to the board (bypassing the frame codec) to confirm the board transmits via
   `meshtastic --noproto`. `…debug.LORAPROV` writes the derived **Knit channel** onto the board over the
   Meshtastic admin API (the headless "Set up Knit channel") and binds the plane to the slot it lands in —

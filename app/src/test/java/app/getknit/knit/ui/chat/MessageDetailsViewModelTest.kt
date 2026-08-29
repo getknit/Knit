@@ -17,6 +17,7 @@ import app.getknit.knit.data.receipt.MessageReceiptEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
 import app.getknit.knit.ui.reaction
@@ -25,6 +26,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -71,7 +73,7 @@ class MessageDetailsViewModelTest {
         coEvery { identity.nodeId() } returns "me"
         every { messages.observeMessage(MSG) } returns messageFlow
         every { reactions.observeReactionsFor(MSG) } returns reactionsFlow
-        every { peers.observePeers() } returns peersFlow
+        every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { receipts.observeForMessage(MSG) } returns receiptsFlow
         every { groups.observeGroups() } returns groupsFlow
         every { settings.contentFilteringEnabled } returns filteringFlow

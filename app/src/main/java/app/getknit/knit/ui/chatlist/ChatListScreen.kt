@@ -102,6 +102,7 @@ import app.getknit.knit.ui.chat.deliveryLabel
 import app.getknit.knit.ui.chat.resolve
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
+import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.components.RoomAvatar
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.invite.ShareKnitDialog
@@ -555,11 +556,10 @@ internal fun ConversationListItem(
             LeadingVisual(row)
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
+                PeerNameText(
                     text = row.title,
+                    discriminator = row.discriminator,
                     style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(

@@ -14,10 +14,12 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.ui.chat.DeliveryStatus
+import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.group
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
@@ -26,6 +28,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -73,7 +76,7 @@ class ChatListViewModelTest {
         every { messages.observeMessages() } returns messagesFlow
         every { settings.blockedNodeIds } returns blockedFlow
         every { groups.observeGroups() } returns groupsFlow
-        every { peers.observePeers() } returns peersFlow
+        every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { settings.lastReadAll } returns lastReadFlow
         every { settings.acceptedConversations } returns acceptedFlow
     }
@@ -247,6 +250,32 @@ class ChatListViewModelTest {
                     .any { it.id == "friend" },
             )
             assertEquals(0, vm.state.value.requestCount)
+        }
+
+    /** Two accepted DM peers who both call themselves Friend are told apart by their alias (ADR 058). */
+    @Test
+    fun sameNamedDmPeersAreTitledWithTheirAlias() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer("friend", name = "Friend"), peer("friend2", name = "Friend"), peer("pal", name = "Pal"))
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"),
+                    msg(senderId = "friend2", sentAt = 200, conversationId = "friend2", recipientId = "me"),
+                    msg(senderId = "pal", sentAt = 300, conversationId = "pal", recipientId = "me"),
+                )
+            acceptedFlow.value = setOf("friend", "friend2", "pal")
+            advanceUntilIdle()
+
+            val rows =
+                vm.state.value.conversations
+                    .associateBy { it.id }
+            assertEquals("Friend (${Alias.aliasFor("friend")})", rows.getValue("friend").title)
+            assertEquals(Alias.aliasFor("friend"), rows.getValue("friend").discriminator)
+            assertEquals("Friend (${Alias.aliasFor("friend2")})", rows.getValue("friend2").title)
+            assertEquals("Pal", rows.getValue("pal").title)
+            assertNull(rows.getValue("pal").discriminator)
         }
 
     @Test

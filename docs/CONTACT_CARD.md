@@ -51,7 +51,9 @@ name and a relay ~230 bytes.
 A card is authentic (the signature and the self-certifying id make a forged or edited card impossible
 without the key) but the channel it arrived over is not: an SMS can be spoofed and the name is chosen by
 whoever sent the card. So an import **pins + accepts but never verifies**; the safety number is shown
-at import and on the profile for the pair to compare over a call. A differing key for a node id already
+at import and on the profile for the pair to compare over a call, and the preview also shows the alias
+derived from the key (ADR 058) — and the `Name (Alias)` form if the card's name is one this device already
+knows another identity by. A differing key for a node id already
 pinned is refused, never swapped in. Relay hints are displayed, never applied — adding a relay hands it
 every scope id and IP this device has, so that stays a deliberate edit in the relay settings.
 

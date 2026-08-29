@@ -3,6 +3,7 @@ package app.getknit.knit.ui.blocked
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.peer
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -10,6 +11,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -32,7 +34,7 @@ class BlockedUsersViewModelTest {
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         every { settings.blockedNodeIds } returns blockedFlow
-        every { peers.observePeers() } returns peersFlow
+        every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
     }
 
     @After

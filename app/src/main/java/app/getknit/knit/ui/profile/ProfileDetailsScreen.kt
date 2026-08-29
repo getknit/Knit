@@ -49,6 +49,7 @@ import app.getknit.knit.R
 import app.getknit.knit.mesh.IntroState
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.FullscreenImageViewer
+import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.scan.QrScanner
@@ -204,9 +205,11 @@ internal fun ProfileDetailsScreenContent(
                 onClick = if (state.avatarHash != null) ({ showAvatarFullscreen = true }) else null,
             )
 
-            Text(
+            PeerNameText(
                 text = state.displayName,
+                discriminator = state.discriminator,
                 style = MaterialTheme.typography.titleLarge,
+                maxLines = Int.MAX_VALUE,
             )
 
             // Live presence: a filled dot + label, matching the contact-list online indicator.
@@ -263,6 +266,13 @@ internal fun ProfileDetailsScreenContent(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
+
+            Text(
+                text = stringResource(R.string.profile_alias, state.alias),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("profile_details_alias"),
+            )
 
             Text(
                 text = stringResource(R.string.profile_node_id, state.nodeId),

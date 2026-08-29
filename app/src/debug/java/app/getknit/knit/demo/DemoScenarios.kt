@@ -16,7 +16,7 @@ package app.getknit.knit.demo
 
 /** A conversation participant. [ME] is the local profile; the rest map to the stable demo node ids in
  *  [DemoSeeder] (so [DemoSeeder.ONLINE_NODE_IDS] and the fake transport stay theme-independent). */
-enum class Slot { ME, SAM, DANI, THEO, PRIYA, JONAS, LENA }
+enum class Slot { ME, SAM, DANI, THEO, PRIYA, JONAS, LENA, JONAS_TWO }
 
 /** A reaction left on a message: who reacted, the emoji, and how long ago. */
 data class DemoReaction(
@@ -109,6 +109,9 @@ private val HIKING_SCENARIO =
                 DemoPeer(Slot.PRIYA, "Priya N.", "Golden hour chaser 🌅"),
                 DemoPeer(Slot.JONAS, "Jonas W.", "Will hike for coffee"),
                 DemoPeer(Slot.LENA, "Lena F.", "Map nerd"),
+                // A second "Jonas W." — the seeded name collision that exercises the ` (Alias)` discriminator
+                // (ADR 058) in the room, contacts and the mention picker. No avatar asset, on purpose.
+                DemoPeer(Slot.JONAS_TWO, "Jonas W.", "The other Jonas"),
             ),
         nearby =
             listOf(
@@ -139,6 +142,7 @@ private val HIKING_SCENARIO =
                         ),
                 ),
                 DemoMsg("demo-nearby-8", Slot.JONAS, "Good call, thanks for the warning.", 38),
+                DemoMsg("demo-nearby-8b", Slot.JONAS_TWO, "Other Jonas here — the upper loop is icy, bring spikes.", 25),
                 DemoMsg("demo-nearby-9", Slot.PRIYA, "Sunset from the summit is unreal tonight 🌄", 12, image = "summit"),
             ),
         nearbyReadMinsAgo = 20,

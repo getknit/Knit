@@ -45,7 +45,8 @@ fun activeMentionQuery(
 
 /**
  * Filters mention [candidates] by [query] (the text after '@'). Matching is case-insensitive and
- * whitespace-stripped on both sides, so "@Joy" matches "Joyful Ferret"; a blank query returns all.
+ * whitespace-stripped on both sides, so "@Joy" matches "Joyful Ferret"; a candidate's alias matches too,
+ * so "@joyful" narrows two Alices to the one with that alias (ADR 058); a blank query returns all.
  */
 fun filterCandidates(
     candidates: List<MentionCandidate>,
@@ -57,7 +58,8 @@ fun filterCandidates(
         it.displayName
             .replace(" ", "")
             .lowercase()
-            .contains(q)
+            .contains(q) ||
+            it.alias.lowercase().contains(q)
     }
 }
 

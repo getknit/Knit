@@ -99,7 +99,7 @@ val appModule =
         single { get<KnitDatabase>().groupRootDao() }
         single { get<KnitDatabase>().messageReceiptDao() }
         single { MessageRepository(get()) }
-        single { PeerRepository(get()) }
+        single { PeerRepository(get(), get<SettingsStore>(), get<Identity>()) }
         // Crash reports. The capture-side CrashStore is built by hand in KnitApplication.onCreate BEFORE
         // startKoin, so a crash inside startup itself is still captured; this is the reader side over the
         // same fixed directory (crashStore() is the single definition of the path, so the two can't drift).

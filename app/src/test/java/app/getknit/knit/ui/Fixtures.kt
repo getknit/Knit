@@ -1,5 +1,6 @@
 package app.getknit.knit.ui
 
+import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
@@ -7,6 +8,7 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.identity.PeerLabels
 
 /**
  * Minimal entity builders for ViewModel/UI tests: default the noise so a test states only the fields it
@@ -87,3 +89,13 @@ fun reaction(
     emoji: String?,
     updatedAt: Long = 0L,
 ): ReactionEntity = ReactionEntity(messageId, reactorNodeId, emoji, updatedAt)
+
+/**
+ * A [PeerDirectory] over [peers] as `PeerRepository.observeDirectory()` would emit it, with [me] / [myName]
+ * standing in for this device (pass `me = null` to leave self out of the collision universe).
+ */
+fun directoryOf(
+    peers: List<PeerEntity>,
+    me: String? = "me",
+    myName: String = "",
+): PeerDirectory = PeerDirectory(peers, PeerLabels.index(peers.map { it.nodeId to it.name }, me?.let { it to myName }))

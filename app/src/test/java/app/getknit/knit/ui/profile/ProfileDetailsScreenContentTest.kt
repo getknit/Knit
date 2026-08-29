@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.R
+import app.getknit.knit.identity.Alias
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -69,6 +70,14 @@ class ProfileDetailsScreenContentTest {
         compose.onNodeWithText("Hiking this weekend").assertIsDisplayed()
         // The safety number lives in the verification section below the fold; scroll it into view.
         compose.onNodeWithText("12345 67890 12345 67890 12345 67890").performScrollTo().assertIsDisplayed()
+    }
+
+    /** The alias is always shown on a profile — it is how a person says which Ada they are (ADR 058). */
+    @Test
+    fun rendersTheAliasLine() {
+        setContent()
+        val alias = Alias.aliasFor("8f3a2b1c9d4e")
+        compose.onNodeWithText(context.getString(R.string.profile_alias, alias)).performScrollTo().assertIsDisplayed()
     }
 
     @Test

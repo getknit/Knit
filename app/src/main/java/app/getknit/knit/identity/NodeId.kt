@@ -33,6 +33,9 @@ object NodeId {
     /** RFC4648 base32 alphabet, lowercased. */
     const val ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
 
+    /** Length of [shortForm] — 6 base32 chars, ~30 bits: enough to tell two peers apart, never to address one. */
+    const val SHORT_LENGTH = 6
+
     /**
      * The self-certifying nodeId for the public-key [bundle] (its base64 [PublicKeyBundle.encoded]
      * form). Both sides of a conversation compute the same id from the same advertised bundle, and an
@@ -54,6 +57,12 @@ object NodeId {
 
     /** The 26-char id string for [BYTES] raw advert bytes (the bytes base32-encoded). Inverse of [toBytes]. */
     fun fromBytes(id: ByteArray): String = base32Encode(id)
+
+    /**
+     * A short, human-quotable prefix of [nodeId] ([SHORT_LENGTH] chars) for disambiguating two peers whose
+     * names and aliases both coincide (see `PeerLabels`). Display only — never an address or a trust input.
+     */
+    fun shortForm(nodeId: String): String = nodeId.take(SHORT_LENGTH)
 
     /**
      * RFC4648 base32 (lowercase, unpadded). Only the low `bits` positions of the accumulator are ever

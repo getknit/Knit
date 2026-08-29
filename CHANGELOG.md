@@ -24,6 +24,11 @@ document:
 
 ### Added
 
+- Two people with the same name are now told apart. When someone nearby uses a name Knit already knows,
+  both show their alias after it — the two-word name Knit gives every device, like "Sam (JoyfulFerret)" —
+  in the room, the chat list, Contacts, group members and notifications, and it goes away again when the
+  names differ. Your own alias is now shown in Settings under your name, and on a contact's profile, so you
+  can tell someone which Sam you are. Typing an alias after "@" finds the right person to mention.
 - Add a contact from a link. Too far apart to scan each other's code? Share your contact link (menu ›
   Add contact › Share link) over any messenger, and add someone from theirs — tap it, share it to
   Knit, or paste it into Add contact. Each of you ends up with the other's key pinned and in Contacts, no

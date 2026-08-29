@@ -240,8 +240,10 @@ data class TypingContent(
 
 /**
  * A structured "@" mention inside a chat body. [nodeId] is the canonical node id used for reliable
- * "did this mention me" detection (display names aren't unique); [name] is the exact display name the
- * sender rendered, so the receiver can locate the "@name" span for highlighting. A plain nested value.
+ * "did this mention me" detection (display names aren't unique); [name] is the exact label text after
+ * the "@" that the sender rendered — the display name, or `Name (Alias)` when the sender knew two people
+ * by that name (ADR 058) — so the receiver can locate the "@name" span for highlighting. A plain nested
+ * value.
  */
 @Serializable
 data class Mention(

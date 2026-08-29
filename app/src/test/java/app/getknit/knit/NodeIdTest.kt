@@ -84,6 +84,14 @@ class NodeIdTest {
     }
 
     @Test
+    fun shortFormIsAHumanQuotablePrefix() {
+        val id = NodeId.derive("android-id-123")
+        assertEquals("ffbbh6", NodeId.shortForm(id))
+        assertEquals(NodeId.SHORT_LENGTH, NodeId.shortForm(id).length)
+        assertTrue(id.startsWith(NodeId.shortForm(id)))
+    }
+
+    @Test
     fun distinctBundlesYieldDistinctIds() {
         // The anti-impersonation property at the derivation level: a different key bundle (e.g. an
         // attacker's) maps to a different nodeId, so it can never claim a victim's id.

@@ -293,6 +293,11 @@ private fun PreviewCard(
             textAlign = TextAlign.Center,
         )
         Text(
+            text = stringResource(R.string.profile_alias, ready.alias),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
             text = stringResource(R.string.profile_node_id, ready.nodeId),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

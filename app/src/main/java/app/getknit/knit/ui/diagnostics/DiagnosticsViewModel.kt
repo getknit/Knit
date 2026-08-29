@@ -158,20 +158,20 @@ class DiagnosticsViewModel(
 
     val state: StateFlow<DiagnosticsUiState> =
         combine(
-            peers.observePeers(),
+            peers.observeDirectory(),
             meshManager.neighbors,
             myNodeId,
             settings.displayName,
             extras,
-        ) { peerList, neighbors, me, myName, extra ->
+        ) { directory, neighbors, me, myName, extra ->
             val online = neighbors.map { it.nodeId }.toSet()
-            val byNode = peerList.associateBy { it.nodeId }
-            val nodeIds = (peerList.map { it.nodeId } + online).toSet() - setOfNotNull(me)
+            val byNode = directory.byNode
+            val nodeIds = (directory.peers.map { it.nodeId } + online).toSet() - setOfNotNull(me)
             val nodes =
                 nodeIds.map { id ->
                     NodeInfo(
                         nodeId = id,
-                        displayName = displayNameFor(byNode[id]?.name, id),
+                        displayName = directory.label(id).text,
                         direct = id in online,
                         profileUpdatedAt = byNode[id]?.updatedAt?.takeIf { it > 0L },
                         transports = extra.peerTransports[id].orEmpty(),

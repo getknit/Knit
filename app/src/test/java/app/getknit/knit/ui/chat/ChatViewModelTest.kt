@@ -21,6 +21,7 @@ import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.TransportKind
@@ -30,6 +31,7 @@ import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
+import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
 import app.getknit.knit.ui.reaction
@@ -41,6 +43,7 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -108,7 +111,7 @@ class ChatViewModelTest {
         every { groups.observeGroup(Conversations.NEARBY) } returns groupFlow
         every { messages.observeMessages(GROUP) } returns messagesFlow
         every { groups.observeGroup(GROUP) } returns groupFlow
-        every { peers.observePeers() } returns peersFlow
+        every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { settings.displayName } returns nameFlow
         // A relaxed mock would hand back a Flow that never emits, and RelayStatusRepository
         // combines these — one silent flow would stall every state assertion in this class.
@@ -234,6 +237,60 @@ class ChatViewModelTest {
             assertFalse(theirs.mine)
             assertEquals("Bob", theirs.senderName)
             assertTrue(vm.state.value.isRoom)
+        }
+
+    /** Two senders who both call themselves Bob are told apart by their alias (ADR 058); a unique name is untouched. */
+    @Test
+    fun sameNamedSendersAreLabelledWithTheirAliasAndTheQuoteSnapshotStaysPlain() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer("bob", name = "Bob"), peer("bob2", name = "bob"), peer("carol", name = "Carol"))
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "bob", body = "yo", id = "m1", sentAt = 100, conversationId = Conversations.NEARBY),
+                    msg(senderId = "bob2", body = "also yo", id = "m2", sentAt = 200, conversationId = Conversations.NEARBY),
+                    msg(senderId = "carol", body = "hi", id = "m3", sentAt = 300, conversationId = Conversations.NEARBY),
+                )
+            advanceUntilIdle()
+
+            val rows =
+                vm.state.value.rows
+                    .associateBy { it.id }
+            assertEquals("Bob (${Alias.aliasFor("bob")})", rows.getValue("m1").senderName)
+            assertEquals(Alias.aliasFor("bob"), rows.getValue("m1").senderDiscriminator)
+            assertEquals("Bob", rows.getValue("m1").senderPlainName) // the reply-quote snapshot never carries the suffix
+            assertEquals("bob (${Alias.aliasFor("bob2")})", rows.getValue("m2").senderName)
+            assertEquals("Carol", rows.getValue("m3").senderName)
+            assertNull(rows.getValue("m3").senderDiscriminator)
+            assertEquals("Carol", rows.getValue("m3").senderPlainName)
+            // The mention picker inserts the same label, and always knows the alias.
+            val candidates =
+                vm.state.value.mentionCandidates
+                    .associateBy { it.nodeId }
+            assertEquals("Bob (${Alias.aliasFor("bob")})", candidates.getValue("bob").displayName)
+            assertEquals(Alias.aliasFor("bob"), candidates.getValue("bob").discriminator)
+            assertEquals("Carol", candidates.getValue("carol").displayName)
+            assertNull(candidates.getValue("carol").discriminator)
+            assertEquals(Alias.aliasFor("carol"), candidates.getValue("carol").alias)
+        }
+
+    @Test
+    fun aDmTitleCarriesTheDiscriminatorWhenAnotherPeerSharesTheName() =
+        runTest {
+            stubDm("bob")
+            val vm = vm("bob")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer("bob", name = "Bob"), peer("bob2", name = "Bob"))
+            advanceUntilIdle()
+
+            assertEquals("Bob (${Alias.aliasFor("bob")})", vm.state.value.title)
+            assertEquals(Alias.aliasFor("bob"), vm.state.value.titleDiscriminator)
+
+            peersFlow.value = listOf(peer("bob", name = "Bob"), peer("bob2", name = "Robert"))
+            advanceUntilIdle()
+            assertEquals("Bob", vm.state.value.title)
+            assertNull(vm.state.value.titleDiscriminator)
         }
 
     @Test

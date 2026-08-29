@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.settings.SettingsStore
-import app.getknit.knit.identity.displayNameFor
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -30,14 +29,14 @@ class BlockedUsersViewModel(
     val blocked: StateFlow<List<BlockedUser>> =
         combine(
             settings.blockedNodeIds,
-            peers.observePeers(),
-        ) { blockedIds, peerList ->
-            val byNode = peerList.associateBy { it.nodeId }
+            peers.observeDirectory(),
+        ) { blockedIds, directory ->
+            val byNode = directory.byNode
             blockedIds
                 .map { id ->
                     BlockedUser(
                         nodeId = id,
-                        displayName = displayNameFor(byNode[id]?.name, id),
+                        displayName = directory.label(id).text,
                         avatarHash = byNode[id]?.avatarHash,
                     )
                 }.sortedBy { it.displayName.lowercase() }

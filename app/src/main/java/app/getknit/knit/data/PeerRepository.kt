@@ -2,14 +2,50 @@ package app.getknit.knit.data
 
 import app.getknit.knit.data.peer.PeerDao
 import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.settings.InboundSettings
+import app.getknit.knit.identity.IdentitySource
+import app.getknit.knit.identity.PeerLabelIndex
+import app.getknit.knit.identity.PeerLabels
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 
-/** Single source of truth for cached peer profiles. */
+/**
+ * Single source of truth for cached peer profiles. [profile] and [identity] contribute this device's own
+ * name and id to the name-collision universe ([observeDirectory] / [labelIndex]) — a peer who adopts our
+ * name is discriminated too.
+ */
 class PeerRepository(
     private val dao: PeerDao,
+    private val profile: InboundSettings,
+    private val identity: IdentitySource,
     private val maxPeers: Int = DEFAULT_MAX_PEERS,
 ) {
     fun observePeers(): Flow<List<PeerEntity>> = dao.observeAll()
+
+    /**
+     * The peer table with its collision-aware label index (ADR 058), rebuilt on every peer change and on a
+     * change of our own display name. The name arm is de-duplicated on purpose: `SettingsStore.displayName`
+     * re-emits on every DataStore write (read watermarks, intro state), and each of those would otherwise
+     * rebuild every list screen.
+     */
+    fun observeDirectory(): Flow<PeerDirectory> =
+        combine(
+            dao.observeAll(),
+            profile.displayName.distinctUntilChanged(),
+            flow { emit(identity.nodeId()) },
+        ) { peers, myName, me ->
+            PeerDirectory(peers, PeerLabels.index(peers.map { it.nodeId to it.name }, me to myName))
+        }
+
+    /** A one-shot [PeerLabelIndex] for a suspend path (a notification, a contact-card preview). */
+    suspend fun labelIndex(): PeerLabelIndex =
+        PeerLabels.index(
+            dao.namesAll().map { it.nodeId to it.name },
+            identity.nodeId() to profile.displayName.first(),
+        )
 
     fun observe(nodeId: String): Flow<PeerEntity?> = dao.observeByNodeId(nodeId)
 

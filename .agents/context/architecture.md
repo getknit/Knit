@@ -57,6 +57,7 @@ data/          Room (messages, peers, reactions, blobs, groups, blob_verdicts, f
                moderation/ImageScreeningService) · message/Conversations (DM keys) · crypto/ DatabaseKey +
                IdentityKeyStore (AndroidKeyStore-wrapped secrets) + KeystoreSecret
 identity/      Identity (stable nodeId + E2E keypair) · NodeId (derive) · DeviceIdSource · DeviceTag · Alias
+               · PeerLabels (NameKey + the collision-aware `Name (Alias)` label, ADR 058)
 crash/         CrashHandler (uncaught-exception capture, installed pre-Koin) · CrashStore (noBackupFilesDir,
                5 reports) · CrashRedactor (two-phase) · CrashReports (reader) · CrashIssueUrl (GitHub prefill)
                · ProcessExitReasons (the native crashes CrashHandler can't see, from the platform's own

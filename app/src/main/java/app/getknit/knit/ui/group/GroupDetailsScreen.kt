@@ -51,7 +51,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -60,6 +59,7 @@ import app.getknit.knit.TextLimits
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.FullscreenImageViewer
 import app.getknit.knit.ui.components.GroupAvatar
+import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.profile.AvatarCropDialog
@@ -321,11 +321,10 @@ private fun MemberRow(
     ) {
         Avatar(avatarHash = member.avatarHash, name = member.displayName, size = 48.dp)
         Spacer(Modifier.width(12.dp))
-        Text(
+        PeerNameText(
             text = member.displayName,
+            discriminator = member.discriminator,
             style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (member.isSelf) {

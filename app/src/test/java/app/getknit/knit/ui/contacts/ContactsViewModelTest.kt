@@ -8,9 +8,11 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.Peer
+import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.group
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
@@ -20,6 +22,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -30,6 +33,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -52,7 +56,7 @@ class ContactsViewModelTest {
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         coEvery { identity.nodeId() } returns "me"
-        every { peers.observePeers() } returns peersFlow
+        every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { settings.blockedNodeIds } returns blockedFlow
         every { settings.acceptedConversations } returns acceptedFlow
         every { messages.observeMessages() } returns messagesFlow
@@ -84,6 +88,28 @@ class ContactsViewModelTest {
             blockedFlow.value = setOf("linked")
             advanceUntilIdle()
             assertEquals(emptyList<String>(), vm.contacts.value.map { it.nodeId })
+        }
+
+    /** Two contacts who both call themselves Alice are told apart by their alias (ADR 058). */
+    @Test
+    fun sameNamedContactsAreLabelledWithTheirAlias() =
+        runTest {
+            val vm = vm()
+            startCollecting(vm)
+            peersFlow.value =
+                listOf(
+                    peer("a1", name = "Alice", verified = true),
+                    peer("a2", name = "alice", verified = true),
+                    peer("bob", name = "Bob", verified = true),
+                )
+            advanceUntilIdle()
+
+            val byId = vm.contacts.value.associateBy { it.nodeId }
+            assertEquals("Alice (${Alias.aliasFor("a1")})", byId.getValue("a1").displayName)
+            assertEquals(Alias.aliasFor("a1"), byId.getValue("a1").discriminator)
+            assertEquals("alice (${Alias.aliasFor("a2")})", byId.getValue("a2").displayName)
+            assertEquals("Bob", byId.getValue("bob").displayName)
+            assertNull(byId.getValue("bob").discriminator)
         }
 
     @Test

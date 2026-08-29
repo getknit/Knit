@@ -48,6 +48,7 @@ import app.getknit.knit.R
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.GroupAvatar
+import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.preview.KnitPreview
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
@@ -167,11 +168,10 @@ private fun RequestRowItem(
         RequestLeadingVisual(row, onOpenProfile = onOpenProfile)
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
+            PeerNameText(
                 text = row.title,
+                discriminator = row.discriminator,
                 style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             row.lastPreview?.let { preview ->
                 Spacer(Modifier.height(2.dp))

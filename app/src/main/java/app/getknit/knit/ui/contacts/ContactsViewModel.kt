@@ -12,7 +12,6 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,6 +29,8 @@ data class Contact(
     val displayName: String,
     val avatarHash: String?,
     val online: Boolean,
+    // The ` (Alias)` suffix already inside [displayName] when another known peer shares the name (ADR 058).
+    val discriminator: String? = null,
 )
 
 /**
@@ -129,17 +130,21 @@ class ContactsViewModel(
     val contacts: StateFlow<List<Contact>> =
         combine(
             bundle,
-            peers.observePeers(),
+            peers.observeDirectory(),
             meshManager.neighbors,
             settings.blockedNodeIds,
             myNodeId,
-        ) { b, peerList, neighbors, blocked, me ->
+        ) { b, directory, neighbors, blocked, me ->
             // Until our own id resolves we can't compute "self-authored" (nor filter ourselves out), so
             // surface nothing rather than mis-including a thread during the ~1s cold-start gap.
             if (me == null) return@combine emptyList<Contact>()
             val online = neighbors.map { it.nodeId }.toSet()
-            val byNode = peerList.associateBy { it.nodeId }
-            val verifiedIds = peerList.filter { it.verified }.map { it.nodeId }.toSet()
+            val byNode = directory.byNode
+            val verifiedIds =
+                directory.peers
+                    .filter { it.verified }
+                    .map { it.nodeId }
+                    .toSet()
             val authored =
                 b.messages
                     .filter { it.senderId == me }
@@ -165,11 +170,13 @@ class ContactsViewModel(
             val contactIds = (acceptedDmPeers + explicitlyAccepted + groupMembers + verifiedIds) - blocked - me
             contactIds
                 .map { id ->
+                    val label = directory.label(id)
                     Contact(
                         nodeId = id,
-                        displayName = displayNameFor(byNode[id]?.name, id),
+                        displayName = label.text,
                         avatarHash = byNode[id]?.avatarHash,
                         online = id in online,
+                        discriminator = label.discriminator,
                     )
                 }.sortedWith(compareByDescending<Contact> { it.online }.thenBy { it.displayName.lowercase() })
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

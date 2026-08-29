@@ -17,7 +17,6 @@ import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Protocol
@@ -41,6 +40,8 @@ data class GroupMemberRow(
     val avatarHash: String?,
     val online: Boolean,
     val isSelf: Boolean,
+    // The ` (Alias)` suffix already inside [displayName] when another known peer shares the name (ADR 058).
+    val discriminator: String? = null,
 )
 
 /** The group as shown on the details/settings screen: name, photo, and the resolved member roster. */
@@ -85,21 +86,23 @@ class GroupDetailsViewModel(
     val state: StateFlow<GroupDetailsUiState> =
         combine(
             groups.observeGroup(groupId),
-            peers.observePeers(),
+            peers.observeDirectory(),
             meshManager.neighbors,
             me,
-        ) { group, peerList, neighbors, myId ->
+        ) { group, directory, neighbors, myId ->
             val members = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
-            val peersByNode = peerList.associateBy { it.nodeId }
+            val peersByNode = directory.byNode
             val onlineIds = neighbors.map { it.nodeId }.toSet()
             val rows =
                 members.map { id ->
+                    val label = directory.label(id)
                     GroupMemberRow(
                         nodeId = id,
-                        displayName = displayNameFor(peersByNode[id]?.name, id),
+                        displayName = label.text,
                         avatarHash = peersByNode[id]?.avatarHash,
                         online = id in onlineIds,
                         isSelf = id == myId,
+                        discriminator = label.discriminator,
                     )
                 }
             val fsBlockers =
@@ -111,7 +114,7 @@ class GroupDetailsViewModel(
                             (peer.capabilities ?: 0L) and Protocol.CAP_RATCHET == 0L ||
                             peer.prekeyId == null ||
                             peer.prekeyPub == null
-                    }.map { id -> displayNameFor(peersByNode[id]?.name, id) }
+                    }.map { id -> directory.label(id).text }
             // Self first (rendered as "You"), then the others connected-first, then alphabetical — mirroring
             // the contact picker's ordering.
             val self = rows.firstOrNull { it.isSelf }
@@ -128,7 +131,7 @@ class GroupDetailsViewModel(
                         memberIds = members,
                         selfId = myId,
                         fallback = context.getString(R.string.group_unnamed),
-                    ) { id -> displayNameFor(peersByNode[id]?.name, id) },
+                    ) { id -> directory.label(id).text },
                 photoHash = group?.photoHash,
                 members = listOfNotNull(self) + others,
                 exists = group != null,

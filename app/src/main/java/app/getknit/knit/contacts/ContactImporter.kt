@@ -4,7 +4,6 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.crypto.ContactCard
 import app.getknit.knit.mesh.crypto.SafetyNumber
@@ -47,6 +46,8 @@ class ContactImporter(
         data class Ready(
             val nodeId: String,
             val displayName: String,
+            /** The alias derived from the key — shown outright, since the card's name is chosen by whoever sent it. */
+            val alias: String,
             val safetyNumber: String,
             val alreadyContact: Boolean,
             val blocked: Boolean,
@@ -66,13 +67,16 @@ class ContactImporter(
             }
         if (card.nodeId == identity.nodeId()) return Preview.Self
         val existing = peers.find(card.nodeId)
-        val displayName = displayNameFor(existing?.name?.ifBlank { null } ?: card.name.ifBlank { null }, card.nodeId)
+        val storedName = existing?.name?.ifBlank { null } ?: card.name.ifBlank { null }
+        val label = peers.labelIndex().labelFor(card.nodeId, storedName)
+        val displayName = label.text
         val pinned = existing?.pubKey
         if (pinned != null && pinned != card.bundle) return Preview.Mismatch(displayName)
         val relaysOn = internetPlane && settings.spoolEnabled.first()
         return Preview.Ready(
             nodeId = card.nodeId,
             displayName = displayName,
+            alias = label.alias,
             safetyNumber = SafetyNumber.compute(identity.nodeId(), identity.publicKeyBundle(), card.nodeId, card.bundle),
             alreadyContact = existing?.verified == true || card.nodeId in settings.acceptedConversations.first(),
             blocked = card.nodeId in settings.blockedNodeIds.first(),

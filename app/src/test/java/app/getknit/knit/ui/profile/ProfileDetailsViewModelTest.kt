@@ -7,6 +7,7 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.Peer
 import app.getknit.knit.mesh.crypto.VerifyPayload
+import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.peer
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -14,6 +15,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -48,7 +50,7 @@ class ProfileDetailsViewModelTest {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         coEvery { identity.nodeId() } returns "me"
         every { identity.publicKeyBundle() } returns "MYBUNDLE"
-        every { peers.observePeers() } returns peersFlow
+        every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { settings.blockedNodeIds } returns blockedFlow
     }
 

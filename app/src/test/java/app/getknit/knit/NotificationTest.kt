@@ -119,6 +119,23 @@ class NotificationTest {
         assertEquals(expectedAlias, blankNamed?.senderName)
     }
 
+    /** The caller resolves the collision-aware label (ADR 058); the builder passes it through untouched. */
+    @Test
+    fun incomingNotificationPassesACollisionAwareLabelThroughVerbatim() {
+        val label = "Bob (${Alias.aliasFor("bob")})"
+        val result =
+            incomingNotification(
+                senderId = "bob",
+                body = "hi",
+                sentAt = 1L,
+                selfId = "me",
+                peerName = label,
+                peerAvatarBytes = null,
+                conversationId = "bob",
+            )
+        assertEquals(label, result?.senderName)
+    }
+
     @Test
     fun incomingNotificationCarriesNameAvatarBodyAndConversation() {
         val result =

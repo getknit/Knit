@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import app.getknit.knit.R
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
+import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupMembersStore
@@ -13,10 +14,8 @@ import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
-import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.identity.displayNameFor
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -39,6 +38,8 @@ data class RequestRow(
     val isGroup: Boolean,
     val lastPreview: String?,
     val lastMessageAt: Long?,
+    // The ` (Alias)` suffix already inside [title] when another known peer shares this DM peer's name (ADR 058).
+    val discriminator: String? = null,
 )
 
 /**
@@ -82,17 +83,21 @@ class MessageRequestsViewModel(
     val requests: StateFlow<List<RequestRow>> =
         combine(
             messagesAndSets,
-            peers.observePeers(),
+            peers.observeDirectory(),
             groups.observeGroups(),
             myNodeId,
-        ) { bundle, peerList, groupList, me ->
+        ) { bundle, directory, groupList, me ->
             // Until our own id resolves we can't compute "self-authored", so surface nothing rather than
             // mis-classifying our own threads as requests during the ~1s cold-start gap.
             if (me == null) return@combine emptyList<RequestRow>()
             val msgs = bundle.messages
-            val peersByNode = peerList.associateBy { it.nodeId }
+            val peersByNode = directory.byNode
             val groupsById = groupList.associateBy { it.groupId }
-            val verified = peerList.filter { it.verified }.map { it.nodeId }.toSet()
+            val verified =
+                directory.peers
+                    .filter { it.verified }
+                    .map { it.nodeId }
+                    .toSet()
             val authored = msgs.filter { it.senderId == me }.map { it.conversationId }.toSet()
             // Senders per thread, so a group a known peer has posted in falls through to the chat list
             // instead of showing here (matches the notify gate and chat list).
@@ -121,9 +126,9 @@ class MessageRequestsViewModel(
                                 memberIds = GroupMembersStore.decode(group?.members ?: ""),
                                 selfId = me,
                                 fallback = context.getString(R.string.group_unnamed),
-                            ) { id -> displayNameFor(peersByNode[id]?.name, id) }
+                            ) { id -> directory.label(id).text }
                         } else {
-                            displayNameFor(peersByNode[conversationId]?.name, conversationId)
+                            directory.label(conversationId).text
                         }
                     val last = threadMsgs.lastOrNull()
                     RequestRow(
@@ -132,8 +137,9 @@ class MessageRequestsViewModel(
                         avatarHash =
                             if (isGroup) group?.photoHash else peersByNode[conversationId]?.avatarHash,
                         isGroup = isGroup,
-                        lastPreview = last?.let { previewFor(it, peersByNode, isGroup) },
+                        lastPreview = last?.let { previewFor(it, directory, isGroup) },
                         lastMessageAt = last?.sentAt,
+                        discriminator = if (isGroup) null else directory.label(conversationId).discriminator,
                     )
                 }
             rows.sortedByDescending { it.lastMessageAt ?: 0L }
@@ -178,13 +184,13 @@ class MessageRequestsViewModel(
     // it shows just the body; a group request prefixes the sender's name.
     private fun previewFor(
         message: MessageEntity,
-        peersByNode: Map<String, PeerEntity>,
+        directory: PeerDirectory,
         isGroup: Boolean,
     ): String {
         if (message.kind == MessageEntity.KIND_MEMBER_LEFT) {
             return context.getString(
                 R.string.chat_group_member_left,
-                displayNameFor(peersByNode[message.senderId]?.name, message.senderId),
+                directory.label(message.senderId).text,
             )
         }
         val body =
@@ -208,7 +214,7 @@ class MessageRequestsViewModel(
                 }
             }
         if (!isGroup) return body
-        val sender = displayNameFor(peersByNode[message.senderId]?.name, message.senderId)
+        val sender = directory.label(message.senderId).text
         return context.getString(R.string.chat_list_preview_with_sender, sender, body)
     }
 }

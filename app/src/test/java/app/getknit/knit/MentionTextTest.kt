@@ -109,6 +109,41 @@ class MentionTextTest {
     }
 
     @Test
+    fun filterMatchesTheAliasSoATypedAliasNarrowsTwoSameNamedCandidates() {
+        val twins =
+            listOf(
+                MentionCandidate("a1", "Alice (JoyfulFerret)", null, alias = "JoyfulFerret", discriminator = "JoyfulFerret"),
+                MentionCandidate("a2", "Alice (CozyJade)", null, alias = "CozyJade", discriminator = "CozyJade"),
+                MentionCandidate("b", "Bob", null, alias = "SharpOnyx"),
+            )
+        assertEquals(listOf("a1", "a2"), filterCandidates(twins, "ali").map { it.nodeId })
+        assertEquals(listOf("a2"), filterCandidates(twins, "cozy").map { it.nodeId })
+        // An unsuffixed candidate's alias matches too — the picker always shows it.
+        assertEquals(listOf("b"), filterCandidates(twins, "sharp").map { it.nodeId })
+    }
+
+    @Test
+    fun aDiscriminatedTokenIsHighlightedWholeAndBeatsThePlainNamePrefix() {
+        // The sender knew two Alices: one token carries the alias (ADR 058), the other is the plain name.
+        val body = "hey @Alice (JoyfulFerret) and @Alice"
+        val out = highlightMentions(body, listOf(Mention("a1", "Alice (JoyfulFerret)"), Mention("a2", "Alice")), style)
+        val spans = out.spanStyles.sortedBy { it.start }
+        assertEquals(2, spans.size)
+        assertEquals(4, spans[0].start)
+        assertEquals(4 + "@Alice (JoyfulFerret)".length, spans[0].end)
+        assertEquals(body.length - "@Alice".length, spans[1].start)
+        assertEquals(body.length, spans[1].end)
+    }
+
+    @Test
+    fun theCursorAfterAnInsertedDiscriminatedTokenIsOutsideAnyMentionQuery() {
+        val text = "hey @Alice (JoyfulFerret) "
+        assertNull(activeMentionQuery(text, text.length))
+        // A cursor placed back inside the alias part isn't a query either: the space breaks the token.
+        assertNull(activeMentionQuery(text, text.length - 3))
+    }
+
+    @Test
     fun noMentionsLeavesTextUnstyled() {
         val out = highlightMentions("plain @text", emptyList(), style)
         assertEquals("plain @text", out.text)

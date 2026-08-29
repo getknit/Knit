@@ -4,6 +4,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.demo.DemoSeeder
+import app.getknit.knit.identity.Alias
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -27,6 +29,15 @@ class NearbyChatInstrumentedTest : SeededUiTest() {
         compose.onNodeWithTag("chat_input").performTextInput(SMOKE_MESSAGE)
         compose.onNodeWithTag("chat_send").performClick()
         awaitText(SMOKE_MESSAGE, timeoutMs = 60_000)
+    }
+
+    /** Two seeded peers are both "Jonas W."; the room tells them apart by appending the alias (ADR 058). */
+    @Test
+    fun showsADuplicateNamedSenderWithItsAlias() {
+        launch("chat/nearby")
+        awaitTag("chat_input")
+        // The second Jonas's post is the second-newest seeded message, so it composes without scrolling.
+        awaitText("Jonas W. (${Alias.aliasFor(DemoSeeder.JONAS_TWO)})")
     }
 
     private companion object {

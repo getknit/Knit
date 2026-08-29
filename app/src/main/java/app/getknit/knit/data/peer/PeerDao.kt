@@ -16,6 +16,10 @@ interface PeerDao {
     @Query("SELECT * FROM peers WHERE nodeId = :nodeId")
     fun observeByNodeId(nodeId: String): Flow<PeerEntity?>
 
+    /** Every peer's `(nodeId, name)` — the light projection the name-collision index is built from. */
+    @Query("SELECT nodeId, name FROM peers")
+    suspend fun namesAll(): List<PeerName>
+
     @Query("UPDATE peers SET verified = :verified WHERE nodeId = :nodeId")
     suspend fun setVerified(
         nodeId: String,

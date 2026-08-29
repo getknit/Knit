@@ -34,6 +34,7 @@ import app.getknit.knit.data.relay.attachmentReach
 import app.getknit.knit.data.relay.planeFor
 import app.getknit.knit.data.relay.reachFor
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
@@ -76,6 +77,11 @@ data class ChatRow(
     val mine: Boolean,
     val senderName: String,
     val senderNodeId: String,
+    // The ` (Alias)` suffix already inside [senderName] when another known peer shares the sender's name
+    // (ADR 058), which the bubble draws muted — and the plain name for the one sink that must stay plain:
+    // the author snapshot a reply puts on the wire ([app.getknit.knit.mesh.protocol.ReplyRef.author]).
+    val senderDiscriminator: String? = null,
+    val senderPlainName: String = senderName,
     // A non-[MessageEntity.KIND_NORMAL] row is a status notice (e.g. [MessageEntity.KIND_MEMBER_LEFT]),
     // rendered as a centered line using [senderName] instead of a chat bubble.
     val kind: Int = MessageEntity.KIND_NORMAL,
@@ -136,11 +142,18 @@ data class ReactionSummary(
     val mine: Boolean,
 )
 
-/** A person who can be "@"-mentioned: someone we've received a message from, resolved to a name. */
+/**
+ * A person who can be "@"-mentioned: a thread sender or group member, resolved to a name. [displayName] is
+ * the label the picker inserts after the "@" — `Name (Alias)` when another known peer shares the name
+ * (ADR 058), in which case [discriminator] is that suffix; [alias] is always shown beside the name in the
+ * picker so the right person can be chosen, and matches the typed query too.
+ */
 data class MentionCandidate(
     val nodeId: String,
     val displayName: String,
     val avatarHash: String?,
+    val alias: String = Alias.aliasFor(nodeId),
+    val discriminator: String? = null,
 )
 
 /** A peer currently shown as "typing" in this thread, resolved to a display [name] + [avatarHash] for the
@@ -161,6 +174,8 @@ data class ChatUiState(
     // Conversation header: the room ([isRoom] true) or a 1:1 DM with [title]/[avatarHash] of the peer.
     val isRoom: Boolean = true,
     val title: String = "",
+    // The ` (Alias)` suffix already inside a DM's [title] when another known peer shares the name (ADR 058).
+    val titleDiscriminator: String? = null,
     val avatarHash: String? = null,
     // True when this DM's peer is blocked, so the header offers "Unblock" instead of "Block".
     val isBlocked: Boolean = false,
@@ -390,11 +405,11 @@ class ChatViewModel(
     val state: StateFlow<ChatUiState> =
         combine(
             messagesWithReactions,
-            peers.observePeers(),
+            peers.observeDirectory(),
             meshStatus,
             myNodeId,
             settings.displayName,
-        ) { bundle, peerList, mesh, me, myName ->
+        ) { bundle, directory, mesh, me, myName ->
             val count = mesh.neighborCount
             val health = mesh.transportHealth
             val typingMap = mesh.typing
@@ -409,18 +424,15 @@ class ChatViewModel(
             val deliveredCounts = bundle.deliveredCounts
             val isGroup = group != null
             val members = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
-            val peersByNode = peerList.associateBy { it.nodeId }
+            val peersByNode = directory.byNode
             // Group once, then tally per emoji within each message's bucket. Orphan reactions (no matching
             // message yet) simply never produce a row until their message arrives.
             val reactionsByMessage = reacts.groupBy { it.messageId }
             val rows =
                 msgs.map { m ->
                     val mine = m.senderId == me
-                    val name =
-                        when {
-                            mine -> myName.ifBlank { context.getString(R.string.chat_self_name) }
-                            else -> displayNameFor(peersByNode[m.senderId]?.name, m.senderId)
-                        }
+                    val senderLabel = if (mine) null else directory.label(m.senderId)
+                    val name = senderLabel?.text ?: myName.ifBlank { context.getString(R.string.chat_self_name) }
                     val tallies =
                         reactionsByMessage[m.id]
                             .orEmpty()
@@ -440,6 +452,8 @@ class ChatViewModel(
                         mine = mine,
                         senderName = name,
                         senderNodeId = m.senderId,
+                        senderDiscriminator = senderLabel?.discriminator,
+                        senderPlainName = senderLabel?.name ?: name,
                         kind = m.kind,
                         avatarHash = peersByNode[m.senderId]?.avatarHash,
                         sentAt = m.sentAt,
@@ -479,10 +493,13 @@ class ChatViewModel(
                     .filter { it != me }
                     .distinct()
                     .map { id ->
+                        val label = directory.label(id)
                         MentionCandidate(
                             nodeId = id,
-                            displayName = displayNameFor(peersByNode[id]?.name, id),
+                            displayName = label.text,
                             avatarHash = peersByNode[id]?.avatarHash,
+                            alias = label.alias,
+                            discriminator = label.discriminator,
                         )
                     }.sortedBy { it.displayName.lowercase() }
                     .toList()
@@ -493,7 +510,7 @@ class ChatViewModel(
                     .orEmpty()
                     .asSequence()
                     .filter { it != me && it !in blocked }
-                    .map { id -> TypingPeer(id, displayNameFor(peersByNode[id]?.name, id), peersByNode[id]?.avatarHash) }
+                    .map { id -> TypingPeer(id, directory.label(id).text, peersByNode[id]?.avatarHash) }
                     .sortedBy { it.name.lowercase() }
                     .toList()
             ChatUiState(
@@ -511,7 +528,7 @@ class ChatViewModel(
                                 memberIds = members,
                                 selfId = me,
                                 fallback = context.getString(R.string.group_unnamed),
-                            ) { id -> displayNameFor(peersByNode[id]?.name, id) }
+                            ) { id -> directory.label(id).text }
                         }
 
                         isRoom -> {
@@ -519,9 +536,10 @@ class ChatViewModel(
                         }
 
                         else -> {
-                            displayNameFor(peersByNode[conversationId]?.name, conversationId)
+                            directory.label(conversationId).text
                         }
                     },
+                titleDiscriminator = if (isRoom || isGroup) null else directory.label(conversationId).discriminator,
                 // The room uses a glyph; a group shows its photo (or the glyph when unset); a DM the peer avatar.
                 avatarHash =
                     when {

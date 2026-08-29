@@ -26,6 +26,7 @@ import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.InboundSettings
 import app.getknit.knit.identity.IdentitySource
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.identity.PeerLabelIndex
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.MessageContent
@@ -1975,6 +1976,9 @@ class InboundPipeline(
     ) {
         val me = identity.nodeId()
         val peer = peers.find(env.senderId)
+        // Collision-aware (ADR 058): "Alice (JoyfulFerret)" when another known peer is also an Alice.
+        val labels = peers.labelIndex()
+        val senderLabel = labels.labelFor(env.senderId, peer?.name)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
         // Attachment-only messages have a blank body; show a placeholder so they still notify.
         val body = content.body.ifBlank { attachmentPreview(content) }
@@ -1984,11 +1988,11 @@ class InboundPipeline(
                 body = body,
                 sentAt = env.sentAt,
                 selfId = me,
-                peerName = peer?.name,
+                peerName = senderLabel.text,
                 peerAvatarBytes = peerAvatar,
                 conversationId = conversationId,
             ) ?: return
-        val conversation = resolveConversation(conversationId, env.senderId, peer?.name, peerAvatar, me)
+        val conversation = resolveConversation(conversationId, env.senderId, senderLabel.text, peerAvatar, me, labels)
         val selfAvatar = settings.ownAvatarHash.first()?.let { blobs.bytes(it) }
         notifier.notify(incoming, conversation, me, settings.displayName.first(), selfAvatar)
     }
@@ -2014,6 +2018,9 @@ class InboundPipeline(
     ) {
         val me = identity.nodeId()
         val peer = peers.find(env.senderId)
+        // Collision-aware (ADR 058): "Alice (JoyfulFerret)" when another known peer is also an Alice.
+        val labels = peers.labelIndex()
+        val senderLabel = labels.labelFor(env.senderId, peer?.name)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
         val body = content.body.ifBlank { attachmentPreview(content) }
         val incoming =
@@ -2022,11 +2029,11 @@ class InboundPipeline(
                 body = body,
                 sentAt = env.sentAt,
                 selfId = me,
-                peerName = peer?.name,
+                peerName = senderLabel.text,
                 peerAvatarBytes = peerAvatar,
                 conversationId = conversationId,
             ) ?: return
-        val conversation = resolveConversation(conversationId, env.senderId, peer?.name, peerAvatar, me)
+        val conversation = resolveConversation(conversationId, env.senderId, senderLabel.text, peerAvatar, me, labels)
         val selfAvatar = settings.ownAvatarHash.first()?.let { blobs.bytes(it) }
         notifier.notifyMention(incoming, conversation, me, settings.displayName.first(), selfAvatar)
     }
@@ -2034,8 +2041,9 @@ class InboundPipeline(
     /**
      * Resolves the conversation-level title + avatar a Signal-style notification shows (the group photo /
      * DM peer avatar as its large icon, the real thread name as its title). A DM uses the sender's
-     * name/avatar; a group looks up its stored name/photo (falling back to member names via [groupTitle]);
-     * the Nearby room leaves both null so [notifier] substitutes its own defaults.
+     * name/avatar; a group looks up its stored name/photo (falling back to member names via [groupTitle],
+     * resolved through [labels] so two same-named members read apart); the Nearby room leaves both null so
+     * [notifier] substitutes its own defaults.
      */
     private suspend fun resolveConversation(
         conversationId: String,
@@ -2043,6 +2051,7 @@ class InboundPipeline(
         dmName: String?,
         dmAvatar: ByteArray?,
         me: String,
+        labels: PeerLabelIndex,
     ): NotifConversation =
         when (Conversations.kindFor(conversationId)) {
             ConversationKind.NEARBY -> {
@@ -2056,9 +2065,10 @@ class InboundPipeline(
             ConversationKind.GROUP -> {
                 val group = groups.find(conversationId)
                 val memberIds = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
-                // Pre-resolve member names off the suspend peer lookups, since groupTitle's nameOf is non-suspend.
+                // Pre-resolve member names off the index (one query, not one per member), since
+                // groupTitle's nameOf is non-suspend.
                 val namesByNode = LinkedHashMap<String, String>()
-                for (id in memberIds) namesByNode[id] = displayNameFor(peers.find(id)?.name, id)
+                for (id in memberIds) namesByNode[id] = labels.labelFor(id).text
                 val title =
                     group?.let {
                         groupTitle(it.name, memberIds, me, fallback = "") { id -> namesByNode[id] ?: id }.ifBlank { null }

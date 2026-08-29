@@ -180,6 +180,7 @@ import app.getknit.knit.data.relay.AttachmentRelay
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.demo.DemoComposeCommand
 import app.getknit.knit.demo.DemoComposer
+import app.getknit.knit.identity.PeerLabel
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.lora.LoraSizeHint
 import app.getknit.knit.mesh.protocol.Mention
@@ -189,6 +190,7 @@ import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
 import app.getknit.knit.ui.components.GroupAvatar
 import app.getknit.knit.ui.components.KnitStitchIndicator
+import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.components.RoomAvatar
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.openUrl
@@ -627,13 +629,12 @@ internal fun ChatScreenContent(
                                     onClick = { onOpenProfile(conversationId) },
                                 )
                                 Spacer(Modifier.width(10.dp))
-                                Text(
+                                PeerNameText(
                                     text = state.title,
+                                    discriminator = state.titleDiscriminator,
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.primary,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     // Weight (fill = false) lets a long name ellipsize while the
                                     // fixed-size badges — measured first as non-weighted children —
                                     // always keep their room. Short names stay snug against the icons.
@@ -824,7 +825,7 @@ internal fun ChatScreenContent(
                                         ReplyRef(
                                             messageId = msg.id,
                                             authorId = msg.senderNodeId,
-                                            author = msg.senderName,
+                                            author = msg.senderPlainName,
                                             snippet =
                                                 buildReplySnippet(
                                                     msg.body,
@@ -1208,8 +1209,9 @@ private fun MessageBubble(
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                         if (!row.mine && showSenderName) {
-                            Text(
+                            PeerNameText(
                                 text = row.senderName,
+                                discriminator = row.senderDiscriminator,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
                             )
@@ -2303,8 +2305,17 @@ private fun MessageInput(
                             ) {
                                 Avatar(avatarHash = candidate.avatarHash, name = candidate.displayName, size = 32.dp)
                                 Spacer(Modifier.width(12.dp))
-                                Text(
-                                    text = candidate.displayName,
+                                // The alias is always shown here — this is where the right Alice gets picked —
+                                // muted like a discriminator; a collided label already carries its own.
+                                val shown =
+                                    if (candidate.discriminator == null) {
+                                        PeerLabel.text(candidate.displayName, candidate.alias)
+                                    } else {
+                                        candidate.displayName
+                                    }
+                                PeerNameText(
+                                    text = shown,
+                                    discriminator = candidate.discriminator ?: candidate.alias,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )

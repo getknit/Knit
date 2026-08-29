@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
+import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
@@ -15,11 +16,9 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.receivedPlane
-import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.receipt.MessageReceiptEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.identity.displayNameFor
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -42,6 +41,8 @@ data class ReactorRow(
     val emoji: String,
     val reactedAt: Long,
     val isSelf: Boolean,
+    // The ` (Alias)` suffix already inside [displayName] when another known peer shares the name (ADR 058).
+    val discriminator: String? = null,
 )
 
 /** The stored row, carrying whether this screen has ever seen it — see [MessageDetailsUiState.vanished]. */
@@ -59,6 +60,8 @@ data class RecipientRow(
     val displayName: String,
     val avatarHash: String?,
     val deliveredAt: Long?,
+    // The ` (Alias)` suffix already inside [displayName] when another known peer shares the name (ADR 058).
+    val discriminator: String? = null,
 )
 
 /** One selectable emoji on the details screen's filter row — the chip's emoji and how many left it. */
@@ -163,35 +166,37 @@ class MessageDetailsViewModel(
         val state: MessageDetailsUiState,
         val row: MessageEntity?,
         val me: String?,
-        val peersByNode: Map<String, PeerEntity>,
+        val directory: PeerDirectory,
     )
 
     private val base: Flow<Base> =
         combine(
             sightings,
             reactions.observeReactionsFor(messageId),
-            peers.observePeers(),
+            peers.observeDirectory(),
             myNodeId,
             settings.contentFilteringEnabled,
-        ) { sighting, reacts, peerList, me, hideSensitive ->
+        ) { sighting, reacts, directory, me, hideSensitive ->
             val message = sighting.row
             val everSeen = sighting.everSeen
-            val peersByNode = peerList.associateBy { it.nodeId }
+            val peersByNode = directory.byNode
             if (message == null) {
-                Base(MessageDetailsUiState(messageId = messageId, vanished = everSeen), null, me, peersByNode)
+                Base(MessageDetailsUiState(messageId = messageId, vanished = everSeen), null, me, directory)
             } else {
                 // Chronological, matching the DAO's `updatedAt ASC` — the order people reacted in reads
                 // better here than any ranking, and the filter chips carry the per-emoji grouping.
                 val rows =
                     reacts.mapNotNull { reaction ->
                         val emoji = reaction.emoji ?: return@mapNotNull null
+                        val label = directory.label(reaction.reactorNodeId)
                         ReactorRow(
                             nodeId = reaction.reactorNodeId,
-                            displayName = displayNameFor(peersByNode[reaction.reactorNodeId]?.name, reaction.reactorNodeId),
+                            displayName = label.text,
                             avatarHash = peersByNode[reaction.reactorNodeId]?.avatarHash,
                             emoji = emoji,
                             reactedAt = reaction.updatedAt,
                             isSelf = reaction.reactorNodeId == me,
+                            discriminator = label.discriminator,
                         )
                     }
                 Base(
@@ -202,7 +207,7 @@ class MessageDetailsViewModel(
                         isVoiceNote = VoiceAudio.isVoice(message.attachmentMime),
                         moderationFlagged = hideSensitive && message.moderation == MessageEntity.MODERATION_TEXT_FLAGGED,
                         mine = message.senderId == me,
-                        senderName = displayNameFor(peersByNode[message.senderId]?.name, message.senderId),
+                        senderName = directory.label(message.senderId).text,
                         senderNodeId = message.senderId,
                         sentAt = message.sentAt,
                         arrivedAt = message.arrivedAt,
@@ -213,7 +218,7 @@ class MessageDetailsViewModel(
                     ),
                     message,
                     me,
-                    peersByNode,
+                    directory,
                 )
             }
         }
@@ -297,9 +302,10 @@ class MessageDetailsViewModel(
     ): RecipientRow =
         RecipientRow(
             nodeId = nodeId,
-            displayName = displayNameFor(base.peersByNode[nodeId]?.name, nodeId),
-            avatarHash = base.peersByNode[nodeId]?.avatarHash,
+            displayName = base.directory.label(nodeId).text,
+            avatarHash = base.directory.byNode[nodeId]?.avatarHash,
             deliveredAt = deliveredAt,
+            discriminator = base.directory.label(nodeId).discriminator,
         )
 
     /** Chip order: most-reacted first, ties broken by who got there first, so chips don't reshuffle. */

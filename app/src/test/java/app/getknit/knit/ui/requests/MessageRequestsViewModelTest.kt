@@ -12,6 +12,7 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.group
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
@@ -23,6 +24,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -66,7 +68,7 @@ class MessageRequestsViewModelTest {
         every { messages.observeMessages() } returns messagesFlow
         every { settings.acceptedConversations } returns acceptedFlow
         every { settings.blockedNodeIds } returns blockedFlow
-        every { peers.observePeers() } returns peersFlow
+        every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { groups.observeGroups() } returns groupsFlow
     }
 

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import app.getknit.knit.R
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
+import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
@@ -16,13 +17,11 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.receivedPlane
-import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.relay.RelayPlane
 import app.getknit.knit.data.relay.planeFor
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.lora.LoraFacts
@@ -61,6 +60,9 @@ data class ConversationRow(
     val unreadCount: Int,
     val lastStatus: DeliveryStatus? = null,
     val lastDeliveredVia: DeliveryPlane = DeliveryPlane.Unknown,
+    // The ` (Alias)` suffix already inside [title] when another known peer shares this DM peer's name
+    // (ADR 058), so the row can draw it muted. Null for the room, groups, and an unambiguous name.
+    val discriminator: String? = null,
 )
 
 data class ChatListUiState(
@@ -182,22 +184,26 @@ class ChatListViewModel(
     val state: StateFlow<ChatListUiState> =
         combine(
             messagesAndBlocks,
-            peers.observePeers(),
+            peers.observeDirectory(),
             settings.lastReadAll,
             myNodeId,
             meshStatus,
-        ) { bundle, peerList, lastReadAll, me, mesh ->
+        ) { bundle, directory, lastReadAll, me, mesh ->
             val msgs = bundle.messages
             val blocked = bundle.blocked
             val activeGroups = bundle.groups.filter { !it.left }
             val groupIds = bundle.groups.map { it.groupId }.toSet() // left groups too, to hide stray rows
-            val peersByNode = peerList.associateBy { it.nodeId }
+            val peersByNode = directory.byNode
             val byConversation = msgs.groupBy { it.conversationId }
             // Partition out stranger "message requests" using the SAME shared predicate as the notify gate
             // (Nearby / accepted-set / verified peer / self-authored) so this list and the gate agree. A
             // pending DM/group is dropped from here and surfaced in the Message Requests inbox instead.
             val accepted = bundle.accepted
-            val verified = peerList.filter { it.verified }.map { it.nodeId }.toSet()
+            val verified =
+                directory.peers
+                    .filter { it.verified }
+                    .map { it.nodeId }
+                    .toSet()
             val authored = msgs.filter { it.senderId == me }.map { it.conversationId }.toSet()
             // Senders per thread, so a group a known peer has posted in reads as a chat rather than a request.
             val sendersByConversation = byConversation.mapValues { (_, tms) -> tms.map { it.senderId }.toSet() }
@@ -219,6 +225,7 @@ class ChatListViewModel(
                 isRoom: Boolean,
                 isGroup: Boolean,
                 avatarHash: String?,
+                discriminator: String? = null,
             ): ConversationRow {
                 val last = threadMsgs.lastOrNull()
                 val lastReadAt = lastReadAll[conversationId] ?: 0L
@@ -241,11 +248,12 @@ class ChatListViewModel(
                     avatarHash = avatarHash,
                     isRoom = isRoom,
                     isGroup = isGroup,
-                    lastPreview = last?.let { previewFor(it, peersByNode, me, isDm = !isRoom && !isGroup) },
+                    lastPreview = last?.let { previewFor(it, directory, me, isDm = !isRoom && !isGroup) },
                     lastMessageAt = last?.sentAt,
                     unreadCount = unread,
                     lastStatus = mineLast?.let { DeliveryStatus.of(it) },
                     lastDeliveredVia = mineLast?.receivedPlane ?: DeliveryPlane.Unknown,
+                    discriminator = discriminator,
                 )
             }
 
@@ -269,7 +277,7 @@ class ChatListViewModel(
                             memberIds = GroupMembersStore.decode(g.members),
                             selfId = me,
                             fallback = context.getString(R.string.group_unnamed),
-                        ) { id -> displayNameFor(peersByNode[id]?.name, id) }
+                        ) { id -> directory.label(id).text }
                     val row =
                         rowFor(
                             g.groupId,
@@ -289,10 +297,11 @@ class ChatListViewModel(
                         rowFor(
                             conversationId,
                             threadMsgs,
-                            title = displayNameFor(peersByNode[conversationId]?.name, conversationId),
+                            title = directory.label(conversationId).text,
                             isRoom = false,
                             isGroup = false,
                             avatarHash = peersByNode[conversationId]?.avatarHash,
+                            discriminator = directory.label(conversationId).discriminator,
                         )
                     }
             // Count of threads moved to the requests inbox (mirrors exactly what the two filters above drop).
@@ -329,7 +338,7 @@ class ChatListViewModel(
      */
     private fun previewFor(
         message: MessageEntity,
-        peersByNode: Map<String, PeerEntity>,
+        directory: PeerDirectory,
         me: String?,
         isDm: Boolean,
     ): String {
@@ -338,7 +347,7 @@ class ChatListViewModel(
         if (message.kind == MessageEntity.KIND_MEMBER_LEFT) {
             return context.getString(
                 R.string.chat_group_member_left,
-                displayNameFor(peersByNode[message.senderId]?.name, message.senderId),
+                directory.label(message.senderId).text,
             )
         }
         val body =
@@ -367,7 +376,7 @@ class ChatListViewModel(
             if (isOwn) {
                 context.getString(R.string.chat_self_name)
             } else {
-                displayNameFor(peersByNode[message.senderId]?.name, message.senderId)
+                directory.label(message.senderId).text
             }
         return context.getString(R.string.chat_list_preview_with_sender, sender, body)
     }

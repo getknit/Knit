@@ -109,6 +109,9 @@ class DemoSeeder(
         const val JONAS = "jonasw88"
         const val LENA = "lenaf042"
 
+        /** The second "Jonas W." of the hiking cast — its first six chars differ from [JONAS] so even the short-id fallback reads apart. */
+        const val JONAS_TWO = "jonas2w9"
+
         /** The subset of demo peers reported as connected by [app.getknit.knit.mesh.DemoTransport]. */
         val ONLINE_NODE_IDS: Set<String> = setOf(SAM, DANI, PRIYA)
     }

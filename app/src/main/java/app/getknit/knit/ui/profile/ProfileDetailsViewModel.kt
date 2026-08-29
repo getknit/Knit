@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.IntroState
@@ -33,6 +34,11 @@ private data class MyIdentity(
 data class ProfileDetailsUiState(
     val nodeId: String,
     val displayName: String,
+    // The peer's alias — always shown here, since this is where a person learns the word pair that tells
+    // "their" Alice from another — and the ` (Alias)` suffix already inside [displayName] when another
+    // known peer shares the name (ADR 058).
+    val alias: String = Alias.aliasFor(nodeId),
+    val discriminator: String? = null,
     val status: String,
     val avatarHash: String?,
     val online: Boolean,
@@ -82,13 +88,14 @@ class ProfileDetailsViewModel(
 
     val state: StateFlow<ProfileDetailsUiState> =
         combine(
-            peers.observePeers(),
+            peers.observeDirectory(),
             meshManager.neighbors,
             settings.blockedNodeIds,
             me,
             meshManager.introState(nodeId),
-        ) { peerList, neighbors, blocked, myId, intro ->
-            val peer = peerList.firstOrNull { it.nodeId == nodeId }
+        ) { directory, neighbors, blocked, myId, intro ->
+            val peer = directory.byNode[nodeId]
+            val label = directory.label(nodeId)
             peerBundle = peer?.pubKey
             peerDeviceTag = peer?.deviceTag
             val safety =
@@ -99,7 +106,9 @@ class ProfileDetailsViewModel(
                 }
             ProfileDetailsUiState(
                 nodeId = nodeId,
-                displayName = displayNameFor(peer?.name, nodeId),
+                displayName = label.text,
+                alias = label.alias,
+                discriminator = label.discriminator,
                 status = peer?.status.orEmpty(),
                 avatarHash = peer?.avatarHash,
                 online = neighbors.any { it.nodeId == nodeId },

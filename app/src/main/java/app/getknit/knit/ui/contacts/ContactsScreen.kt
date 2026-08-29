@@ -45,12 +45,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.ui.components.Avatar
+import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.preview.KnitPreview
 import org.koin.androidx.compose.koinViewModel
 
@@ -201,11 +201,10 @@ private fun ContactRow(
     ) {
         Avatar(avatarHash = contact.avatarHash, name = contact.displayName, size = 48.dp)
         Spacer(Modifier.width(12.dp))
-        Text(
+        PeerNameText(
             text = contact.displayName,
+            discriminator = contact.discriminator,
             style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         // A filled dot marks a contact currently connected to the mesh.

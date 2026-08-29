@@ -239,7 +239,19 @@ internal fun ProfileScreenContent(
                 label = { Text(stringResource(R.string.profile_display_name_label)) },
                 placeholder = { if (form.alias.isNotEmpty()) Text(form.alias) },
                 singleLine = true,
-                supportingText = { CharCounter(form.name.length, TextLimits.DISPLAY_NAME) },
+                supportingText = {
+                    Column {
+                        // The alias is what tells two same-named people apart (ADR 058), so it stays
+                        // visible after a name is typed — the placeholder alone vanishes then.
+                        if (form.alias.isNotEmpty()) {
+                            Text(
+                                text = stringResource(R.string.profile_alias_hint, form.alias),
+                                modifier = Modifier.testTag("profile_alias"),
+                            )
+                        }
+                        CharCounter(form.name.length, TextLimits.DISPLAY_NAME)
+                    }
+                },
             )
             OutlinedTextField(
                 value = form.status,

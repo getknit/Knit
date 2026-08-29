@@ -159,9 +159,10 @@ fun summaryCounts(perConversationCounts: Collection<Int>): Pair<Int, Int> {
 
 /**
  * Builds the notification payload for an inbound chat message, or `null` when it must not notify —
- * the message is our own ([senderId] == [selfId]) or has a blank body. The sender name falls back to
- * a friendly alias derived from the node id when the peer profile is unknown or blank, mirroring the
- * chat UI's resolution.
+ * the message is our own ([senderId] == [selfId]) or has a blank body. [peerName] is the caller's
+ * collision-aware label (`PeerLabel.text` — `Name (Alias)` when another known peer shares the name,
+ * ADR 058) and passes through verbatim; when it is unknown or blank the sender name falls back to the
+ * friendly alias derived from the node id, mirroring the chat UI's resolution.
  */
 fun incomingNotification(
     senderId: String,

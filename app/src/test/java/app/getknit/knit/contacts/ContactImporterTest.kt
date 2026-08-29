@@ -3,8 +3,11 @@ package app.getknit.knit.contacts
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.identity.PeerLabelIndex
+import app.getknit.knit.identity.PeerLabels
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.crypto.ContactCard
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
@@ -70,6 +73,7 @@ class ContactImporterTest {
         every { settings.spoolEnabled } returns spoolEnabled
         every { settings.spoolUrls } returns spoolUrls
         coEvery { peers.find(any()) } returns null
+        coEvery { peers.labelIndex() } returns PeerLabelIndex.EMPTY
     }
 
     private fun importer(internetPlane: Boolean = true) = ContactImporter(peers, settings, identity, mesh, internetPlane)
@@ -108,6 +112,16 @@ class ContactImporterTest {
             assertTrue(ready.alreadyContact)
             importer().import(ready)
             coVerify { peers.upsert(match { it.name == "Robert" && it.verified && it.updatedAt == 9L }) }
+        }
+
+    /** A card whose name this device already knows another identity by previews as `Name (Alias)` (ADR 058). */
+    @Test
+    fun aCardWhoseNameAnotherContactAlreadyUsesPreviewsWithTheAliasAppended() =
+        runTest {
+            coEvery { peers.labelIndex() } returns PeerLabels.index(listOf("other" to "Bob"))
+            val ready = importer().preview(bob.card(name = "Bob")) as ContactImporter.Preview.Ready
+            assertEquals("Bob (${Alias.aliasFor(bob.nodeId)})", ready.displayName)
+            assertEquals(Alias.aliasFor(bob.nodeId), ready.alias)
         }
 
     @Test

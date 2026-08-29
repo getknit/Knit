@@ -177,6 +177,13 @@ doc). **Don't start a deferred item without explicit direction.**
   `maxScopes` pressure); a chat-thread intro notice (the profile status line covers it; the pair scope
   already reads as relay-covered).
 
+- **Same-name disambiguation follow-ups** (ADR 058 shipped the `Name (Alias)` label, 2026-08-28): an
+  **impersonation warning** when a non-contact adopts a contact's or your own name (the label makes it
+  visible; nothing yet says so); a **node-id-derived avatar hue** in-app (`ui/components/Avatar` is one fixed
+  tint — the notification hue already keys on the identity); **last-seen pruning** of the collision
+  universe (a stranger seen once can suffix a contact indefinitely — needs a `lastSeen` column); and
+  resolving `ReplyRef.authorId` through the directory instead of rendering the sender's snapshot.
+
 - **Audio moderation** — voice notes (ADR 034) ship **unscreened**: no on-device model classifies speech
   and the app has no cloud option, so `MODERATION_NONE` is the honest verdict and both screening hooks skip
   audio by MIME. Mitigated rather than solved: the mic is not offered in the Nearby room (the one surface

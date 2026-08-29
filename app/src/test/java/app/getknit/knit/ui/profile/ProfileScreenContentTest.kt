@@ -3,6 +3,7 @@ package app.getknit.knit.ui.profile
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -72,6 +73,17 @@ class ProfileScreenContentTest {
                 )
             }
         }
+    }
+
+    /** The alias stays under the name field once a name is typed — it is how two same-named people tell each other apart (ADR 058). */
+    @Test
+    fun theAliasHintStaysVisibleWhileANameIsSet() {
+        render(isDirty = false)
+        // The supporting line is merged into the text field's semantics (hence the unmerged finder), and the
+        // field sits in a vertically-scrolled column, so bring it on-screen first.
+        val hint = compose.onNodeWithTag("profile_alias", useUnmergedTree = true)
+        hint.performScrollTo().assertIsDisplayed()
+        hint.assertTextContains("Cool Fox", substring = true)
     }
 
     @Test

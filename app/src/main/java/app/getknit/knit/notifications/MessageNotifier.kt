@@ -289,7 +289,7 @@ class MessageNotifier(
         // notification at it — that gives the Signal-style avatar in the collapsed, group-child, and heads-up
         // views (Conversations section).
         val title = displayTitle(r.kind, r.title)
-        val avatar = bitmapFor(r.avatarBytes) ?: fallbackAvatar(r.kind, title)
+        val avatar = bitmapFor(r.avatarBytes) ?: fallbackAvatar(r.kind, title, key = r.conversationId)
         pushConversationShortcut(r.conversationId, title, avatar)
 
         val channelId = if (r.isMention) NotificationChannels.MENTIONS else NotificationChannels.channelFor(r.kind)
@@ -463,7 +463,7 @@ class MessageNotifier(
             .Builder()
             .setKey(id)
             .setName(display)
-            .setIcon(IconCompat.createWithAdaptiveBitmap(bitmapFor(avatarBytes) ?: letterAvatar(display)))
+            .setIcon(IconCompat.createWithAdaptiveBitmap(bitmapFor(avatarBytes) ?: letterAvatar(display, key = id)))
             .build()
     }
 
@@ -496,12 +496,14 @@ class MessageNotifier(
 
     /**
      * The photoless avatar for a conversation: the Nearby/broadcast room gets the Knit mesh mark (matching
-     * the chat list's room glyph), everything else gets a [letterAvatar] on its title initial.
+     * the chat list's room glyph), everything else gets a [letterAvatar] on its title initial, colored by
+     * the conversation [key].
      */
     private fun fallbackAvatar(
         kind: ConversationKind,
         title: String,
-    ): Bitmap = if (kind == ConversationKind.NEARBY) roomAvatar() else letterAvatar(title)
+        key: String,
+    ): Bitmap = if (kind == ConversationKind.NEARBY) roomAvatar() else letterAvatar(title, key)
 
     /**
      * The Nearby/broadcast room's icon: the Knit mesh mark ([R.drawable.ic_knit_room], the circular variant)
@@ -527,14 +529,19 @@ class MessageNotifier(
     }
 
     /**
-     * A generated avatar for [name] when it has no photo: a deterministically-colored circle (the adaptive
-     * mask rounds the filled square) with the leading grapheme initial, mirroring the in-app
-     * [app.getknit.knit.ui.components.Avatar] fallback so notifications match the rest of the app.
+     * A generated avatar for [name] when it has no photo: a circle (the adaptive mask rounds the filled
+     * square) colored deterministically by the identity [key] — the node id, or a conversation id — with the
+     * leading grapheme initial, the same initial rule as the in-app [app.getknit.knit.ui.components.Avatar]
+     * fallback. Keyed on the identity rather than the name so two people with the same name at least
+     * differ in shade (ADR 058); the in-app avatar is one fixed tint and does not mirror this.
      */
-    private fun letterAvatar(name: String): Bitmap {
+    private fun letterAvatar(
+        name: String,
+        key: String,
+    ): Bitmap {
         val bitmap = Bitmap.createBitmap(AVATAR_PX, AVATAR_PX, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        canvas.drawColor(colorFor(name))
+        canvas.drawColor(colorFor(key))
         val paint =
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE
@@ -547,9 +554,9 @@ class MessageNotifier(
         return bitmap
     }
 
-    /** A stable, pleasant background hue for [name]'s letter avatar (same name -> same color). */
-    private fun colorFor(name: String): Int {
-        val hue = ((name.hashCode() % HUE_STEPS) + HUE_STEPS) % HUE_STEPS
+    /** A stable, pleasant background hue for a letter avatar (same identity [key] -> same color). */
+    private fun colorFor(key: String): Int {
+        val hue = ((key.hashCode() % HUE_STEPS) + HUE_STEPS) % HUE_STEPS
         return Color.HSVToColor(floatArrayOf(hue.toFloat(), AVATAR_SAT, AVATAR_VAL))
     }
 

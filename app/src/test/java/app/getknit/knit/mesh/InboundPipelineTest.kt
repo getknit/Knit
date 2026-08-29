@@ -24,8 +24,10 @@ import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.receipt.MessageReceiptEntity
 import app.getknit.knit.data.settings.InboundSettings
+import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.IdentitySource
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.identity.PeerLabels
 import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
@@ -62,6 +64,7 @@ import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.mesh.spool.ScopeSync
 import app.getknit.knit.moderation.ImageScreeningService
+import app.getknit.knit.notifications.NotifMessage
 import app.getknit.knit.notifications.Notifier
 import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeyTemplates
@@ -70,6 +73,7 @@ import com.google.crypto.tink.hybrid.HpkePrivateKey
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -284,6 +288,7 @@ class InboundPipelineTest {
             coEvery { peers.upsert(any()) } answers { peerMap[firstArg<PeerEntity>().nodeId] = firstArg() }
             // isAccepted now reads the batch "verified" signal; derive it from the same fake map the repo backs.
             coEvery { peers.verifiedNodeIds() } answers { peerMap.values.filter { it.verified }.map { it.nodeId } }
+            coEvery { peers.labelIndex() } answers { PeerLabels.index(peerMap.values.map { it.nodeId to it.name }) }
             coEvery { messages.exists(any()) } answers { msgMap.containsKey(firstArg<String>()) }
             coEvery { messages.save(any()) } answers { msgMap[firstArg<MessageEntity>().id] = firstArg() }
             coEvery { messages.saveIfAbsent(any()) } answers {
@@ -1659,6 +1664,25 @@ class InboundPipelineTest {
 
             assertEquals("hello room", rig.msgMap["b1"]?.body)
             coVerify { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
+    /** A notification names its sender by the collision-aware label when another pinned peer shares the name (ADR 058). */
+    @Test
+    fun aNotificationFromOneOfTwoSameNamedPeersCarriesTheAlias() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val alice2 = party()
+            rig.pin(alice)
+            rig.pin(alice2)
+            rig.peerMap[alice.nodeId] = rig.peerMap.getValue(alice.nodeId).copy(name = "Alice")
+            rig.peerMap[alice2.nodeId] = rig.peerMap.getValue(alice2.nodeId).copy(name = "alice")
+            val posted = slot<NotifMessage>()
+
+            rig.deliver(alice, rig.broadcastChat(alice, id = "b1", body = "hello room"))
+
+            coVerify { rig.notifier.notify(capture(posted), any(), any(), any(), any()) }
+            assertEquals("Alice (${Alias.aliasFor(alice.nodeId)})", posted.captured.senderName)
         }
 
     @Test

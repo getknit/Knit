@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.ui.components.Avatar
+import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
 import org.koin.androidx.compose.koinViewModel
@@ -377,11 +378,10 @@ private fun RecipientListRow(
     ) {
         Avatar(avatarHash = recipient.avatarHash, name = recipient.displayName, size = 40.dp)
         Spacer(Modifier.width(12.dp))
-        Text(
+        PeerNameText(
             text = recipient.displayName,
+            discriminator = recipient.discriminator,
             style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (delivered != null) {
@@ -455,11 +455,10 @@ private fun ReactorListRow(
     ) {
         Avatar(avatarHash = reactor.avatarHash, name = name, size = 40.dp)
         Spacer(Modifier.width(12.dp))
-        Text(
+        PeerNameText(
             text = name,
+            discriminator = if (reactor.isSelf) null else reactor.discriminator,
             style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         Text(text = reactor.emoji, style = MaterialTheme.typography.titleMedium)

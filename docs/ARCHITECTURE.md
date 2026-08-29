@@ -485,8 +485,13 @@ that budget is a purely local knob that can differ per node without breaking cue
 - **Highlighting** — `MentionText.highlightMentions(body, mentions, spanStyle)` builds `@name`
   tokens, sorts them **longest-first** (so `@Jay` can't grab a prefix of `@Jaylene`), and styles each
   non-overlapping occurrence via a per-char mask. The same file provides compose-time typeahead
-  (`activeMentionQuery` / `filterCandidates`); `ChatViewModel` builds the candidate list from peers
-  you've received messages from in the thread.
+  (`activeMentionQuery` / `filterCandidates`, which matches a candidate's name **or alias**); `ChatViewModel`
+  builds the candidate list from the thread's senders ∪ the group roster (so @-mentions work in a fresh
+  group before anyone has spoken).
+- **Same-named people** (ADR 058) — the token the picker inserts is the candidate's collision-aware label
+  (`PeerLabel.text`): `@Alice` normally, `@Alice (JoyfulFerret)` when the sender knows two Alices, and
+  `Mention.name` carries that exact text so the receiver (and every older build) still locates the span.
+  The picker row always shows the alias beside the name.
 - **Storage** — `object MentionStore` (in `MessageEntity.kt`, its own lenient `Json`) encodes
   mentions to a JSON array string for the `messages.mentions` TEXT column (default `"[]"`); a
   malformed/legacy value decodes to an empty list rather than crashing rendering.
@@ -558,6 +563,14 @@ that budget is a purely local knob that can differ per node without breaking cue
   via an FNV-1a hash over word lists — every device derives the same friendly name for a peer with no
   exchange. `displayNameFor(storedName, nodeId)` returns the non-blank profile name else the alias,
   so a peer is never shown as a raw id.
+- **`PeerLabels`** (ADR 058) — names are not unique, so a list surface resolves through
+  `PeerLabelIndex.labelFor` instead: over the universe of every cached peer ∪ our own name, grouped by
+  `NameKey` (NFKC, format chars stripped, lower-cased, whitespace collapsed), a peer whose name another
+  identity shares is labelled `Name (Alias)`; a blank-named peer, or a residual text collision, falls back to
+  the six-char `NodeId.shortForm`, so labels are distinct by construction. `PeerRepository.observeDirectory()`
+  emits the table with its index; `labelIndex()` is the suspend snapshot (notifications, card preview).
+  Disambiguation only — the ~15-bit alias is grindable; `verified` and the safety number remain the trust
+  mechanism.
 - **Profile broadcasting** (`MeshManager`):
   - On a **new neighbor**, push the current profile frame and (only if needed — §8) the avatar file.
   - On a **profile change** (name/status/avatar, observed via a combined settings flow, `.drop(1)` to
@@ -788,7 +801,7 @@ before bumping anything that could pull in a newer Kotlin stdlib.
     anti-entropy), and the pure BLE policies (`PromotionPolicyTest`, `ScanDemandPolicyTest`,
     `ConnectBackoffPolicyTest`, `BleAdvertPayloadTest`, `BlePresenceTrackerTest`, `PowerPolicyTest`).
   - Data/identity/UI logic: `ConversationsTest`, `ReactionRepositoryTest`, `MentionTest`,
-    `MentionTextTest`, `NodeIdTest` / `SelfCertifyingIdentityTest` / `DeviceTagTest`, `AliasTest`,
+    `MentionTextTest`, `NodeIdTest` / `SelfCertifyingIdentityTest` / `DeviceTagTest`, `AliasTest`, `PeerLabelsTest` / `NameKeyTest` (the `Name (Alias)` collision labels, ADR 058),
     `GroupNamingTest` / `GroupMembersStoreTest`, `NotificationTest`, `RelativeTimeTest`, `AvatarCropTest`.
   - E2E crypto: `MessageCryptoTest` (DM + N-member group seal/open; tampered ciphertext, wrong sender
     key, mismatched header, and non-recipient all rejected; bundle encode/decode) and `SafetyNumberTest`

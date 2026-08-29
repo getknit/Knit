@@ -190,6 +190,7 @@ class DemoWriter(
             Slot.PRIYA -> DemoSeeder.PRIYA
             Slot.JONAS -> DemoSeeder.JONAS
             Slot.LENA -> DemoSeeder.LENA
+            Slot.JONAS_TWO -> DemoSeeder.JONAS_TWO
         }
 
     /** The display name of a [Slot]: the local profile name for [Slot.ME], else the peer's scenario name. */

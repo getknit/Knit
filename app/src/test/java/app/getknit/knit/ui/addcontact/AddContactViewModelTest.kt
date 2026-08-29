@@ -44,6 +44,7 @@ class AddContactViewModelTest {
         ContactImporter.Preview.Ready(
             nodeId = "bbbbbbbbbbbbbbbbbbbbbbbbbb",
             displayName = "Bob",
+            alias = "CozyJade",
             safetyNumber = "00000 11111",
             alreadyContact = false,
             blocked = false,

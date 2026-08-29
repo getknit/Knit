@@ -112,8 +112,14 @@ must never need an event to recover. Closes ADR 038's "one board per clique" res
 blacked the plane out for the rest of it; the hourly total is unchanged, the worst straddling hour ≤ 6.25 %),
 and one allowance = `min(region duty cycle, 10 % politeness) × 0.5` of the window — **45 s of air at LongFast**.
 `AirBucket.LIVE` may spend all of it; `AirBucket.BRIDGE` (offers + backfill + the ADR 039 re-offer) is capped
-at 30 %, so backfill degrades before live chat does. `FrameClass.BOOTSTRAP` is always admitted;
-`FrameClass.TICK` (our own delivery receipts, see Pacing) never spends the last 25 % of a window. Region + preset
+at 30 %, so backfill degrades before live chat does; `AirBucket.BOOTSTRAP` (a live `profile` fan-out, ours or
+relayed — paired to `FrameClass.BOOTSTRAP` by `AirBucket.defaultFor`) is capped at 25 % and is the **one class
+judged outside the total**, so the key bootstrap still rides a spent window (ADR 056). It used to be admitted
+unconditionally *and* recorded, which is a budget with no floor: on the lab gateway 79 % of every LoRa frame
+ever sent was a profile, because a relayed one is gated only by the 10-minute signature dedup and
+`MeshRouter`'s SeenSet lapses on the same 10 minutes. A backfilled profile stays on `BRIDGE` — re-served
+history, not bootstrap. `FrameClass.TICK` (our own delivery receipts, see Pacing) never spends the last 25 %
+of a window. Region + preset
 are read off the board (`FromRadio.config` → `Config.LoRaConfig`, pinned by `MeshtasticProtoTest`; conservative
 5 % until reported). `LoraPacePolicy.take` consults it, skipping a refused frame rather than blocking behind
 it, and **dequeue is now by class then FIFO** (a reversal of ADR 039 §5 — bursts of backfill must not queue-jump
@@ -141,7 +147,9 @@ wait), NAK back-off (rate/duty → a 60 s cool-down), hold while `queueFree == 0
 frame's [AirBucket] budget is spent — a refused frame is skipped rather than blocking the queue behind it.
 When full the queue **sheds by class** (`FrameClass`: BOOTSTRAP > GOSSIP > DM > ROOM > TICK): the oldest
 **whole** frame (never a lone fragment) of the lowest class present goes, the newcomer included — a room post
-alone at the bottom is `REFUSED` rather than evicting a DM, and nothing ever evicts the profile bootstrap.
+alone at the bottom is `REFUSED` rather than evicting a DM, and nothing ever evicts the profile bootstrap
+(queue order only — since ADR 056 the bootstrap is metered on the air, and a profile refused by its share
+waits in the queue for the next window rather than being dropped).
 `TICK` is a frame **we** originated as a delivery receipt, said so by `FanoutHint.TICK` on
 `MeshTransport.longRangeFanout` (the transport cannot read a sealed frame); a relayed DM-form frame stays `DM`,
 and every `fastSend` frame is a tick by policy. Dequeue runs the same class order forwards since ADR 044
@@ -370,7 +378,9 @@ where no other Knit board is listening. Set the Meshtastic app's device to **Non
   index in settings now points at the Knit slot. Both boards must be provisioned before frames cross.
 - `…debug.LORA` (debug bridge): `--es address <MAC>` + `--es name <n>` binds a board, `--ei channel <idx>`,
   `--ez on <true|false>`, `--ez bridge <true|false>`; no extras dumps
-  `state/boardNodeNum/snr/rssi/queueFree/heard/role/pocketLinks/pocketSightings/gatewaysHeard/radio/airtime/counters`. It is the
+  `state/boardNodeNum/snr/rssi/queueFree/heard/role/pocketLinks/pocketSightings/gatewaysHeard/radio/airtime/counters`
+  (`airtime` carries `liveMs`/`bridgeMs`/`bootstrapMs` against their budgets — `loraSent − loraDmSent −
+  loraOfferSent` is the profile + room count, and profiles are the fragmented ones). It is the
   two-board oracle. `…debug.LORATX --es text <s>` sends a raw payload straight to the board (board-side
   sanity via `meshtastic --noproto`). `…debug.LORAPROV` sets the board up headlessly; `--es mode restore` undoes it.
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips

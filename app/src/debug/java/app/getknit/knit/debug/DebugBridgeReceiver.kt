@@ -1118,6 +1118,8 @@ class DebugBridgeReceiver :
                         .put("liveBudgetMs", air.liveBudgetMs)
                         .put("bridgeMs", air.bridgeUsedMs)
                         .put("bridgeBudgetMs", air.bridgeBudgetMs)
+                        .put("bootstrapMs", air.bootstrapUsedMs)
+                        .put("bootstrapBudgetMs", air.bootstrapBudgetMs)
                 } ?: JSONObject.NULL,
             ).put("counters", metricsJson(metrics.snapshot()))
     }

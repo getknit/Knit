@@ -200,14 +200,15 @@ internal class LoraRadioViewModel(
     }
 
     /**
-     * Airtime spent this hour as a percentage of what the plane allows itself — the LIVE budget, which is the
-     * whole allowance, so this reads as "how much of my radio time Knit has used". Rounded up, so any spending
-     * at all shows as at least 1 %.
+     * Airtime spent this window as a percentage of what the plane allows itself — the LIVE budget, which is
+     * the whole allowance, so this reads as "how much of my radio time Knit has used". Every bucket counts,
+     * the bootstrap included: it is judged against its own share on admission, but the air it spends is the
+     * same air. Rounded up, so any spending at all shows as at least 1 %.
      */
     private fun airtimePercent(air: AirtimeSnapshot): Int {
         val budget = air.liveBudgetMs
         if (budget <= 0) return 0
-        val used = air.liveUsedMs + air.bridgeUsedMs
+        val used = air.liveUsedMs + air.bridgeUsedMs + air.bootstrapUsedMs
         return ((used * PERCENT + budget - 1) / budget).toInt().coerceIn(0, PERCENT.toInt())
     }
 

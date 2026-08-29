@@ -232,6 +232,8 @@ class LoraRadioViewModelTest {
                     liveBudgetMs = 100_000,
                     bridgeUsedMs = 10_000,
                     bridgeBudgetMs = 30_000,
+                    bootstrapUsedMs = 0,
+                    bootstrapBudgetMs = 25_000,
                 )
             status.value = LoraStatus(state = ready(emptyList()), airtime = air)
             advanceUntilIdle()
@@ -259,6 +261,8 @@ class LoraRadioViewModelTest {
                             liveBudgetMs = 100_000,
                             bridgeUsedMs = 0,
                             bridgeBudgetMs = 30_000,
+                            bootstrapUsedMs = 0,
+                            bootstrapBudgetMs = 25_000,
                         ),
                 )
             advanceUntilIdle()

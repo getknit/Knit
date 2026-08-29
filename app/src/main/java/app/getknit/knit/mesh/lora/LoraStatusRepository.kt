@@ -41,7 +41,8 @@ internal class LoraStatusRepository(
             }.distinctUntilChanged()
         }
 
-    private fun saturated(air: AirtimeSnapshot): Boolean = air.liveUsedMs + air.bridgeUsedMs >= air.liveBudgetMs * AIRTIME_SPENT_SHARE
+    private fun saturated(air: AirtimeSnapshot): Boolean =
+        air.liveUsedMs + air.bridgeUsedMs + air.bootstrapUsedMs >= air.liveBudgetMs * AIRTIME_SPENT_SHARE
 
     companion object {
         /** How full the window must be before a LoRa-only DM is told it will wait — a whole packet short of refusal. */

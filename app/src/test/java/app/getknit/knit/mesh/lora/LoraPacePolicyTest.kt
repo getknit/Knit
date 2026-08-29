@@ -123,9 +123,45 @@ class LoraPacePolicyTest {
         }
         val big = ByteArray(MeshtasticProto.MAX_PAYLOAD)
         pace.enqueue(OutboundFrame(listOf(big), "room", FrameClass.ROOM, AirBucket.LIVE))
-        pace.enqueue(OutboundFrame(listOf(big), "profile", FrameClass.BOOTSTRAP, AirBucket.LIVE))
+        pace.enqueue(OutboundFrame(listOf(big), "profile", FrameClass.BOOTSTRAP))
         assertEquals("profile", pace.take(now)!!.label)
         assertNull("everything else waits for the window to roll", pace.take(now + 10_000))
+    }
+
+    @Test
+    fun aBootstrapFrameOverItsOwnShareWaitsInTheQueueRatherThanBeingLost() {
+        // ADR 056: the bootstrap is bounded now, so it can be refused — and a refused profile must be
+        // deferred like any other frame, since dropping the key bootstrap is what the exemption existed
+        // to prevent in the first place.
+        val air = LoraAirtime()
+        val pace = LoraPacePolicy(minGapMs = 0, airtime = air)
+        val big = ByteArray(MeshtasticProto.MAX_PAYLOAD)
+        var now = 0L
+        while (air.admits(AirBucket.BOOTSTRAP, FrameClass.BOOTSTRAP, listOf(MeshtasticProto.MAX_PAYLOAD), now)) {
+            air.record(AirBucket.BOOTSTRAP, MeshtasticProto.MAX_PAYLOAD, now)
+            now += 3_000
+        }
+        pace.enqueue(OutboundFrame(listOf(big), "profile", FrameClass.BOOTSTRAP))
+        pace.enqueue(OutboundFrame(listOf(big), "dm", FrameClass.DM, AirBucket.LIVE))
+        assertEquals("the DM goes while the profile's share is spent", "dm", pace.take(now)!!.label)
+        assertEquals("the profile is still queued, not dropped", 1, pace.pending)
+        assertEquals(1, pace.lastAirtimeRefusals)
+        // A whole window later its share is back and it rides.
+        val later = now + LoraAirtime.WINDOW_MS
+        assertEquals("profile", pace.take(later)!!.label)
+    }
+
+    @Test
+    fun aBootstrapFrameTakesTheBootstrapBucketWithoutBeingTold() {
+        // The class implies the bucket (AirBucket.defaultFor), so no call site can accidentally book a
+        // profile against LIVE and get the old unmetered behaviour back.
+        assertEquals(AirBucket.BOOTSTRAP, OutboundFrame(listOf(ByteArray(1)), "profile", FrameClass.BOOTSTRAP).bucket)
+        assertEquals(AirBucket.LIVE, OutboundFrame(listOf(ByteArray(1)), "dm", FrameClass.DM).bucket)
+        assertEquals(
+            "an explicit bucket still wins — a backfilled profile is bridge traffic",
+            AirBucket.BRIDGE,
+            OutboundFrame(listOf(ByteArray(1)), "backfill", FrameClass.BOOTSTRAP, AirBucket.BRIDGE).bucket,
+        )
     }
 
     /** Takes everything queued, advancing the clock past the min gap between takes. */

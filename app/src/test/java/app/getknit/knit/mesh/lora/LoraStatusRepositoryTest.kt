@@ -90,6 +90,8 @@ class LoraStatusRepositoryTest {
                     liveBudgetMs = 45_000,
                     bridgeUsedMs = 1_000,
                     bridgeBudgetMs = 13_500,
+                    bootstrapUsedMs = 0,
+                    bootstrapBudgetMs = 11_250,
                 )
             val roomy = spent.copy(liveUsedMs = 20_000)
             status.value = LoraStatus(state = LinkState.Idle, airtime = spent)

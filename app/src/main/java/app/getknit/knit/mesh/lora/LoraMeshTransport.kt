@@ -371,7 +371,7 @@ internal class LoraMeshTransport(
         parts: List<ByteArray>,
         label: String,
         klass: FrameClass,
-        bucket: AirBucket = AirBucket.LIVE,
+        bucket: AirBucket = AirBucket.defaultFor(klass),
     ) {
         if (pace.enqueue(OutboundFrame(parts, label, klass, bucket)) != LoraPacePolicy.Admission.ACCEPTED) {
             metrics.onLoraDroppedQueue()

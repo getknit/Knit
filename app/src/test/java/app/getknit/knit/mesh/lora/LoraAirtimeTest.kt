@@ -87,18 +87,62 @@ class LoraAirtimeTest {
     }
 
     @Test
-    fun aBootstrapFrameIsAlwaysAdmittedEvenWithTheBudgetSpent() {
+    fun aBootstrapFrameStillRidesWithTheRestOfTheBudgetSpent() {
         val air = LoraAirtime().apply { onRadioConfig(radio()) }
+        val packet = listOf(MeshtasticProto.MAX_PAYLOAD)
         var now = 0L
-        while (air.admits(AirBucket.LIVE, FrameClass.ROOM, listOf(MeshtasticProto.MAX_PAYLOAD), now)) {
+        while (air.admits(AirBucket.LIVE, FrameClass.ROOM, packet, now)) {
             air.record(AirBucket.LIVE, MeshtasticProto.MAX_PAYLOAD, now)
             now += 3_000
         }
-        assertFalse(air.admits(AirBucket.LIVE, FrameClass.ROOM, listOf(MeshtasticProto.MAX_PAYLOAD), now))
+        assertFalse(air.admits(AirBucket.LIVE, FrameClass.ROOM, packet, now))
         assertTrue(
-            "nothing verifies without the author's profile, so the bootstrap is never refused",
-            air.admits(AirBucket.LIVE, FrameClass.BOOTSTRAP, listOf(MeshtasticProto.MAX_PAYLOAD), now),
+            "nothing verifies without the author's profile, so a spent window must not silence it",
+            air.admits(AirBucket.BOOTSTRAP, FrameClass.BOOTSTRAP, packet, now),
         )
+    }
+
+    @Test
+    fun theBootstrapIsRefusedAtItsOwnShareSoItCanNeverBlankThePlane() {
+        // ADR 056. Before it, BOOTSTRAP returned true unconditionally *and* was recorded, so a relayed
+        // profile re-fanned every 10 min (the sig dedup's TTL) could take the whole allowance and leave the
+        // plane refusing everything a human had typed. On the lab gateway it took 79 % of all frames sent.
+        val air = LoraAirtime().apply { onRadioConfig(radio()) }
+        val packet = listOf(MeshtasticProto.MAX_PAYLOAD)
+        var now = 0L
+        var admitted = 0
+        while (air.admits(AirBucket.BOOTSTRAP, FrameClass.BOOTSTRAP, packet, now)) {
+            air.record(AirBucket.BOOTSTRAP, MeshtasticProto.MAX_PAYLOAD, now)
+            admitted++
+            now += 3_000
+            assertTrue("the exemption is bounded, not unbounded", admitted < 100)
+        }
+        assertTrue("some bootstrap always fits", admitted > 0)
+        assertTrue(
+            "spending stays inside the bootstrap share",
+            air.usedMs(AirBucket.BOOTSTRAP, now) <= air.budgetMs(AirBucket.BOOTSTRAP),
+        )
+        assertEquals(
+            (air.allowanceMs() * LoraAirtime.BOOTSTRAP_SHARE).toLong(),
+            air.budgetMs(AirBucket.BOOTSTRAP),
+        )
+        // And what it did spend is real air: content sees a window that much smaller, not a fresh one.
+        val left = air.allowanceMs() - air.usedMs(AirBucket.BOOTSTRAP, now)
+        assertTrue("the bootstrap's air is charged to the total too", left < air.allowanceMs())
+        assertTrue("three quarters of the window survives it", left >= air.allowanceMs() * 3 / 4)
+    }
+
+    @Test
+    fun aSpentBootstrapShareDoesNotStopContentGoingOut() {
+        val air = LoraAirtime().apply { onRadioConfig(radio()) }
+        val packet = listOf(MeshtasticProto.MAX_PAYLOAD)
+        var now = 0L
+        while (air.admits(AirBucket.BOOTSTRAP, FrameClass.BOOTSTRAP, packet, now)) {
+            air.record(AirBucket.BOOTSTRAP, MeshtasticProto.MAX_PAYLOAD, now)
+            now += 3_000
+        }
+        assertFalse(air.admits(AirBucket.BOOTSTRAP, FrameClass.BOOTSTRAP, packet, now))
+        assertTrue("a DM still has the rest of the window", air.admits(AirBucket.LIVE, FrameClass.DM, packet, now))
     }
 
     @Test

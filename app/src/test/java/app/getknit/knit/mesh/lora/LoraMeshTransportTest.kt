@@ -671,11 +671,58 @@ class LoraMeshTransportTest {
                     .mapTo(HashSet()) { it.toList() }
                     .size
             assertEquals("no fragment was handed to the board twice", a.link.sent.size, distinct)
+            // Across every bucket: the session's self-profile beacon books BOOTSTRAP (ADR 056), the frame
+            // under test books LIVE, and the invariant is about the ledger as a whole.
             assertEquals(
                 "and the ledger booked exactly what went out",
                 a.link.sent.sumOf { pace.airtime.timeOnAirMs(it.size) },
-                pace.airtime.usedMs(AirBucket.LIVE, testScheduler.currentTime),
+                AirBucket.entries.sumOf { pace.airtime.usedMs(it, testScheduler.currentTime) },
             )
+            a.transport.stop()
+        }
+
+    /**
+     * ADR 056. A relayed `profile` is the key bootstrap, so it is judged outside the window's total — but it
+     * has its own share, and once that is gone it waits like anything else. Before the cap, `admits` returned
+     * true for every BOOTSTRAP frame *and* recorded it, so a profile re-fanned on each SeenSet lapse could
+     * spend the whole allowance and leave the plane refusing traffic a human had typed: on the lab gateway
+     * 79 % of every frame it had ever sent was a profile.
+     */
+    @Test
+    fun aRelayedProfileIsMeteredAndStopsAtItsShareInsteadOfBlankingThePlane() =
+        runTest {
+            val pace = LoraPacePolicy(minGapMs = 3_000)
+            val a = rig(FakeMeshtasticAir(), 1u, "alice", backgroundScope, pace = pace) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            val baseline = a.link.sent.size
+
+            // Fan a distinct peer profile until the plane stops taking them.
+            var carried = 0
+            repeat(12) { i ->
+                a.transport.fastFanout(frame(FrameType.PROFILE, "carol", body = "profile-$i".padEnd(20, 'x')))
+                advanceTimeBy(4_000)
+                runCurrent()
+            }
+            carried = a.link.sent.size - baseline
+            assertTrue("some bootstrap always rides", carried > 0)
+            val spent = pace.airtime.usedMs(AirBucket.BOOTSTRAP, testScheduler.currentTime)
+            assertTrue(
+                "the bootstrap is booked to its own bucket now, not silently to LIVE",
+                spent > 0 && pace.airtime.usedMs(AirBucket.LIVE, testScheduler.currentTime) == 0L,
+            )
+            assertTrue("and it stops at its share", spent <= pace.airtime.budgetMs(AirBucket.BOOTSTRAP))
+            assertTrue(
+                "twelve profiles must not all ride — that is the unbounded behaviour ADR 056 removed",
+                carried < 12,
+            )
+
+            // The window is not blank: three quarters of it is still there for a message.
+            val sentSoFar = a.link.sent.size
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate in ten"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertTrue("content still goes out with the bootstrap share spent", a.link.sent.size > sentSoFar)
             a.transport.stop()
         }
 

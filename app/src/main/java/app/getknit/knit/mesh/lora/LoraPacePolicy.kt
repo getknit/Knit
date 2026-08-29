@@ -42,8 +42,9 @@ internal class LoraPacePolicy(
     val pending: Int get() = queue.size
 
     fun enqueue(frame: OutboundFrame): Admission {
-        // A newcomer may fit where everything queued did not — a BOOTSTRAP frame always does — so the
-        // airtime deferral is a fact about the queue as it stood, not a standing cool-down.
+        // A newcomer may fit where everything queued did not — it may spend a bucket the queue was not
+        // asking for — so the airtime deferral is a fact about the queue as it stood, not a standing
+        // cool-down.
         airtimeBlockedUntil = 0L
         if (queue.size < queueCap) {
             queue.addLast(frame)
@@ -156,7 +157,8 @@ internal class LoraPacePolicy(
  * This is the **queue-shedding** order only. What a frame costs against the rolling budget is
  * [AirBucket], which is orthogonal: a backfilled DM keeps DM class here — so a room post cannot evict it —
  * while spending from the bridge budget there. [LoraAirtime] reads one class beyond the bucket: a [TICK]
- * never spends the last share of a window.
+ * never spends the last share of a window. Note [BOOTSTRAP] outranks everything *in the queue* but is not
+ * unmetered on the air — since ADR 056 it spends [AirBucket.BOOTSTRAP], a bounded share of the allowance.
  */
 internal enum class FrameClass { BOOTSTRAP, GOSSIP, DM, ROOM, TICK }
 
@@ -165,8 +167,8 @@ internal class OutboundFrame(
     val messages: List<ByteArray>,
     val label: String,
     val klass: FrameClass = FrameClass.ROOM,
-    /** Which hourly budget this frame spends from; see [AirBucket]. */
-    val bucket: AirBucket = AirBucket.LIVE,
+    /** Which rolling budget this frame spends from; see [AirBucket] and [AirBucket.defaultFor]. */
+    val bucket: AirBucket = AirBucket.defaultFor(klass),
 ) {
     /**
      * How many of [messages] the board has already taken. A board that runs out of queue part-way through a

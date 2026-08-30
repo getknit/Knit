@@ -224,6 +224,13 @@ class MeshManagerTest {
          */
         var clockNow = now
 
+        /**
+         * The avatar clock [MeshManager.watchProfileChanges] combines with the name and status. Hoisted
+         * because nothing else in the manager collects it, which makes its `subscriptionCount` an exact
+         * signal that the watcher is up — see [awaitProfileWatcher].
+         */
+        val avatarUpdatedAt = MutableStateFlow(0L)
+
         // Hoisted so a test can pre-shape group-ratchet state (e.g. a stale outbox ack) around the
         // manager's own send/flush paths — same instance the manager is wired with below.
         val groupRatchet = GroupRatchetSessions(store = GroupRatchetRepository(db.groupRatchetDao()))
@@ -283,7 +290,7 @@ class MeshManagerTest {
             val displayName = MutableStateFlow("")
             coEvery { settings.displayName } returns displayName
             coEvery { settings.status } returns MutableStateFlow("")
-            coEvery { settings.avatarUpdatedAt } returns MutableStateFlow(0L)
+            coEvery { settings.avatarUpdatedAt } returns avatarUpdatedAt
             coEvery { settings.ownAvatarHash } returns MutableStateFlow(null)
             // 0 keeps broadcastSealedProfile's early return in play: the sealed CTL_PROFILE half is a
             // separate carrier with its own test surface, and this case is about the cleartext frame id.
@@ -328,6 +335,15 @@ class MeshManagerTest {
         ) = withContext(Dispatchers.Default) {
             withTimeout(AWAIT_MS) { while (have() < count) delay(POLL_MS) }
         }
+
+        /**
+         * Waits until [MeshManager.watchProfileChanges] is collecting. `start()` launches that watcher and
+         * the custody seed as siblings on `Dispatchers.Default`, so awaiting the seed does not order the
+         * watcher: an edit written before its `combine` subscribes arrives as that combine's *initial*
+         * value, `drop(1)` swallows it as the stored one, and nothing floods for the rest of the test.
+         * [SettingsStore.avatarUpdatedAt] has no other collector in the manager, so one subscriber is it.
+         */
+        suspend fun awaitProfileWatcher() = await(1) { avatarUpdatedAt.subscriptionCount.value }
 
         /** The distinct CHAT routing envelopes the manager originated (collapsing the flood + fast-fanout copies). */
         fun sentChatFrames(): List<RelayEnvelope> =
@@ -1334,6 +1350,7 @@ class MeshManagerTest {
             rig.await(1) { rig.custodiedProfiles().size } // the startup custody seed, still nameless
             val seeded = rig.custodiedProfiles().single()
 
+            rig.awaitProfileWatcher() // the edit must not beat the watcher's combine to the flow
             // A real edit lands at a later instant than the seed — as the lab capture showed, a display name
             // is typically saved seconds after onboarding published the (still nameless) profile.
             rig.clockNow = rig.now + 26_000

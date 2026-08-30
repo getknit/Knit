@@ -228,8 +228,13 @@ doc). **Don't start a deferred item without explicit direction.**
   `CAP_FRAME_TRANSCODE` through the profile frame it beacons here, newest-`sentAt`-wins, closed when no one is
   heard" (~20 lines in `LoraMeshTransport.onFramePacket`/`recomputeReachable`/`encodeOrNull`), or a capability
   byte on a new `LoraCtl` kind; residuals either way: an unheard far-pocket old build on a rebroadcasting
-  channel, a downgraded peer until its older profile arrives; **(b) the compact group form as v4** (derived
-  nonce + labeled plaintext for `g`, roster-gated on every member's pinned capability; ~12 + 20–40 B a post,
+  channel, a downgraded peer until its older profile arrives. The gate also owns a budget: `LoraSizeHint`'s
+  `DM_BODY_BYTES` (320) is honest only in the `0x05` form — a budget DM carrying its four inline acks is 596 B
+  against the 681-B ceiling there, but **675–683 B untranscoded** — so whatever falls back to `0x03` for an
+  ungated peer must drop that budget ~20 B or accept a `loraTooBig` on a tenth of the DMs the composer just
+  promised would fit (`CoordinationPlaneSizeBudgetTest` pins both budget tests on the transcoded form for
+  exactly that reason); **(b) the compact group form as v4** (derived nonce + labeled plaintext for `g`,
+  roster-gated on every member's pinned capability; ~12 + 20–40 B a post,
   no packet-count change on its own — v3 is the DM form by executable rule, ADR 059 amendment); **(c)** seed
   `profileVersion` from the wall clock on first run, so a reinstalled peer's stale `CAP_CRYPTO_V3` /
   `CAP_RATCHET` pin is cleared by its next profile rather than by its edit count climbing back; **(d)** re-tune

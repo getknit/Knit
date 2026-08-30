@@ -607,7 +607,11 @@ class CoordinationPlaneSizeBudgetTest {
      */
     private val esp32PayloadCap = 255 - LoraMeshTransport.TORADIO_OVERHEAD
 
-    /** Part count for [wire] on the LoRa hop, or null when no encoding fits <= 3 fragments. */
+    /**
+     * Part count for [wire] on the LoRa hop in the untranscoded `0x03` form, or null when nothing fits <= 3
+     * fragments. The pre-ADR-060 baseline — a stricter bound than the plane's own, which encodes `transcode =
+     * true` (see [transcodedLoraParts]); a budget the hint promises is pinned against *that*, not this.
+     */
     private fun loraParts(wire: WireEnvelope): Int? = LoraFrameCodec.encode(wire, fragId = 1)?.size
 
     @Test
@@ -699,6 +703,9 @@ class CoordinationPlaneSizeBudgetTest {
     /**
      * ADR 054: a DM at the composer's budget that also carries its full complement of inline acks must still
      * cross the board — `MeshManager.inlineAcksFor` reserves [INLINE_ACK_BYTES] per ack out of the same budget.
+     * Measured in the transcoded form `LoraMeshTransport` sends (ADR 060): this fixture is 596 B there against
+     * a 681-B ceiling, but 675-683 B untranscoded, so pinning it on [loraParts] made the test a coin flip on
+     * the crypto's own entropy once the measured on-air cap took [MeshtasticProto.MAX_PAYLOAD] from 233 to 231.
      */
     @Test
     fun aBudgetDmWithInlineAcksStillFitsTheLoraHop() {
@@ -708,7 +715,7 @@ class CoordinationPlaneSizeBudgetTest {
         val body = "a".repeat(LoraSizeHint.DM_BODY_BYTES - MAX_INLINE_ACKS * INLINE_ACK_BYTES)
         val dm = alice.sign(sealer.dm(FrameId.new(), body = body, acks = List(MAX_INLINE_ACKS) { FrameId.new() }))
         report("sealed-dm-budget-with-inline-acks-init", dm, alice)
-        val parts = checkNotNull(loraParts(dm)) { "a budget DM with inline acks must fit the LoRa hop" }
+        val parts = checkNotNull(transcodedLoraParts(dm)) { "a budget DM with inline acks must fit the LoRa hop" }
         assertTrue("budget DM + inline acks in <= 3 LoRa packets (was $parts)", parts <= FastFrameCodec.MAX_PARTS)
     }
 
@@ -739,7 +746,9 @@ class CoordinationPlaneSizeBudgetTest {
      * ADR 040: the composer's "long message" hint is sized by [LoraSizeHint]'s body budgets, which must be
      * *under* the real ceilings — a draft at the budget must still fit in ≤ 3 packets in every form the hint
      * covers: a room post (deflate-hostile body, the honest upper bound — real text compresses better), a
-     * session-initial DM, and each with the largest reply and an attachment reference riding along.
+     * session-initial DM, and each with the largest reply and an attachment reference riding along. Measured
+     * in the transcoded form the plane sends (ADR 060), where the tightest of them keeps 63 B of headroom —
+     * untranscoded, the DM-with-a-photo and DM-reply forms land within a byte or two of the 681-B ceiling.
      */
     @Test
     fun theComposerHintBudgetsFitTheLoraHop() {
@@ -762,7 +771,7 @@ class CoordinationPlaneSizeBudgetTest {
             label: String,
             wire: WireEnvelope,
         ) {
-            val parts = checkNotNull(loraParts(wire)) { "$label must fit the LoRa hop at its hint budget" }
+            val parts = checkNotNull(transcodedLoraParts(wire)) { "$label must fit the LoRa hop at its hint budget" }
             assertTrue("$label in <= 3 LoRa packets (was $parts)", parts <= FastFrameCodec.MAX_PARTS)
         }
         val room = LoraSizeHint.ROOM_BODY_BYTES

@@ -415,6 +415,11 @@ class MeshManager(
     /** conversationId → the set of peers currently shown as "typing" there, for the chat UI. Ephemeral (TTL'd). */
     override val typing: StateFlow<Map<String, Set<String>>> get() = typingTracker.typing
 
+    // Demo-screenshot only (DemoSeeder.seedRelays): a pinned spool status that [spoolStatus] answers with
+    // instead of the live one. Null in every build that is not `-PseedDemo=true`.
+    @Volatile
+    private var demoSpools: List<SpoolStatus>? = null
+
     /**
      * Demo-screenshot only: pin a persistent "now typing" indicator for [conversationId] from [senderId],
      * bypassing the [TypingTracker] TTL so a statically-captured demo screenshot reliably catches it. Called
@@ -478,7 +483,19 @@ class MeshManager(
         sessionScope = null
     }
 
-    override fun spoolStatus(): List<SpoolStatus> = scopeSync?.status().orEmpty()
+    override fun spoolStatus(): List<SpoolStatus> = demoSpools ?: scopeSync?.status().orEmpty()
+
+    /**
+     * Demo-screenshot only: pin a fixed set of spool statuses, so the relay indicators (the chat header's
+     * globe, the relay settings rows, the Diagnostics section) render against a plane that never opens a
+     * socket. A demo build has no `ScopeSync` session at all, and an empty status list is indistinguishable
+     * from "no relays" — which is precisely the state a capture must not be of. Called by [DemoSeeder];
+     * deliberately off the [MeshController] interface, like [seedDemoTyping], so the production facade
+     * stays clean.
+     */
+    fun seedDemoSpools(statuses: List<SpoolStatus>) {
+        demoSpools = statuses
+    }
 
     override suspend fun importContact(peerId: String) {
         introSync.want(peerId)

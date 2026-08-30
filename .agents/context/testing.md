@@ -73,6 +73,13 @@ the JVM tests (`CompositeMeshTransportTest`, `RadioWarningTest`, `OnboardingScre
 - **Isolation is Android Test Orchestrator + `clearPackageData=true`** (`testOptions.execution` +
   `androidTestUtil` orchestrator/test-services in `app/build.gradle.kts`): each test runs in a fresh,
   data-wiped process, so the identity + DB regenerate and the seed re-runs every time.
+- **The seed also arms the two flag-gated planes.** `DemoPlanes` (debug-only) consents to and fills the
+  Internet-relay list and binds a Knit-provisioned LoRa board, so `relays`, `lora`, the chat header's
+  globe/board glyphs and the plane marks on a bubble all render against something. Neither opens a socket
+  nor dials hardware: the spool statuses are pinned via `MeshManager.seedDemoSpools`, and the board is
+  `DemoLoraPlane`, a `LoraPlaneStatus` that only reports. It also seeds one unaccepted stranger DM + group
+  (so the Requests inbox and its chat-list badge are populated) and one blocked peer. A seeded build is
+  therefore **not** a clean-slate build — if you are asserting on an empty state, seed it yourself.
 - **`BuildConfig.SEED_DEMO` is compile-time-inlined into the androidTest DEX**, so the **test** APK must also
   be built with `-PseedDemo=true` (the gradle/FTL commands above pass it to both). `SeededUiTest` fails loudly
   with a `check(SEED_DEMO)` if not — never gate the suite on `Assume.assumeTrue(SEED_DEMO)` (a mis-build would

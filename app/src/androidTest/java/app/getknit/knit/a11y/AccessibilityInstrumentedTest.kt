@@ -105,8 +105,18 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun internetRelays() = audit(route = "relays") { awaitTag("relays_switch") }
 
-    // The seeded emulator has no Bluetooth adapter, so this audits the screen's empty state (no boards paired).
+    // The seeded build reports a bound, connected, Knit-provisioned board (DemoPlanes + DemoLoraPlane), so
+    // this audits the populated screen — the live status block, the battery and signal rows, the picker and
+    // the Restore action — rather than the "pair a board first" empty state an emulator would otherwise give.
     @Test fun loraRadio() = audit(route = "lora") { awaitTag("lora_switch") }
+
+    // The seeded build leaves one stranger's DM and one stranger's group unaccepted (DemoScenario.requests /
+    // requestGroup), so this audits the inbox with rows — the accept/block/delete actions on each — not the
+    // empty state.
+    @Test fun messageRequests() = audit(route = "requests") { awaitTag("request_row_river7x2") }
+
+    // One seeded blocked peer (DemoScenario.blocked), so the list has a row and its unblock action to audit.
+    @Test fun blockedUsers() = audit(route = "blocked") { awaitTag("screen_blocked_users") }
 
     // demo-group-4 is one of ours, seeded with three reactors across two emoji AND delivered to two of its
     // three other members, so this audits the populated screen — the filter chips, the people list, and both

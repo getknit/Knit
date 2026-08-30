@@ -5,6 +5,7 @@ package app.getknit.knit.demo
 import android.util.Log
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.MeshManager
 import app.getknit.knit.mesh.Peer
@@ -17,7 +18,8 @@ import org.koin.core.Koin
  * Debug-only trailer director (`-PdemoDirector=true`). Plays a scripted, animated conversation on the
  * **Nearby** room so a screen recording becomes the promo trailer: the local user types + sends a message,
  * peers reply, more nodes join (the "connected to N" header climbs), and the room fills with photos, an
- * animated GIF, reactions, quoted replies, @-mentions, and "typing…" cues.
+ * animated GIF, a voice note, reactions, quoted replies, @-mentions, "typing…" cues, and a line that
+ * arrives over a LoRa board rather than the radios.
  *
  * It writes through [DemoWriter] (the same repository primitives the static [DemoSeeder] uses), so every
  * change animates into the live UI with no bespoke rendering — peer messages/reactions land via reactive
@@ -51,8 +53,15 @@ class DemoDirector(
         // replies), plus this timeline's ambient + live messages.
         val timelineMsgs = script.mapNotNull { (it as? Beat.PeerMessage)?.msg }
         val msgById =
-            (scenario.nearby + scenario.dms.flatMap { it.messages } + scenario.groupMessages + AMBIENT + timelineMsgs)
-                .associateBy { it.id }
+            (
+                scenario.nearby +
+                    scenario.dms.flatMap { it.messages } +
+                    scenario.group.messages +
+                    scenario.requests.flatMap { it.messages } +
+                    scenario.requestGroup?.messages.orEmpty() +
+                    AMBIENT +
+                    timelineMsgs
+            ).associateBy { it.id }
         writer = DemoWriter(koin, scenario, me, msgById)
 
         val now = System.currentTimeMillis()
@@ -61,7 +70,11 @@ class DemoDirector(
         writer.seedProfileAndPeers(now)
         AMBIENT.forEach { writer.write(it, nearby, dmPeer = null, now) }
         writer.seedDms(now)
-        writer.seedGroup(now)
+        val groupId = writer.seedGroup(scenario.group, now)
+        writer.seedRequests(now)
+        // The trailer's cutaways are of chat screens, whose headers carry the relay globe and the board
+        // glyph — so the director arms both planes exactly as the still seeder does.
+        DemoPlanes.arm(koin, coveredLabels = scenario.dms.map { writer.nodeId(it.peer) } + groupId)
 
         // Give the cold-started Nearby screen a beat to compose and subscribe to DemoComposer before the
         // first local-type beat (its command flow has no replay, so a too-early emit would be missed).
@@ -159,6 +172,22 @@ class DemoDirector(
                     delayMs = 2_200,
                 ),
                 Beat.Reaction("dir-6", Slot.SAM, "🙌", delayMs = 1_400),
+                // A voice note lands and holds its own beat — the bubble is wide and the waveform reads at
+                // a glance, so it does not need the dwell a photo does.
+                Beat.Typing(Slot.SAM, delayMs = 1_100),
+                Beat.PeerMessage(DemoMsg("dir-6b", Slot.SAM, "", 0, voiceSeconds = 7), delayMs = 1_900),
+                // Then one from far outside radio range, carried by a LoRa board: the bubble wears the board
+                // glyph, which is the only place in the trailer the long-range plane is visible.
+                Beat.PeerMessage(
+                    DemoMsg(
+                        "dir-6c",
+                        Slot.THEO,
+                        "way out past the trash fence — this one's coming over the board 📻",
+                        0,
+                        via = DeliveryPlane.LoRa,
+                    ),
+                    delayMs = 2_000,
+                ),
                 // The animated GIF gets its own moment — a lingering typing cue, the clip, then reactions
                 // dwell on it (and it stays on screen through the two-peer typing finale below).
                 Beat.Typing(Slot.PRIYA, delayMs = 1_300),

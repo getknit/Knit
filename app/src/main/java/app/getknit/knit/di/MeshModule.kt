@@ -143,7 +143,8 @@ val meshModule =
         single<MeshtasticLink> {
             MeshtasticSession(dialer = get(), scope = get(), now = SystemClock::elapsedRealtime, log = { Log.d("MeshtasticLink", it) })
         }
-        single<BoardDirectory> { BondedBoardDirectory(androidContext()) }
+        // Demo builds fake the bonded list (no adapter on an emulator); production reads the real one.
+        single<BoardDirectory> { demoBoardDirectoryOrNull() ?: BondedBoardDirectory(androidContext()) }
         // MeshManager supplies the signed profile frame for the LoRa key-bootstrap beacon (a third alias),
         // the carried DM-form frames the plane re-offers to a peer it first hears (a fourth), and the custody
         // window the bridge gossips about and serves from (a fifth, ADR 044).
@@ -217,6 +218,11 @@ val meshModule =
         // The LoRa plane's UI face: the transport itself when the build ships the plane, a dark stand-in
         // otherwise — so the chat header's repository (resolved by every open chat) never instantiates the
         // board session in release. Its facts feed the header glyph, the DM notice and the composer hint.
-        single<LoraPlaneStatus> { if (BuildConfig.LORA_PLANE) get<LoraMeshTransport>() else LoraPlaneStatus.Dark }
+        // A demo build reports a connected, Knit-provisioned board without dialling one (see DemoWiring);
+        // otherwise the transport itself when the build ships the plane, and a dark stand-in when it doesn't.
+        single<LoraPlaneStatus> {
+            demoLoraPlaneOrNull()
+                ?: if (BuildConfig.LORA_PLANE) get<LoraMeshTransport>() else LoraPlaneStatus.Dark
+        }
         single { LoraStatusRepository(get(), get()) }
     }

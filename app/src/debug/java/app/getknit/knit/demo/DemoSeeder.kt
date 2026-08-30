@@ -26,6 +26,11 @@ import org.koin.core.Koin
  * so both stay in lockstep. Paired with [app.getknit.knit.mesh.DemoTransport], which reports
  * [ONLINE_NODE_IDS] as connected so the "connected" header and contact "online" dots light up. All writes
  * are idempotent upserts keyed by stable ids, so a relaunch re-seeds deterministically.
+ *
+ * Beyond the conversation history it arms the two **planes** the emulator cannot actually run — the
+ * Internet relays and the LoRa board, via [DemoPlanes] — because both are now visible all over the UI (a
+ * globe or a board glyph on a chat header, a bubble and a ✓✓ tick, two settings screens), and without them
+ * every capture of that surface would be of its off state.
  */
 class DemoSeeder(
     private val koin: Koin,
@@ -39,21 +44,31 @@ class DemoSeeder(
         val me = koin.get<Identity>().nodeId()
         val scenario = demoScenarioFor(BuildConfig.DEMO_THEME)
         val msgById =
-            (scenario.nearby + scenario.dms.flatMap { it.messages } + scenario.groupMessages)
-                .associateBy { it.id }
+            (
+                scenario.nearby +
+                    scenario.dms.flatMap { it.messages } +
+                    scenario.group.messages +
+                    scenario.requests.flatMap { it.messages } +
+                    scenario.requestGroup?.messages.orEmpty()
+            ).associateBy { it.id }
         val writer = DemoWriter(koin, scenario, me, msgById)
         val now = System.currentTimeMillis()
 
         writer.seedProfileAndPeers(now)
         writer.seedNearby(now)
         writer.seedDms(now)
-        writer.seedGroup(now)
+        val groupId = writer.seedGroup(scenario.group, now)
+        writer.seedRequests(now)
+        writer.seedBlocked()
 
         // Pin one persistent "now typing" cue for the dm-sam marketing shot. A real cue is TTL'd (12s) and
         // would race a static capture; this bypasses the TTL. For a DM the conversationId is the peer's
         // nodeId (see seedDms), so both args are the same slot.
         koin.get<MeshManager>().seedDemoTyping(conversationId = SAM, senderId = SAM)
 
+        // The two planes an emulator cannot run, reported rather than dialled. Covered scopes are the
+        // accepted threads only: a stranger you have not answered has no scope in the real plane either.
+        DemoPlanes.arm(koin, coveredLabels = scenario.dms.map { nodeIdOf(it.peer) } + groupId)
         seedCrashReport()
         seedLatchedModel()
     }
@@ -97,6 +112,22 @@ class DemoSeeder(
         )
     }
 
+    /** The node id behind a scenario [Slot] — the seeder's own copy of [DemoWriter.nodeId] for ME-free slots. */
+    private fun nodeIdOf(slot: Slot): String =
+        when (slot) {
+            Slot.SAM -> SAM
+            Slot.DANI -> DANI
+            Slot.THEO -> THEO
+            Slot.PRIYA -> PRIYA
+            Slot.JONAS -> JONAS
+            Slot.LENA -> LENA
+            Slot.JONAS_TWO -> JONAS_TWO
+            Slot.RIVER -> RIVER
+            Slot.NOAH -> NOAH
+            Slot.MARLO -> MARLO
+            Slot.ME -> error("ME has no fixed id — it is this device's runtime node id")
+        }
+
     companion object {
         // Stable, illustrative demo node ids — short fixed slots (NOT the real 26-char base32 [NodeId]
         // format; demo peers are seeded straight into the DB and never advertised over a radio, so any
@@ -111,6 +142,15 @@ class DemoSeeder(
 
         /** The second "Jonas W." of the hiking cast — its first six chars differ from [JONAS] so even the short-id fallback reads apart. */
         const val JONAS_TWO = "jonas2w9"
+
+        /** The stranger whose unanswered DM is the seeded message request. */
+        const val RIVER = "river7x2"
+
+        /** The stranger who added us to the seeded request group. */
+        const val NOAH = "noahq415"
+
+        /** The one blocked peer, so "Blocked users" has a row. */
+        const val MARLO = "marlo9b3"
 
         /** The subset of demo peers reported as connected by [app.getknit.knit.mesh.DemoTransport]. */
         val ONLINE_NODE_IDS: Set<String> = setOf(SAM, DANI, PRIYA)

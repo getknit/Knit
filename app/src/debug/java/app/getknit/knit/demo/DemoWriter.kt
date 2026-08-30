@@ -13,7 +13,6 @@ import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
-import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.withReply
@@ -96,24 +95,53 @@ class DemoWriter(
         }
     }
 
-    /** Upserts the scenario group and writes its history; returns the group id. */
-    suspend fun seedGroup(now: Long): String {
-        val members = scenario.groupMembers.map { nodeId(it) }
+    /**
+     * Upserts [group] and writes its history; returns the group id. [read] false leaves the thread
+     * without a read watermark, which is what a group the user has not opened — a **request** — looks
+     * like; the accepted group passes true, as it always did.
+     */
+    suspend fun seedGroup(
+        group: DemoGroup,
+        now: Long,
+        read: Boolean = true,
+    ): String {
+        val members = group.members.map { nodeId(it) }
         val groupId = Conversations.groupIdFor(members)
-        val opener = scenario.groupMessages.first() // lists are oldest-first -> first = creation
+        val opener = group.messages.first() // lists are oldest-first -> first = creation
         groups.upsert(
             GroupEntity(
                 groupId = groupId,
-                name = scenario.groupName,
+                name = group.name,
                 members = GroupMembersStore.encode(members),
                 createdBy = nodeId(opener.from),
                 createdAt = now - opener.minsAgo * 60_000L,
                 nameUpdatedAt = now - opener.minsAgo * 60_000L,
             ),
         )
-        scenario.groupMessages.forEach { write(it, conversationId = groupId, dmPeer = null, now) }
-        settings.setLastReadAt(groupId, now)
+        group.messages.forEach { write(it, conversationId = groupId, dmPeer = null, now) }
+        if (read) settings.setLastReadAt(groupId, now)
         return groupId
+    }
+
+    /**
+     * Writes the scenario's stranger threads — the DM requests and the group a stranger added us to —
+     * **without** accepting any of them, so `Conversations.isAccepted` keeps them out of the chat list and
+     * in the Message Requests inbox (whose badge then appears on the chat list). Deliberately not folded
+     * into [seedDms]: the difference between a chat and a request is exactly the absence of an accept, and
+     * a single list would make that absence an easy thing to lose.
+     */
+    suspend fun seedRequests(now: Long) {
+        scenario.requests.forEach { thread ->
+            val peer = nodeId(thread.peer)
+            thread.messages.forEach { write(it, conversationId = peer, dmPeer = peer, now) }
+            if (thread.read) settings.setLastReadAt(peer, now)
+        }
+        scenario.requestGroup?.let { seedGroup(it, now, read = false) }
+    }
+
+    /** Blocks the scenario's blocked slots, so "Blocked users" has rows instead of its empty state. */
+    suspend fun seedBlocked() {
+        scenario.blocked.forEach { settings.block(nodeId(it), deviceTag = null) }
     }
 
     /**
@@ -122,6 +150,10 @@ class DemoWriter(
      * recipient is set per direction; for the room/group it's null. [received] doubles as the delivery tick and
      * is only meaningful for our own outbound messages, so it tracks "is this mine". A [DemoMsg.image] is
      * ingested as a plaintext blob (JPEG scene photo or animated WebP) and pinned via [MessageEntity.attachmentHash].
+     *
+     * [DemoMsg.via] is written to `receivedVia` for every row and carried onto the seeded receipts, so the
+     * plane glyphs (globe / board) render on the bubble, on the ✓✓ tick and on the per-recipient rows of
+     * "Message info" from one field.
      */
     suspend fun write(
         m: DemoMsg,
@@ -145,6 +177,9 @@ class DemoWriter(
                 // the send — a plausible one-hop lag that can't land in the future for any minsAgo >= 1.
                 arrivedAt = if (fromMe) null else now - m.minsAgo * 60_000L + 30_000L,
                 received = fromMe,
+                // The plane, in the same place the real path writes it: an inbound row is its own proof,
+                // one of ours learns it from the receipt that flipped `received`.
+                receivedVia = m.via.code,
                 mentions =
                     MentionStore.encode(
                         if (m.mentionsMe) listOf(Mention(me, scenario.meName)) else emptyList(),
@@ -168,7 +203,7 @@ class DemoWriter(
         }
         // A receipt lands after the message it acks; a minute is enough to keep the ordering readable.
         m.deliveredTo.forEach { slot ->
-            receipts.record(m.id, nodeId(slot), DeliveryPlane.Nearby, now - (m.minsAgo - 1) * 60_000L)
+            receipts.record(m.id, nodeId(slot), m.via, now - (m.minsAgo - 1) * 60_000L)
         }
     }
 
@@ -191,6 +226,9 @@ class DemoWriter(
             Slot.JONAS -> DemoSeeder.JONAS
             Slot.LENA -> DemoSeeder.LENA
             Slot.JONAS_TWO -> DemoSeeder.JONAS_TWO
+            Slot.RIVER -> DemoSeeder.RIVER
+            Slot.NOAH -> DemoSeeder.NOAH
+            Slot.MARLO -> DemoSeeder.MARLO
         }
 
     /** The display name of a [Slot]: the local profile name for [Slot.ME], else the peer's scenario name. */

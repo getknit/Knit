@@ -209,6 +209,7 @@ class MeshMetrics {
     private val spoolPulled = AtomicLong()
     private val spoolBridged = AtomicLong()
     private val spoolInvalid = AtomicLong()
+    private val spoolAccounted = AtomicLong()
     private val spoolErrors = AtomicLong()
     private val spoolAttachPushed = AtomicLong()
     private val spoolAttachPulled = AtomicLong()
@@ -522,6 +523,16 @@ class MeshMetrics {
         spoolInvalid.incrementAndGet()
     }
 
+    /**
+     * A bridged blob that local custody did not keep entered the accounted set (spec §9.6) — it is folded
+     * into our digest as held and never pulled again. Climbing slowly is normal: it is the 24–48 h band
+     * between the mesh custody TTL and the scope TTL. Climbing in step with [onSpoolPulled] round after
+     * round is the ADR 062 regression — the band being re-pulled instead of accounted.
+     */
+    fun onSpoolAccounted() {
+        spoolAccounted.incrementAndGet()
+    }
+
     /** A spool answered `err`, or refused a scope at SUB. */
     fun onSpoolError() {
         spoolErrors.incrementAndGet()
@@ -731,6 +742,7 @@ class MeshMetrics {
             spoolPulled = spoolPulled.get(),
             spoolBridged = spoolBridged.get(),
             spoolInvalid = spoolInvalid.get(),
+            spoolAccounted = spoolAccounted.get(),
             spoolErrors = spoolErrors.get(),
             spoolAttachPushed = spoolAttachPushed.get(),
             spoolAttachPulled = spoolAttachPulled.get(),
@@ -816,6 +828,7 @@ class MeshMetrics {
         val spoolPulled: Long = 0,
         val spoolBridged: Long = 0,
         val spoolInvalid: Long = 0,
+        val spoolAccounted: Long = 0,
         val spoolErrors: Long = 0,
         val spoolAttachPushed: Long = 0,
         val spoolAttachPulled: Long = 0,

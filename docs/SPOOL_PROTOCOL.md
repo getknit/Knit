@@ -6,8 +6,8 @@
 |--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Protocol version   | 1                                                                                                                                                                       |
 | Status             | Normative. Implemented and shipping (see Appendix A)                                                                                                                    |
-| This revision      | 2026-08-25                                                                                                                                                              |
-| Decision record    | ADR 019 (+ M4/M5/M6 amendments, ADR 020, ADR 021, ADR 042)                                                                                                              |
+| This revision      | 2026-08-30                                                                                                                                                              |
+| Decision record    | ADR 019 (+ M4/M5/M6 amendments, ADR 020, ADR 021, ADR 042, ADR 062)                                                                                                              |
 | Client reference   | `mesh/crypto/scope/` (`ScopeCrypto`, `SpoolPow`), `mesh/spool/` (`SpoolRecords`, `ScopeFrames`, `ScopeAttachments`, `GroupRootPolicy`, `ScopeRegistry`, `ScopeSync`)    |
 | Spool reference    | [`knit-spool`](https://github.com/getknit/knit-spool) (AGPL-3.0, separate repository) + its conformance suite                                                           |
 | Executable anchors | `ScopeCryptoTest`, `ScopeVectorTest`, `SpoolPowTest`, `SpoolRecordsTest`, `ScopeAttachmentsTest`, `ScopeFramesTest`, `GroupRootPolicyTest`, `AttachmentDeferPolicyTest` |
@@ -1107,6 +1107,47 @@ a relay.
 > sharpen
 > §10's timing signal, priced there.
 
+### 9.6 The accounted set
+
+| ID          | Requirement                                                                                                                                                                          |
+|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **C-9.6-1** | A pulled blob that passed §4.4 and was bridged per §9.4, but that local custody does **not** hold once delivery returns, MUST enter a bounded per-(spool, scope) **accounted set**. |
+| **C-9.6-2** | An accounted id MUST be folded into the client's local scope digest and counted as held, and MUST NOT be pulled again.                                                            |
+| **C-9.6-3** | An accounted id MUST be dropped as soon as a `list` for its scope no longer names it, and MUST NOT be folded in while the same id is also held in custody.                        |
+| **C-9.6-4** | The accounted set MUST outlive a connection. Retaining it across a process restart is permitted, not required.                                                                    |
+
+> **Why this exists.** §12.2 sets the scope TTL at 48 h against a 24 h mesh custody TTL *deliberately* —
+> "longer retention stores frames the inner ratchet may no longer decrypt". That band is not an edge case,
+> it is half the retention window, and every blob in it is one the client pulled, delivered and then aged
+> out of custody. Without C-9.6-2 those ids sit in the spool's digest and can never enter the client's:
+> the scope reports diverged for the whole second day, `list` runs on every tick, and each pull re-bridges
+> a message the inner ratchet has already consumed. This is §9.3's failure exactly — "folds into the
+> spool's digest but never the client's: permanent divergence and infinite re-pull" — arriving through a
+> door §9.3 does not cover, because these blobs are *valid*: they fail nothing in §4.4, they die at the
+> custody store's own dead-on-arrival rule, which is downstream of the bridge and reports nothing back.
+>
+> **Why it is not the invalid set.** §9.3's entries are "never counted as held" because a spool that
+> plants garbage must not be able to move our digest. These blobs are the opposite: they are frames we
+> genuinely received, and counting them as held is what the digest needs to be *true*. Keeping the two
+> sets apart also keeps §9.3's quarantine counter meaning what it says — spool misbehaviour, expected 0.
+>
+> **Why "custody did not keep it" rather than a TTL comparison.** The client already owns one copy of the
+> expiry rule, in its custody store, and that rule is convergence-critical on the mesh. A second copy in
+> the spool client would be a second thing to keep in step; asking the store what it did is exact by
+> construction, and it covers quota eviction and any future refusal for free.
+>
+> **Why C-9.6-3.** Both halves are the same divergence mirrored. An accounted id the spool has since
+> expired leaves the client's fold carrying something the spool no longer counts; an id that is both
+> accounted and held would XOR its own contribution out of an XOR-folded digest and cancel itself.
+>
+> **Why C-9.6-4.** A connection-scoped set is not a fix: a client reconnects on Doze, a network change or
+> a spool restart, and each reconnect re-pulls and re-bridges the entire band. Losing the set on a process
+> restart costs one such band, once, which is bounded by `maxFrames` and self-limiting — a durable set is
+> therefore permitted rather than required, so the plane may stay storage-free.
+>
+> **Observability.** A spool sees a client that stops asking for blobs it will not take, which is what a
+> converged scope looks like from the outside. Nothing new is exposed.
+
 ## 10. Security and privacy claims [Both]
 
 ### 10.1 What a spool, or whoever takes its disk, observes
@@ -1233,6 +1274,7 @@ Deliberately open, additively reachable, in no particular order.
 | suggested `maxAget`                      | 32                                                      | ≈1.5 MiB per batch. HELLO-advertised, spool-tunable                                                                     |
 | `pairGrace`                              | 48 h                                                    | §3.5 — a pair scope outlives our own confirmation by the spool's default retention, so the answer can still be pulled |
 | `maxPairScopes`                          | 8                                                       | §3.5 — headroom under `maxScopes`                                                                                       |
+| suggested invalid / accounted set bound  | 512 ids per (spool, scope), oldest-first drop           | §9.3, §9.6 — above a full scope (`maxFrames` = 400), so eviction is the pathological case, not the ordinary one       |
 | intro re-send / answer floors            | 20 h / 1 h                                              | §3.5 client policy: re-send an unconfirmed intro under the 24 h custody TTL; answer an init-bearing peer at most hourly |
 
 ## 13. Test vectors [Both]
@@ -1412,6 +1454,7 @@ wire.
 | §7 record layer, §7.3 attachment records        | Shipped both sides                                                                                                                         | `SpoolRecords`, `SpoolConnection`, `knit-spool`                  |
 | §8 proof of work                                | Shipped both sides                                                                                                                         | `SpoolPow`                                                       |
 | §9.1–§9.4 heal loop, guard, invalid set, bridge | Shipped                                                                                                                                    | `ScopeSync`                                                      |
+| §9.6 accounted set                              | Shipped, per-connection lifetime only — a process restart re-pulls the band once (C-9.6-4 permits it)                                       | `ScopeSync`                                                      |
 | §9.5 attachment fetch and refill                | Shipped, minus persisted partial downloads (§11)                                                                                           | `ScopeSync`, `ScopeAttachments`                                  |
 | §9.5 push-half deferral                         | Shipped, DM scopes only                                                                                                                    | `AttachmentDeferPolicy`                                          |
 | §10 Tor for the IP edge                         | Deferred                                                                                                                                   | §11                                                              |
@@ -1440,3 +1483,4 @@ the plane itself was unaffected either time, since a spool never decodes a frame
 | 2026-08-23 | **The attachment MIME leaves the mesh frame (ADR 035).** §9.5's reference table drops `attachmentMime` from the `chat` row; C-9.5-1 generalises to "a frame need not name a mime"; new C-9.5-10 says where a fetcher gets one instead. Client-side only — §4.3 seals the whole frame, so a spool never observed the field                                                                                                                                                                        | None for spools, and no record, derivation or §13 vector changed. Clients: tolerate a reference with no mime (already required for `groupupdate`) and resolve the type locally                     |
 | 2026-08-24 | **Capacity refusal (§7.1).** New S-7.1-10 and C-7.1-11 write down what a spool at its connection cap does — refuse the upgrade `503` with `Retry-After`, never a close code — and what a client does about it                                                                                                                                                                                                   | **Spools:** optional; a spool with no cap is unaffected. **Clients:** a refused upgrade is not a close code, so a client that reports only close codes shows a full spool as an unexplained transport error                     |
 | 2026-08-25 | **Pair scopes (ADR 042).** New §3.5: a scope both members derive from their *identity* DH keys, so a pair that has only exchanged a contact card out of band (`docs/CONTACT_CARD.md`) can meet at a spool before a session exists. Carries the §4.4 DM frame set unchanged; subscribed only while an intro is pending plus a 48 h grace. §1.1/§1.4 wording, §3.4 row, §10.1 bullet, §10.3's identity-file row narrowed to *conversation* scopes, §12 constants, four §13 rows appended                                                                                                                                                                                              | None for spools: one more opaque id. Clients: a new label family under `knit/scope/v1/pair/…`; no record, no existing vector moved                                                                                                |
+| 2026-08-30 | **The accounted set (ADR 062).** New §9.6: a pulled blob that passed §4.4, bridged, and that local custody did not keep is counted as held and never pulled again (C-9.6-1…4), with §12.2 gaining the set bound. Closes the divergence §9.3 was written for, arriving through the one door §9.3 does not cover — a *valid* blob in the 24–48 h band between the mesh custody TTL and the scope TTL, which no client could ever fold into its digest | None for spools. Clients: a scope that has been reporting `converged = false` for the back half of the spool's retention should now settle, and stop re-pulling that band on every reconnect |

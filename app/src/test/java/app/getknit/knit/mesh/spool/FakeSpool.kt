@@ -112,6 +112,42 @@ class FakeSpool(
         synchronized(sockets) { sockets.toList() }.forEach { it.emit(record) }
     }
 
+    /**
+     * Kills every open socket, the way Doze, a Wi-Fi flip or a spool restart does. The client reconnects
+     * on its own backoff onto a *fresh* connection — which is what drops every per-connection set.
+     */
+    fun dropSockets() {
+        synchronized(sockets) { sockets.toList() }.forEach { it.close(1006, "dropped") }
+    }
+
+    /**
+     * Ages a blob out (S-6.2-1): gone from the live set, tombstoned, and every subscriber told with a
+     * fresh digest (S-7.2-3). The digest is not optional dressing — without it no client would ever look
+     * again, since its own anchor still folds the blob in.
+     */
+    fun expire(
+        scopeHex: String,
+        blobIdHex: String,
+    ) {
+        val state = scopes[scopeHex] ?: return
+        state.live.remove(blobIdHex)
+        state.tombstones.add(blobIdHex)
+        gossip(SpoolCodec.encode(digestRecord(unhex(scopeHex))))
+    }
+
+    /** The `digest` the spool would answer a SUB for [scope] with — shared by SUB and [expire]. */
+    private fun digestRecord(scope: ByteArray): SpoolDigest {
+        val state = scopes.getOrPut(hex(scope)) { ScopeState() }
+        return SpoolDigest(
+            t = SpoolRecordType.DIGEST,
+            scope = scope,
+            digest = ScopeCrypto.digestBytes(ScopeCrypto.scopeDigest(state.live.keys.map(::unhex))),
+            count = state.live.size,
+            full = state.live.size >= maxFrames,
+            bounds = ScopeBounds(maxFrames = maxFrames, ttlMs = ScopeRegistry.DEFAULT_TTL_MS, maxBlob = maxBlob),
+        )
+    }
+
     /** Plants a blob the spool folds into its digest but no member can open — the §9.3 divergence trap. */
     fun plantGarbage(
         scopeHex: String,
@@ -427,17 +463,7 @@ class FakeSpool(
             emit(SpoolCodec.encode(SpoolOk(t = SpoolRecordType.OK, q = aput.q)))
         }
 
-        private fun digestFor(scope: ByteArray): SpoolDigest {
-            val state = scopes.getOrPut(hex(scope)) { ScopeState() }
-            return SpoolDigest(
-                t = SpoolRecordType.DIGEST,
-                scope = scope,
-                digest = ScopeCrypto.digestBytes(ScopeCrypto.scopeDigest(state.live.keys.map(::unhex))),
-                count = state.live.size,
-                full = state.live.size >= maxFrames,
-                bounds = ScopeBounds(maxFrames = maxFrames, ttlMs = ScopeRegistry.DEFAULT_TTL_MS, maxBlob = maxBlob),
-            )
-        }
+        private fun digestFor(scope: ByteArray): SpoolDigest = digestRecord(scope)
     }
 }
 

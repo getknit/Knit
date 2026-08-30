@@ -909,6 +909,7 @@ class DebugBridgeReceiver :
             .put("spoolPulled", snap.spoolPulled)
             .put("spoolBridged", snap.spoolBridged)
             .put("spoolInvalid", snap.spoolInvalid)
+            .put("spoolAccounted", snap.spoolAccounted)
             .put("spoolErrors", snap.spoolErrors)
             .put("spoolAttachPushed", snap.spoolAttachPushed)
             .put("spoolAttachPulled", snap.spoolAttachPulled)
@@ -1051,6 +1052,10 @@ class DebugBridgeReceiver :
                         .put("spool", scope.spoolCount)
                         .put("converged", scope.converged)
                         .put("invalid", scope.invalidCount)
+                        // How much of `local` is the §9.6 accounted band rather than custody — blobs the
+                        // spool still holds that our custody has aged out. Counted in `local` on purpose,
+                        // so `local == spool` keeps meaning converged.
+                        .put("accounted", scope.accountedCount)
                         // A retiring scope is drained, never refilled, so local > spool for its whole
                         // drain window — expected, not divergence.
                         .put("retiring", scope.retiring),

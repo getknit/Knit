@@ -50,6 +50,14 @@ free). Two invariants that are easy to break:
 - **A blob that fails validation is quarantined per (spool, scope), never merely dropped** (spec §9.3).
   Spools are untrusted storage: a garbage blob folds into *their* digest and never ours, so without the
   invalid set the two digests diverge forever and the client re-pulls it on every heal round.
+- **A blob that bridged but that custody did not keep is *accounted*, not re-pulled** (spec §9.6, ADR 062)
+  — the same divergence through the one door §9.3 does not cover, since these blobs are valid and die at
+  the custody store's dead-on-arrival guard. The scope TTL (48 h) outlives mesh custody (24 h) on purpose,
+  so this band is half the retention window, not an edge case. Three traps: decide it by asking the store
+  (`!store.has(id)`), never by re-deriving the custody TTL rule here; never fold an id that is accounted
+  **and** held, since an XOR fold would cancel it out; and prune the set to the spool's listing. The set
+  must outlive a connection — `accepted` is the per-connection race guard and still clears on reconnect,
+  which is what lets a custody wipe re-converge by the ordinary route.
 - **Attachments are a second object class, deliberately outside the scope digest**
   (`ScopeAttachments`, spec §4.5/§6.5/§9.5). Presence is discovered by asking (`ahave`), never by
   anti-entropy, because the quota is in *bytes* and a byte budget cannot be identical on every node —

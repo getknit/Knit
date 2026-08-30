@@ -430,6 +430,88 @@ class ScopeSyncTest {
         }
 
     @Test
+    fun `a swept frame the spool still holds is not re-pulled after a reconnect either`() =
+        runTest {
+            val spool = FakeSpool()
+            val holder = member(spool, alice, bob)
+            holder.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            holder.sync.start(backgroundScope)
+            pump()
+            holder.custody.sweep("m1")
+            pump(rounds = 120)
+            val afterSweep = spool.pulled.size
+            assertEquals("pulled once after the sweep", 1, afterSweep)
+
+            // ADR 062. The per-connection guard held inside one session and nowhere else, so every
+            // reconnect — Doze, a Wi-Fi flip, a spool restart — re-pulled the whole aged band and
+            // re-bridged it into delivery. On a lab Pixel that was ~200 undecryptable re-deliveries per
+            // reconnect, every 15-20 minutes, with nobody touching the app.
+            repeat(3) {
+                spool.dropSockets()
+                pump(rounds = 120)
+            }
+
+            assertEquals("and never again, across three reconnects", afterSweep, spool.pulled.size)
+            assertEquals("bridged once, not once per connection", 1, holder.metrics.snapshot().spoolBridged)
+            holder.sync.stop()
+        }
+
+    @Test
+    fun `a scope the spool outlives converges anyway, on the accounted band`() =
+        runTest {
+            val spool = FakeSpool()
+            val holder = member(spool, alice, bob)
+            holder.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            holder.sync.start(backgroundScope)
+            pump()
+            holder.custody.sweep("m1")
+            pump(rounds = 120)
+
+            // The whole point of §9.6: a blob custody can never hold again is folded in as if held, so the
+            // two digests agree and the round goes quiet. Before it, this scope sat `converged = false`
+            // for the second half of the spool's retention and LISTed on every tick to prove it.
+            val scope =
+                holder.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single { it.scopeHex == scopeHex(alice, bob) }
+            assertTrue("the aged band is accounted, so the digests agree", scope.converged)
+            assertEquals("and it is counted, so local == spool still reads as converged", scope.spoolCount, scope.localCount)
+            assertEquals(1, scope.accountedCount)
+            assertEquals(1, holder.metrics.snapshot().spoolAccounted)
+            holder.sync.stop()
+        }
+
+    @Test
+    fun `an accounted blob the spool finally expires leaves our digest with it`() =
+        runTest {
+            val spool = FakeSpool()
+            val holder = member(spool, alice, bob)
+            holder.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            holder.sync.start(backgroundScope)
+            pump()
+            val blobId = spool.pushed.single()
+            holder.custody.sweep("m1")
+            pump(rounds = 120)
+
+            // The mirror of the bug: an accounted id the spool has since aged out would leave our fold
+            // carrying something the spool no longer counts — permanent divergence, the other way round.
+            spool.expire(scopeHex(alice, bob), blobId)
+            pump(rounds = 120)
+
+            val scope =
+                holder.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single { it.scopeHex == scopeHex(alice, bob) }
+            assertEquals("pruned once the listing stopped naming it", 0, scope.accountedCount)
+            assertTrue("and an empty scope converges on an empty fold", scope.converged)
+            holder.sync.stop()
+        }
+
+    @Test
     fun `a spool that rejects the connection reports why, instead of just looking disconnected`() =
         runTest {
             // A spool with a token configured closes 4001 before saying anything. Without the close code

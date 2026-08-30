@@ -70,6 +70,11 @@ interface SpoolSocket : SpoolLink {
  * [converged] is plain digest equality, so read it together with [retiring]: a retiring scope is drained
  * but never refilled (spec §3.1/§3.3), so it legitimately sits at `local > spool` and reports **false**
  * for the whole drain window. That is the scope working as designed, not divergence.
+ *
+ * [localCount] is the population our digest is folded over — custody-held **plus** [accountedCount], the
+ * blobs the spool holds that our custody never will (§9.6). Counting them keeps `localCount ==
+ * spoolCount` meaning "converged" once the aged band is accounted for, which is what the soak oracle and
+ * the debug bridge read.
  */
 class ScopeStatus(
     val scopeHex: String,
@@ -79,6 +84,7 @@ class ScopeStatus(
     val converged: Boolean,
     val invalidCount: Int,
     val retiring: Boolean,
+    val accountedCount: Int = 0,
 )
 
 /**
@@ -245,6 +251,11 @@ class ScopeSync(
         private val localCounts = ConcurrentHashMap<String, Int>()
         private val invalid = ConcurrentHashMap<String, LinkedHashSet<String>>()
         private val accepted = ConcurrentHashMap<String, LinkedHashSet<String>>()
+
+        // §9.6's accounted set, per scope: blob id hex → its digest contribution. Holds the fold value
+        // rather than the id so a round costs no hex round-trip and a prune is a key removal. Unlike
+        // [accepted] this SURVIVES a reconnect — that is the whole point of it (ADR 062).
+        private val accounted = ConcurrentHashMap<String, LinkedHashMap<String, Long>>()
         private val stamps = ConcurrentHashMap<String, PowStamp>()
         private val invalidAttachments = ConcurrentHashMap<String, LinkedHashSet<String>>()
 
@@ -303,6 +314,7 @@ class ScopeSync(
                             converged = spoolDigests[scope.idHex] == localDigests[scope.idHex],
                             invalidCount = invalid[scope.idHex]?.size ?: 0,
                             retiring = scope.retiring,
+                            accountedCount = accountedFor(scope.idHex).size,
                         )
                     },
             )
@@ -354,6 +366,10 @@ class ScopeSync(
             socket.close(NORMAL_CLOSE, "done")
             connection = null
             spoolDigests.clear()
+            // The per-connection race guard goes; the §9.6 accounted set deliberately does NOT. Dropping
+            // `accepted` is what lets a custody wipe re-converge by the ordinary route (everything still
+            // live is simply re-pulled); dropping `accounted` only re-pulls what can never be held, which
+            // is the reconnect storm ADR 062 is about.
             accepted.clear()
             return ready
         }
@@ -392,9 +408,15 @@ class ScopeSync(
             // outside the digest by design (§6.5), so it can never signal them.
             val frames = store.liveFrames(clock())
             val local = held(scope, frames)
-            val localFold = ScopeCrypto.scopeDigest(local.values.map { it.sealed.blobId })
+            // §9.6: fold the accounted band in beside what we hold, so a scope whose spool keeps blobs our
+            // custody has aged out can still reach digest equality. Never both — an id that came back into
+            // custody would otherwise XOR itself out of the fold and diverge us permanently.
+            val accountedHere = accountedFor(scope.idHex).filterKeys { it !in local }
+            val localFold =
+                ScopeCrypto.scopeDigest(local.values.map { it.sealed.blobId }) xor
+                    accountedHere.values.fold(0L) { acc, contribution -> acc xor contribution }
             localDigests[scope.idHex] = localFold
-            localCounts[scope.idHex] = local.size
+            localCounts[scope.idHex] = local.size + accountedHere.size
             val anchor = spoolDigests[scope.idHex] ?: return // the SUB hasn't been answered yet
             if (anchor == localFold) {
                 healAttachments(conn, scope, frames)
@@ -404,14 +426,21 @@ class ScopeSync(
             val quarantined = invalid[scope.idHex].orEmpty()
             val spoolIds = listing.blobIds.associateBy { hex(it) }
             val tombstoned = listing.tombstones.mapTo(mutableSetOf()) { hex(it) }
-            // Skip what we already processed on this connection, not just what we still hold. The scope
-            // TTL (48 h) deliberately outlives mesh custody (24 h), so a frame we delivered and then swept
-            // still sits at the spool for another day: it is absent from `local` forever, our digest never
-            // matches, and without this the heal round re-pulls it every tick for that whole second day —
-            // silently, since `accept` short-circuits before the counters move.
+            // The listing is the scope's whole live set, so it is also the only chance to notice that an
+            // accounted blob finally expired at the spool. Drop those: keeping them would leave our fold
+            // carrying an id the spool no longer counts — the same permanent divergence, mirrored.
+            pruneAccounted(scope.idHex, spoolIds.keys)
+            // Skip what we already processed on this connection, and what we have accounted for across
+            // every connection. The scope TTL (48 h) deliberately outlives mesh custody (24 h), so a frame
+            // we delivered and then swept still sits at the spool for another day: it is absent from
+            // `local` forever, and without these two sets the heal round re-pulls it every tick for that
+            // whole second day — silently, since `accept` short-circuits before the counters move.
             val processed = accepted[scope.idHex].orEmpty()
             val wanted =
-                spoolIds.filterKeys { it !in local && it !in quarantined && it !in processed }.values.toList()
+                spoolIds
+                    .filterKeys { it !in local && it !in quarantined && it !in processed && it !in accountedHere }
+                    .values
+                    .toList()
             val gone = pullMissing(conn, scope, wanted)
             val pushed = pushMissing(conn, scope, local, spoolIds.keys, tombstoned, quarantined)
             reanchor(scope, spoolIds, gone, pushed)
@@ -799,6 +828,12 @@ class ScopeSync(
             metrics.onSpoolPulled()
             deliver(opened.wire, opened.env, SPOOL_SOURCE_PREFIX + url)
             metrics.onSpoolBridged()
+            // §9.6. Delivery is done and it was worth doing — but if custody did not keep the frame, no
+            // future round can ever fold this blob into `local`, so re-pulling it can only repeat this
+            // work. Asking the store rather than re-deriving the rule is deliberate: "will custody hold
+            // it" is the store's own dead-on-arrival + quota decision (`ForwardRepository.store`), and a
+            // second copy of a convergence-critical TTL rule here is exactly how the two drift apart.
+            if (!store.has(opened.env.id) && account(scope.idHex, idHex, blobId)) metrics.onSpoolAccounted()
             return true
         }
 
@@ -824,6 +859,34 @@ class ScopeSync(
                 while (set.size >= BLOB_SET_MAX) set.remove(set.first())
                 set.add(blobIdHex)
             }
+
+        /**
+         * Records [blobIdHex] as accounted for [scopeHex] (§9.6): folded into our local digest as if held,
+         * and never pulled again. Bounded and oldest-first-evicting like [remember] — the bound is above a
+         * full scope (`maxFrames` = 400), so eviction is the pathological case, not the ordinary one.
+         * Returns whether it was new.
+         */
+        private fun account(
+            scopeHex: String,
+            blobIdHex: String,
+            blobId: ByteArray,
+        ): Boolean =
+            synchronized(accounted) {
+                val fold = accounted.getOrPut(scopeHex) { LinkedHashMap() }
+                while (fold.size >= BLOB_SET_MAX) fold.remove(fold.keys.first())
+                fold.put(blobIdHex, ScopeCrypto.fnv64(blobId)) == null
+            }
+
+        /** A snapshot of [scopeHex]'s accounted set — copied under the lock, since `accept` runs off the pump. */
+        private fun accountedFor(scopeHex: String): Map<String, Long> = synchronized(accounted) { accounted[scopeHex]?.toMap().orEmpty() }
+
+        /** Drops accounted ids the spool's listing no longer names — they expired or were evicted there. */
+        private fun pruneAccounted(
+            scopeHex: String,
+            live: Set<String>,
+        ) {
+            synchronized(accounted) { accounted[scopeHex]?.keys?.retainAll(live) }
+        }
 
         /** A cached hashcash stamp for [scope], mined only when the spool demands one (§8). */
         private fun stampFor(

@@ -630,6 +630,7 @@ private fun SpoolSection(spool: SpoolStatus) {
         MetricRow(
             "   ${scope.label.take(SCOPE_LABEL_CHARS)}$suffix",
             "${scope.localCount} local / ${scope.spoolCount} spool" +
+                (if (scope.accountedCount > 0) " · ${scope.accountedCount} aged" else "") +
                 if (scope.invalidCount > 0) " · ${scope.invalidCount} bad" else "",
         )
     }

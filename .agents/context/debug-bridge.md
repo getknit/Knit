@@ -64,7 +64,10 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   stop you chasing ghosts: `retiring` marks a drained previous-session scope, where `local > spool`
   is correct rather than divergence; and `lastError` is the spool's most recent `err` code, which is
   the only thing distinguishing "connected and idle" from "connected and refusing us" (`quota`,
-  `pow` and `rate` all otherwise present as a scope that simply never converges).
+  `pow` and `rate` all otherwise present as a scope that simply never converges). `accounted` is how
+  much of `local` is the §9.6 band — blobs the spool still holds that our custody has aged out, counted
+  as held on purpose (ADR 062) so `local == spool` keeps meaning converged; a scope stuck unconverged
+  with a large `accounted` means the fold or the prune is broken, not the network.
 - `…debug.LORA` — configures and inspects the **LoRa (Meshtastic-over-BLE) plane** (ADR 038,
   `context/lora-bridge.md`), off by default and needing a paired board, so this is how you drive it on a
   locked lab device. `--es address <MAC>` (+ `--es name <n>`) binds a bonded board, `--ei channel <idx>`

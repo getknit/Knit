@@ -355,7 +355,7 @@ class WifiAwareTransport(
     // bounded reassembly store for inbound fragments — touched only on the Aware callback thread.
     private val fragSeq = AtomicInteger()
     private val reassembler =
-        FragReassembler<FragKey>(
+        FragReassembler<HandleKey>(
             now = SystemClock::elapsedRealtime,
             onDrop = { drop ->
                 metrics.onFastDropped(
@@ -371,6 +371,10 @@ class WifiAwareTransport(
     // know for it, so [_reachable] can linger a peer briefly after its ephemeral link drops.
     private val lastSeenAt = ConcurrentHashMap<String, Long>()
     private val reachablePeers = ConcurrentHashMap<String, Peer>()
+
+    // (session, handle) → the neighbor a cue/advert named on it, so a fast frame is credited to the hop that
+    // delivered it and never to the author its envelope names (ADR 061). Learned alongside [cueTarget].
+    private val hopTable = NanHopTable<HandleKey>()
 
     // Wakes the discovery loop immediately (cue made a peer sync-wanted, link up/down + settle, heal(),
     // screen-on) instead of waiting out its idle.
@@ -442,11 +446,11 @@ class WifiAwareTransport(
     )
 
     /**
-     * Reassembly key for inbound fragments: the session disambiguates equal [PeerHandle] ids across the
-     * publish/subscribe sessions, and one frame's parts always arrive on one (they're sent back-to-back
-     * to a single [CueTarget]).
+     * A coordination-plane sender: the session disambiguates equal [PeerHandle] ids across the
+     * publish/subscribe sessions. Keys inbound fragment reassembly (one frame's parts always arrive on one
+     * session — they're sent back-to-back to a single [CueTarget]) and the [hopTable].
      */
-    private data class FragKey(
+    private data class HandleKey(
         val session: DiscoverySession,
         val handle: PeerHandle,
     )
@@ -744,6 +748,7 @@ class WifiAwareTransport(
             accepting = 0
         }
         cueTarget.clear()
+        hopTable.clear()
         reassembler.clear()
         lastSeenAt.clear()
         reachablePeers.clear()
@@ -1550,7 +1555,10 @@ class WifiAwareTransport(
                 }
             }
         }
-        subscribeSession?.let { cueTarget[peerNodeId] = CueTarget(peerHandle, it) } // handle valid on subscribe
+        subscribeSession?.let {
+            cueTarget[peerNodeId] = CueTarget(peerHandle, it) // handle valid on subscribe
+            hopTable.learn(HandleKey(it, peerHandle), peerNodeId)
+        }
         noteReachable(Peer(peerNodeId, advert.protoVersion, advert.capabilities))
         sendCue(peerNodeId)
         healSignal.trySend(Unit)
@@ -1569,6 +1577,7 @@ class WifiAwareTransport(
         val cue = NanCueCodec.parseCue(message) ?: return
         if (cue.nodeId == localNodeId) return
         val firstContact = cueTarget.put(cue.nodeId, CueTarget(handle, sess)) == null
+        hopTable.learn(HandleKey(sess, handle), cue.nodeId)
         noteReachable(Peer(cue.nodeId))
         // The peer's digest moved, so a sync *may* be wanted — but wake the loop only after a short settle. A
         // broadcast fast-fanout cues its new epoch and pushes the frame back-to-back; if we reacted to the cue
@@ -1728,17 +1737,18 @@ class WifiAwareTransport(
         sess: DiscoverySession,
         message: ByteArray,
     ): Boolean {
+        val from = HandleKey(sess, handle)
         when (message[0]) {
             MSG_FRAME_TAG -> {
-                onFastFrame(message)
+                onFastFrame(from, message)
             }
 
             FastFrameCodec.TAG_COMPACT, FastFrameCodec.TAG_TRANSCODED -> {
-                onCompactFrame(message)
+                onCompactFrame(from, message)
             }
 
             FastFrameCodec.TAG_FRAG -> {
-                onFragment(handle, sess, message)
+                onFragment(from, message)
             }
 
             else -> {
@@ -1753,20 +1763,26 @@ class WifiAwareTransport(
      * A broadcast frame arrived over the coordination plane in the legacy [MSG_FRAME_TAG] framing: decode
      * and [emitFastWire] it. Malformed bytes stay a silent drop, exactly as before the compact tags.
      */
-    private fun onFastFrame(message: ByteArray) {
+    private fun onFastFrame(
+        from: HandleKey,
+        message: ByteArray,
+    ) {
         val wire = WireCodec.decodeWire(message.copyOfRange(1, message.size)) ?: return
-        emitFastWire(wire, via = "legacy")
+        emitFastWire(wire, via = "legacy", hop = hopTable.hopFor(from))
     }
 
     /** A `0x03` or `0x05` frame arrived: decode (inflating / rebuilding as its tag says) and [emitFastWire] it. */
-    private fun onCompactFrame(message: ByteArray) {
+    private fun onCompactFrame(
+        from: HandleKey,
+        message: ByteArray,
+    ) {
         val transcoded = message[0] == FastFrameCodec.TAG_TRANSCODED
         val wire = FastFrameCodec.decodeCompact(message)
         if (wire == null) {
             metrics.onFastDropped(if (transcoded) FastPathDrop.TRANSCODE_FAILED else FastPathDrop.DECODE_FAILED)
             return
         }
-        emitFastWire(wire, via = if (transcoded) "transcoded" else "compact")
+        emitFastWire(wire, via = if (transcoded) "transcoded" else "compact", hop = hopTable.hopFor(from))
     }
 
     /**
@@ -1776,8 +1792,7 @@ class WifiAwareTransport(
      * via its onDrop hook.
      */
     private fun onFragment(
-        handle: PeerHandle,
-        sess: DiscoverySession,
+        from: HandleKey,
         message: ByteArray,
     ) {
         val frag = FastFrameCodec.parseFragment(message)
@@ -1785,29 +1800,36 @@ class WifiAwareTransport(
             metrics.onFastDropped(FastPathDrop.DECODE_FAILED)
             return
         }
-        val assembled = reassembler.accept(FragKey(sess, handle), frag) ?: return
+        val assembled = reassembler.accept(from, frag) ?: return
         if (assembled.isEmpty() || !FastFrameCodec.isFrameTag(assembled[0])) {
             metrics.onFastDropped(FastPathDrop.DECODE_FAILED)
             return
         }
         metrics.onFastReassembled()
-        onCompactFrame(assembled)
+        onCompactFrame(from, assembled)
     }
 
     /**
      * Injects a fast-path [wire] into the normal inbound path exactly like a data-path frame, so the router
      * dedups, relays, and delivers it with no NDP. A later flood/custody copy is dropped by the receiver's
      * SeenSet, so a dropped fast frame self-heals — the fast path is a latency win layered over the reliable one.
+     *
+     * [hop] is the neighbor that delivered the message ([hopTable]), or null when its handle has not been
+     * named by a cue/advert yet. The sighting and the frame's `fromNodeId` are the hop, never the envelope's
+     * `senderId`: that is the **author**, which a re-fanned custody frame names as a peer that may be miles
+     * away (ADR 061). With no hop there is no sighting, and `fromNodeId` falls back to the author — the
+     * split horizon then excludes a node that is at worst not a neighbor, which is harmless.
      */
     private fun emitFastWire(
         wire: WireEnvelope,
         via: String,
+        hop: String?,
     ) {
         val envelope = WireCodec.decodeEnvelope(wire.signed) ?: return
+        hop?.let { noteReachable(Peer(it)) }
         if (envelope.senderId == localNodeId) return // our own frame echoed back — ignore
-        Log.i(TAG, "fast-frame from ${envelope.senderId} id=${envelope.id} via=$via") // TEMP diag
-        noteReachable(Peer(envelope.senderId))
-        _inbound.tryEmit(InboundFrame(wire, envelope, envelope.senderId))
+        Log.i(TAG, "fast-frame from ${envelope.senderId} id=${envelope.id} via=$via hop=${hop ?: "?"}") // TEMP diag
+        _inbound.tryEmit(InboundFrame(wire, envelope, hop ?: envelope.senderId))
     }
 
     // --- Client side (initiator) ---
@@ -2409,6 +2431,7 @@ class WifiAwareTransport(
                 !peers.containsKey(nodeId) && (lastSeenAt[nodeId]?.let { now - it > REACHABLE_LINGER_MS } ?: true)
             }.forEach { nodeId ->
                 cueTarget.remove(nodeId)
+                hopTable.forget(nodeId)
                 reachablePeers.remove(nodeId)
                 digestTracker.forget(nodeId)
                 synchronized(lock) { failStreak.remove(nodeId) } // gone → fresh streak when it returns
@@ -2471,6 +2494,7 @@ class WifiAwareTransport(
                 clearAttachBackoff() // symmetric with the up edge; the streak can't outlive the radio it measured
                 synchronized(lock) { accepting = 0 }
                 cueTarget.clear()
+                hopTable.clear()
                 lastSeenAt.clear()
                 reachablePeers.clear()
                 _neighbors.value = emptySet() // symmetric with stop(); teardownPeer already recomputes it empty

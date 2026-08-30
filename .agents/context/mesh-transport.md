@@ -61,7 +61,13 @@ and the shipped design runs **two planes** (a concurrent-serve redesign is propo
   `fastReassembled`/`fastTooBig`/`transcodeFallbacks`/`fastDropsByReason` on `…debug.STATE`; grep
   `fast-fanout`/`fast-send`/`fast-frame` logcat lines for per-frame routing. A cue also bootstraps
   the reverse handle, so a node whose own *subscribe* is broken (e.g. Pixel 9 post-kill) still cues
-  larger peers to pull from it.
+  larger peers to pull from it. A fast frame is a **sighting of the hop that delivered it, never of its
+  author** — `NanHopTable` maps the (session, `PeerHandle`) a message arrived on to the node the last
+  cue/advert named there, and that hop is what `noteReachable` and `InboundFrame.fromNodeId` get. The
+  envelope's `senderId` is the originator (relays keep the signed bytes verbatim), and every node re-fans each
+  first-seen custody frame, so crediting it put a peer miles away — and a BLE-only phone with no Aware
+  radio — in the "directly connected" list for the 150 s linger (ADR 061). An unnamed handle is no
+  sighting at all.
 - **Data plane** — one ephemeral NDP, brought up **only** when a peer is sync-wanted (the larger id
   initiates, via the unchanged `initiateTo` + accept-any responder). On link-up each side advertises the
   custody ids it holds (a `LinkFraming.Type.DIGEST` record) and pushes back only the frames the peer lacks

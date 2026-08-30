@@ -40,7 +40,10 @@ Changing `WireEnvelope`'s shape, the `WireCodec` config, the signing input, the 
 (`WifiAwareTransport`), or removing/renaming a field/type is a coordinated wire break; adding a
 nullable/defaulted field or a new `type` is additive. See `docs/WIRE_COMPAT.md`. Because the wire is
 opaque `@ByteString` CBOR (not kotlinx sealed polymorphism), a relay rewrites only `ttl`/`hops` and
-passes `signed`+`sig` through byte-for-byte — see the verbatim-relay rule in `rules/mesh.md`.
+passes `signed`+`sig` through byte-for-byte — see the verbatim-relay rule in `rules/mesh.md`. The two
+size-capped fast planes may carry `signed` *transcoded* (`mesh/link/FrameTranscoder`, tag `0x05`, ADR 060):
+a transport-local re-encoding the receiver rebuilds byte-exact before verifying, so the bytes that are
+signed, stored and relayed still never change — see `context/mesh-transport.md`.
 
 Note the **TTL constants** (`DEFAULT_TTL_MS`/`DEFAULT_BROADCAST_TTL_MS`) and the broadcast-chat
 classification are **convergence-critical** — treat changing them like a wire change (see

@@ -35,13 +35,21 @@ import java.util.zip.Inflater
  * [0]    tag 0x04
  * [1-2]  fragId, big-endian u16 (per-sender counter; one id per frame across all fan-out targets)
  * [3]    part index (high nibble) / part count (low nibble), count in 2..MAX_PARTS
- * [4]    a consecutive slice of the COMPLETE compact frame (its tag+header included), fixed-size
+ * [4]    a consecutive slice of the COMPLETE 0x03 or 0x05 frame (its tag+header included), fixed-size
  *        chunks except the last — so reassembly yields a self-describing tagged unit fed back through
  *        [decodeCompact], and the receiver never needs to know the sender's chunk size
  * ```
  *
+ * Transcoded frame ([TAG_TRANSCODED], ADR 060): the same header and sig as 0x03, but the body is
+ * [FrameTranscoder]'s schema-aware re-encoding of `signed` (integer labels, raw ids and hashes, a 6-byte clock,
+ * the payload inlined), which the receiver rebuilds byte-exact before the signature is verified — `signed`
+ * still arrives byte-for-byte, it just does not *travel* that way. DEFLATED on 0x05 means raw deflate with
+ * **no** dictionary (dictId 0 — the text tokens [DICT_V1] was built from are gone from the transcoded form).
+ * A sender emits 0x05 only toward `Protocol.CAP_FRAME_TRANSCODE` peers and only when it is the smaller of the
+ * two forms ([encodeBest]); a frame the transcoder cannot reproduce keeps 0x03.
+ *
  * Tag registry (append-only, like capability bits): `0x01` legacy tagged-CBOR frame (forever), `0x02`
- * burned (a since-removed nudge), `0x03` compact, `0x04` fragment. Flag bits are append-only too: a
+ * burned (a since-removed nudge), `0x03` compact, `0x04` fragment, `0x05` transcoded. Flag bits are append-only too: a
  * receiver drops any reserved bit it does not know, so a new bit is only ever emitted toward a peer whose
  * capabilities say it reads it (UNSIGNED rides behind `Protocol.CAP_CRYPTO_V3`). Tags stay non-printable
  * (`0x00..0x1F`) so untagged cues — whose first byte is a printable node-id char — remain
@@ -57,6 +65,9 @@ internal object FastFrameCodec {
 
     /** One fragment of a compact frame (layout above). */
     const val TAG_FRAG: Byte = 0x04
+
+    /** A single transcoded frame (layout above, ADR 060): the 0x03 header around a [FrameTranscoder] body. */
+    const val TAG_TRANSCODED: Byte = 0x05
 
     // Reserved elsewhere in this tag space: 0x10 is `LoraCtl.TAG`, the LoRa plane's gateway-to-gateway
     // control packet (ADR 044). It never reaches this codec — it is dispatched before decode — but it shares
@@ -80,8 +91,11 @@ internal object FastFrameCodec {
     /** Fragment fixed header: tag + fragId(2) + part/count. */
     const val FRAG_HEADER_BYTES = 4
 
-    /** The shipped preset dictionary's id (flags bits 2-3). 0 is reserved, never emitted. */
+    /** The shipped preset dictionary's id (flags bits 2-3). Never emitted on 0x03 without a dictionary. */
     const val DICT_ID_V1 = 1
+
+    /** No dictionary (flags bits 2-3): the only dictId a DEFLATED 0x05 frame carries; unknown on 0x03. */
+    const val DICT_ID_NONE = 0
 
     private const val FLAG_RELAY = 0x01
     private const val FLAG_DEFLATED = 0x02
@@ -110,18 +124,92 @@ internal object FastFrameCodec {
      * over links — so the empty case here is, in practice, the v3 tick.
      */
     fun encodeCompact(wire: WireEnvelope): ByteArray? {
+        if (!representable(wire)) return null
+        return frame(TAG_COMPACT, wire, wire.signed, deflate(wire.signed, DICT_V1), DICT_ID_V1)
+    }
+
+    /**
+     * The one 0x05 frame for [wire] (ADR 060): [FrameTranscoder]'s re-encoding of `signed`, raw-deflated with
+     * no dictionary when that is strictly smaller. Null when the sig is unrepresentable (as [encodeCompact]) or
+     * the transcoder cannot reproduce this frame — an encoding it does not model — so the caller keeps 0x03.
+     */
+    fun encodeTranscoded(wire: WireEnvelope): ByteArray? {
+        if (!representable(wire)) return null
+        val transcoded = FrameTranscoder.transcode(wire.signed) ?: return null
+        return frame(TAG_TRANSCODED, wire, transcoded, deflate(transcoded, null), DICT_ID_NONE)
+    }
+
+    /**
+     * The smaller of [encodeCompact] and — when [transcode], i.e. toward a `Protocol.CAP_FRAME_TRANSCODE` peer —
+     * [encodeTranscoded]: fewer bytes is never more parts. Null when neither exists (an odd-sized sig).
+     */
+    fun encodeBest(
+        wire: WireEnvelope,
+        transcode: Boolean,
+    ): Best? {
+        val compact = encodeCompact(wire)
+        if (!transcode) return compact?.let { Best(it, transcodeRefused = false) }
+        val transcoded = encodeTranscoded(wire) ?: return compact?.let { Best(it, transcodeRefused = true) }
+        val frame = if (compact == null || transcoded.size < compact.size) transcoded else compact
+        return Best(frame, transcodeRefused = false)
+    }
+
+    /**
+     * [encodeBest]'s pick. [transcodeRefused] is the field signal that some build emits an encoding the transcoder
+     * cannot reproduce (the frame rode 0x03 for that reason, not because 0x03 was smaller).
+     */
+    class Best(
+        val frame: ByteArray,
+        val transcodeRefused: Boolean,
+    ) {
+        val transcoded: Boolean get() = frame[0] == TAG_TRANSCODED
+    }
+
+    /** Whether [tag] opens a complete frame this codec decodes — what a reassembled fragment set must start with. */
+    fun isFrameTag(tag: Byte): Boolean = tag == TAG_COMPACT || tag == TAG_TRANSCODED
+
+    /**
+     * The [WireEnvelope] a 0x03 or 0x05 message reconstructs, or null when it is malformed: wrong tag, shorter
+     * than header + sig, a reserved flag bit set (an unknown future variant — the flood copy is the
+     * backstop), a dictId the tag does not take, a deflate stream that fails to inflate, or (0x05) a body the
+     * transcoder cannot rebuild.
+     */
+    fun decodeCompact(message: ByteArray): WireEnvelope? {
+        if (message.size < HEADER_BYTES + 1 || !isFrameTag(message[0])) return null
+        val flags = message[1].toInt() and BYTE_MASK
+        if (flags and RESERVED_MASK != 0) return null
+        val sigBytes = if (flags and FLAG_UNSIGNED != 0) 0 else SIG_BYTES
+        if (message.size < HEADER_BYTES + sigBytes + 1) return null
+        val signed = signedOf(message[0], flags, message.copyOfRange(HEADER_BYTES + sigBytes, message.size)) ?: return null
+        return WireEnvelope(
+            ttl = (message[2].toInt() shr NIBBLE_BITS) and NIBBLE_MAX,
+            hops = message[2].toInt() and NIBBLE_MAX,
+            relay = flags and FLAG_RELAY != 0,
+            sig = message.copyOfRange(HEADER_BYTES, HEADER_BYTES + sigBytes),
+            signed = signed,
+        )
+    }
+
+    private fun representable(wire: WireEnvelope): Boolean = wire.sig.isEmpty() || wire.sig.size == SIG_BYTES
+
+    /** Frames [wire] under [tag] with the smaller of [stored] and its [deflated] form (flagged with [dictId]). */
+    private fun frame(
+        tag: Byte,
+        wire: WireEnvelope,
+        stored: ByteArray,
+        deflated: ByteArray,
+        dictId: Int,
+    ): ByteArray {
         val unsigned = wire.sig.isEmpty()
-        if (!unsigned && wire.sig.size != SIG_BYTES) return null
-        val deflated = deflateWithDict(wire.signed)
-        val useDeflate = deflated.size < wire.signed.size
-        val body = if (useDeflate) deflated else wire.signed
+        val useDeflate = deflated.size < stored.size
+        val body = if (useDeflate) deflated else stored
         var flags = 0
         if (wire.relay) flags = flags or FLAG_RELAY
-        if (useDeflate) flags = flags or FLAG_DEFLATED or (DICT_ID_V1 shl DICT_SHIFT)
+        if (useDeflate) flags = flags or FLAG_DEFLATED or (dictId shl DICT_SHIFT)
         if (unsigned) flags = flags or FLAG_UNSIGNED
         val sigBytes = if (unsigned) 0 else SIG_BYTES
         val out = ByteArray(HEADER_BYTES + sigBytes + body.size)
-        out[0] = TAG_COMPACT
+        out[0] = tag
         out[1] = flags.toByte()
         out[2] = packTtlHops(wire.ttl, wire.hops)
         wire.sig.copyInto(out, HEADER_BYTES)
@@ -129,33 +217,25 @@ internal object FastFrameCodec {
         return out
     }
 
-    /**
-     * The [WireEnvelope] a 0x03 message reconstructs, or null when it is malformed: wrong tag, shorter
-     * than header + sig, a reserved flag bit set (an unknown future variant — the flood copy is the
-     * backstop), an unknown dictId, or a deflate stream that fails to inflate.
-     */
-    fun decodeCompact(message: ByteArray): WireEnvelope? {
-        if (message.size < HEADER_BYTES + 1 || message[0] != TAG_COMPACT) return null
-        val flags = message[1].toInt() and BYTE_MASK
-        if (flags and RESERVED_MASK != 0) return null
-        val sigBytes = if (flags and FLAG_UNSIGNED != 0) 0 else SIG_BYTES
-        if (message.size < HEADER_BYTES + sigBytes + 1) return null
-        val sig = message.copyOfRange(HEADER_BYTES, HEADER_BYTES + sigBytes)
-        val body = message.copyOfRange(HEADER_BYTES + sigBytes, message.size)
-        val signed =
-            if (flags and FLAG_DEFLATED != 0) {
-                if ((flags shr DICT_SHIFT) and DICT_MASK != DICT_ID_V1) return null
-                inflateWithDict(body) ?: return null
-            } else {
+    /** `signed` behind a frame [body]: inflated when DEFLATED (0x03 takes [DICT_ID_V1], 0x05 no dictionary), rebuilt for 0x05. */
+    private fun signedOf(
+        tag: Byte,
+        flags: Int,
+        body: ByteArray,
+    ): ByteArray? {
+        val transcoded = tag == TAG_TRANSCODED
+        val stored =
+            if (flags and FLAG_DEFLATED == 0) {
                 body
+            } else {
+                val dictId = (flags shr DICT_SHIFT) and DICT_MASK
+                when {
+                    transcoded && dictId == DICT_ID_NONE -> inflate(body, null)
+                    !transcoded && dictId == DICT_ID_V1 -> inflate(body, DICT_V1)
+                    else -> null
+                } ?: return null
             }
-        return WireEnvelope(
-            ttl = (message[2].toInt() shr NIBBLE_BITS) and NIBBLE_MAX,
-            hops = message[2].toInt() and NIBBLE_MAX,
-            relay = flags and FLAG_RELAY != 0,
-            sig = sig,
-            signed = signed,
-        )
+        return if (transcoded) FrameTranscoder.rebuild(stored) else stored
     }
 
     /**
@@ -218,11 +298,14 @@ internal object FastFrameCodec {
         return ((t shl NIBBLE_BITS) or h).toByte()
     }
 
-    /** Raw-deflate [bytes] with the preset dictionary at best compression (frames are ≤ ~1 KB — µs work). */
-    private fun deflateWithDict(bytes: ByteArray): ByteArray {
+    /** Raw-deflate [bytes] with the preset [dictionary] (none for 0x05) at best compression (frames are ≤ ~1 KB — µs work). */
+    private fun deflate(
+        bytes: ByteArray,
+        dictionary: ByteArray?,
+    ): ByteArray {
         val deflater = Deflater(Deflater.BEST_COMPRESSION, true)
         try {
-            deflater.setDictionary(DICT_V1)
+            if (dictionary != null) deflater.setDictionary(dictionary)
             deflater.setInput(bytes)
             deflater.finish()
             val buf = ByteArray(bytes.size + DEFLATE_SLACK)
@@ -238,12 +321,15 @@ internal object FastFrameCodec {
         }
     }
 
-    /** Inflates a raw-deflate [bytes] stream with the preset dictionary, or null if malformed/oversized. */
-    private fun inflateWithDict(bytes: ByteArray): ByteArray? {
+    /** Inflates a raw-deflate [bytes] stream with the preset [dictionary] (none for 0x05), or null if malformed/oversized. */
+    private fun inflate(
+        bytes: ByteArray,
+        dictionary: ByteArray?,
+    ): ByteArray? {
         val inflater = Inflater(true)
         try {
             // Raw (nowrap) streams take the preset dictionary up front; zlib-wrapped ones would signal it.
-            inflater.setDictionary(DICT_V1)
+            if (dictionary != null) inflater.setDictionary(dictionary)
             inflater.setInput(bytes)
             val buf = ByteArray(MAX_INFLATED_BYTES)
             var len = 0

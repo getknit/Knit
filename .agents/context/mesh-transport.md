@@ -48,14 +48,18 @@ and the shipped design runs **two planes** (a concurrent-serve redesign is propo
   the last sync (an identical-digest pair skips the NDP entirely). Small floodable frames (broadcast
   chat, reactions, receipts, group-meta, profiles) *also* ride this plane as a best-effort **fast
   fan-out** (`fastFanout`/`fastSend`), deduped by the receiver's `SeenSet`, so they propagate with zero
-  NDP. The framing is chosen **per peer**: toward a `CAP_FAST_COMPACT` peer the frame rides the compact
-  `0x03` tag (`mesh/link/FastFrameCodec` — outer envelope stripped to 3 B + preset-dict deflate over
-  `signed`, sig/signed byte-exact) and splits into ≤3 `0x04` fragments when one ~255 B message won't
-  hold it (this is what lets AckSync's sealed ticks, sealed reactions, and full profiles ride at all —
-  they measure 374-554 B legacy, see `CoordinationPlaneSizeBudgetTest`); toward legacy/cue-only peers
-  the old `0x01` tagged-CBOR framing is kept, so no wire break. Counters: `fastCompactSent`/
-  `fastLegacySent`/`fastFragSent`/`fastReassembled`/`fastTooBig`/`fastDropsByReason` on `…debug.STATE`;
-  grep `fast-fanout`/`fast-send`/`fast-frame` logcat lines for per-frame routing. A cue also bootstraps
+  NDP. The framing is chosen **per peer** (`mesh/link/FastFramePick`, from the SSI-advert capability copy):
+  toward a `CAP_FRAME_TRANSCODE` peer the frame rides the transcoded `0x05` tag (`mesh/link/FrameTranscoder`,
+  ADR 060 — `signed` re-encoded with integer labels and raw ids, rebuilt byte-exact at the receiver before
+  the signature is verified; the signed v3 ✓✓ tick is one 221-B message this way) or `0x03` when that is
+  smaller; toward a `CAP_FAST_COMPACT` peer the compact `0x03` tag (`mesh/link/FastFrameCodec` — outer
+  envelope stripped to 3 B + preset-dict deflate over `signed`, sig/signed byte-exact); either splits into
+  ≤3 `0x04` fragments when one ~255 B message won't hold it (this is what lets AckSync's sealed ticks,
+  sealed reactions, and full profiles ride at all — they measure 374-554 B legacy, see
+  `CoordinationPlaneSizeBudgetTest`); toward legacy/cue-only peers the old `0x01` tagged-CBOR framing is
+  kept, so no wire break. Counters: `fastCompactSent`/`fastTranscodedSent`/`fastLegacySent`/`fastFragSent`/
+  `fastReassembled`/`fastTooBig`/`transcodeFallbacks`/`fastDropsByReason` on `…debug.STATE`; grep
+  `fast-fanout`/`fast-send`/`fast-frame` logcat lines for per-frame routing. A cue also bootstraps
   the reverse handle, so a node whose own *subscribe* is broken (e.g. Pixel 9 post-kill) still cues
   larger peers to pull from it.
 - **Data plane** — one ephemeral NDP, brought up **only** when a peer is sync-wanted (the larger id

@@ -162,8 +162,8 @@ peer that does not advertise the bit. Once no such peer exists, the fallback and
 on every send path.
 
 **At the break.** Drop the `0x01` writer and reader. `0x02` stays burned either way. If item 8 has landed
-the canonical form is already compact, so the `0x03` deflate and the `0x05` transcode (roadmap: "frame
-compaction, round 2") retire in the same pass and the fast planes carry the signed bytes as-is. Note this is
+the canonical form is already compact, so the `0x03` deflate and the `0x05` transcode (ADR 060) retire in
+the same pass and the fast planes carry the signed bytes as-is. Note this is
 the one item on the list that is *purely* cleanup — it buys no capability and no privacy, so it should ride
 a break that is happening anyway and never motivate one.
 
@@ -182,8 +182,8 @@ property on it repeats the mistake item 2 warns about.
 
 ### 8. Make the transcoder's byte layout the canonical signed form
 
-**What.** Once the schema-aware `0x05` transcoder exists (`.agents/memory/roadmap.md`, "frame compaction,
-round 2"), the break is where its layout stops being a transport-local re-encoding and becomes what
+**What.** The schema-aware `0x05` transcoder exists (ADR 060, `mesh/link/FrameTranscoder`); the break is
+where its layout stops being a transport-local re-encoding and becomes what
 `WireCodec` emits and signs: integer map keys (`@CborLabel` + `preferCborLabelsOverNames`, kotlinx ≥ 1.11),
 raw 16-byte ids wherever a `FrameId`/`NodeId` rides as text today (`RelayEnvelope.id`/`senderId`/
 `recipientId`, `ReceiptContent.ackId`, `ReactionContent.messageId`, `GroupInfo.members`/`createdBy`/
@@ -207,7 +207,8 @@ discriminated by `EncEnvelope.v = 3` (a reserved label-0 version rides inside it
 never emitted, so it could not gate) behind `CAP_CRYPTO_V3`, so the break only has to move what is outside
 the seal. One thing the break *can* reclaim that ADR 059 could not: v3 carries `nonce` as an empty byte
 string (7 B) because `canCarry` decodes the payload on every fielded build; once every carrier is past the
-break the field can go.
+break the field can go (ADR 060's transcoder already elides it *on the air* — the break reclaims it from the
+stored and signed form).
 
 **Watch out.** The recipient prefix changes what a relay sees: `isBroadcastRoom` (`LoraFramePolicy`,
 `FrameFanout`, `InboundPipeline`) keys on `recipientId == null`, and `ForwardStore`'s DM custody rule

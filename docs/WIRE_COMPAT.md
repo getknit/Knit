@@ -92,11 +92,15 @@ if one ever happens they all ride it together and no single item has to justify 
 > its `sendMessage` payloads with a leading tag byte; the registry is **append-only** like capability
 > bits: `0x01` legacy tagged-CBOR frame (kept forever), `0x02` burned, `0x03` compact frame / `0x04`
 > fragment (`mesh/link/FastFrameCodec`, emitted only toward peers advertising
-> `Protocol.CAP_FAST_COMPACT = 0x20`). These re-frame only the outer `WireEnvelope` — `signed`/`sig`
-> pass through byte-exact (rule 4 holds by construction) — so adding a tag + gating cap bit is additive
-> and needs **no** `SERVICE_NAME` bump; old builds count-and-drop unknown non-printable tags. The
-> compact form's preset deflate dictionary `DICT_V1` is frozen (golden-hash-pinned); tuning mints
-> `DICT_V2` under a fresh dictId, never edits V1.
+> `Protocol.CAP_FAST_COMPACT = 0x20`), `0x05` transcoded frame (`mesh/link/FrameTranscoder`, ADR 060, only
+> toward `Protocol.CAP_FRAME_TRANSCODE = 0x80`). `0x03`/`0x04` re-frame only the outer `WireEnvelope` —
+> `signed`/`sig` pass through byte-exact (rule 4 holds by construction); `0x05` re-encodes `signed` itself
+> but the receiver **rebuilds the byte-identical canonical CBOR before verifying**, so the bytes that are
+> signed, stored and relayed still never change. Adding a tag + gating cap bit is therefore additive and
+> needs **no** `SERVICE_NAME` bump; old builds count-and-drop unknown non-printable tags. The compact
+> form's preset deflate dictionary `DICT_V1` is frozen (golden-hash-pinned); tuning mints `DICT_V2` under a
+> fresh dictId, never edits V1. The transcoder's schema 1 is frozen the same way (golden vectors + label
+> map): a richer schema is a new tag.
 
 > **Pre-1.0 alpha history.** The precedents below (DB v19 / v21 / v22) document the coordinated wire/discovery
 > breaks taken *during pre-release alpha*, when the app had no installed base and every schema bump wiped
@@ -392,6 +396,21 @@ capability bits, and a new one is only emitted behind a capability because old r
 `GoldenVectorTest` gained seven vectors and moved none; `ScopeVectorTest`/`SpoolRecordsTest` untouched.
 *Metadata cost:* none on the mesh (a v3 frame is one byte of version away from a v2 one); the unsigned tick
 gives up Ed25519 non-repudiation for a frame that only ever says "delivered".
+
+**Precedent: the `0x05` transcoded framing (ADR 060, 2026-08-29).** A transport-local re-encoding of the
+*signed* bytes — integer labels, raw ids, the payload inlined — that is not a wire change *because the
+receiver rebuilds the canonical CBOR byte-exact and verifies the original signature over it*: what is
+signed, stored and relayed never changes, only what travels on two size-capped planes. Three rules made it
+additive. (1) The rewriter is generic and path-scoped, so a key it does not know rides as text plus its raw
+value — an older or newer build's additive field is passed through, never dropped (a typed mirror would have
+made every new wire field a new capability bit). (2) Every transform is self-describing by CBOR major type
+with a passthrough fallback, and the sender proves each frame reproduces before sending it, so a string the
+schema cannot represent stays the string the signer signed. (3) Emission is capability-gated on an
+advert-visible bit (`0x80`, the last one a BLE advert carries) while every receiver accepts every tag, the
+`CAP_FAST_COMPACT` posture. Frozen with it: the schema-1 label table (six golden transcoded vectors +
+the literal map in `FrameTranscoderTest`); the layout is versioned by *tag*, never edited. What it could not
+reach — and the next break can (`docs/NEXT_WIRE_BREAK.md` item 8) — is the stored form: the 7-B empty nonce
+in custody, the text ids inside sealed payloads, the millisecond clock. `GoldenVectorTest` moved nothing.
 
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + every branch that

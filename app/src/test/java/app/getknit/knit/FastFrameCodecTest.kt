@@ -4,6 +4,7 @@ import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.TinkInit
 import app.getknit.knit.mesh.link.FastFrameCodec
+import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
@@ -241,6 +242,133 @@ class FastFrameCodecTest {
         assertNull("part >= count", FastFrameCodec.parseFragment(frag(0x22)))
         assertNull("empty slice", FastFrameCodec.parseFragment(byteArrayOf(FastFrameCodec.TAG_FRAG, 0, 1, 0x02)))
         assertNull("wrong tag", FastFrameCodec.parseFragment(byteArrayOf(0x03, 0, 1, 0x02, 0x55)))
+    }
+
+    // --- transcoded frames (ADR 060) ---
+
+    @Test
+    fun transcodedRoundTripPreservesSigAndSignedByteExactAndIsSmaller() {
+        val original = wire(signed = cborSigned(), ttl = 6, hops = 1, relay = false)
+        val transcoded = checkNotNull(FastFrameCodec.encodeTranscoded(original))
+        assertEquals(FastFrameCodec.TAG_TRANSCODED, transcoded[0])
+        val decoded = checkNotNull(FastFrameCodec.decodeCompact(transcoded))
+        assertArrayEquals(original.sig, decoded.sig)
+        assertArrayEquals(original.signed, decoded.signed)
+        assertEquals(6, decoded.ttl)
+        assertEquals(1, decoded.hops)
+        assertFalse(decoded.relay)
+        assertTrue("0x05 beats 0x03 on a real receipt", transcoded.size < checkNotNull(FastFrameCodec.encodeCompact(original)).size)
+    }
+
+    @Test
+    fun aRealSignatureStillVerifiesAfterTranscodedRoundTrip() {
+        TinkInit.ensure()
+        val hybrid = KeysetHandle.generateNew(KeyTemplates.get("DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"))
+        val sigKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519_RAW"))
+        val crypto = MessageCrypto(hybrid, sigKeys)
+        val signed = cborSigned()
+        val original = WireEnvelope(sig = crypto.signRaw(signed), signed = signed)
+        val decoded = checkNotNull(FastFrameCodec.decodeCompact(checkNotNull(FastFrameCodec.encodeTranscoded(original))))
+        assertTrue(
+            "the receiver rebuilds the canonical bytes and the original signature verifies over them",
+            MessageCrypto.verify(PublicKeyBundle.fromPrivate(hybrid, sigKeys), decoded.sig, decoded.signed),
+        )
+    }
+
+    @Test
+    fun transcodedDeflateCarriesNoDictionaryAndTheDictIdsAreTagSpecific() {
+        val chatty =
+            WireCodec.encodeEnvelope(
+                RelayEnvelope(
+                    type = FrameType.CHAT,
+                    id = "AAAAAAAAAAAAAAAAAAAAAA",
+                    senderId = "abcdefghijklmnopqrstuvwxy2",
+                    sentAt = 1_755_700_000_000L,
+                    payload = WireCodec.encodePayload(ChatContent(body = "the quick brown fox jumps over the lazy dog. ".repeat(6))),
+                ),
+            )
+        val transcoded = checkNotNull(FastFrameCodec.encodeTranscoded(wire(signed = chatty)))
+        assertTrue("repetitive text deflates on 0x05 too", (transcoded[1].toInt() and 0x02) != 0)
+        assertEquals("dictId 0 = no dictionary", 0, (transcoded[1].toInt() shr 2) and 0x03)
+        assertArrayEquals(chatty, checkNotNull(FastFrameCodec.decodeCompact(transcoded)).signed)
+        val withDictV1 = transcoded.copyOf().also { it[1] = (it[1].toInt() or (FastFrameCodec.DICT_ID_V1 shl 2)).toByte() }
+        assertNull("DICT_V1 is not a 0x05 dictionary", FastFrameCodec.decodeCompact(withDictV1))
+        val compact = checkNotNull(FastFrameCodec.encodeCompact(wire(signed = chatty)))
+        assertTrue((compact[1].toInt() and 0x02) != 0)
+        val withNone = compact.copyOf().also { it[1] = (it[1].toInt() and (0x03 shl 2).inv()).toByte() } // DEFLATED, dictId 0
+        assertNull("dictId 0 is not a 0x03 dictionary", FastFrameCodec.decodeCompact(withNone))
+    }
+
+    @Test
+    fun encodeBestPicksTheSmallerFormAndReportsARefusal() {
+        val cbor = wire(signed = cborSigned())
+        val best = checkNotNull(FastFrameCodec.encodeBest(cbor, transcode = true))
+        assertTrue(best.transcoded)
+        assertFalse(best.transcodeRefused)
+        assertTrue(best.frame.size <= checkNotNull(FastFrameCodec.encodeCompact(cbor)).size)
+        val notTranscoding = checkNotNull(FastFrameCodec.encodeBest(cbor, transcode = false))
+        assertEquals("a peer without the bit gets 0x03", FastFrameCodec.TAG_COMPACT, notTranscoding.frame[0])
+        assertFalse(notTranscoding.transcodeRefused)
+        val opaque = wire(signed = rng.nextBytes(120)) // not CBOR at all: the transcoder refuses, 0x03 carries it
+        val refused = checkNotNull(FastFrameCodec.encodeBest(opaque, transcode = true))
+        assertEquals(FastFrameCodec.TAG_COMPACT, refused.frame[0])
+        assertTrue(refused.transcodeRefused)
+        assertNull(FastFrameCodec.encodeTranscoded(opaque))
+        assertNull(
+            "an odd sig is unrepresentable in either form",
+            FastFrameCodec.encodeBest(wire(sig = rng.nextBytes(63)), transcode = true),
+        )
+    }
+
+    @Test
+    fun transcodedFramesShareTheHeaderRulesAndRejectABodyThatWillNotRebuild() {
+        val original = wire(signed = cborSigned(), relay = true, ttl = 8, hops = 2)
+        val transcoded = checkNotNull(FastFrameCodec.encodeTranscoded(original))
+        assertEquals("relay rides bit 0", 0x01, transcoded[1].toInt() and 0x01)
+        assertEquals("no reserved bits", 0, transcoded[1].toInt() and 0xE0)
+        assertEquals("ttl 8 / hops 2", 0x82.toByte(), transcoded[2])
+        for (bit in listOf(0x20, 0x40, 0x80)) {
+            assertNull(
+                "reserved bit $bit",
+                FastFrameCodec.decodeCompact(transcoded.copyOf().also { it[1] = (it[1].toInt() or bit).toByte() }),
+            )
+        }
+        val bodyAt = FastFrameCodec.HEADER_BYTES + FastFrameCodec.SIG_BYTES
+        val corrupt = transcoded.copyOf().also { it[bodyAt + 1] = 0x17 } // the first label → one no scope has
+        assertNull("a body the rebuild refuses is a drop, never a wrong frame", FastFrameCodec.decodeCompact(corrupt))
+        val unsigned = wire(sig = ByteArray(0), relay = false, signed = cborSigned())
+        val unsignedTranscoded = checkNotNull(FastFrameCodec.encodeTranscoded(unsigned))
+        assertTrue((unsignedTranscoded[1].toInt() and FastFrameCodec.FLAG_UNSIGNED) != 0)
+        val decoded = checkNotNull(FastFrameCodec.decodeCompact(unsignedTranscoded))
+        assertEquals(0, decoded.sig.size)
+        assertArrayEquals(unsigned.signed, decoded.signed)
+        assertTrue(FastFrameCodec.isFrameTag(FastFrameCodec.TAG_COMPACT))
+        assertTrue(FastFrameCodec.isFrameTag(FastFrameCodec.TAG_TRANSCODED))
+        assertFalse(FastFrameCodec.isFrameTag(FastFrameCodec.TAG_FRAG))
+    }
+
+    @Test
+    fun aFragmentedTranscodedFrameReassemblesThroughTheSameDecoder() {
+        val big =
+            WireCodec.encodeEnvelope(
+                RelayEnvelope(
+                    type = FrameType.CHAT,
+                    id = "AAAAAAAAAAAAAAAAAAAAAA",
+                    senderId = "abcdefghijklmnopqrstuvwxy2",
+                    sentAt = 1_755_700_000_000L,
+                    payload = WireCodec.encodePayload(ChatContent(body = String(CharArray(400) { ('!' + rng.nextInt(90)) }))),
+                ),
+            )
+        val transcoded = checkNotNull(FastFrameCodec.encodeTranscoded(wire(signed = big)))
+        assertTrue(transcoded.size > 255)
+        val parts = checkNotNull(FastFrameCodec.fragment(transcoded, maxMessage = 255, fragId = 9))
+        val glued =
+            parts
+                .map { checkNotNull(FastFrameCodec.parseFragment(it)) }
+                .sortedBy { it.part }
+                .fold(ByteArray(0)) { acc, f -> acc + f.payload }
+        assertEquals(FastFrameCodec.TAG_TRANSCODED, glued[0])
+        assertArrayEquals(big, checkNotNull(FastFrameCodec.decodeCompact(glued)).signed)
     }
 
     private companion object {

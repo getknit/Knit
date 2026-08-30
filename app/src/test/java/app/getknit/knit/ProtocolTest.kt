@@ -36,10 +36,19 @@ class ProtocolTest {
     @Test
     fun cryptoV3RidesTheProfileAboveTheBleAdvertsEightBits() {
         // ADR 059: the bit is a send-time input read from the pinned profile; it deliberately sits above the
-        // 8 bits a BLE advert carries (0x80 stays reserved for the transcoder), and every local build claims it.
+        // 8 bits a BLE advert carries (0x80 is the transcoder's — ADR 060), and every local build claims it.
         assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_CRYPTO_V3 != 0L)
         assertTrue(Protocol.CAP_CRYPTO_V3 > 0xFFL)
         assertEquals(0x100L, Protocol.CAP_CRYPTO_V3)
+    }
+
+    @Test
+    fun theTranscoderBitIsTheLastOneABleAdvertCarries() {
+        // ADR 060: read from the advert copy like CAP_FAST_COMPACT (a transport-local encoding choice), so it
+        // has to sit inside the 8 bits a BLE advert carries — and it is the last of them.
+        assertEquals(0x80L, Protocol.CAP_FRAME_TRANSCODE)
+        assertTrue(Protocol.LOCAL_CAPABILITIES and Protocol.CAP_FRAME_TRANSCODE != 0L)
+        assertTrue(Protocol.CAP_FRAME_TRANSCODE <= 0xFFL)
     }
 
     @Test

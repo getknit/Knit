@@ -1,6 +1,7 @@
 package app.getknit.knit.mesh.lora
 
 import app.getknit.knit.mesh.FanoutHint
+import app.getknit.knit.mesh.FastPathDrop
 import app.getknit.knit.mesh.InboundFrame
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.MeshTransport
@@ -384,12 +385,20 @@ internal class LoraMeshTransport(
         wire: WireEnvelope,
         label: String,
     ): List<ByteArray>? {
-        val parts = LoraFrameCodec.encode(wire, fragSeq.getAndIncrement() and FRAG_ID_MASK, maxPayload)
-        if (parts == null) {
+        // `transcode = true` unconditionally is the ADR 060 flag-day: this plane has no per-peer capability (a
+        // LoRa sighting carries caps 0 and the OFFER has no field for them), and it ships debug-only. Before it
+        // ships to release this needs a gate — every peer heard on the plane advertising the bit through the
+        // profile frame it beacons here — recorded in the roadmap; an older debug build on the channel drops
+        // 0x05 as UNKNOWN_TAG until then.
+        val encoded = LoraFrameCodec.encodeBest(wire, fragSeq.getAndIncrement() and FRAG_ID_MASK, maxPayload, transcode = true)
+        if (encoded == null) {
             metrics.onLoraTooBig()
             log("lora too-big $label")
+            return null
         }
-        return parts
+        if (encoded.transcodeRefused) metrics.onTranscodeFallback()
+        if (encoded.transcoded) metrics.onLoraTranscoded()
+        return encoded.parts
     }
 
     private fun enqueue(
@@ -774,7 +783,8 @@ internal class LoraMeshTransport(
         val compact = reassemble(packet) ?: return
         val wire = FastFrameCodec.decodeCompact(compact)
         if (wire == null) {
-            metrics.onFastDropped(app.getknit.knit.mesh.FastPathDrop.DECODE_FAILED)
+            val reason = if (compact[0] == FastFrameCodec.TAG_TRANSCODED) FastPathDrop.TRANSCODE_FAILED else FastPathDrop.DECODE_FAILED
+            metrics.onFastDropped(reason)
             return
         }
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return
@@ -792,20 +802,20 @@ internal class LoraMeshTransport(
         log("lora rx ${env.type} id=${env.id} from ${env.senderId}")
     }
 
-    /** Returns the complete compact frame for [packet]: itself if [FastFrameCodec.TAG_COMPACT], else reassembled. */
+    /** Returns the complete frame for [packet]: itself if a whole `0x03`/`0x05` frame, else reassembled from `0x04` parts. */
     private fun reassemble(packet: ReceivedPacket): ByteArray? =
         when (packet.payload[0]) {
-            FastFrameCodec.TAG_COMPACT -> {
+            FastFrameCodec.TAG_COMPACT, FastFrameCodec.TAG_TRANSCODED -> {
                 packet.payload
             }
 
             FastFrameCodec.TAG_FRAG -> {
                 val frag = FastFrameCodec.parseFragment(packet.payload) ?: return null
-                reassembler.accept(packet.from, frag)?.takeIf { it.firstOrNull() == FastFrameCodec.TAG_COMPACT }
+                reassembler.accept(packet.from, frag)?.takeIf { it.isNotEmpty() && FastFrameCodec.isFrameTag(it[0]) }
             }
 
             else -> {
-                metrics.onFastDropped(app.getknit.knit.mesh.FastPathDrop.UNKNOWN_TAG)
+                metrics.onFastDropped(FastPathDrop.UNKNOWN_TAG)
                 null
             }
         }

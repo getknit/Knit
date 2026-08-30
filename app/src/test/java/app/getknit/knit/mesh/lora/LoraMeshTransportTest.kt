@@ -5,6 +5,7 @@ import app.getknit.knit.mesh.InboundFrame
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.Peer
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.link.FastFrameCodec
 import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
@@ -118,6 +119,70 @@ class LoraMeshTransportTest {
             advanceTimeBy(4_000)
             runCurrent()
             assertEquals("the verbatim resend is suppressed", afterFirst + 1, b.link.sent.size)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    /** A decodable broadcast chat around a hand-built [payload] (the transport only decodes the envelope, never the content). */
+    private fun rawChat(payload: ByteArray): WireEnvelope {
+        val env = RelayEnvelope(type = FrameType.CHAT, id = "id-$sigCounter", senderId = "alice", payload = payload)
+        val sig = ByteArray(64)
+        sig[1] = sigCounter.toByte()
+        sigCounter++
+        return WireEnvelope(relay = true, sig = sig, signed = WireCodec.encodeEnvelope(env))
+    }
+
+    /** ADR 060: on this plane every frame the transcoder reproduces rides `0x05` (the flag-day), and lands. */
+    @Test
+    fun aTranscodableFrameLeavesTranscodedAndLandsOnTheOtherBoard() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+            val transcodedBefore = a.metrics.snapshot().loraTranscoded // the profile beacon already rode 0x05
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate, ten minutes"))
+            runCurrent()
+            assertEquals("one 0x05 packet on the air", FastFrameCodec.TAG_TRANSCODED, a.link.sent.last()[0])
+            assertEquals(transcodedBefore + 1, a.metrics.snapshot().loraTranscoded)
+            assertEquals(0L, a.metrics.snapshot().transcodeFallbacks)
+            assertTrue("bob decodes it through the same inbound path", b.received.any { it.envelope.senderId == "alice" })
+            assertTrue(
+                b.metrics
+                    .snapshot()
+                    .fastDropsByReason
+                    .isEmpty(),
+            )
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    /** A frame the transcoder cannot reproduce keeps the `0x03` framing and is counted, never lost or mangled. */
+    @Test
+    fun aFrameTheTranscoderRefusesStillRidesCompactAndIsCounted() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+
+            // An EncEnvelope hand-encoded with `nonce` before `v` — a key order kotlinx never emits, so the
+            // rebuild would put the elided nonce back in the wrong slot and the transcoder refuses the frame.
+            fun tstr(s: String) = byteArrayOf((0x60 + s.length).toByte()) + s.encodeToByteArray()
+            val enc =
+                byteArrayOf(0xA4.toByte()) + tstr("nonce") + byteArrayOf(0x40) + tstr("v") + byteArrayOf(0x03) +
+                    tstr("ct") + byteArrayOf(0x44, 1, 2, 3, 4) + tstr("keys") + byteArrayOf(0x80.toByte())
+            val transcodedBefore = a.metrics.snapshot().loraTranscoded
+            a.transport.fastFanout(rawChat(byteArrayOf(0xA1.toByte()) + tstr("enc") + enc))
+            runCurrent()
+            assertEquals("0x03 carries it", FastFrameCodec.TAG_COMPACT, a.link.sent.last()[0])
+            assertEquals(1L, a.metrics.snapshot().transcodeFallbacks)
+            assertEquals("…and it is not counted as transcoded", transcodedBefore, a.metrics.snapshot().loraTranscoded)
+            assertTrue(b.received.any { it.envelope.senderId == "alice" })
             a.transport.stop()
             b.transport.stop()
         }

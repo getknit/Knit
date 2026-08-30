@@ -23,6 +23,8 @@ class MeshMetricsTest {
         metrics.onFastFragSent()
         metrics.onFastReassembled()
         metrics.onFastTooBig()
+        metrics.onFastTranscodedSent()
+        repeat(3) { metrics.onTranscodeFallback() }
         repeat(2) { metrics.onFastDropped(FastPathDrop.FRAG_TIMEOUT) }
         metrics.onFastDropped(FastPathDrop.UNKNOWN_TAG)
 
@@ -32,6 +34,8 @@ class MeshMetricsTest {
         assertEquals(1L, snap.fastFragSent)
         assertEquals(1L, snap.fastReassembled)
         assertEquals(1L, snap.fastTooBig)
+        assertEquals(1L, snap.fastTranscodedSent)
+        assertEquals(3L, snap.transcodeFallbacks)
         assertEquals(
             mapOf(FastPathDrop.FRAG_TIMEOUT to 2L, FastPathDrop.UNKNOWN_TAG to 1L),
             snap.fastDropsByReason,
@@ -117,6 +121,7 @@ class MeshMetricsTest {
         repeat(2) { metrics.onLoraReceived() }
         metrics.onLoraReassembled()
         metrics.onLoraTooBig()
+        metrics.onLoraTranscoded()
         metrics.onLoraDroppedQueue()
         metrics.onLoraSuppressed()
         metrics.onLoraNak()
@@ -129,6 +134,7 @@ class MeshMetricsTest {
         assertEquals(2L, snap.loraReceived)
         assertEquals(1L, snap.loraReassembled)
         assertEquals(1L, snap.loraTooBig)
+        assertEquals(1L, snap.loraTranscoded)
         assertEquals(1L, snap.loraDroppedQueue)
         assertEquals(1L, snap.loraSuppressed)
         assertEquals(1L, snap.loraNak)

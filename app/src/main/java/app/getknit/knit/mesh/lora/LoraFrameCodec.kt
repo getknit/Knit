@@ -29,13 +29,30 @@ internal object LoraFrameCodec {
         wire: WireEnvelope,
         fragId: Int,
         maxPayload: Int = MeshtasticProto.MAX_PAYLOAD,
-    ): List<ByteArray>? {
+        transcode: Boolean = false,
+    ): List<ByteArray>? = encodeBest(wire, fragId, maxPayload, transcode)?.parts
+
+    /**
+     * [encode] plus what it chose: with [transcode], the `0x05` form when it is the smaller (ADR 060 — the
+     * one-packet form for a signed tick), else `0x03`. [Encoded.transcodeRefused] flags a frame the transcoder
+     * could not reproduce, which rode `0x03` for that reason.
+     */
+    fun encodeBest(
+        wire: WireEnvelope,
+        fragId: Int,
+        maxPayload: Int = MeshtasticProto.MAX_PAYLOAD,
+        transcode: Boolean = false,
+    ): Encoded? {
         val cap = maxPayload.coerceIn(MIN_PAYLOAD, MeshtasticProto.MAX_PAYLOAD)
-        val one = FastFrameCodec.encodeCompact(wire) ?: return null
-        return if (one.size <= cap) {
-            listOf(one)
-        } else {
-            FastFrameCodec.fragment(one, cap, fragId)
-        }
+        val best = FastFrameCodec.encodeBest(wire, transcode) ?: return null
+        val parts = if (best.frame.size <= cap) listOf(best.frame) else FastFrameCodec.fragment(best.frame, cap, fragId) ?: return null
+        return Encoded(parts, transcoded = best.transcoded, transcodeRefused = best.transcodeRefused)
     }
+
+    /** The packets for one frame and the form they took. */
+    class Encoded(
+        val parts: List<ByteArray>,
+        val transcoded: Boolean,
+        val transcodeRefused: Boolean,
+    )
 }

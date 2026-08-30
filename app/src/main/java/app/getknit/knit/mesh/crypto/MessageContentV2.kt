@@ -3,6 +3,7 @@
 package app.getknit.knit.mesh.crypto
 
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.protocol.CanonicalText
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.Mention
@@ -96,9 +97,9 @@ internal object MessageContentV2 {
 
     private fun nodeIdBytes(id: String): ByteArray = NodeId.toBytesOrNull(id) ?: throw NonCanonical()
 
-    private fun hashBytes(hex: String): ByteArray = hashBytesOrNull(hex) ?: throw NonCanonical()
+    private fun hashBytes(hex: String): ByteArray = CanonicalText.hashBytesOrNull(hex) ?: throw NonCanonical()
 
-    private fun keyBytes(key: String): ByteArray = keyBytesOrNull(key) ?: throw NonCanonical()
+    private fun keyBytes(key: String): ByteArray = CanonicalText.base64BytesOrNull(key) ?: throw NonCanonical()
 
     /** The domain [MessageContent] for compact [bytes], or null when malformed or a newer compact schema. */
     fun decode(bytes: ByteArray): MessageContent? =
@@ -108,7 +109,7 @@ internal object MessageContentV2 {
             MessageContent(
                 body = w.body,
                 mentions = w.mentions.map { Mention(nodeId = nodeIdText(it.nodeId), name = it.name) },
-                attachmentHash = w.attachmentHash?.let(::hashText),
+                attachmentHash = w.attachmentHash?.let(CanonicalText::hashText),
                 attachmentMime = w.attachmentMime,
                 attachmentKey = w.attachmentKey?.let(::b64),
                 replyTo =
@@ -130,7 +131,7 @@ internal object MessageContentV2 {
                         ProfilePayload(
                             name = it.name,
                             status = it.status,
-                            avatarHash = it.avatarHash?.let(::hashText),
+                            avatarHash = it.avatarHash?.let(CanonicalText::hashText),
                             version = it.version,
                         )
                     },
@@ -141,24 +142,6 @@ internal object MessageContentV2 {
         require(bytes.size == NodeId.BYTES) { "a node id is ${NodeId.BYTES} bytes, got ${bytes.size}" }
         return NodeId.fromBytes(bytes)
     }
-
-    /** The 32 bytes behind a lowercase 64-hex content hash, or null when [hex] is not exactly that. */
-    private fun hashBytesOrNull(hex: String): ByteArray? {
-        if (hex.length != HASH_BYTES * 2) return null
-        val bytes = runCatching { ByteArray(HASH_BYTES) { i -> hex.substring(2 * i, 2 * i + 2).toInt(HEX_RADIX).toByte() } }.getOrNull()
-        return bytes?.takeIf { hashText(it) == hex }
-    }
-
-    private fun hashText(bytes: ByteArray): String {
-        require(bytes.size == HASH_BYTES) { "a content hash is $HASH_BYTES bytes, got ${bytes.size}" }
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
-
-    /** The bytes behind a standard padded-base64 key, or null unless they re-encode to exactly [key]. */
-    private fun keyBytesOrNull(key: String): ByteArray? = runCatching { b64d(key) }.getOrNull()?.takeIf { b64(it) == key }
-
-    private const val HASH_BYTES = 32
-    private const val HEX_RADIX = 16
 
     /**
      * The top-level layout. Labels are append-only. **12 and 13 are reserved** for the two additive

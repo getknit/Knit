@@ -199,23 +199,52 @@ class CoordinationPlaneSizeBudgetTest {
                 }
             }
         val deflated = if ((compact[1].toInt() and 0x02) != 0) "deflated" else "stored"
+        val best = checkNotNull(FastFrameCodec.encodeBest(wire, transcode = true)) { "$label must encode" }
+        val transcodedParts =
+            if (best.frame.size <= WifiAwareTransport.COORD_MSG_MAX) {
+                1
+            } else {
+                checkNotNull(
+                    FastFrameCodec.fragment(best.frame, WifiAwareTransport.COORD_MSG_MAX, fragId = 1),
+                ) { "$label transcoded fit" }.size
+            }
+        val form = if (best.transcoded) "0x05" else "0x03"
+        val lora = transcodedLoraParts(wire)
+        val esp32 = transcodedLoraParts(wire, esp32PayloadCap)
         println(
             "size-budget: $label legacy=${legacy}B compact=${compact.size}B ($deflated) parts=$parts " +
-                "(cap ${WifiAwareTransport.COORD_MSG_MAX})",
+                "transcoded=${best.frame.size}B ($form) parts=$transcodedParts lora@${MeshtasticProto.MAX_PAYLOAD}=$lora " +
+                "lora@$esp32PayloadCap=$esp32 (cap ${WifiAwareTransport.COORD_MSG_MAX})",
         )
         assertEquals("raw Ed25519 signature", 64, wire.sig.size)
         assertTrue("$label verifies", MessageCrypto.verify(author.bundle, wire.sig, wire.signed))
         val decoded = checkNotNull(FastFrameCodec.decodeCompact(compact)) { "$label compact round-trip" }
         assertTrue("$label signature survives the compact round-trip", MessageCrypto.verify(author.bundle, decoded.sig, decoded.signed))
         assertTrue("compact never expands past legacy", compact.size < legacy)
-        return Sizes(legacy, compact.size, parts)
+        assertFalse("$label reproduces through the transcoder", best.transcodeRefused)
+        val rebuilt = checkNotNull(FastFrameCodec.decodeCompact(best.frame)) { "$label transcoded round-trip" }
+        val rebuiltVerifies = MessageCrypto.verify(author.bundle, rebuilt.sig, rebuilt.signed)
+        assertTrue("$label signature survives the transcoded round-trip", rebuiltVerifies)
+        assertTrue("the transcoded pick never exceeds compact", best.frame.size <= compact.size)
+        return Sizes(legacy, compact.size, parts, best.frame.size, transcodedParts)
     }
 
     private class Sizes(
         val legacy: Int,
         val compact: Int,
         val parts: Int,
+        val transcoded: Int,
+        val transcodedParts: Int,
     )
+
+    /** Part count for [wire] on the LoRa hop in the transcoded form (ADR 060) at [cap], or null when nothing fits ≤ 3. */
+    private fun transcodedLoraParts(
+        wire: WireEnvelope,
+        cap: Int = MeshtasticProto.MAX_PAYLOAD,
+    ): Int? =
+        LoraFrameCodec
+            .encode(wire, fragId = 1, maxPayload = cap, transcode = true)
+            ?.size
 
     /**
      * The unsigned form (ADR 059): the v3 live-link tick, `relay = false`, no signature — its AEAD is the
@@ -231,10 +260,16 @@ class CoordinationPlaneSizeBudgetTest {
         val deflated = if ((compact[1].toInt() and 0x02) != 0) "deflated" else "stored"
         val lora = checkNotNull(loraParts(wire))
         val esp32 = checkNotNull(LoraFrameCodec.encode(wire, fragId = 1, maxPayload = esp32PayloadCap)).size
+        val best = checkNotNull(FastFrameCodec.encodeBest(wire, transcode = true)) { "$label must encode" }
         println(
             "size-budget: $label legacy=${legacySize(wire)}B compact=${compact.size}B ($deflated) " +
                 "parts@255=${if (compact.size <= WifiAwareTransport.COORD_MSG_MAX) 1 else "2+"} " +
-                "parts@233=$lora parts@$esp32PayloadCap=$esp32",
+                "parts@${MeshtasticProto.MAX_PAYLOAD}=$lora parts@$esp32PayloadCap=$esp32 transcoded=${best.frame.size}B",
+        )
+        assertArrayEquals(
+            "$label rebuilds through the transcoder",
+            wire.signed,
+            checkNotNull(FastFrameCodec.decodeCompact(best.frame)).signed,
         )
         val decoded = checkNotNull(FastFrameCodec.decodeCompact(compact)) { "$label compact round-trip" }
         assertEquals(0, decoded.sig.size)
@@ -283,7 +318,7 @@ class CoordinationPlaneSizeBudgetTest {
                             name = "Alice Example",
                             status = "Out exploring the mesh",
                             pubKey = alice.bundle.encoded,
-                            deviceTag = "tag-0123456789abcdef",
+                            deviceTag = "0123456789abcdef",
                             protoVersion = Protocol.VERSION,
                             capabilities = Protocol.LOCAL_CAPABILITIES,
                             prekey = PrekeyInfo(id = SPK_ID, pub = spk.pub, sig = spkSig),
@@ -317,7 +352,7 @@ class CoordinationPlaneSizeBudgetTest {
                 id = FrameId.new(),
                 senderId = alice.nodeId,
                 sentAt = SENT_AT,
-                payload = WireCodec.encodePayload(TypingContent(groupId = "g-" + "a".repeat(26))),
+                payload = WireCodec.encodePayload(TypingContent(groupId = "g-" + "a".repeat(24))),
             ),
             relay = false,
         )
@@ -493,6 +528,52 @@ class CoordinationPlaneSizeBudgetTest {
         assertTrue(checkNotNull(LoraFrameCodec.encode(batch, fragId = 1, maxPayload = esp32PayloadCap)).size <= FastFrameCodec.MAX_PARTS)
     }
 
+    /**
+     * ADR 060: the transcoder (tag `0x05`) is what puts the **signed** v3 forms in one packet on every plane —
+     * the DM ✓✓ with its signature and custody intact (221 B), a sealed reaction (229 B; two at the ESP32 cap),
+     * a 40-char DM on Wi-Fi Aware (244 B) — and the profile bootstrap in two at the ESP32 cap instead of three.
+     * A 100-char DM is the structural floor and stays two.
+     */
+    @Test
+    fun theTranscoderPutsTheSignedV3FormsInOnePacket() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        sealer.confirm()
+        val tick = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, ack = FrameId.new(), v3 = true))
+        val tickSizes = report("sealed-receipt-steady-v3", tick, alice)
+        assertEquals("the signed ✓✓ in one Wi-Fi Aware message (was 2)", 1, tickSizes.transcodedParts)
+        assertEquals("…in one nominal LoRa packet (was 2)", 1, transcodedLoraParts(tick))
+        assertEquals("…and in one packet at the ESP32 cap of $esp32PayloadCap (was 2)", 1, transcodedLoraParts(tick, esp32PayloadCap))
+        val reaction =
+            alice.sign(
+                sealer.dm(
+                    FrameId.new(),
+                    body = "",
+                    ctl = MessageContent.CTL_REACTION,
+                    rp = ReactionPayload(messageId = FrameId.new(), emoji = "👍"),
+                    v3 = true,
+                ),
+            )
+        val reactionSizes = report("sealed-reaction-steady-v3", reaction, alice)
+        assertEquals("a sealed reaction in one message", 1, reactionSizes.transcodedParts)
+        assertEquals("…and one nominal LoRa packet", 1, transcodedLoraParts(reaction))
+        val short = alice.sign(sealer.dm(FrameId.new(), body = "See you at the north gate in ten minutes", v3 = true))
+        val shortSizes = report("sealed-dm-40char-steady-v3", short, alice)
+        assertEquals("a 40-char DM in one Wi-Fi Aware message (was 2)", 1, shortSizes.transcodedParts)
+        assertTrue("…and still two LoRa packets (244 B: past the 231-B cap)", checkNotNull(transcodedLoraParts(short)) <= 2)
+        val profile = fullProfile(alice, RatchetCrypto.generateKeyPair())
+        report("profile-full-transcoded", profile, alice)
+        assertEquals("the profile bootstrap in two packets at the ESP32 cap (was 3)", 2, transcodedLoraParts(profile, esp32PayloadCap))
+        val acks = List(DmAckCoalescer.MAX_LORA_TICK_ACKS) { FrameId.new() }
+        val batch = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_RECEIPT, acks = acks, v3 = true))
+        report("coalesced-dm-tick-12-v3-transcoded", batch, alice)
+        assertTrue("a 12-ack tick in <= 2 packets at the ESP32 cap (was 3)", checkNotNull(transcodedLoraParts(batch, esp32PayloadCap)) <= 2)
+        val long = alice.sign(sealer.dm(FrameId.new(), body = "b".repeat(100), v3 = true))
+        report("sealed-dm-100char-steady-v3-transcoded", long, alice)
+        assertTrue("a 100-char DM is the structural floor: still 2 LoRa packets", checkNotNull(transcodedLoraParts(long)) <= 2)
+    }
+
     @Test
     fun fragBudgetArithmetic() {
         // 3 parts x (cap - 4 B frag header) is the ceiling for any compact frame on this plane.
@@ -597,7 +678,7 @@ class CoordinationPlaneSizeBudgetTest {
 
     /**
      * ADR 054: a coalesced DM tick at its cap replaces up to twelve single ticks, so it must still cross the
-     * board — checked at the real ESP32 cap (MTU 255 → a 222-B `Data.payload`), not just the nominal 233.
+     * board — checked at the real ESP32 cap (MTU 255 → a 228-B `Data.payload`), not just the nominal 231.
      */
     @Test
     fun aCoalescedDmTickFitsTheLoraHop() {
@@ -633,7 +714,7 @@ class CoordinationPlaneSizeBudgetTest {
 
     /**
      * ADR 042: the contact-card intro is a session-initial `CTL_PROFILE` DM — the X3DH init plus a full
-     * presentation payload (a 32-char name, a 64-char status, an avatar hash) — and it must cross the LoRa
+     * presentation payload (a 32-char name, a 100-char status, an avatar hash) — and it must cross the LoRa
      * hop, since a LoRa-only pair's intro has no other path until the session exists.
      */
     @Test

@@ -217,41 +217,29 @@ doc). **Don't start a deferred item without explicit direction.**
   exists (2026-08-21): `mesh/link/FastFrameCodec` (compact `0x03` / fragment `0x04`, ADR 030) is
   transport-neutral by design — this item still needs the ext-adv carrier plus its cap gate (BLE
   adverts carry the low 8 capability bits, which covers `CAP_FAST_COMPACT = 0x20`).
-- **Fast-plane frame compaction, round 2: the schema-aware transcoder (tag `0x05`)** — round 1 landed
-  2026-08-29 as ADR 059 (crypto scheme v3: derived nonce, compact plaintext, the unsigned `relay = false`
-  tick at ~222 B / one packet; the signed DM ✓✓ is ~290 B and still two packets). Measured 2026-08-29 against `CoordinationPlaneSizeBudgetTest`:
-  after ADR 030 every sealed frame still fragments on the LoRa hop and the NAN plane — tick 316 B, sealed
-  reaction 338, 40-char DM 326, 100-char DM 388, profile 452 (3 packets at the MTU-255 ESP32 boards' 222-B
-  cap) — and deflate is exhausted: a tick's `signed` is 285 B of which 173 are random (ids 74, nonce 12, ek
-  32, ct 55), no-dictionary deflate *expands* it, `DICT_V1` buys 36 B, and a `DICT_V2` carrying the pubKey
-  bundle's two constant base64 runs buys 16 more on the profile (exactly 2 × 218, zero margin — not worth
-  minting). The next step is an **exact structural re-encoding** of `signed` beside `0x03`/`0x04`: integer
-  keys, raw 16-B ids, a 6-B `sentAt`; the receiver rebuilds the canonical kotlinx CBOR and verifies the
-  *original* signature, and the sender round-trips its own output first, falling back to `0x03` for any
-  frame it cannot reproduce (an older build's encoding, a field it doesn't model) — the ADR 030 argument a
-  fourth time, no wire change. Floors it reaches: signed tick 228 (≈205 on v3 — the DM ✓✓ under a packet
-  with custody intact; the unsigned live-link tick ≈142), reaction 249 (≈225 with v3), 40-char DM 237
-  (≈227), 100-char DM 297, profile 338 (3 → 2 packets), 12-ack coalesced tick 483 (3 → 2). Note v3's nonce
-  field rides *empty* rather than absent (7 B: `canCarry` decodes the payload, so an undecodable envelope is
-  an uncarried one) — the transcoder can elide it in the re-encoding, since the receiver rebuilds the
-  canonical bytes. Gating: NAN per peer on a new capability bit (`0x80` is the
-  last one a BLE advert carries — `BleAdvertPayload` byte 0); LoRa has **no per-peer gate**, so a flag-day
-  is acceptable only while `LORA_PLANE` is debug-only, and the `LoraCtl` OFFER needs a capability byte
-  before that plane ships. Same bit, if it ships in the same release: the compact **group form as v4**
-  (derived nonce + labeled plaintext for `g`, roster-gated on every member's pinned capability; ~12 + 20–40 B
-  a post, no packet-count change on its own) — v3 is the DM form by executable rule (ADR 059 amendment), so
-  it cannot reuse the number. Ride-along: trim `LoraMeshTransport.TORADIO_OVERHEAD` 33 → 27 (the exact
-  `ToRadio{packet{to, channel, decoded{portnum, payload}, id}}` framing + 3-B ATT header) — done with ADR 059
-  (now measured off `MeshtasticProto.encodePacket`; verified 2026-08-29 on the lab Pixel 9's MTU-255 ESP32 board —
-  `lora ready … mtu=255 maxPayload=228`, fragmented 228-B writes accepted, no write errors). Rejected on measurement: `ek` elision (ratchet advance rule 2 rekeys on
-  every conversational turnaround, so only the 2nd+ frame of a one-sided burst could elide —
-  `docs/FORWARD_SECRECY_RATCHET.md` §4), any further dictionary work, and dropping the signature on
-  *flooded* frames (custody and relays verify `senderId`). Structural floor: a 100-char sealed DM is
-  ≥ ~285 B (sig 64 + ids 48 + ek 32 + ct 124) and stays 2 LoRa packets under any transport-local scheme;
-  below that is `docs/NEXT_WIRE_BREAK.md` item 8. Also owed from ADR 059: seed `profileVersion` from the wall
-  clock on first run, so a reinstalled peer's stale `CAP_CRYPTO_V3` (and `CAP_RATCHET`) pin can be cleared by
-  its next profile rather than by its edit count climbing back; and re-tune `INLINE_ACK_BYTES` (23) for the
-  17-B compact ack.
+- **Frame compaction: what round 2 (ADR 060, the `0x05` transcoder) left** — round 1 (ADR 059, crypto v3)
+  and round 2 (ADR 060: a schema-aware re-encoding of `signed` the receiver rebuilds byte-exact before
+  verifying) both landed 2026-08-29; measured after: signed v3 ✓✓ tick **221 B, one packet at 228/231/255**,
+  unsigned tick 157, sealed reaction 229 (one at 231/255), 40-char DM 244 (one NAN message, two LoRa
+  packets), 100-char DM 304 (two — the structural floor, sig 64 + ids 48 + ek 32 + ct 124), profile 352
+  (3 → 2 parts at 228), 12-ack tick 409 (3 → 2). Still owed: **(a) the LoRa gate before that plane ships to
+  release** — today every LoRa frame the transcoder reproduces rides `0x05` (a flag-day, acceptable only while
+  `LORA_PLANE` is debug-only); the gate is "every peer heard on the plane within the 45-min linger advertised
+  `CAP_FRAME_TRANSCODE` through the profile frame it beacons here, newest-`sentAt`-wins, closed when no one is
+  heard" (~20 lines in `LoraMeshTransport.onFramePacket`/`recomputeReachable`/`encodeOrNull`), or a capability
+  byte on a new `LoraCtl` kind; residuals either way: an unheard far-pocket old build on a rebroadcasting
+  channel, a downgraded peer until its older profile arrives; **(b) the compact group form as v4** (derived
+  nonce + labeled plaintext for `g`, roster-gated on every member's pinned capability; ~12 + 20–40 B a post,
+  no packet-count change on its own — v3 is the DM form by executable rule, ADR 059 amendment); **(c)** seed
+  `profileVersion` from the wall clock on first run, so a reinstalled peer's stale `CAP_CRYPTO_V3` /
+  `CAP_RATCHET` pin is cleared by its next profile rather than by its edit count climbing back; **(d)** re-tune
+  `INLINE_ACK_BYTES` (23) for the 17-B compact ack; **(e)** `docs/NEXT_WIRE_BREAK.md` item 8 — make the
+  transcoder's layout the canonical signed form at the break, reclaiming what a re-encode cannot (the 7-B
+  nonce from the stored form, the text ids inside sealed payloads, the millisecond clock). Rejected on
+  measurement, don't retry: `ek` elision (ratchet advance rule 2 rekeys on every conversational turnaround),
+  any further dictionary work (`DICT_V2` bought 16 B on the profile, zero margin), dropping the signature on
+  *flooded* frames (custody and relays verify `senderId`), and a typed `@CborLabel` mirror for the transcoder
+  (it could not pass unknown fields through, and `fastFanout` re-fans frames other builds originated).
 - **Crypto hardening that is policy, not scheme** (from the 2026-08-29 pre-release review of v3, ADR 059
   amendment) — neither needs a version number, so neither rode v3: (1) mark a frame *seen* only after it
   verifies — today a forged frame carrying a real id shadows the genuine one for the SeenSet window (10 min,

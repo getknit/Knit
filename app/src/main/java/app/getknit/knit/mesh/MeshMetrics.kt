@@ -134,6 +134,12 @@ enum class FastPathDrop {
 
     /** A tagged message that failed to parse/inflate back into a frame. */
     DECODE_FAILED,
+
+    /**
+     * A transcoded (`0x05`, ADR 060) message would not decode — most likely its body did not rebuild: the
+     * sender's transcoder and this build's rebuild disagree about a frame. Should be ~0; the flood copy heals it.
+     */
+    TRANSCODE_FAILED,
 }
 
 /**
@@ -196,6 +202,8 @@ class MeshMetrics {
     private val fastFragSent = AtomicLong()
     private val fastReassembled = AtomicLong()
     private val fastTooBig = AtomicLong()
+    private val fastTranscodedSent = AtomicLong()
+    private val transcodeFallbacks = AtomicLong()
     private val fastDrops: Map<FastPathDrop, AtomicLong> = FastPathDrop.entries.associateWith { AtomicLong() }
     private val spoolPushed = AtomicLong()
     private val spoolPulled = AtomicLong()
@@ -207,6 +215,7 @@ class MeshMetrics {
     private val spoolAttachDeferred = AtomicLong()
     private val loraSent = AtomicLong()
     private val loraFragSent = AtomicLong()
+    private val loraTranscoded = AtomicLong()
     private val loraReceived = AtomicLong()
     private val loraReassembled = AtomicLong()
     private val loraTooBig = AtomicLong()
@@ -452,6 +461,19 @@ class MeshMetrics {
         fastTooBig.incrementAndGet()
     }
 
+    /** A fast frame left in the transcoded (`0x05`, ADR 060) encoding toward one target, fragmented or not. */
+    fun onFastTranscodedSent() {
+        fastTranscodedSent.incrementAndGet()
+    }
+
+    /**
+     * A frame asked for the transcoded form could not be reproduced by the transcoder and rode `0x03` instead
+     * (any plane). Should be ~0: with volume, some build emits an encoding `FrameTranscoder` does not model.
+     */
+    fun onTranscodeFallback() {
+        transcodeFallbacks.incrementAndGet()
+    }
+
     /** An inbound fast-path message was discarded — see [FastPathDrop] for how to read each reason. */
     fun onFastDropped(reason: FastPathDrop) {
         fastDrops.getValue(reason).incrementAndGet()
@@ -532,6 +554,11 @@ class MeshMetrics {
     /** A LoRa frame that had to be split across fragments (dwarfed by [onLoraSent] is healthy). */
     fun onLoraFragSent() {
         loraFragSent.incrementAndGet()
+    }
+
+    /** A LoRa frame encoded in the transcoded (`0x05`, ADR 060) form — the one-packet form for a signed tick. */
+    fun onLoraTranscoded() {
+        loraTranscoded.incrementAndGet()
     }
 
     /** A frame received over the LoRa plane (after reassembly + decode). */
@@ -697,6 +724,8 @@ class MeshMetrics {
             fastFragSent = fastFragSent.get(),
             fastReassembled = fastReassembled.get(),
             fastTooBig = fastTooBig.get(),
+            fastTranscodedSent = fastTranscodedSent.get(),
+            transcodeFallbacks = transcodeFallbacks.get(),
             fastDropsByReason = fastDrops.mapValues { it.value.get() }.filterValues { it > 0 },
             spoolPushed = spoolPushed.get(),
             spoolPulled = spoolPulled.get(),
@@ -708,6 +737,7 @@ class MeshMetrics {
             spoolAttachDeferred = spoolAttachDeferred.get(),
             loraSent = loraSent.get(),
             loraFragSent = loraFragSent.get(),
+            loraTranscoded = loraTranscoded.get(),
             loraReceived = loraReceived.get(),
             loraReassembled = loraReassembled.get(),
             loraTooBig = loraTooBig.get(),
@@ -779,6 +809,8 @@ class MeshMetrics {
         val fastFragSent: Long = 0,
         val fastReassembled: Long = 0,
         val fastTooBig: Long = 0,
+        val fastTranscodedSent: Long = 0,
+        val transcodeFallbacks: Long = 0,
         val fastDropsByReason: Map<FastPathDrop, Long> = emptyMap(),
         val spoolPushed: Long = 0,
         val spoolPulled: Long = 0,
@@ -790,6 +822,7 @@ class MeshMetrics {
         val spoolAttachDeferred: Long = 0,
         val loraSent: Long = 0,
         val loraFragSent: Long = 0,
+        val loraTranscoded: Long = 0,
         val loraReceived: Long = 0,
         val loraReassembled: Long = 0,
         val loraTooBig: Long = 0,

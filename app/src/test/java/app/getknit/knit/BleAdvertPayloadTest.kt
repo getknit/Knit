@@ -2,6 +2,7 @@ package app.getknit.knit
 
 import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.bluetooth.BleAdvertPayload
+import app.getknit.knit.mesh.protocol.Protocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -27,6 +28,15 @@ class BleAdvertPayloadTest {
         assertEquals(0xFL, p.capabilities)
         assertEquals("digest cue is the low 32 bits of the version", 0x123456789ABCDEF0L.toInt(), p.digestCue)
         assertEquals(0x0081, p.psm)
+    }
+
+    @Test
+    fun everyAdvertCarriedCapabilityBitSurvivesIncludingTheTranscoders() {
+        // The advert carries the low 8 bits; ADR 060 spent the last of them (0x80), and 0x100+ is profile-only.
+        val p = BleAdvertPayload.parse(BleAdvertPayload.encode(nodeA, Protocol.LOCAL_CAPABILITIES, 0L, 1))!!
+        assertEquals(Protocol.LOCAL_CAPABILITIES and 0xFFL, p.capabilities)
+        assertTrue(p.capabilities and Protocol.CAP_FRAME_TRANSCODE != 0L)
+        assertEquals(0L, p.capabilities and Protocol.CAP_CRYPTO_V3)
     }
 
     @Test

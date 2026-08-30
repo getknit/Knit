@@ -49,6 +49,7 @@ import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.canReclaimForegroundService
 import app.getknit.knit.mesh.link.FastFrameCodec
+import app.getknit.knit.mesh.link.FastFramePick
 import app.getknit.knit.mesh.link.FragReassembler
 import app.getknit.knit.mesh.link.FramedLink
 import app.getknit.knit.mesh.link.LinkCallbacks
@@ -1666,6 +1667,20 @@ class WifiAwareTransport(
             }
         }
 
+        /**
+         * Transcoded framing (ADR 060): the smaller of one `0x05` and one `0x03` message, `0x04` fragments past the
+         * cap, or null (unrepresentable / too big). Only a `Protocol.CAP_FRAME_TRANSCODE` peer is sent it.
+         */
+        val transcoded: List<ByteArray>? by lazy {
+            val best = FastFrameCodec.encodeBest(wire, transcode = true) ?: return@lazy null
+            if (best.transcodeRefused) metrics.onTranscodeFallback()
+            if (best.frame.size <= coordMsgMax) {
+                listOf(best.frame)
+            } else {
+                FastFrameCodec.fragment(best.frame, coordMsgMax, fragSeq.getAndIncrement() and FRAG_ID_MASK)
+            }
+        }
+
         /** One grep-stable diag fragment: both encodings' on-air sizes and the compact part count. */
         fun diag(): String {
             val legacyBytes = legacy?.first()?.size ?: -1
@@ -1687,24 +1702,19 @@ class WifiAwareTransport(
     ) {
         val target = cueTarget[nodeId] ?: return
         val caps = reachablePeers[nodeId]?.capabilities ?: 0L
-        val compactCapable = caps and Protocol.CAP_FAST_COMPACT != 0L
-        val messages = (if (compactCapable) enc.compact ?: enc.legacy else enc.legacy)
-        if (messages == null) {
+        val choice = FastFramePick.choose(caps, { enc.transcoded }, { enc.compact }, { enc.legacy })
+        if (choice == null) {
             metrics.onFastTooBig()
             return
         }
-        messages.forEach { msg ->
+        choice.messages.forEach { msg ->
             runCatching { target.session.sendMessage(target.handle, msgSeq.getAndIncrement(), msg) }
                 .onFailure {
                     cueTarget.remove(nodeId) // stale handle/session; refreshed on next discover/receive
                     return
                 }
         }
-        when {
-            !compactCapable || enc.compact == null -> metrics.onFastLegacySent()
-            messages.size > 1 -> metrics.onFastFragSent()
-            else -> metrics.onFastCompactSent()
-        }
+        FastFramePick.record(choice, metrics)
     }
 
     /**
@@ -1723,7 +1733,7 @@ class WifiAwareTransport(
                 onFastFrame(message)
             }
 
-            FastFrameCodec.TAG_COMPACT -> {
+            FastFrameCodec.TAG_COMPACT, FastFrameCodec.TAG_TRANSCODED -> {
                 onCompactFrame(message)
             }
 
@@ -1748,14 +1758,15 @@ class WifiAwareTransport(
         emitFastWire(wire, via = "legacy")
     }
 
-    /** A [FastFrameCodec.TAG_COMPACT] frame arrived: decode (inflating if deflated) and [emitFastWire] it. */
+    /** A `0x03` or `0x05` frame arrived: decode (inflating / rebuilding as its tag says) and [emitFastWire] it. */
     private fun onCompactFrame(message: ByteArray) {
+        val transcoded = message[0] == FastFrameCodec.TAG_TRANSCODED
         val wire = FastFrameCodec.decodeCompact(message)
         if (wire == null) {
-            metrics.onFastDropped(FastPathDrop.DECODE_FAILED)
+            metrics.onFastDropped(if (transcoded) FastPathDrop.TRANSCODE_FAILED else FastPathDrop.DECODE_FAILED)
             return
         }
-        emitFastWire(wire, via = "compact")
+        emitFastWire(wire, via = if (transcoded) "transcoded" else "compact")
     }
 
     /**
@@ -1775,7 +1786,7 @@ class WifiAwareTransport(
             return
         }
         val assembled = reassembler.accept(FragKey(sess, handle), frag) ?: return
-        if (assembled.isEmpty() || assembled[0] != FastFrameCodec.TAG_COMPACT) {
+        if (assembled.isEmpty() || !FastFrameCodec.isFrameTag(assembled[0])) {
             metrics.onFastDropped(FastPathDrop.DECODE_FAILED)
             return
         }
@@ -2559,8 +2570,9 @@ class WifiAwareTransport(
         // distinguishes framed messages. The registry is append-only, like capability bits: 0x01 = legacy
         // tagged-CBOR fast frame ([MSG_FRAME_TAG], kept forever — every build reads it), 0x02 = BURNED (a
         // since-removed "please re-attach" nudge; never recycle), 0x03/0x04 = compact frame / fragment
-        // (mesh/link/FastFrameCodec, emitted only toward Protocol.CAP_FAST_COMPACT peers). Cues stay
-        // untagged (byte-for-byte unchanged); an unknown non-printable tag is counted and dropped.
+        // (mesh/link/FastFrameCodec, emitted only toward Protocol.CAP_FAST_COMPACT peers), 0x05 = transcoded
+        // frame (ADR 060, only toward Protocol.CAP_FRAME_TRANSCODE peers). Cues stay untagged (byte-for-byte
+        // unchanged); an unknown non-printable tag is counted and dropped.
         const val MSG_FRAME_TAG: Byte = 0x01
 
         /** Low 16 bits of [fragSeq] — the fragment header's id width (FastFrameCodec's u16). */

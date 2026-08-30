@@ -73,10 +73,16 @@ object Protocol {
      */
     const val CAP_INLINE_ACK = 0x40L
 
-    // 0x80 is deliberately left unspent: it is the last capability bit a BLE advert carries
-    // (`BleAdvertPayload.CAP_MASK`), and the transport-local frame transcoder planned as the next round of
-    // frame compaction (roadmap) will need a bit the adverts can see. Bits from 0x100 up ride the pinned
-    // profile and the Wi-Fi Aware advert only.
+    /**
+     * The transcoded fast-path framing (`mesh/link/FrameTranscoder`, ADR 060): this build decodes the `0x05`
+     * tag — a schema-aware re-encoding of a frame's signed bytes that the receiver rebuilds byte-exact before
+     * verifying the signature. Gates only the *encoding* a sender picks toward this peer, exactly like
+     * [CAP_FAST_COMPACT]: consumed from the SSI advert copy, never a trust input, and receivers accept every
+     * tag unconditionally. This is the last capability bit a BLE advert carries (`BleAdvertPayload.CAP_MASK`),
+     * spent here because the adverts are where a transport-local encoding choice is read; bits from 0x100 up
+     * ride the pinned profile and the Wi-Fi Aware advert only.
+     */
+    const val CAP_FRAME_TRANSCODE = 0x80L
 
     /**
      * Crypto scheme v3 (ADR 059): this build opens a `EncEnvelope.v = 3` DM — derived nonce, labeled
@@ -91,7 +97,7 @@ object Protocol {
     /** This build's advertised capability bitfield. */
     val LOCAL_CAPABILITIES: Long =
         CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT or
-            CAP_INLINE_ACK or CAP_CRYPTO_V3
+            CAP_INLINE_ACK or CAP_FRAME_TRANSCODE or CAP_CRYPTO_V3
 
     private const val SEP = '|'
 

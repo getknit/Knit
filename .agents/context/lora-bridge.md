@@ -34,7 +34,10 @@ originator's signature verifies unchanged. Meshtastic `Data.payload` cap = **231
 packet (`MeshtasticProto.MAX_PAYLOAD`: the firmware transmits at most a 237-byte `Data`, and the two-byte
 `PRIVATE_APP` portnum plus the payload framing take 6 — the proto's `DATA_PAYLOAD_LEN = 233` assumes a one-byte
 portnum; measured 2026-08-29: 231 queues, 232 NAKs `TOO_LARGE`) → ≤ 3 fragments (ceiling `3 × 227 = 681 B`
-compact); an MTU-255 board takes 228. Before the board reports its MTU the cap is the MTU-255 floor
+compact); an MTU-255 board takes 228. Every frame the transcoder reproduces leaves in the `0x05` transcoded
+form (`mesh/link/FrameTranscoder`, ADR 060; `loraTranscoded`, `transcodeFallbacks`) — a **flag-day** while the
+plane is debug-only, since a LoRa sighting carries no capability: an older debug build on the channel drops
+`0x05` as `UNKNOWN_TAG`. The gate it needs before the plane ships to release is in the roadmap. Before the board reports its MTU the cap is the MTU-255 floor
 (`LoraMeshTransport.PRE_READY_PAYLOAD`), not the maximum — frames fanned out during the connect used to be
 chunked at 233 and every one came back `TOO_LARGE`. Inbound mirrors `WifiAwareTransport.emitFastWire`: decode/reassemble →
 `_inbound.tryEmit(InboundFrame(wire, env, fromNodeId = env.senderId))`, so the router's dedup / verify /
@@ -196,9 +199,10 @@ DM is `loraTooBig` and rides the radios/custody. The ✓✓ is the recipient's s
 frame originated `relay = true`, so it crosses back on the same rule, and it re-runs on every re-delivery via
 the pre-decrypt exists-gate (which is how a tick lost over LoRa heals when the DM is re-offered). Between two
 builds that read crypto scheme v3 (ADR 059) every sealed DM-form frame is ~30 B lighter (derived nonce,
-compact plaintext) — the DM ✓✓ still two packets (signed, custodied) — and AckSync's `relay = false` tick for
-a room or group post crosses **unsigned as one packet** (~222 B; at the MTU-255 ESP32 boards that needs the
-measured cap, `TORADIO_OVERHEAD` 27 → 228-B payloads, pinned by `CoordinationPlaneSizeBudgetTest`; verified on the
+compact plaintext), and through ADR 060's `0x05` transcoder the signed, custodied DM ✓✓ crosses in **one
+packet** (221 B at 228/231/255), a sealed reaction in one at 231, the profile bootstrap in two at 228 instead
+of three; AckSync's `relay = false` tick for a room or group post crosses **unsigned as one packet** (157 B
+transcoded, ~218 B on `0x03`; at the MTU-255 ESP32 boards the latter needs the measured cap, `TORADIO_OVERHEAD` 27 → 228-B payloads, pinned by `CoordinationPlaneSizeBudgetTest`; verified on the
 lab Pixel 9's MTU-255 ESP32 board 2026-08-29 — `lora ready … mtu=255 maxPayload=228`, fragmented 228-B writes accepted).
 
 **Re-offer on first hearing.** The plane has no custody sync, so a DM sent while the peer's board was off

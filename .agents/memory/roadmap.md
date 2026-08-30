@@ -118,10 +118,15 @@ doc). **Don't start a deferred item without explicit direction.**
     `acceptSpoolConsent`, which records consent and enables in one write), per-relay health rows off
     `SpoolStatus`, and the shared `SpoolUrl` validator so the editor refuses at entry exactly what
     `OkHttpSpoolDialer` refuses at dial time. ADR 019's M6 amendment records the UX rules.)
+  - ~~a switch per relay~~ (**done 2026-08-30** — ADR 063. `SettingsStore.spool_urls_disabled` holds
+    the parked subset, and the composed `activeSpoolUrls` is the single seam every consumer reads,
+    the way `spoolEnabled` already gated the plane. No wire, DB or protocol change.)
   - a validated-Internet `ConnectivityManager` seam (the MVP reconnects on backoff instead, which
     is why `rules/mesh.md` still reads NAN-only and `ACCESS_NETWORK_STATE` is still undeclared);
-    the Tor SOCKS toggle; per-conversation opt-out (deliberately **not** built — the plane is
-    all-or-nothing by product decision, 2026-08-16).
+    the Tor SOCKS toggle; per-**conversation** opt-out (deliberately **not** built — which
+    conversations ride the plane is all-or-nothing by product decision, 2026-08-16, and the consent
+    sheet says so. Note the axis: ADR 063 ships a per-**relay** switch, which chooses *which third
+    party* carries, not *which conversations* do — that decision is untouched).
   ~~Then: group scopes~~ (**done 2026-08-16** — the `GroupKeyPayload.gr` wire field, `group_roots`
   at DB v3, `GroupRootPolicy`/`GroupRootStore`, group scopes in `ScopeRegistry`/`ScopeFrames`, and
   the mint/gossip/adopt/re-mint wiring in `MeshManager`/`InboundPipeline`. The spec's §3.2 was

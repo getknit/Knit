@@ -14,6 +14,11 @@ import app.getknit.knit.mesh.spool.ScopeAttachments
  * [Conversations.idFor] produces for the same conversation — so a thread is covered precisely when its
  * `conversationId` is in this set, with no extra key to keep in sync.
  *
+ * [configured] counts every relay in the user's list; [active] counts the ones that may actually carry
+ * — the plane on, and the relay itself not parked. The rules below turn on [active], because a device
+ * whose relays are all parked reaches nothing, however long its list is; [configured] survives only so
+ * the Profile subtitle can tell an empty list apart from a fully parked one.
+ *
  * [maxAttachBytes] is the largest per-scope attachment budget advertised by any connected spool, or
  * null when none of them carries attachments at all. Taking the **max** rather than the min is correct
  * because a member converges through the union of whatever every spool holds (spec §9.1): one relay
@@ -22,6 +27,7 @@ import app.getknit.knit.mesh.spool.ScopeAttachments
 data class RelayFacts(
     val enabled: Boolean = false,
     val configured: Int = 0,
+    val active: Int = 0,
     val connected: Int = 0,
     val coveredLabels: Set<String> = emptySet(),
     val maxAttachBytes: Int? = null,
@@ -91,7 +97,7 @@ enum class AttachmentRelay {
  */
 fun planeFor(facts: RelayFacts): RelayPlane =
     when {
-        !facts.enabled || facts.configured == 0 -> RelayPlane.Off
+        !facts.enabled || facts.active == 0 -> RelayPlane.Off
         facts.connected == 0 -> RelayPlane.Down
         else -> RelayPlane.Live
     }
@@ -108,7 +114,7 @@ fun reachFor(
     facts: RelayFacts,
 ): RelayReach =
     when {
-        !facts.enabled || facts.configured == 0 || facts.connected == 0 -> RelayReach.Silent
+        !facts.enabled || facts.active == 0 || facts.connected == 0 -> RelayReach.Silent
         conversationId == Conversations.NEARBY -> RelayReach.Room
         conversationId in facts.coveredLabels -> RelayReach.Covered
         else -> RelayReach.Pending

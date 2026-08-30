@@ -300,6 +300,7 @@ class MeshManagerTest {
             // profile; both read a settings flow with .first(), which throws on a relaxed mock's empty flow
             // and would abort the seeding coroutine before it ever reached the profile.
             coEvery { settings.spoolEnabled } returns MutableStateFlow(false)
+            coEvery { settings.activeSpoolUrls } returns MutableStateFlow(emptySet())
             coEvery { settings.acceptedConversations } returns MutableStateFlow(emptySet())
             // setProfilePublishedAt returns DataStore's Preferences; the test only cares about the write.
             coEvery { settings.setProfilePublishedAt(any()) } answers {

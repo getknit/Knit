@@ -23,8 +23,10 @@ class ContactCardsTest {
     private val signing = Ed25519Sign.KeyPair.newKeyPairFromSeed(ByteArray(32) { it.toByte() })
     private val bundle = PublicKeyBundle.fromRaw(signing.publicKey, X25519.publicFromPrivate(ByteArray(32) { (it + 1).toByte() }))!!
     private val signer = Ed25519Sign(signing.privateKey)
-    private val spoolEnabled = MutableStateFlow(true)
-    private val spoolUrls =
+
+    // The card publishes what we actually dial, so it reads the composed set; whether a URL is in it
+    // because of the master switch or its own is SettingsStore's business, and is tested there.
+    private val activeSpoolUrls =
         MutableStateFlow(setOf("wss://b.example/spool/v1", "wss://a.example/spool/v1?k=secret", "wss://c.example/spool/v1"))
 
     @Before
@@ -32,8 +34,7 @@ class ContactCardsTest {
         TinkInit.ensure()
         every { identity.publicKeyBundle() } returns bundle.encoded
         every { settings.displayName } returns MutableStateFlow("Ann")
-        every { settings.spoolEnabled } returns spoolEnabled
-        every { settings.spoolUrls } returns spoolUrls
+        every { settings.activeSpoolUrls } returns activeSpoolUrls
     }
 
     private fun cards() = ContactCards(identity, settings, { signer.sign(it) }, clock = { 42L })
@@ -54,8 +55,18 @@ class ContactCardsTest {
     @Test
     fun noRelaysRideWhileThePlaneIsOff() =
         runTest {
-            spoolEnabled.value = false
+            activeSpoolUrls.value = emptySet()
             val card = ContactCard.parse(cards().mint().compact) as ContactCard.Parsed.Card
             assertEquals(emptyList<String>(), card.spools)
+        }
+
+    @Test
+    fun aParkedRelayIsNotAdvertised() =
+        runTest {
+            // `sp` means "relays the owner uses" (docs/CONTACT_CARD.md §2). Publishing one we have
+            // switched off would point a new contact at an address we never read a frame from.
+            activeSpoolUrls.value = setOf("wss://c.example/spool/v1")
+            val card = ContactCard.parse(cards().mint().compact) as ContactCard.Parsed.Card
+            assertEquals(listOf("wss://c.example/spool/v1"), card.spools)
         }
 }

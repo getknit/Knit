@@ -45,6 +45,7 @@ class ProfileViewModelTest {
     private val filteringFlow = MutableStateFlow(true)
     private val spoolEnabledFlow = MutableStateFlow(false)
     private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
+    private val activeSpoolUrlsFlow = MutableStateFlow(emptySet<String>())
 
     @Before
     fun setUp() {
@@ -56,6 +57,7 @@ class ProfileViewModelTest {
         every { settings.contentFilteringEnabled } returns filteringFlow
         every { settings.spoolEnabled } returns spoolEnabledFlow
         every { settings.spoolUrls } returns spoolUrlsFlow
+        every { settings.activeSpoolUrls } returns activeSpoolUrlsFlow
     }
 
     @After

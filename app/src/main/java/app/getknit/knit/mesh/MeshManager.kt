@@ -354,7 +354,7 @@ class MeshManager(
                 dialer = dialer,
                 store = forwardStore,
                 selfId = { identity.nodeId() },
-                urls = { if (settings.spoolEnabled.first()) settings.spoolUrls.first().toList() else emptyList() },
+                urls = { settings.activeSpoolUrls.first().toList() },
                 canCarry = pipeline::canCarry,
                 blobs = scopeBlobs(),
                 // The same hook a radio pull fires, so NSFW screening, the message rows, and the UI all

@@ -15,6 +15,7 @@ class RelayReachTest {
         RelayFacts(
             enabled = true,
             configured = 1,
+            active = 1,
             connected = 1,
             coveredLabels = setOf("peer-a", "group-1"),
             maxAttachBytes = 16 * 1024 * 1024,
@@ -29,7 +30,16 @@ class RelayReachTest {
 
     @Test
     fun `no relay configured says nothing`() {
-        assertEquals(RelayReach.Silent, reachFor("peer-a", covered.copy(configured = 0, connected = 0)))
+        assertEquals(RelayReach.Silent, reachFor("peer-a", covered.copy(configured = 0, active = 0, connected = 0)))
+    }
+
+    @Test
+    fun `a list whose relays are all parked reaches nothing, however long it is`() {
+        // The user's own switches, not an outage: the rules turn on how many relays may carry, so a
+        // configured-but-parked list must read exactly like an empty one.
+        val parked = covered.copy(configured = 3, active = 0, connected = 0)
+        assertEquals(RelayPlane.Off, planeFor(parked))
+        assertEquals(RelayReach.Silent, reachFor("peer-a", parked))
     }
 
     @Test
@@ -63,7 +73,7 @@ class RelayReachTest {
         assertEquals(RelayPlane.Off, planeFor(RelayFacts()))
         assertEquals(RelayPlane.Off, planeFor(covered.copy(enabled = false)))
         // Enabled with an empty relay list is still nothing to report — the plane cannot carry anything.
-        assertEquals(RelayPlane.Off, planeFor(covered.copy(configured = 0, connected = 0)))
+        assertEquals(RelayPlane.Off, planeFor(covered.copy(configured = 0, active = 0, connected = 0)))
     }
 
     @Test
@@ -77,7 +87,7 @@ class RelayReachTest {
 
     @Test
     fun `one connected relay is enough for the header to read live`() {
-        assertEquals(RelayPlane.Live, planeFor(covered.copy(configured = 3, connected = 1)))
+        assertEquals(RelayPlane.Live, planeFor(covered.copy(configured = 3, active = 3, connected = 1)))
         // Coverage is per conversation; the plane being up says nothing about which scopes exist yet.
         assertEquals(RelayPlane.Live, planeFor(covered.copy(coveredLabels = emptySet())))
     }

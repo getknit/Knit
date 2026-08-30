@@ -391,11 +391,14 @@ private fun InternetRelayRow(
     summary: RelaySummary,
     onClick: () -> Unit,
 ) {
+    // "None added" and "none in use" both mean nothing crosses the plane, but they ask different things
+    // of the user — add a relay, or switch one back on — so the empty list keeps its own line.
     val subtitle =
         when {
             !summary.enabled -> stringResource(R.string.relays_summary_off)
             summary.configured == 0 -> stringResource(R.string.relays_summary_none)
-            else -> stringResource(R.string.relays_summary_on, summary.connected, summary.configured)
+            summary.active == 0 -> stringResource(R.string.relays_summary_none_active)
+            else -> stringResource(R.string.relays_summary_on, summary.connected, summary.active)
         }
     Row(
         modifier =

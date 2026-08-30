@@ -73,6 +73,7 @@ class DiagnosticsViewModelTest {
             val settings = mockk<SettingsStore>(relaxed = true)
             every { settings.spoolEnabled } returns MutableStateFlow(false)
             every { settings.spoolUrls } returns MutableStateFlow(emptySet())
+            every { settings.activeSpoolUrls } returns MutableStateFlow(emptySet())
             val journal =
                 object : EmptyJournal() {
                     override fun observeModelLoad(model: String): Flow<ModelLoadState> =
@@ -122,6 +123,7 @@ class DiagnosticsViewModelTest {
             val settings = mockk<SettingsStore>(relaxed = true)
             every { settings.spoolEnabled } returns MutableStateFlow(false)
             every { settings.spoolUrls } returns MutableStateFlow(emptySet())
+            every { settings.activeSpoolUrls } returns MutableStateFlow(emptySet())
             val vm =
                 DiagnosticsViewModel(
                     peers = mockk(relaxed = true),
@@ -148,6 +150,7 @@ class DiagnosticsViewModelTest {
             val settings = mockk<SettingsStore>(relaxed = true)
             every { settings.spoolEnabled } returns MutableStateFlow(false)
             every { settings.spoolUrls } returns MutableStateFlow(emptySet())
+            every { settings.activeSpoolUrls } returns MutableStateFlow(emptySet())
             val ref =
                 CrashReportRef(
                     at = 1_700_000_000_000L,

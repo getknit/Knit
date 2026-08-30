@@ -52,12 +52,17 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   `pending` / `grace` sets (`"<peerId>|<millis>"`) and the counters (`introsSent`, `introsAnswered`). The
   two-device recipe: `card` on each, `import` the other's on each, then `…debug.RATCHET` for `confirmed`
   and `…debug.SPOOL` for the shared DM scope id.
-- `…debug.SPOOL` — configures and inspects the **Internet (spool) plane**, which has no UI beyond a
-  debug-only on/off switch, so this is the only way to drive it on a locked lab device. `--es url
-  <ws(s)://host:port/spool/v1[?k=token]>` adds a spool, `--es drop <url>` removes one, `--ez on
-  <true|false>` flips the global opt-in (default **off**); no extras at all just dumps state. Debug
-  builds accept plain `ws://` (a `knit-spool` daemon terminates no TLS of its own — that's a
-  reverse-proxy job); release refuses it at dial time whatever is stored. The reply's per-scope
+- `…debug.SPOOL` — configures and inspects the **Internet (spool) plane**; the relay editor is in the UI
+  now (`ui/relay/`, ADR 019's M6 amendment), but this is still the only way to drive the plane on a
+  locked lab device. `--es url <ws(s)://host:port/spool/v1[?k=token]>` adds a spool, `--es drop <url>`
+  removes one, `--ez on <true|false>` flips the global opt-in (default **off**); no extras at all just
+  dumps state. `--es park <url>` / `--es unpark <url>` flip one relay's own switch (ADR 063) — how a soak
+  run takes a single spool out of the rotation **without losing its bearer token**, which `drop` would.
+  The dump's `disabled` array is the parked set, and a parked URL stays in `configured` while leaving
+  `spools[]` within one 15 s `ScopeSync` reconcile tick as its worker stops (that disappearance is the
+  oracle that parking actually closed the socket). `drop` clears a parked flag too, so a re-added URL
+  comes back in use. Debug builds accept plain `ws://` (a `knit-spool` daemon terminates no TLS of its
+  own — that's a reverse-proxy job); release refuses it at dial time whatever is stored. The reply's per-scope
   `local` vs `spool` counts are the **convergence oracle** — they agree once the heal loop settles,
   exactly as `liveFingerprint` parity is for mesh custody — and `invalid` should stay 0 (a nonzero
   count means some uploader is putting blobs into a scope that fail validation). Two fields exist to

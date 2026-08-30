@@ -177,6 +177,60 @@ class SettingsStoreTest {
         }
 
     @Test
+    fun `a relay is in use until the user parks it, and the plane still gates the lot`() =
+        runTest {
+            val store = newStore()
+            val a = "wss://a.example/spool/v1"
+            val b = "wss://b.example/spool/v1"
+            store.addSpoolUrl(a)
+            store.addSpoolUrl(b)
+
+            // Nothing is parked by default, so a list that predates this setting keeps working unchanged.
+            assertEquals(emptySet<String>(), store.disabledSpoolUrls.first())
+            // ...but the master switch still decides whether any of them is dialled.
+            assertEquals(emptySet<String>(), store.activeSpoolUrls.first())
+
+            store.setSpoolEnabled(true)
+            assertEquals(setOf(a, b), store.activeSpoolUrls.first())
+
+            store.setSpoolUrlEnabled(a, false)
+            assertEquals(setOf(a), store.disabledSpoolUrls.first())
+            assertEquals("a parked relay must not be dialled", setOf(b), store.activeSpoolUrls.first())
+            assertEquals("parking is not removing", setOf(a, b), store.spoolUrls.first())
+
+            store.setSpoolUrlEnabled(a, true)
+            assertEquals(setOf(a, b), store.activeSpoolUrls.first())
+        }
+
+    @Test
+    fun `removing a parked relay forgets that it was parked`() =
+        runTest {
+            // Otherwise re-adding the same address later brings it back silently switched off, which reads
+            // as the app ignoring the user.
+            val store = newStore()
+            val url = "wss://a.example/spool/v1"
+            store.setSpoolEnabled(true)
+            store.addSpoolUrl(url)
+            store.setSpoolUrlEnabled(url, false)
+
+            store.removeSpoolUrl(url)
+            assertEquals(emptySet<String>(), store.disabledSpoolUrls.first())
+
+            store.addSpoolUrl(url)
+            assertEquals(setOf(url), store.activeSpoolUrls.first())
+        }
+
+    @Test
+    fun `seeded defaults arrive in use`() =
+        runTest {
+            val store = newStore()
+            val default = "wss://lax.spool.getknit.app/spool/v1"
+            store.seedDefaultSpools(listOf(default))
+            store.setSpoolEnabled(true)
+            assertEquals(setOf(default), store.activeSpoolUrls.first())
+        }
+
+    @Test
     fun `seeding preserves a spool the user added and tolerates an empty default list`() =
         runTest {
             val store = newStore()

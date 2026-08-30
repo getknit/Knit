@@ -28,16 +28,15 @@ class ContactCards(
 
     suspend fun mint(): Minted {
         val bundle = checkNotNull(PublicKeyBundle.decode(identity.publicKeyBundle())) { "own bundle must decode" }
+        // `sp` is "relay URLs the owner uses" (docs/CONTACT_CARD.md §2), so it reads the active set:
+        // a relay the plane is off for, or one the user parked, is not one we would ever read a frame
+        // from, and publishing it would point a new contact at an address we ignore.
         val spools =
-            if (settings.spoolEnabled.first()) {
-                settings.spoolUrls
-                    .first()
-                    .filterNot { SpoolUrl.redact(it) != it }
-                    .sorted()
-                    .take(ContactCard.MAX_SPOOLS)
-            } else {
-                emptyList()
-            }
+            settings.activeSpoolUrls
+                .first()
+                .filterNot { SpoolUrl.redact(it) != it }
+                .sorted()
+                .take(ContactCard.MAX_SPOOLS)
         val compact =
             ContactCard.encode(
                 bundle = bundle,

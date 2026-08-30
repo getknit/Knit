@@ -22,10 +22,15 @@ import kotlinx.coroutines.launch
  * [scopeCount] and [carriesPhotos] are null while disconnected rather than zero/false, because "we have
  * not spoken to it yet" is a different statement from "it holds nothing" and from "it refuses photos" —
  * and only the connected form of each is worth showing.
+ *
+ * [enabled] is this relay's own switch, independent of the master one: it says what the user asked for,
+ * not what the plane is doing. The two settle apart for up to one `ScopeSync` reconcile tick after a
+ * flip, which is why the row renders intent first.
  */
 data class RelayRow(
     val url: String,
     val host: String,
+    val enabled: Boolean,
     val connected: Boolean,
     val scopeCount: Int? = null,
     val carriesPhotos: Boolean? = null,
@@ -38,7 +43,8 @@ data class InternetRelayUiState(
 )
 
 /**
- * The Internet relays screen: the master switch, the relay list editor, and each relay's live health.
+ * The Internet relays screen: the master switch, the relay list editor with a switch per relay, and each
+ * relay's live health.
  *
  * The switch does **not** write straight through on the way up — [onToggle] raises [showConsent] the
  * first time, and only [acceptConsent] turns the plane on. Turning it *off* is immediate and
@@ -53,8 +59,9 @@ class InternetRelayViewModel(
         combine(
             settings.spoolEnabled,
             settings.spoolUrls,
+            settings.disabledSpoolUrls,
             relayStatus.statuses,
-        ) { enabled, urls, statuses ->
+        ) { enabled, urls, parked, statuses ->
             val byUrl = statuses.associateBy { it.url }
             InternetRelayUiState(
                 enabled = enabled,
@@ -64,6 +71,7 @@ class InternetRelayViewModel(
                         RelayRow(
                             url = url,
                             host = SpoolUrl.host(url),
+                            enabled = url !in parked,
                             connected = live != null,
                             scopeCount = live?.scopes?.count { !it.retiring },
                             carriesPhotos = live?.let { it.maxAttachBytes != null },
@@ -116,5 +124,17 @@ class InternetRelayViewModel(
 
     fun removeRelay(url: String) {
         viewModelScope.launch { settings.removeSpoolUrl(url) }
+    }
+
+    /**
+     * Parks or un-parks one relay. No consent interlock, unlike [onToggle]: the disclosure is about the
+     * plane existing at all, and this switch can only ever narrow what an already-consented plane sends —
+     * turning a relay on when the master switch is off still opens no socket.
+     */
+    fun setRelayEnabled(
+        url: String,
+        enabled: Boolean,
+    ) {
+        viewModelScope.launch { settings.setSpoolUrlEnabled(url, enabled) }
     }
 }

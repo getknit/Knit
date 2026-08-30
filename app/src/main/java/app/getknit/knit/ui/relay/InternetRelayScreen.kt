@@ -80,6 +80,7 @@ fun InternetRelayScreen(
         onDismissConsent = viewModel::dismissConsent,
         onAddRelay = viewModel::addRelay,
         onRemoveRelay = viewModel::removeRelay,
+        onSetRelayEnabled = viewModel::setRelayEnabled,
         isValidUrl = viewModel::isValidUrl,
     )
 }
@@ -95,6 +96,7 @@ internal fun InternetRelayScreenContent(
     onDismissConsent: () -> Unit = {},
     onAddRelay: (String) -> Unit = {},
     onRemoveRelay: (String) -> Unit = {},
+    onSetRelayEnabled: (String, Boolean) -> Unit = { _, _ -> },
     isValidUrl: (String) -> Boolean = { it.startsWith("wss://") },
 ) {
     var addDialogOpen by remember { mutableStateOf(false) }
@@ -151,6 +153,7 @@ internal fun InternetRelayScreenContent(
                     RelayListRow(
                         relay = relay,
                         planeEnabled = state.enabled,
+                        onSetEnabled = { onSetRelayEnabled(relay.url, it) },
                         onRemove = { pendingRemoval = relay },
                     )
                 }
@@ -245,54 +248,81 @@ private fun MasterSwitchRow(
 }
 
 /**
- * One relay: a status dot, its host, and a second line saying what it is doing for us.
+ * One relay: a status dot, its host, a second line saying what it is doing for us, its own switch, and
+ * the way to remove it.
  *
  * The host is [app.getknit.knit.mesh.spool.SpoolUrl.host]-derived, never the raw URL — a private relay
  * carries its bearer token in the query string, and that token is the whole access control, so it must
  * not survive into a screenshot or a bug report.
+ *
+ * The `toggleable` sits on an **inner** row holding the dot, the text and the switch, with the delete
+ * button as a sibling outside it. That split is what keeps the house pattern usable in a list: putting
+ * `toggleable` on the outer row would nest the delete `IconButton` inside a toggle, which announces as
+ * one control that does two things. As written, a screen reader gets one labelled switch and one
+ * labelled button per relay.
  */
 @Composable
 private fun RelayListRow(
     relay: RelayRow,
     planeEnabled: Boolean,
+    onSetEnabled: (Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val dot =
-            when {
-                relay.connected -> MaterialTheme.colorScheme.tertiary
-                !planeEnabled -> MaterialTheme.colorScheme.outline
-                relay.lastError != null -> MaterialTheme.colorScheme.error
-                else -> MaterialTheme.colorScheme.outline
-            }
-        Spacer(
-            modifier = Modifier.size(10.dp).clip(CircleShape).background(dot),
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = relay.host,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        Row(
+            modifier =
+                Modifier
+                    .weight(1f)
+                    .testTag("relay_row_${relay.host}")
+                    .toggleable(
+                        value = relay.enabled,
+                        enabled = planeEnabled,
+                        onValueChange = onSetEnabled,
+                        role = Role.Switch,
+                    ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Intent outranks liveness: a relay the user just parked keeps its worker for up to one
+            // ScopeSync reconcile tick, and a row that still said "Connected" for those seconds would
+            // read as the switch not having worked.
+            val dot =
+                when {
+                    !planeEnabled || !relay.enabled -> MaterialTheme.colorScheme.outline
+                    relay.connected -> MaterialTheme.colorScheme.tertiary
+                    relay.lastError != null -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.outline
+                }
+            Spacer(
+                modifier = Modifier.size(10.dp).clip(CircleShape).background(dot),
             )
-            Text(
-                text = relayStatusLine(relay, planeEnabled),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // A relay that carries frames but no photos is worth calling out here rather than leaving the
-            // user to discover it one un-relayed photo at a time.
-            if (relay.carriesPhotos == false) {
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = stringResource(R.string.relays_no_photos),
+                    text = relay.host,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = relayStatusLine(relay, planeEnabled),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // A relay that carries frames but no photos is worth calling out here rather than leaving
+                // the user to discover it one un-relayed photo at a time.
+                if (relay.carriesPhotos == false) {
+                    Text(
+                        text = stringResource(R.string.relays_no_photos),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
+            Spacer(Modifier.width(12.dp))
+            Switch(checked = relay.enabled, onCheckedChange = null, enabled = planeEnabled)
         }
         IconButton(onClick = onRemove, modifier = Modifier.size(48.dp)) {
             Icon(
@@ -304,20 +334,31 @@ private fun RelayListRow(
     }
 }
 
-/** The one-line status under a relay's host. */
+/**
+ * The one-line status under a relay's host.
+ *
+ * The two off states are tested before liveness, and are separate strings: "the plane is off" is a fact
+ * about the whole screen and repeats down every row, while "you turned this one off" is a fact about
+ * this relay that only its own row can state. Collapsing them would leave a parked relay indistinguishable
+ * from its neighbours the moment the master switch went off.
+ */
 @Composable
 private fun relayStatusLine(
     relay: RelayRow,
     planeEnabled: Boolean,
 ): String =
     when {
+        !planeEnabled -> {
+            stringResource(R.string.relays_status_off)
+        }
+
+        !relay.enabled -> {
+            stringResource(R.string.relays_status_paused)
+        }
+
         relay.connected -> {
             stringResource(R.string.relays_status_connected) + " · " +
                 pluralStringResource(R.plurals.relays_scope_count, relay.scopeCount ?: 0, relay.scopeCount ?: 0)
-        }
-
-        !planeEnabled -> {
-            stringResource(R.string.relays_status_off)
         }
 
         relay.lastError != null -> {
@@ -497,6 +538,7 @@ fun InternetRelayScreenOnPreview() =
                             RelayRow(
                                 url = "wss://lax.spool.getknit.app/spool/v1",
                                 host = "lax.spool.getknit.app",
+                                enabled = true,
                                 connected = true,
                                 scopeCount = 3,
                                 carriesPhotos = true,
@@ -504,13 +546,21 @@ fun InternetRelayScreenOnPreview() =
                             RelayRow(
                                 url = "wss://frames.example.org/spool/v1",
                                 host = "frames.example.org",
+                                enabled = true,
                                 connected = true,
                                 scopeCount = 3,
                                 carriesPhotos = false,
                             ),
                             RelayRow(
+                                url = "wss://parked.example.org/spool/v1",
+                                host = "parked.example.org",
+                                enabled = false,
+                                connected = false,
+                            ),
+                            RelayRow(
                                 url = "wss://down.example.org/spool/v1",
                                 host = "down.example.org",
+                                enabled = true,
                                 connected = false,
                                 lastError = "unreachable",
                             ),

@@ -160,6 +160,39 @@ class SettingsStore(
     val spoolUrls: Flow<Set<String>> = dataStore.data.map { it[KEY_SPOOL_URLS] ?: emptySet() }
 
     /**
+     * The subset of [spoolUrls] the user has **parked**: still configured, deliberately not dialled.
+     *
+     * Stored as the disabled subset rather than the enabled one so that "in use" is what a URL means by
+     * default — which is what a seeded default, a `--es url` from the debug bridge, and every list that
+     * predates this setting all have to mean. A parked URL is not a removed one: removal forgets the
+     * address and its `?k=` bearer token (spec §7.1), which for a private relay is the whole access
+     * control, and `seedDefaultSpools`' one-shot marker makes it unrecoverable.
+     *
+     * For the relay editor only — it is the one screen that must render what it is *not* using. Everything
+     * that asks which relays we actually dial reads [activeSpoolUrls].
+     */
+    val disabledSpoolUrls: Flow<Set<String>> = dataStore.data.map { it[KEY_SPOOL_DISABLED] ?: emptySet() }
+
+    /**
+     * The relays this device dials right now: [spoolUrls] minus [disabledSpoolUrls], and empty whenever
+     * [spoolEnabled] is false.
+     *
+     * **This is the seam.** For the reason [spoolEnabled] folds `BuildConfig.INTERNET_PLANE` into itself
+     * rather than leaving each consumer to remember it, the per-relay filter composes *here* too: one flow
+     * answers "which relays may carry for us", so `ScopeSync`'s url supplier, the contact card's `sp` list
+     * and `RelayStatusRepository`'s counts cannot disagree, and a future consumer cannot forget either
+     * gate. Filtering at each call site would be two rules to keep in step instead of none.
+     */
+    val activeSpoolUrls: Flow<Set<String>> =
+        dataStore.data.map { prefs ->
+            if (!BuildConfig.INTERNET_PLANE || prefs[KEY_SPOOL_ENABLED] != true) {
+                emptySet()
+            } else {
+                (prefs[KEY_SPOOL_URLS] ?: emptySet()) - (prefs[KEY_SPOOL_DISABLED] ?: emptySet())
+            }
+        }
+
+    /**
      * Whether the user has been shown, and accepted, the disclosure behind [spoolEnabled] — what a spool
      * can observe (IP, timing, volume) and cannot (content, roster), that the choice is global rather
      * than per-conversation, and that switching off stops new uploads while sealed copies already at a
@@ -423,7 +456,26 @@ class SettingsStore(
     /** Adds a spool URL to sync against (idempotent — the setting is a set, not a list). */
     suspend fun addSpoolUrl(url: String) = dataStore.edit { it[KEY_SPOOL_URLS] = (it[KEY_SPOOL_URLS] ?: emptySet()) + url }
 
-    suspend fun removeSpoolUrl(url: String) = dataStore.edit { it[KEY_SPOOL_URLS] = (it[KEY_SPOOL_URLS] ?: emptySet()) - url }
+    /**
+     * Removes a spool URL, and clears any parked flag it carried in the same write.
+     *
+     * The two must move together: a stale flag left behind would make a later re-add of the same address
+     * come back silently switched off, which reads as the app ignoring the user's action.
+     */
+    suspend fun removeSpoolUrl(url: String) =
+        dataStore.edit {
+            it[KEY_SPOOL_URLS] = (it[KEY_SPOOL_URLS] ?: emptySet()) - url
+            it[KEY_SPOOL_DISABLED] = (it[KEY_SPOOL_DISABLED] ?: emptySet()) - url
+        }
+
+    /** Parks or un-parks one configured relay. See [disabledSpoolUrls]; the plane's own switch is [setSpoolEnabled]. */
+    suspend fun setSpoolUrlEnabled(
+        url: String,
+        enabled: Boolean,
+    ) = dataStore.edit {
+        val parked = it[KEY_SPOOL_DISABLED] ?: emptySet()
+        it[KEY_SPOOL_DISABLED] = if (enabled) parked - url else parked + url
+    }
 
     override fun observeModelLoad(model: String): Flow<ModelLoadState> = dataStore.data.map { it.modelLoadState(model) }
 
@@ -491,6 +543,7 @@ class SettingsStore(
         val KEY_REVIEW_ATTEMPT_COUNT = longPreferencesKey("review_attempt_count")
         val KEY_SPOOL_ENABLED = booleanPreferencesKey("spool_enabled")
         val KEY_SPOOL_URLS = stringSetPreferencesKey("spool_urls")
+        val KEY_SPOOL_DISABLED = stringSetPreferencesKey("spool_urls_disabled")
         val KEY_SPOOL_SEEDED = booleanPreferencesKey("spool_defaults_seeded")
         val KEY_SPOOL_CONSENTED = booleanPreferencesKey("spool_consented")
         val KEY_LORA_ENABLED = booleanPreferencesKey("lora_enabled")

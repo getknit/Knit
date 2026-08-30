@@ -94,6 +94,7 @@ class ChatViewModelTest {
     private val nameFlow = MutableStateFlow("Alice")
     private val spoolEnabledFlow = MutableStateFlow(false)
     private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
+    private val activeSpoolUrlsFlow = MutableStateFlow(emptySet<String>())
     private val relayFactsFlow = MutableStateFlow(RelayFacts())
     private val loraFactsFlow = MutableStateFlow(LoraFacts())
     private val deliveredCountsFlow = MutableStateFlow(emptyMap<String, Int>())
@@ -117,6 +118,7 @@ class ChatViewModelTest {
         // combines these — one silent flow would stall every state assertion in this class.
         every { settings.spoolEnabled } returns spoolEnabledFlow
         every { settings.spoolUrls } returns spoolUrlsFlow
+        every { settings.activeSpoolUrls } returns activeSpoolUrlsFlow
         every { receipts.observeDeliveredCounts(any(), any()) } returns deliveredCountsFlow
     }
 

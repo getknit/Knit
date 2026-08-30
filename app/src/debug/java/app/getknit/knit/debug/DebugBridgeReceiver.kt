@@ -1027,8 +1027,12 @@ class DebugBridgeReceiver :
      * device, since there is no spool-list editor in the UI yet. With no extras it just dumps state.
      *
      * `--es url <ws(s)://host:port/spool/v1[?k=token]>` adds a spool, `--es drop <url>` removes one, and
-     * `--ez on <true|false>` flips the global opt-in. Debug builds accept plain `ws://` (a LAN daemon
-     * terminates no TLS of its own); release refuses it at dial time regardless of what is stored here.
+     * `--ez on <true|false>` flips the global opt-in. `--es park <url>` / `--es unpark <url>` flip one
+     * relay's own switch, which is how a soak run takes a single spool out of the rotation without losing
+     * its bearer token — the dump's `disabled` array reports the result, and the parked URL leaves
+     * `spools[]` within one `ScopeSync` reconcile tick as its worker stops. Debug builds accept plain
+     * `ws://` (a LAN daemon terminates no TLS of its own); release refuses it at dial time regardless of
+     * what is stored here.
      *
      * The dump's `local` and `spool` counts per scope are the convergence oracle: they agree once the
      * heal loop has settled, exactly like `liveFingerprint` parity for mesh custody.
@@ -1037,6 +1041,8 @@ class DebugBridgeReceiver :
     private suspend fun handleSpool(intent: Intent): JSONObject {
         intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() }?.let { settings.addSpoolUrl(it.trim()) }
         intent.getStringExtra(EXTRA_DROP)?.takeIf { it.isNotBlank() }?.let { settings.removeSpoolUrl(it.trim()) }
+        intent.getStringExtra(EXTRA_PARK)?.takeIf { it.isNotBlank() }?.let { settings.setSpoolUrlEnabled(it.trim(), false) }
+        intent.getStringExtra(EXTRA_UNPARK)?.takeIf { it.isNotBlank() }?.let { settings.setSpoolUrlEnabled(it.trim(), true) }
         if (intent.hasExtra(EXTRA_ON)) settings.setSpoolEnabled(intent.getBooleanExtra(EXTRA_ON, false))
 
         val spools = JSONArray()
@@ -1078,6 +1084,7 @@ class DebugBridgeReceiver :
             .put("status", "ok")
             .put("enabled", settings.spoolEnabled.first())
             .put("configured", JSONArray(settings.spoolUrls.first().toList()))
+            .put("disabled", JSONArray(settings.disabledSpoolUrls.first().toList()))
             .put("spools", spools)
             .put("counters", metricsJson(metrics.snapshot()))
     }
@@ -1367,6 +1374,8 @@ class DebugBridgeReceiver :
         const val EXTRA_ON = "on"
         const val EXTRA_MODE = "mode"
         const val EXTRA_DROP = "drop"
+        const val EXTRA_PARK = "park"
+        const val EXTRA_UNPARK = "unpark"
         const val EXTRA_RESET_PEER = "reset"
 
         /** Default sender + hidden body for [ACTION_FLAGMSG]'s synthetic flagged inbound message. */

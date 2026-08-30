@@ -1,11 +1,13 @@
 package app.getknit.knit.ui.relay
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -36,6 +38,7 @@ class InternetRelayScreenContentTest {
         onToggle: (Boolean) -> Unit = {},
         onAddRelay: (String) -> Unit = {},
         onRemoveRelay: (String) -> Unit = {},
+        onSetRelayEnabled: (String, Boolean) -> Unit = { _, _ -> },
         onAcceptConsent: () -> Unit = {},
     ) {
         compose.setContent {
@@ -48,6 +51,7 @@ class InternetRelayScreenContentTest {
                     onAcceptConsent = onAcceptConsent,
                     onAddRelay = onAddRelay,
                     onRemoveRelay = onRemoveRelay,
+                    onSetRelayEnabled = onSetRelayEnabled,
                     isValidUrl = { it.startsWith("wss://") },
                 )
             }
@@ -56,6 +60,7 @@ class InternetRelayScreenContentTest {
 
     private fun relay(
         host: String = "lax.spool.getknit.app",
+        enabled: Boolean = true,
         connected: Boolean = true,
         scopeCount: Int? = 3,
         carriesPhotos: Boolean? = true,
@@ -63,6 +68,7 @@ class InternetRelayScreenContentTest {
     ) = RelayRow(
         url = "wss://$host/spool/v1",
         host = host,
+        enabled = enabled,
         connected = connected,
         scopeCount = scopeCount,
         carriesPhotos = carriesPhotos,
@@ -167,6 +173,73 @@ class InternetRelayScreenContentTest {
         // The dialog's confirm button carries the same label as the row that opened it.
         compose.onAllNodesWithText("Add relay").onLast().performClick()
         assertEquals("wss://new.example.org/spool/v1", added)
+    }
+
+    @Test
+    fun aParkedRelayReadsAsParkedRatherThanAsAnOutage() {
+        // The point of the row's own switch is that it is not a failure: the status line and the switch
+        // have to agree, and neither may borrow the error styling a real outage uses.
+        render(
+            InternetRelayUiState(
+                enabled = true,
+                relays = listOf(relay(enabled = false, connected = false, scopeCount = null, carriesPhotos = null)),
+            ),
+        )
+        compose.onNodeWithText("Turned off").assertIsDisplayed()
+        compose.onNodeWithTag("relay_row_lax.spool.getknit.app").assertIsOff()
+    }
+
+    @Test
+    fun intentOutranksAStillConnectedWorker() {
+        // ScopeSync reconciles on a 15 s tick, so a just-parked relay stays connected for a beat. The row
+        // must report what the user asked for, or the switch reads as not having worked.
+        render(
+            InternetRelayUiState(enabled = true, relays = listOf(relay(enabled = false, connected = true))),
+        )
+        compose.onNodeWithText("Turned off").assertIsDisplayed()
+    }
+
+    @Test
+    fun togglingOneRelayReportsItsOwnUrl() {
+        val flipped = mutableListOf<Pair<String, Boolean>>()
+        render(
+            InternetRelayUiState(
+                enabled = true,
+                relays = listOf(relay(host = "one.example.org"), relay(host = "two.example.org", enabled = false)),
+            ),
+            onSetRelayEnabled = { url, on -> flipped += url to on },
+        )
+        compose.onNodeWithTag("relay_row_two.example.org").performClick()
+        assertEquals(listOf("wss://two.example.org/spool/v1" to true), flipped)
+    }
+
+    @Test
+    fun aRelayRowCannotBeFlippedWhileThePlaneIsOff() {
+        // The master switch gates the sockets, so a per-relay switch that still moved would be offering a
+        // choice with no effect. It greys out instead, the same way the LoRa screen's sub-switches do.
+        val flipped = mutableListOf<String>()
+        render(
+            InternetRelayUiState(enabled = false, relays = listOf(relay())),
+            onSetRelayEnabled = { url, _ -> flipped += url },
+        )
+        compose.onNodeWithTag("relay_row_lax.spool.getknit.app").assertIsNotEnabled().performClick()
+        assertEquals(emptyList<String>(), flipped)
+        // And it says why: the whole plane is off, which is a different statement from this one relay being.
+        compose.onNodeWithText("Not in use").assertIsDisplayed()
+    }
+
+    @Test
+    fun aParkedRelayCanStillBeRemoved() {
+        // The delete button is a sibling of the toggle rather than nested inside it, so parking a relay
+        // must not take away the way to forget it entirely.
+        var removed: String? = null
+        render(
+            InternetRelayUiState(enabled = true, relays = listOf(relay(enabled = false))),
+            onRemoveRelay = { removed = it },
+        )
+        compose.onNodeWithContentDescription("Remove relay lax.spool.getknit.app").performClick()
+        compose.onAllNodesWithText("Remove").onLast().performClick()
+        assertEquals("wss://lax.spool.getknit.app/spool/v1", removed)
     }
 
     @Test

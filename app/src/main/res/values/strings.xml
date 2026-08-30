@@ -491,6 +491,7 @@
     <string name="relays_summary_off">Off</string>
     <string name="relays_summary_on">On · %1$d of %2$d connected</string>
     <string name="relays_summary_none">On · no relays added</string>
+    <string name="relays_summary_none_active">On · no relays in use</string>
     <string name="relays_section_list">Relays</string>
     <string name="relays_off_note">Turning this off stops new uploads. Sealed copies already on a relay are unreadable to it and expire within 48 hours.</string>
     <string name="relays_empty">No relays added. The Internet plane stays off until you add one — your messages still travel by Wi-Fi and Bluetooth.</string>
@@ -505,6 +506,7 @@
     <string name="relays_status_connected">Connected</string>
     <string name="relays_status_connecting">Connecting…</string>
     <string name="relays_status_off">Not in use</string>
+    <string name="relays_status_paused">Turned off</string>
     <!-- LoRa (Meshtastic-over-BLE) radio settings -->
     <string name="lora_title">LoRa radio</string>
     <string name="settings_lora_title">Use a LoRa radio</string>

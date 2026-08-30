@@ -62,12 +62,14 @@ class RelayStatusRepository(
         combine(
             settings.spoolEnabled,
             settings.spoolUrls,
+            settings.activeSpoolUrls,
             statuses,
-        ) { enabled, urls, spools ->
+        ) { enabled, urls, active, spools ->
             val live = spools.filter { it.connected }
             RelayFacts(
                 enabled = enabled,
                 configured = urls.size,
+                active = active.size,
                 connected = live.size,
                 // Only non-retiring scopes count as coverage: a retiring scope is drained but never
                 // refilled (spec §3.1/§3.3), so a new message would not reach it.

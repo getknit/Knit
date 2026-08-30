@@ -44,6 +44,7 @@ data class LoraSummary(
 data class RelaySummary(
     val enabled: Boolean = false,
     val configured: Int = 0,
+    val active: Int = 0,
     val connected: Int = 0,
 )
 
@@ -111,7 +112,7 @@ class ProfileViewModel(
      */
     val relaySummary: StateFlow<RelaySummary> =
         relayFacts
-            .map { RelaySummary(it.enabled, it.configured, it.connected) }
+            .map { RelaySummary(it.enabled, it.configured, it.active, it.connected) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RelaySummary())
 
     /** Summary of the LoRa plane for the Profile row that navigates to its own screen: settings + the live link. */

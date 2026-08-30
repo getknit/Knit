@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.ui.chat.DeliveryStatus
@@ -182,6 +183,68 @@ class ChatListScreenContentTest {
         }
 
         compose.onNodeWithTag("chatlist_requests").assertDoesNotExist()
+    }
+
+    @Test
+    fun theGettingStartedHintRoutesToNearbyAndToAddContact() {
+        var opened: String? = null
+        var addContact = 0
+        compose.setContent {
+            KnitTheme {
+                ChatListScreenContent(
+                    state =
+                        ChatListUiState(
+                            conversations = listOf(row("nearby", "Nearby", isRoom = true)),
+                            showGettingStarted = true,
+                        ),
+                    now = now,
+                    onOpenConversation = { opened = it },
+                    onNewMessage = {},
+                    onOpenProfile = {},
+                    onOpenDiagnostics = {},
+                    onOpenBlockedUsers = {},
+                    onOpenMessageRequests = {},
+                    onOpenDonate = {},
+                    onOpenAddContact = { addContact++ },
+                    onShareApp = {},
+                    onOpenRadioSettings = {},
+                    onDismissRadioWarning = {},
+                    onDeleteConversation = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("chatlist_hint").assertIsDisplayed()
+        compose.onNodeWithTag("chatlist_hint_add_contact").performClick()
+        assertEquals(1, addContact)
+        compose.onNodeWithTag("chatlist_hint_nearby").performClick()
+        assertEquals(Conversations.NEARBY, opened)
+    }
+
+    @Test
+    fun theGettingStartedHintIsAbsentOnceThereIsSomethingToOpen() {
+        compose.setContent {
+            KnitTheme {
+                ChatListScreenContent(
+                    state = ChatListUiState(conversations = listOf(row("nearby", "Nearby", isRoom = true))),
+                    now = now,
+                    onOpenConversation = {},
+                    onNewMessage = {},
+                    onOpenProfile = {},
+                    onOpenDiagnostics = {},
+                    onOpenBlockedUsers = {},
+                    onOpenMessageRequests = {},
+                    onOpenDonate = {},
+                    onOpenAddContact = {},
+                    onShareApp = {},
+                    onOpenRadioSettings = {},
+                    onDismissRadioWarning = {},
+                    onDeleteConversation = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("chatlist_hint").assertDoesNotExist()
     }
 
     @Test

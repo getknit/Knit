@@ -87,6 +87,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
+import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.relay.RelayPlane
 import app.getknit.knit.mesh.TransportHealth
@@ -379,6 +380,17 @@ internal fun ChatListScreenContent(
                                 // something just arrived.
                                 modifier = Modifier.animateItem(placementSpec = KnitMotion.spatial()),
                             )
+                        }
+                        // First run only, and directly under the Nearby row it points at: the room's row is
+                        // always there, so without this the screen offers a new user nothing to act on.
+                        if (state.showGettingStarted) {
+                            item(key = "getting_started") {
+                                GettingStartedCard(
+                                    onSayHello = { onOpenConversation(Conversations.NEARBY) },
+                                    onAddContact = onOpenAddContact,
+                                    modifier = Modifier.animateItem(placementSpec = KnitMotion.spatial()),
+                                )
+                            }
                         }
                     }
                 }
@@ -967,6 +979,47 @@ fun ChatListScreenLoadingPreview() =
     KnitPreview {
         ChatListScreenContent(
             state = ChatListUiState(isLoading = true),
+            now = PREVIEW_NOW,
+            onOpenConversation = {},
+            onNewMessage = {},
+            onOpenProfile = {},
+            onOpenDiagnostics = {},
+            onOpenBlockedUsers = {},
+            onOpenMessageRequests = {},
+            onOpenDonate = {},
+            onOpenAddContact = {},
+            onShareApp = {},
+            onOpenRadioSettings = {},
+            onDismissRadioWarning = {},
+            onDeleteConversation = {},
+        )
+    }
+
+// First run: the Nearby row with no messages behind it, plus the getting-started nudge.
+@Preview(showBackground = true)
+@Composable
+fun ChatListScreenFirstRunPreview() =
+    KnitPreview {
+        ChatListScreenContent(
+            state =
+                ChatListUiState(
+                    conversations =
+                        listOf(
+                            ConversationRow(
+                                id = "nearby",
+                                title = "Nearby",
+                                avatarHash = null,
+                                isRoom = true,
+                                isGroup = false,
+                                lastPreview = null,
+                                lastMessageAt = null,
+                                unreadCount = 0,
+                            ),
+                        ),
+                    neighborCount = 0,
+                    transportHealth = TransportHealth.Healthy,
+                    showGettingStarted = true,
+                ),
             now = PREVIEW_NOW,
             onOpenConversation = {},
             onNewMessage = {},

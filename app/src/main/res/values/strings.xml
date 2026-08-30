@@ -241,6 +241,10 @@
     <!-- Chat list -->
     <string name="nearby_title">Nearby</string>
     <string name="chat_list_empty_preview">No messages yet</string>
+    <string name="chat_list_hint_title">Get started</string>
+    <string name="chat_list_hint_body">Messages hop from phone to phone — no internet needed. Say hello in Nearby to reach everyone in range, or add a contact to message one person directly.</string>
+    <string name="chat_list_hint_nearby">Say hello</string>
+    <string name="chat_list_hint_add_contact">Add a contact</string>
     <string name="chat_list_preview_photo">📷 Photo</string>
     <string name="chat_list_preview_voice">🎤 Voice message</string>
     <string name="chat_list_preview_with_sender">%1$s: %2$s</string>

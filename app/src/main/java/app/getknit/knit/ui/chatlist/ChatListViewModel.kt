@@ -79,6 +79,9 @@ data class ChatListUiState(
     val loraPlane: LoraPlane = LoraPlane.Off,
     // The radio-off warning banner to show (or null), already accounting for the user's dismissal.
     val radioWarning: RadioWarning? = null,
+    // First run: show the getting-started hint under the Nearby row. True only while there is nothing on
+    // this screen to open — see the flag's computation in [state] for what retires it.
+    val showGettingStarted: Boolean = false,
     // True only for the initial seed value (see [state]'s stateIn below), before the underlying Room +
     // DataStore + mesh flows have all first-emitted. The list shows a skeleton instead of a blank screen
     // for that ~1s cold-start gap. Defaults false so every real combine emission — and the previews —
@@ -308,6 +311,12 @@ class ChatListViewModel(
             val requestCount =
                 byConversation.keys.count { it != Conversations.NEARBY && it !in groupIds && isPending(it) } +
                     activeGroups.count { isPending(it.groupId) }
+            // The list is never literally empty — the Nearby room always has a row — so a fresh install
+            // reads as a working screen with nothing to do on it. Nudge until there is: any Nearby message,
+            // a group, a DM, or a pending request. Deleting every thread again brings the hint back, which
+            // is the state it is written for.
+            val gettingStarted =
+                nearby.lastMessageAt == null && groupRows.isEmpty() && dms.isEmpty() && requestCount == 0
             ChatListUiState(
                 conversations = (listOf(nearby) + groupRows + dms).sortedByDescending { it.lastMessageAt ?: 0L },
                 requestCount = requestCount,
@@ -316,6 +325,7 @@ class ChatListViewModel(
                 relayPlane = mesh.relayPlane,
                 loraPlane = mesh.loraPlane,
                 radioWarning = mesh.warning,
+                showGettingStarted = gettingStarted,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatListUiState(isLoading = true))
 

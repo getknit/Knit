@@ -37,6 +37,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -100,6 +101,50 @@ class ChatListViewModelTest {
                     .first { it.id == Conversations.NEARBY }
             assertTrue(nearby.isRoom)
             assertEquals(context.getString(R.string.nearby_title), nearby.title)
+        }
+
+    @Test
+    fun theGettingStartedHintShowsOnAFreshInstallAndRetiresOnTheFirstNearbyMessage() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            advanceUntilIdle()
+
+            // Nothing but the (empty) Nearby row: the list looks populated but has nothing to open.
+            assertTrue(vm.state.value.showGettingStarted)
+
+            messagesFlow.value = listOf(msg(senderId = "bob", sentAt = 100, conversationId = Conversations.NEARBY))
+            advanceUntilIdle()
+
+            assertFalse(vm.state.value.showGettingStarted)
+        }
+
+    @Test
+    fun theGettingStartedHintRetiresForAGroupADmOrAPendingRequest() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+
+            // An empty group the user just created — no messages anywhere, but there is a thread to open.
+            groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x"), createdAt = 50))
+            acceptedFlow.value = setOf("g-1")
+            advanceUntilIdle()
+            assertFalse(vm.state.value.showGettingStarted)
+
+            // An accepted DM.
+            groupsFlow.value = emptyList()
+            messagesFlow.value =
+                listOf(msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"))
+            acceptedFlow.value = setOf("friend")
+            advanceUntilIdle()
+            assertFalse(vm.state.value.showGettingStarted)
+
+            // A stranger's DM is partitioned into the requests inbox rather than the list, but it is still
+            // somewhere to go, so the hint stays retired.
+            acceptedFlow.value = emptySet()
+            advanceUntilIdle()
+            assertEquals(1, vm.state.value.requestCount)
+            assertFalse(vm.state.value.showGettingStarted)
         }
 
     @Test

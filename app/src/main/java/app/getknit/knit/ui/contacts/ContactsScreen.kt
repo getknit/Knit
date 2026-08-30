@@ -1,6 +1,8 @@
 package app.getknit.knit.ui.contacts
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
@@ -51,7 +55,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.PeerNameText
+import app.getknit.knit.ui.components.skeletonBlockColor
+import app.getknit.knit.ui.components.skeletonPulseAlpha
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.theme.KnitMotion
 import org.koin.androidx.compose.koinViewModel
 
 /**
@@ -66,7 +73,7 @@ fun ContactsScreen(
     onAddContact: () -> Unit = {},
     viewModel: ContactsViewModel = koinViewModel(),
 ) {
-    val contacts by viewModel.contacts.collectAsStateWithLifecycle()
+    val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val groupFullMessage =
         stringResource(R.string.contacts_group_full, ContactsViewModel.MAX_OTHER_MEMBERS + 1)
@@ -77,7 +84,7 @@ fun ContactsScreen(
     }
 
     ContactsScreenContent(
-        contacts = contacts,
+        state = state,
         onBack = onBack,
         onPickSingle = onPick,
         onCreateGroup = viewModel::createGroup,
@@ -89,7 +96,7 @@ fun ContactsScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ContactsScreenContent(
-    contacts: List<Contact>,
+    state: ContactsUiState,
     onBack: () -> Unit,
     onPickSingle: (nodeId: String) -> Unit,
     onCreateGroup: (memberIds: List<String>) -> Unit,
@@ -147,38 +154,102 @@ internal fun ContactsScreenContent(
             }
         },
     ) { padding ->
-        if (contacts.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(padding).padding(32.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text(
-                        text = stringResource(R.string.contacts_empty),
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedButton(onClick = onAddContact, modifier = Modifier.testTag("contacts_add_empty")) {
-                        Icon(Icons.Filled.PersonAdd, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.add_contact_title))
+        // The picker's contacts are a combine of Room + DataStore + mesh flows that emits nothing for the
+        // first frames after this screen is created — exactly the frames the chat-list → picker transition
+        // is playing over. Drawing the "no contacts yet" empty state there flashed a centred column that
+        // the real rows then replaced in one frame, which is what made the transition read as jagged; show
+        // the same-shaped skeleton instead and cross-fade to whichever state actually arrives.
+        val listEnter = KnitMotion.enterFade()
+        val listExit = KnitMotion.exitFade()
+        AnimatedContent(
+            targetState = state.isLoading,
+            transitionSpec = { listEnter togetherWith listExit },
+            label = "contactsLoading",
+            modifier = Modifier.fillMaxSize().padding(padding),
+        ) { loading ->
+            when {
+                loading -> {
+                    ContactsSkeleton(modifier = Modifier.fillMaxSize())
+                }
+
+                state.contacts.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.contacts_empty),
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedButton(onClick = onAddContact, modifier = Modifier.testTag("contacts_add_empty")) {
+                                Icon(Icons.Filled.PersonAdd, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.add_contact_title))
+                            }
+                        }
+                    }
+                }
+
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 4.dp),
+                    ) {
+                        items(state.contacts, key = { it.nodeId }) { contact ->
+                            ContactRow(
+                                contact = contact,
+                                selected = contact.nodeId in selected,
+                                onClick = { toggle(contact.nodeId) },
+                            )
+                        }
                     }
                 }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(vertical = 4.dp),
-            ) {
-                items(contacts, key = { it.nodeId }) { contact ->
-                    ContactRow(
-                        contact = contact,
-                        selected = contact.nodeId in selected,
-                        onClick = { toggle(contact.nodeId) },
-                    )
-                }
-            }
         }
+    }
+}
+
+/**
+ * Placeholder rows shown while the contact list is still loading (see [ContactsUiState.isLoading]). A row's
+ * shape mirrors [ContactRow] — leading avatar circle, name line, trailing selection dot — so the real list
+ * lands without a layout jump.
+ */
+@Composable
+private fun ContactsSkeleton(modifier: Modifier = Modifier) {
+    val alpha = skeletonPulseAlpha(label = "contactsSkeleton")
+    Column(modifier = modifier.padding(vertical = 4.dp)) {
+        repeat(SKELETON_ROW_COUNT) { ContactSkeletonRow(pulseAlpha = alpha) }
+    }
+}
+
+private const val SKELETON_ROW_COUNT = 6
+
+@Composable
+private fun ContactSkeletonRow(pulseAlpha: Float) {
+    val blockColor = skeletonBlockColor(pulseAlpha)
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(48.dp).clip(CircleShape).background(blockColor))
+        Spacer(Modifier.width(12.dp))
+        // The name line claims the row's slack the way PeerNameText does, then draws across half of it.
+        Box(modifier = Modifier.weight(1f)) {
+            Box(
+                Modifier
+                    .fillMaxWidth(0.5f)
+                    .height(16.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(blockColor),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Box(Modifier.size(24.dp).clip(CircleShape).background(blockColor))
     }
 }
 
@@ -232,12 +303,15 @@ private fun ContactRow(
 fun ContactsScreenPreview() =
     KnitPreview {
         ContactsScreenContent(
-            contacts =
-                listOf(
-                    Contact(nodeId = "node-ada", displayName = "Ada Lovelace", avatarHash = null, online = true),
-                    Contact(nodeId = "node-grace", displayName = "Grace Hopper", avatarHash = null, online = true),
-                    Contact(nodeId = "node-edsger", displayName = "Edsger Dijkstra", avatarHash = null, online = false),
-                    Contact(nodeId = "node-radia", displayName = "Radia Perlman", avatarHash = null, online = false),
+            state =
+                ContactsUiState(
+                    contacts =
+                        listOf(
+                            Contact(nodeId = "node-ada", displayName = "Ada Lovelace", avatarHash = null, online = true),
+                            Contact(nodeId = "node-grace", displayName = "Grace Hopper", avatarHash = null, online = true),
+                            Contact(nodeId = "node-edsger", displayName = "Edsger Dijkstra", avatarHash = null, online = false),
+                            Contact(nodeId = "node-radia", displayName = "Radia Perlman", avatarHash = null, online = false),
+                        ),
                 ),
             onBack = {},
             onPickSingle = {},
@@ -251,7 +325,21 @@ fun ContactsScreenPreview() =
 fun ContactsScreenEmptyPreview() =
     KnitPreview {
         ContactsScreenContent(
-            contacts = emptyList(),
+            state = ContactsUiState(),
+            onBack = {},
+            onPickSingle = {},
+            onCreateGroup = {},
+            onGroupFull = {},
+        )
+    }
+
+// Cold-start loading state: the skeleton placeholder rows shown until the state flow first emits.
+@Preview(showBackground = true)
+@Composable
+fun ContactsScreenLoadingPreview() =
+    KnitPreview {
+        ContactsScreenContent(
+            state = ContactsUiState(isLoading = true),
             onBack = {},
             onPickSingle = {},
             onCreateGroup = {},

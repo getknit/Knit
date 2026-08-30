@@ -8,12 +8,6 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.togetherWith
@@ -104,6 +98,8 @@ import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
 import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.components.RoomAvatar
+import app.getknit.knit.ui.components.skeletonBlockColor
+import app.getknit.knit.ui.components.skeletonPulseAlpha
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.invite.ShareKnitDialog
 import app.getknit.knit.ui.invite.ShareStorageException
@@ -398,17 +394,7 @@ internal fun ChatListScreenContent(
  */
 @Composable
 private fun ChatListSkeleton(modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "chatListSkeleton")
-    val alpha by transition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 0.9f,
-        animationSpec =
-            infiniteRepeatable(
-                animation = tween(durationMillis = 700, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse,
-            ),
-        label = "chatListSkeletonAlpha",
-    )
+    val alpha = skeletonPulseAlpha(label = "chatListSkeleton")
     Column(modifier = modifier.padding(vertical = 4.dp)) {
         repeat(SKELETON_ROW_COUNT) { ConversationSkeletonRow(pulseAlpha = alpha) }
     }
@@ -418,9 +404,7 @@ private const val SKELETON_ROW_COUNT = 6
 
 @Composable
 private fun ConversationSkeletonRow(pulseAlpha: Float) {
-    // Tint the placeholder blocks from the theme so they read correctly in light and dark; the pulse
-    // rides on top of a low base opacity so the shapes never fully disappear.
-    val blockColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f * pulseAlpha + 0.04f)
+    val blockColor = skeletonBlockColor(pulseAlpha)
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,

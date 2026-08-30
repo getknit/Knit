@@ -33,6 +33,16 @@ data class Contact(
     val discriminator: String? = null,
 )
 
+/** What the "new message" picker draws: the resolved contacts, or the fact that they aren't resolved yet. */
+data class ContactsUiState(
+    val contacts: List<Contact> = emptyList(),
+    // True until the underlying Room + DataStore + mesh flows have all first-emitted AND our own node id
+    // has resolved. Without it the picker draws its "no contacts yet" empty state for those first frames —
+    // right as the screen is fading in from the chat list, so the flash lands inside the nav transition and
+    // reads as a stutter. Defaults false so every real combine emission — and the previews — render content.
+    val isLoading: Boolean = false,
+)
+
 /**
  * Backs the "new message" contact picker. The list is your **established contacts** — deliberately not
  * every stranger you've seen in the Nearby room: a node id qualifies only if you've engaged with it
@@ -127,7 +137,7 @@ class ContactsViewModel(
         ) { msgs, groupList, accepted -> Bundle(msgs, groupList, accepted) }
 
     /** Accepted DM peers ∪ active-group co-members ∪ verified peers, minus self and blocked; connected first, then name. */
-    val contacts: StateFlow<List<Contact>> =
+    val state: StateFlow<ContactsUiState> =
         combine(
             bundle,
             peers.observeDirectory(),
@@ -136,8 +146,9 @@ class ContactsViewModel(
             myNodeId,
         ) { b, directory, neighbors, blocked, me ->
             // Until our own id resolves we can't compute "self-authored" (nor filter ourselves out), so
-            // surface nothing rather than mis-including a thread during the ~1s cold-start gap.
-            if (me == null) return@combine emptyList<Contact>()
+            // surface nothing rather than mis-including a thread during the ~1s cold-start gap. Still
+            // *loading*, not empty — an empty list here would flash the "no contacts yet" state.
+            if (me == null) return@combine ContactsUiState(isLoading = true)
             val online = neighbors.map { it.nodeId }.toSet()
             val byNode = directory.byNode
             val verifiedIds =
@@ -168,16 +179,19 @@ class ContactsViewModel(
             // contact even before a single message exists in the thread.
             val explicitlyAccepted = b.accepted.filterTo(mutableSetOf()) { Conversations.kindFor(it) == ConversationKind.DM }
             val contactIds = (acceptedDmPeers + explicitlyAccepted + groupMembers + verifiedIds) - blocked - me
-            contactIds
-                .map { id ->
-                    val label = directory.label(id)
-                    Contact(
-                        nodeId = id,
-                        displayName = label.text,
-                        avatarHash = byNode[id]?.avatarHash,
-                        online = id in online,
-                        discriminator = label.discriminator,
-                    )
-                }.sortedWith(compareByDescending<Contact> { it.online }.thenBy { it.displayName.lowercase() })
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+            ContactsUiState(
+                contacts =
+                    contactIds
+                        .map { id ->
+                            val label = directory.label(id)
+                            Contact(
+                                nodeId = id,
+                                displayName = label.text,
+                                avatarHash = byNode[id]?.avatarHash,
+                                online = id in online,
+                                discriminator = label.discriminator,
+                            )
+                        }.sortedWith(compareByDescending<Contact> { it.online }.thenBy { it.displayName.lowercase() }),
+            )
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ContactsUiState(isLoading = true))
 }

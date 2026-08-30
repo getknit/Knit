@@ -20,6 +20,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -70,10 +71,51 @@ class ContactsViewModelTest {
 
     private fun vm() = ContactsViewModel(peers, mesh, identity, settings, groups, messages)
 
-    /** Collects [ContactsViewModel.contacts] on the background scope so the flow stays hot for assertions. */
+    /** Collects [ContactsViewModel.state] on the background scope so the flow stays hot for assertions. */
     private fun TestScope.startCollecting(vm: ContactsViewModel) {
-        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.contacts.collect {} }
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
     }
+
+    /**
+     * The picker must be able to tell "still resolving" from "you have nobody": the screen draws its
+     * "no contacts yet" empty state on the latter, and flashing it over the chat-list → picker transition
+     * was what made that transition read as jagged.
+     */
+    @Test
+    fun stateIsLoadingUntilTheFlowsFirstEmitThenEmptyIsEmptyNotLoading() =
+        runTest {
+            val vm = vm()
+            assertTrue(vm.state.value.isLoading)
+            startCollecting(vm)
+            advanceUntilIdle()
+            assertFalse(vm.state.value.isLoading)
+            assertTrue(
+                vm.state.value.contacts
+                    .isEmpty(),
+            )
+        }
+
+    /** Our own node id resolves asynchronously; the gap before it lands is loading, not an empty list. */
+    @Test
+    fun stateStaysLoadingWhileOurOwnNodeIdIsStillResolving() =
+        runTest {
+            val gate = CompletableDeferred<String>()
+            coEvery { identity.nodeId() } coAnswers { gate.await() }
+            val vm = vm()
+            startCollecting(vm)
+            peersFlow.value = listOf(peer("val", name = "Val", verified = true))
+            advanceUntilIdle()
+            assertTrue(vm.state.value.isLoading)
+
+            gate.complete("me")
+            advanceUntilIdle()
+            assertFalse(vm.state.value.isLoading)
+            assertEquals(
+                listOf("val"),
+                vm.state.value.contacts
+                    .map { it.nodeId },
+            )
+        }
 
     /** A contact imported from a link is accepted before any message exists; the picker must list it. */
     @Test
@@ -84,10 +126,18 @@ class ContactsViewModelTest {
             peersFlow.value = listOf(peer("linked", name = "Linked"))
             acceptedFlow.value = setOf("linked", "g-00112233445566778899aabb")
             advanceUntilIdle()
-            assertEquals(listOf("linked"), vm.contacts.value.map { it.nodeId })
+            assertEquals(
+                listOf("linked"),
+                vm.state.value.contacts
+                    .map { it.nodeId },
+            )
             blockedFlow.value = setOf("linked")
             advanceUntilIdle()
-            assertEquals(emptyList<String>(), vm.contacts.value.map { it.nodeId })
+            assertEquals(
+                emptyList<String>(),
+                vm.state.value.contacts
+                    .map { it.nodeId },
+            )
         }
 
     /** Two contacts who both call themselves Alice are told apart by their alias (ADR 058). */
@@ -104,7 +154,9 @@ class ContactsViewModelTest {
                 )
             advanceUntilIdle()
 
-            val byId = vm.contacts.value.associateBy { it.nodeId }
+            val byId =
+                vm.state.value.contacts
+                    .associateBy { it.nodeId }
             assertEquals("Alice (${Alias.aliasFor("a1")})", byId.getValue("a1").displayName)
             assertEquals(Alias.aliasFor("a1"), byId.getValue("a1").discriminator)
             assertEquals("alice (${Alias.aliasFor("a2")})", byId.getValue("a2").displayName)
@@ -124,13 +176,13 @@ class ContactsViewModelTest {
 
             assertEquals(
                 setOf("val"),
-                vm.contacts.value
+                vm.state.value.contacts
                     .map { it.nodeId }
                     .toSet(),
             )
             assertEquals(
                 "Val",
-                vm.contacts.value
+                vm.state.value.contacts
                     .single()
                     .displayName,
             )
@@ -153,7 +205,7 @@ class ContactsViewModelTest {
 
             assertEquals(
                 setOf("pat"),
-                vm.contacts.value
+                vm.state.value.contacts
                     .map { it.nodeId }
                     .toSet(),
             )
@@ -171,7 +223,7 @@ class ContactsViewModelTest {
 
             assertEquals(
                 setOf("rando"),
-                vm.contacts.value
+                vm.state.value.contacts
                     .map { it.nodeId }
                     .toSet(),
             )
@@ -192,7 +244,7 @@ class ContactsViewModelTest {
 
             assertEquals(
                 setOf("amy", "bob"),
-                vm.contacts.value
+                vm.state.value.contacts
                     .map { it.nodeId }
                     .toSet(),
             )
@@ -207,7 +259,10 @@ class ContactsViewModelTest {
             blockedFlow.value = setOf("val")
             advanceUntilIdle()
 
-            assertTrue(vm.contacts.value.isEmpty())
+            assertTrue(
+                vm.state.value.contacts
+                    .isEmpty(),
+            )
         }
 
     @Test
@@ -221,7 +276,7 @@ class ContactsViewModelTest {
             mesh.neighbors.value = setOf(Peer("zoe"))
             advanceUntilIdle()
 
-            val result = vm.contacts.value
+            val result = vm.state.value.contacts
             // "zoe" is online so it sorts ahead of "amy" despite the later name.
             assertEquals(listOf("zoe", "amy"), result.map { it.nodeId })
             assertTrue(result.first { it.nodeId == "zoe" }.online)

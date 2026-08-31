@@ -87,6 +87,15 @@ internal object MeshtasticProto {
     /** `Config.DeviceConfig.rebroadcast_mode`. */
     const val DEVICE_REBROADCAST_MODE = 6
 
+    /**
+     * `Config.LoRaConfig.channel_num` — the 1-based RF slot override. 0 (the firmware default, and what a
+     * restore puts back) means "derive the slot from the primary channel's name", which is the shared public
+     * frequency every stock board lands on; a non-zero value pins the radio to that slot instead. Public
+     * because the dedicated-slot setup splices it (ADR 067); the other `LORA_*` numbers stay private to the
+     * decoder.
+     */
+    const val LORA_CHANNEL_NUM = 11
+
     /** `Config.PositionConfig.position_broadcast_secs`. */
     const val POSITION_BROADCAST_SECS = 1
 
@@ -491,13 +500,14 @@ internal object MeshtasticProto {
         return FromRadio.Config(lora)
     }
 
-    /** The four `Config.LoRaConfig` fields that decide time-on-air and the legal duty cycle. */
+    /** The `Config.LoRaConfig` fields that decide time-on-air, the legal duty cycle, and which RF slot we sit on. */
     private fun decodeLoraConfig(reader: ProtoReader): LoraRadioConfig {
         var usePreset = false
         var preset = ModemPreset.LONG_FAST
         var region = LoraRegion.UNSET
         var hopLimit = 0
         var overrideDutyCycle = false
+        var channelNum = 0
         while (reader.hasMore) {
             val tag = reader.readTag()
             when (tag ushr WireType.FIELD_SHIFT) {
@@ -506,10 +516,11 @@ internal object MeshtasticProto {
                 LORA_REGION -> region = LoraRegion.fromCode(reader.readVarint32())
                 LORA_HOP_LIMIT -> hopLimit = reader.readVarint32()
                 LORA_OVERRIDE_DUTY_CYCLE -> overrideDutyCycle = reader.readVarint32() != 0
+                LORA_CHANNEL_NUM -> channelNum = reader.readVarint32()
                 else -> reader.skip(tag and WireType.MASK)
             }
         }
-        return LoraRadioConfig(usePreset, preset, region, hopLimit, overrideDutyCycle)
+        return LoraRadioConfig(usePreset, preset, region, hopLimit, overrideDutyCycle, channelNum)
     }
 
     private fun decodeChannel(reader: ProtoReader): FromRadio.Channel = FromRadio.Channel(decodeChannelInfo(reader))
@@ -712,9 +723,24 @@ internal enum class BoardConfig(
     DEVICE(configType = 0, member = 1, module = false),
     POSITION(configType = 1, member = 2, module = false),
     TELEMETRY(configType = 5, member = 6, module = true),
+
+    /**
+     * The radio config. Deliberately **not** in [QUIET], so the ordinary setup never reads or writes a
+     * legally-scoped sub-config (ADR 045); only the debug-only dedicated-slot setup and the restore that
+     * undoes it touch it, and then only to splice [MeshtasticProto.LORA_CHANNEL_NUM] (ADR 067). Note it
+     * collides with [TELEMETRY] on both numbers and is told apart by [module] alone.
+     */
+    LORA(configType = 5, member = 6, module = false),
     ;
 
     companion object {
+        /**
+         * The sub-configs every setup reads and quiets. [LORA] is excluded on purpose: reading it costs an
+         * extra admin round-trip on every board, and writing it — even spliced byte-identically — would break
+         * ADR 045's promise that a plain setup never touches the radio.
+         */
+        val QUIET: List<BoardConfig> = listOf(DEVICE, POSITION, TELEMETRY)
+
         fun of(
             member: Int,
             module: Boolean,
@@ -847,6 +873,11 @@ internal sealed interface FromRadio {
  * better than none. [overrideDutyCycle] is the firmware's own escape hatch and is honoured: a user who set
  * it has taken the regulatory call, so we stop applying the regional cap and fall back to the polite
  * ceiling.
+ *
+ * [channelNum] is the one field Knit *can* write, and only in a debug build (ADR 067): 0 means the firmware
+ * derives the RF slot from the primary channel's name — the shared public frequency ADR 045 deliberately
+ * sits on — and non-zero means the board has been pinned to a slot of its own. [LoraAirtime] reads it to
+ * decide whether the politeness ceiling still applies, so the budget follows the radio's actual state.
  */
 internal data class LoraRadioConfig(
     val usePreset: Boolean,
@@ -854,7 +885,12 @@ internal data class LoraRadioConfig(
     val region: LoraRegion,
     val hopLimit: Int,
     val overrideDutyCycle: Boolean,
-)
+    /** `Config.LoRaConfig.channel_num`: 0 = the slot hashed from the primary's name, non-zero = a pinned slot. */
+    val channelNum: Int = 0,
+) {
+    /** Whether the board is pinned to an RF slot of its own rather than sharing the stock public one. */
+    val dedicatedSlot: Boolean get() = channelNum != 0
+}
 
 /**
  * `Config.LoRaConfig.ModemPreset`, pinned by number, each carrying the spreading factor / bandwidth /
@@ -898,11 +934,22 @@ internal enum class ModemPreset(
  * Meshtastic firmware enforces for each (`RegionInfo` in `RadioInterface.cpp`). Only the duty-limited
  * regions need naming individually; everything else is 100 % and collapses into [OTHER]. [UNSET] means the
  * board has not been given a region and will not transmit at all — treated as the conservative case.
+ *
+ * [bandStartKhz]/[bandEndKhz] are populated for exactly the regions whose band Knit is prepared to place a
+ * **dedicated RF slot** in (ADR 067, debug-only): picking a slot means computing a transmit frequency
+ * ourselves, and a slot past the end of the band is out-of-band transmission, not a bug. So the band is
+ * stated only where it is known exactly, [OTHER] carries none — it is a bucket of regions with different
+ * bands, and the narrowest of them (RU, ~0.5 MHz) has no room to move — and [LoraSlot] refuses everything it
+ * cannot place. Everything else about a region, the duty cycle included, is unaffected by this.
  */
-@Suppress("MagicNumber") // the numbers ARE meshtastic's RegionCode wire codes
+@Suppress("MagicNumber") // the numbers ARE meshtastic's RegionCode wire codes and the band edges in kHz
 internal enum class LoraRegion(
     val code: Int,
     val dutyCyclePercent: Double,
+    /** Band start in kHz, or 0 where Knit does not know it exactly enough to place a slot in it. */
+    val bandStartKhz: Int = 0,
+    /** Band end in kHz, or 0 alongside a 0 [bandStartKhz]. */
+    val bandEndKhz: Int = 0,
 ) {
     UNSET(0, DUTY_LIMITED_PERCENT),
     EU_433(2, DUTY_LIMITED_PERCENT),
@@ -910,9 +957,18 @@ internal enum class LoraRegion(
     UA_433(14, DUTY_LIMITED_PERCENT),
     UA_868(15, DUTY_LIMITED_PERCENT),
 
-    /** Every region the firmware runs at 100 % duty (US, ANZ, JP, IN, …); named once rather than enumerated. */
+    /** 902–928 MHz: 104 slots at LongFast's 250 kHz, which is what makes a dedicated slot worth having. */
+    US(1, 100.0, bandStartKhz = 902_000, bandEndKhz = 928_000),
+
+    /** 915–928 MHz: 52 slots at 250 kHz. */
+    ANZ(6, 100.0, bandStartKhz = 915_000, bandEndKhz = 928_000),
+
+    /** Every remaining region the firmware runs at 100 % duty (JP, IN, RU, …); named once rather than enumerated. */
     OTHER(-1, 100.0),
     ;
+
+    /** How wide the band is, in kHz; 0 where Knit does not know it (see [bandStartKhz]). */
+    val bandWidthKhz: Int get() = (bandEndKhz - bandStartKhz).coerceAtLeast(0)
 
     companion object {
         fun fromCode(code: Int): LoraRegion = entries.firstOrNull { it.code == code && it != OTHER } ?: OTHER

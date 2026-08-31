@@ -401,6 +401,18 @@ class MeshtasticSessionTest {
             BoardConfig.TELEMETRY to ProtoWriter().varint(1, 1800).varint(3, 1).toByteArray(),
         )
 
+    // The board's `Config.LoRaConfig` as the admin read returns it: US, on the shared slot. MediumFast
+    // rather than the default LongFast on purpose — LongFast's code is 0, which proto3 writes by omission,
+    // so it could not show that the splice preserved it.
+    private val boardLoraConfig =
+        ProtoWriter()
+            .bool(1, true) // use_preset
+            .varint(2, ModemPreset.MEDIUM_FAST.code)
+            .varint(7, LoraRegion.US.code)
+            .varint(8, 3) // hop_limit
+            .varint(10, 27) // tx_power — must survive the splice untouched
+            .toByteArray()
+
     /** The same board after a dedicate — what a restore reads back before putting the old values in. */
     private val quietedConfigs =
         boardConfigs.mapValues { (config, raw) -> spliceVarintFields(raw, BoardQuiet.quiet(config))!! }
@@ -416,6 +428,7 @@ class MeshtasticSessionTest {
         nakReason: RoutingError = RoutingError.ADMIN_BAD_SESSION_KEY,
         configs: Map<BoardConfig, ByteArray>? = null,
         user: ByteArray? = boardUser,
+        radio: ByteArray? = null,
     ) {
         var sets = 0
         ch.onWrite = { bytes ->
@@ -423,6 +436,7 @@ class MeshtasticSessionTest {
                 BoardBytes.isWantConfig(bytes) -> {
                     ch.enqueueRead(BoardBytes.myInfo(0xABCDu, "heltec-v4"))
                     channels.forEach { (i, n, r) -> ch.enqueueRead(BoardBytes.channel(i, n, r)) }
+                    radio?.let { ch.enqueueRead(it) }
                     ch.enqueueRead(BoardBytes.configComplete(nonce))
                 }
 
@@ -837,6 +851,120 @@ class MeshtasticSessionTest {
             runCurrent()
             assertEquals(true, session.battery.value?.powered)
             collector.cancel()
+            session.stop()
+        }
+
+    // --- ADR 067: the debug-only dedicated-frequency setup ---
+
+    @Test
+    fun theOrdinarySetupNeverReadsOrWritesTheRadioConfig() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs + (BoardConfig.LORA to boardLoraConfig))
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            async { session.provisionChannel(provisionSpec) }.await()
+            // ADR 045's promise, now that the codec *can* address the radio: the shared-frequency setup still
+            // neither asks for it nor writes it, so a legally-scoped sub-config is never a setup's business.
+            assertTrue(ch.writes.none { BoardBytes.adminGetConfigType(it) == BoardConfig.LORA })
+            assertEquals("still one write per quieted sub-config", 3, ch.writes.mapNotNull { BoardBytes.adminSetConfigRaw(it) }.size)
+            session.stop()
+        }
+
+    @Test
+    fun theDedicatedSetupPinsTheSlotAndLeavesTheRestOfTheRadioAlone() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(
+                ch,
+                channels = listOf(Triple(0, "", 1)),
+                configs = boardConfigs + (BoardConfig.LORA to boardLoraConfig),
+                radio = BoardBytes.loraConfig(LoraRegion.US, ModemPreset.MEDIUM_FAST),
+            )
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val result = async { session.provisionChannel(provisionSpec.copy(mode = ProvisionMode.SetupDedicated)) }.await()
+            assertTrue("got ${'$'}result", result is ProvisionResult.Provisioned)
+            val written = ch.writes.mapNotNull { BoardBytes.adminSetConfigRaw(it) }
+            assertEquals("the three quieted sub-configs plus the radio", 4, written.size)
+            val lora = written.last()
+            val want = LoraSlot.forRegion(LoraRegion.US, ModemPreset.MEDIUM_FAST)!!.toLong()
+            assertEquals("the radio is pinned to Knit's derived slot", want, readVarintField(lora, MeshtasticProto.LORA_CHANNEL_NUM))
+            // Everything else about the radio is the user's legally-scoped call and must survive verbatim.
+            assertEquals("region survived the read-modify-write", LoraRegion.US.code.toLong(), readVarintField(lora, 7))
+            assertEquals("modem preset survived", ModemPreset.MEDIUM_FAST.code.toLong(), readVarintField(lora, 2))
+            assertEquals("tx_power survived", 27L, readVarintField(lora, 10))
+            session.stop()
+        }
+
+    @Test
+    fun theDedicatedSetupIsRefusedWithoutWritingWhereKnitWillNotPlaceASlot() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(
+                ch,
+                channels = listOf(Triple(0, "", 1)),
+                configs = boardConfigs + (BoardConfig.LORA to boardLoraConfig),
+                radio = BoardBytes.loraConfig(LoraRegion.EU_868),
+            )
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val result = async { session.provisionChannel(provisionSpec.copy(mode = ProvisionMode.SetupDedicated)) }.await()
+            assertEquals(ProvisionResult.NoDedicatedSlot(LoraRegion.EU_868), result)
+            // The refusal has to be total: a board left half set up on a frequency we would not pick is worse
+            // than one left alone.
+            assertTrue("nothing written", ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) })
+            session.stop()
+        }
+
+    @Test
+    fun restoreHandsAPinnedRadioBackToTheSharedSlot() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(
+                ch,
+                channels = listOf(Triple(0, "", 1), Triple(1, "Knit", 2)),
+                configs = boardConfigs + (BoardConfig.LORA to boardLoraConfig),
+                radio = BoardBytes.loraConfig(LoraRegion.US, channelNum = 10),
+            )
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val spec = provisionSpec.copy(mode = ProvisionMode.Restore, previous = boardIntervals)
+            assertEquals(ProvisionResult.Restored, async { session.provisionChannel(spec) }.await())
+            val lora = ch.writes.mapNotNull { BoardBytes.adminSetConfigRaw(it) }.last()
+            // channel_num 0 is a proto3 default, so handing the slot back means the field goes away — the
+            // firmware is deriving it from the primary's name again.
+            assertNull("back on the shared slot", readVarintField(lora, MeshtasticProto.LORA_CHANNEL_NUM))
+            assertEquals("the rest of the radio is untouched", 27L, readVarintField(lora, 10))
+            session.stop()
+        }
+
+    @Test
+    fun restoreOfABoardThatWasNeverPinnedNeverTouchesTheRadio() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(
+                ch,
+                channels = listOf(Triple(0, "", 1), Triple(1, "Knit", 2)),
+                configs = boardConfigs + (BoardConfig.LORA to boardLoraConfig),
+                radio = BoardBytes.loraConfig(LoraRegion.US),
+            )
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val spec = provisionSpec.copy(mode = ProvisionMode.Restore, previous = boardIntervals)
+            async { session.provisionChannel(spec) }.await()
+            assertTrue(ch.writes.none { BoardBytes.adminGetConfigType(it) == BoardConfig.LORA })
+            assertEquals("only the quieted sub-configs", 3, ch.writes.mapNotNull { BoardBytes.adminSetConfigRaw(it) }.size)
             session.stop()
         }
 }

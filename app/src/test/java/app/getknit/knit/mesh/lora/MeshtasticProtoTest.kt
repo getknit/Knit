@@ -255,10 +255,12 @@ class MeshtasticProtoTest {
     }
 
     @Test
-    fun decodeAdminIgnoresASubConfigKnitNeverAsksAbout() {
-        // Config{ lora(6) = … }: modelled elsewhere, but never a read-modify-write target, so it stays null
-        // rather than being mistaken for one of the three.
-        assertNull(MeshtasticProto.decodeAdmin(hex("32 05 32 03 08 84 07"))!!.config)
+    fun decodeAdminReadsTheLoraSubConfigAsItsOwnTarget() {
+        // Config{ lora(6) = … }. It shares both numbers with TELEMETRY and is told apart by `module` alone,
+        // so this pins that the non-module member 6 resolves to LORA — the read-modify-write base the
+        // dedicated-slot setup splices `channel_num` into (ADR 067).
+        val config = MeshtasticProto.decodeAdmin(hex("32 05 32 03 08 84 07"))!!.config
+        assertEquals(BoardConfig.LORA, config?.config)
     }
 
     @Test
@@ -332,8 +334,12 @@ class MeshtasticProtoTest {
         // An over-estimating preset and a 100 %-duty region are the safe fallbacks for codes we don't know.
         assertEquals(ModemPreset.LONG_FAST, ModemPreset.fromCode(99))
         assertEquals(LoraRegion.OTHER, LoraRegion.fromCode(99))
-        assertEquals(LoraRegion.OTHER, LoraRegion.fromCode(1)) // US: 100 % duty, collapses into OTHER
         assertEquals(LoraRegion.UNSET, LoraRegion.fromCode(0))
+        // US and ANZ are named (ADR 067 needs their band to place a dedicated slot in); every other
+        // 100 %-duty region still collapses into OTHER, which carries no band and so gets no slot.
+        assertEquals(LoraRegion.US, LoraRegion.fromCode(1))
+        assertEquals(LoraRegion.ANZ, LoraRegion.fromCode(6))
+        assertEquals(LoraRegion.OTHER, LoraRegion.fromCode(5)) // JP: 100 % duty, band unmodelled
     }
 
     @Test

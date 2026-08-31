@@ -83,7 +83,9 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   `DUTY_CYCLE_LIMIT`/`RATE_LIMIT_EXCEEDED` mean airtime pressure — and every NAK is also logged as
   `lora nak id=… reason=…` under `LoraMeshTransport`. `…debug.LORATX --es text <s>`
   sends a raw payload straight to the board (bypassing the frame codec) to confirm the board transmits via
-  `meshtastic --noproto`. `…debug.LORAPROV` writes the derived **Knit channel** onto the board over the
+  `meshtastic --noproto`. `--es mode dedicated` runs ADR 067's debug-only dedicated-frequency setup instead
+  (the radio is pinned off the shared public slot; the `airtime.dedicated` flag in the `LORA` dump says so).
+  `…debug.LORAPROV` writes the derived **Knit channel** onto the board over the
   Meshtastic admin API (the headless "Set up Knit channel") and binds the plane to the slot it lands in —
   run it on both phones so the boards converge. All need the plane enabled and the board Ready. (New action
   = add to BOTH the `when` and the debug manifest `<intent-filter>`.)

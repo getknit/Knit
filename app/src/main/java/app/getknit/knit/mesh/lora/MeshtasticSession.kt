@@ -495,7 +495,7 @@ internal class MeshtasticSession(
             return null
         }
         return when (cmd.spec.mode) {
-            ProvisionMode.Setup -> runSetup(channel, myNode, cmd)
+            ProvisionMode.Setup, ProvisionMode.SetupDedicated -> runSetup(channel, myNode, cmd)
             ProvisionMode.Restore -> runRestore(channel, myNode, cmd)
         }
     }
@@ -518,12 +518,50 @@ internal class MeshtasticSession(
     ): SessionEnd? {
         val was = readBoardOwner(channel, myNode) ?: return failProvision(cmd, "board did not return its name")
         val rename = renameStep(was, BoardName.forNode(myNode)) ?: return failProvision(cmd, MALFORMED_OWNER)
+        // Read and refuse before anything is written: a region Knit will not place a slot in must leave the
+        // board untouched rather than half set up (ADR 067).
+        val slot = slotWrite(channel, myNode, cmd) ?: return null
         val existing = knitChannel(cmd.spec.name)
         return if (existing != null) {
-            renameOnly(channel, myNode, cmd, existing, was, rename)
+            renameOnly(channel, myNode, cmd, existing, was, rename, slot)
         } else {
-            writeSetup(channel, myNode, cmd, was, rename)
+            writeSetup(channel, myNode, cmd, was, rename, slot)
         }
+    }
+
+    /**
+     * The radio write that pins the board to the RF slot [LoraSlot] derives for its region and preset, and
+     * the raw `Config.LoRaConfig` it was spliced from — which is also the only thing that knows the board's
+     * own `channel_num`, for the restore to put back. [SlotWrite.NONE] for the ordinary shared-frequency
+     * setup, which never reads or writes the radio at all (ADR 045).
+     *
+     * Null means the request has been refused and [cmd] already answered: either the region has no slot Knit
+     * will place ([ProvisionResult.NoDedicatedSlot]) or the board would not return its radio config.
+     */
+    private suspend fun slotWrite(
+        channel: GattChannel,
+        myNode: UInt,
+        cmd: Cmd.Provision,
+    ): SlotWrite? {
+        if (cmd.spec.mode != ProvisionMode.SetupDedicated) return SlotWrite.NONE
+        val cfg = radio
+        val slot = cfg?.let { LoraSlot.forRegion(it.region, it.modemPreset) }
+        if (slot == null) {
+            log("lora provision refused: no dedicated slot for region ${cfg?.region ?: LoraRegion.UNSET}")
+            cmd.reply.complete(ProvisionResult.NoDedicatedSlot(cfg?.region ?: LoraRegion.UNSET))
+            return null
+        }
+        val raw =
+            readOneConfig(channel, myNode, BoardConfig.LORA) ?: run {
+                failProvision(cmd, "board did not return its radio config")
+                return null
+            }
+        val spliced =
+            spliceVarintFields(raw, BoardQuiet.loraSlot(slot)) ?: run {
+                failProvision(cmd, MALFORMED_CONFIG)
+                return null
+            }
+        return SlotWrite(steps = listOf(configStep(BoardConfig.LORA, spliced)), raw = raw, slot = slot)
     }
 
     /**
@@ -537,15 +575,16 @@ internal class MeshtasticSession(
         cmd: Cmd.Provision,
         was: BoardOwnerRaw,
         rename: List<AdminStep>,
+        slot: SlotWrite,
     ): SessionEnd? {
-        val slot = freeSecondarySlot() ?: return noFreeSlot(cmd)
+        val index = freeSecondarySlot() ?: return noFreeSlot(cmd)
         val raws = readBoardConfigs(channel, myNode) ?: return failProvision(cmd, "board did not return its config")
         val steps =
             buildList {
                 add(
                     channelStep(
                         ChannelWrite(
-                            index = slot,
+                            index = index,
                             name = cmd.spec.name,
                             psk = cmd.spec.psk,
                             positionPrecision = MeshtasticProto.POSITION_PRECISION_NONE,
@@ -554,14 +593,20 @@ internal class MeshtasticSession(
                 )
                 addAll(rename)
                 addAll(quietSteps(raws) { config -> BoardQuiet.quiet(config) } ?: return failProvision(cmd, MALFORMED_CONFIG))
+                addAll(slot.steps)
             }
         return applySteps(
             channel = channel,
             myNode = myNode,
             steps = steps,
-            label = "set up ch$slot '${cmd.spec.name}'",
+            label = "set up ch$index '${cmd.spec.name}'${slot.label}",
             reply = cmd.reply,
-            result = ProvisionResult.Provisioned(slot, alreadyPresent = false, previous = BoardQuiet.recorded(raws, was.owner)),
+            result =
+                ProvisionResult.Provisioned(
+                    index = index,
+                    alreadyPresent = false,
+                    previous = BoardQuiet.recorded(raws, was.owner, slot.raw),
+                ),
         )
     }
 
@@ -579,8 +624,17 @@ internal class MeshtasticSession(
         existing: ChannelInfo,
         was: BoardOwnerRaw,
         rename: List<AdminStep>,
+        slot: SlotWrite,
     ): SessionEnd? {
-        if (rename.isEmpty()) {
+        // The record keeps the board's own channel_num the first time a dedicated setup reads it; on the
+        // shared-frequency path there is nothing read and nothing to add.
+        val previous =
+            cmd.spec.previous?.copy(
+                owner = was.owner,
+                channelNum = slot.recordedChannelNum ?: cmd.spec.previous.channelNum,
+            )
+        val steps = rename + slot.steps
+        if (steps.isEmpty()) {
             log("lora provision already set up ch${existing.index} '${cmd.spec.name}'")
             cmd.reply.complete(ProvisionResult.Provisioned(existing.index, alreadyPresent = true))
             return null
@@ -588,16 +642,42 @@ internal class MeshtasticSession(
         return applySteps(
             channel = channel,
             myNode = myNode,
-            steps = rename,
-            label = "renamed the board '${BoardName.forNode(myNode).longName}'",
+            steps = steps,
+            label =
+                listOfNotNull(
+                    "renamed the board '${BoardName.forNode(myNode).longName}'".takeIf { rename.isNotEmpty() },
+                    slot.label.takeIf { it.isNotEmpty() },
+                ).joinToString(" "),
             reply = cmd.reply,
             result =
                 ProvisionResult.Provisioned(
                     index = existing.index,
                     alreadyPresent = true,
-                    previous = cmd.spec.previous?.copy(owner = was.owner),
+                    previous = previous,
                 ),
         )
+    }
+
+    /**
+     * The dedicated-slot half of a setup: the steps that pin `lora.channel_num`, the raw radio config they
+     * were spliced from, and the slot itself for the log line. [NONE] is the shared-frequency setup, which
+     * carries no steps and reads nothing — so every board that never asked for a dedicated slot goes through
+     * exactly the writes ADR 045 always made.
+     */
+    private class SlotWrite(
+        val steps: List<AdminStep>,
+        val raw: ByteArray?,
+        val slot: Int?,
+    ) {
+        /** The board's own `channel_num`, or null when the radio config was never read. */
+        val recordedChannelNum: Int?
+            get() = raw?.let { readVarintField(it, MeshtasticProto.LORA_CHANNEL_NUM)?.toInt() ?: 0 }
+
+        val label: String get() = slot?.let { "on dedicated slot $it" }.orEmpty()
+
+        companion object {
+            val NONE = SlotWrite(steps = emptyList(), raw = null, slot = null)
+        }
     }
 
     /**
@@ -617,6 +697,7 @@ internal class MeshtasticSession(
         val was = readBoardOwner(channel, myNode) ?: return failProvision(cmd, "board did not return its name")
         val raws = readBoardConfigs(channel, myNode) ?: return failProvision(cmd, "board did not return its config")
         val name = cmd.spec.previous?.owner ?: BoardName.stock(myNode)
+        val slot = slotRestore(channel, myNode, cmd) ?: return null
         val steps =
             buildList {
                 addAll(disableKnitChannels(cmd.spec.name))
@@ -625,6 +706,7 @@ internal class MeshtasticSession(
                     quietSteps(raws) { config -> BoardQuiet.restore(config, cmd.spec.previous) }
                         ?: return failProvision(cmd, MALFORMED_CONFIG),
                 )
+                addAll(slot)
             }
         return applySteps(
             channel = channel,
@@ -634,6 +716,34 @@ internal class MeshtasticSession(
             reply = cmd.reply,
             result = ProvisionResult.Restored,
         )
+    }
+
+    /**
+     * The radio write that puts `lora.channel_num` back to what the board had before Knit pinned it — 0 on
+     * every board the plain setup touched, which is why this is **empty unless the board's current slot
+     * differs from the recorded one**. A restore of a board that was never dedicated therefore reads and
+     * writes no radio config at all, exactly as before ADR 067.
+     *
+     * Null means the read failed and [cmd] has been answered.
+     */
+    private suspend fun slotRestore(
+        channel: GattChannel,
+        myNode: UInt,
+        cmd: Cmd.Provision,
+    ): List<AdminStep>? {
+        val want = cmd.spec.previous?.channelNum ?: BoardQuiet.SHARED_SLOT
+        if ((radio?.channelNum ?: BoardQuiet.SHARED_SLOT) == want) return emptyList()
+        val raw =
+            readOneConfig(channel, myNode, BoardConfig.LORA) ?: run {
+                failProvision(cmd, "board did not return its radio config")
+                return null
+            }
+        val spliced =
+            spliceVarintFields(raw, BoardQuiet.loraSlot(want)) ?: run {
+                failProvision(cmd, MALFORMED_CONFIG)
+                return null
+            }
+        return listOf(configStep(BoardConfig.LORA, spliced))
     }
 
     /** Answers [cmd] without writing anything: every secondary slot is already spoken for. */
@@ -707,12 +817,22 @@ internal class MeshtasticSession(
         myNode: UInt,
     ): Map<BoardConfig, ByteArray>? {
         val out = LinkedHashMap<BoardConfig, ByteArray>()
-        for (config in BoardConfig.entries) {
+        for (config in BoardConfig.QUIET) {
             val reply = adminRequest(channel, myNode, MeshtasticProto.encodeAdminGetConfig(config)) ?: return null
             val raw = reply.config?.takeIf { it.config == config }?.raw ?: return null
             out[config] = raw
         }
         return out
+    }
+
+    /** Reads one sub-config as raw bytes; null if the board fails to return it. */
+    private suspend fun readOneConfig(
+        channel: GattChannel,
+        myNode: UInt,
+        config: BoardConfig,
+    ): ByteArray? {
+        val reply = adminRequest(channel, myNode, MeshtasticProto.encodeAdminGetConfig(config)) ?: return null
+        return reply.config?.takeIf { it.config == config }?.raw
     }
 
     /** Reads the board's own `User`, the base the rename splices into; null if it never answers. */

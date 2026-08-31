@@ -2,6 +2,7 @@ package app.getknit.knit.ui.lora
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.settings.KnitBoardSetup
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.lora.AirtimeSnapshot
@@ -16,6 +17,7 @@ import app.getknit.knit.mesh.lora.KnitChannel
 import app.getknit.knit.mesh.lora.LinkState
 import app.getknit.knit.mesh.lora.LoraGatewayPolicy
 import app.getknit.knit.mesh.lora.LoraPlaneStatus
+import app.getknit.knit.mesh.lora.LoraSlot
 import app.getknit.knit.mesh.lora.ProvisionMode
 import app.getknit.knit.mesh.lora.ProvisionResult
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,7 +40,17 @@ data class BoardOption(
 enum class LoraConnState { Off, Connecting, Ready, Reconnecting, NeedsPairing, Unavailable }
 
 /** The result of the last provisioning tap, mapped off the internal provision result for the screen. */
-enum class LoraProvisionOutcome { Provisioned, AlreadyPresent, Restored, NoFreeSlot, Failed, NotReady }
+enum class LoraProvisionOutcome {
+    Provisioned,
+    AlreadyPresent,
+    Restored,
+    NoFreeSlot,
+
+    /** The dedicated setup was refused: Knit will not place an RF slot in this board's region (ADR 067). */
+    NoDedicatedSlot,
+    Failed,
+    NotReady,
+}
 
 data class LoraRadioUiState(
     val enabled: Boolean = false,
@@ -97,6 +109,20 @@ data class LoraRadioUiState(
     val anyBonded: Boolean = false,
     val provisioning: Boolean = false,
     val provisionOutcome: LoraProvisionOutcome? = null,
+    /**
+     * Whether the debug-only dedicated-frequency setup is offered at all (ADR 067). False in every release
+     * build — the shared public frequency is the shipping bargain and the only one a release user is given.
+     */
+    val dedicatedOffered: Boolean = false,
+    /**
+     * The RF slot the dedicated setup would pin this board to, or null when Knit will not place one in its
+     * region — which is also what greys the action out rather than letting it fail at the board.
+     */
+    val dedicatedSlot: Int? = null,
+    /** The board is on a dedicated slot right now, so the airtime budget is off the politeness ceiling. */
+    val dedicated: Boolean = false,
+    /** The open confirmation is the dedicated one, which is a different bargain and says so. */
+    val confirmDedicated: Boolean = false,
 )
 
 /**
@@ -184,6 +210,10 @@ internal class LoraRadioViewModel(
                 anyBonded = picker.bonded.isNotEmpty(),
                 provisioning = provision.running,
                 provisionOutcome = provision.outcome,
+                dedicatedOffered = BuildConfig.DEBUG,
+                dedicatedSlot = ready?.radio?.let { LoraSlot.forRegion(it.region, it.modemPreset) },
+                dedicated = ready?.radio?.dedicatedSlot == true,
+                confirmDedicated = provision.dedicated,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LoraRadioUiState())
 
@@ -244,7 +274,16 @@ internal class LoraRadioViewModel(
 
     /** Opens the setup confirmation; what it costs the board is spelled out there, not here. */
     fun askSetup() {
-        provisionState.update { it.copy(confirm = true, outcome = null) }
+        provisionState.update { it.copy(confirm = true, dedicated = false, outcome = null) }
+    }
+
+    /**
+     * Opens the confirmation for the debug-only dedicated-frequency setup (ADR 067). Inert in a release
+     * build, checked here rather than only in the UI so the action cannot be reached by any route.
+     */
+    fun askSetupDedicated() {
+        if (!BuildConfig.DEBUG) return
+        provisionState.update { it.copy(confirm = true, dedicated = true, outcome = null) }
     }
 
     fun dismissSetup() {
@@ -258,7 +297,8 @@ internal class LoraRadioViewModel(
      * here; they are the only way a restore can put back what was actually there.
      */
     fun setUpBoard() {
-        provision(ProvisionMode.Setup)
+        val dedicated = provisionState.value.dedicated && BuildConfig.DEBUG
+        provision(if (dedicated) ProvisionMode.SetupDedicated else ProvisionMode.Setup)
     }
 
     /**
@@ -312,6 +352,7 @@ internal class LoraRadioViewModel(
                 rebroadcastMode = previous.rebroadcastMode,
                 longName = previous.owner?.longName.orEmpty(),
                 shortName = previous.owner?.shortName.orEmpty(),
+                channelNum = previous.channelNum,
             ),
         )
     }
@@ -325,6 +366,7 @@ internal class LoraRadioViewModel(
             rebroadcastMode = rebroadcastMode,
             // Both empty means no name was ever recorded — the restore then writes the firmware's own.
             owner = if (longName.isEmpty() && shortName.isEmpty()) null else BoardOwner(longName, shortName),
+            channelNum = channelNum,
         )
 
     /** Dismisses the last provisioning outcome banner. */
@@ -337,6 +379,7 @@ internal class LoraRadioViewModel(
             is ProvisionResult.Provisioned -> if (alreadyPresent) LoraProvisionOutcome.AlreadyPresent else LoraProvisionOutcome.Provisioned
             ProvisionResult.Restored -> LoraProvisionOutcome.Restored
             ProvisionResult.NoFreeSlot -> LoraProvisionOutcome.NoFreeSlot
+            is ProvisionResult.NoDedicatedSlot -> LoraProvisionOutcome.NoDedicatedSlot
             is ProvisionResult.Failed -> LoraProvisionOutcome.Failed
             is ProvisionResult.NotReady -> LoraProvisionOutcome.NotReady
         }
@@ -355,6 +398,8 @@ internal class LoraRadioViewModel(
         val running: Boolean = false,
         val outcome: LoraProvisionOutcome? = null,
         val confirm: Boolean = false,
+        /** The pending confirmation is for the debug-only dedicated setup rather than the shared one. */
+        val dedicated: Boolean = false,
     )
 
     private companion object {

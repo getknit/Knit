@@ -10,7 +10,15 @@ class LoraAirtimeTest {
         preset: ModemPreset = ModemPreset.LONG_FAST,
         region: LoraRegion = LoraRegion.OTHER,
         override: Boolean = false,
-    ) = LoraRadioConfig(usePreset = true, modemPreset = preset, region = region, hopLimit = 3, overrideDutyCycle = override)
+        channelNum: Int = 0,
+    ) = LoraRadioConfig(
+        usePreset = true,
+        modemPreset = preset,
+        region = region,
+        hopLimit = 3,
+        overrideDutyCycle = override,
+        channelNum = channelNum,
+    )
 
     @Test
     fun aFullPacketAtLongFastIsAboutTwoSecondsOnAir() {
@@ -197,5 +205,45 @@ class LoraAirtimeTest {
         }
         assertFalse(air.admits(AirBucket.LIVE, FrameClass.ROOM, three, now))
         assertTrue(air.admits(AirBucket.LIVE, FrameClass.ROOM, one, now))
+    }
+
+    // --- ADR 067: a dedicated RF slot lifts the politeness ceiling, never the law ---
+
+    @Test
+    fun aDedicatedSlotIsInertUnlessTheBuildUnlocksIt() {
+        // The default — every release build. A board somebody pinned by hand in the Meshtastic app must
+        // budget exactly as a shared-frequency one does.
+        val locked = LoraAirtime().apply { onRadioConfig(radio(region = LoraRegion.US, channelNum = 37)) }
+        val shared = LoraAirtime().apply { onRadioConfig(radio(region = LoraRegion.US)) }
+        assertEquals(shared.allowanceMs(), locked.allowanceMs())
+        assertFalse(locked.dedicated())
+    }
+
+    @Test
+    fun aDedicatedSlotInAHundredPercentRegionSpendsTheWholeDutyCycle() {
+        val unlocked = LoraAirtime(dedicatedUnlocksDuty = true)
+        unlocked.onRadioConfig(radio(region = LoraRegion.US, channelNum = 37))
+        assertTrue(unlocked.dedicated())
+        // 100 % duty x the 0.5 safety factor = half the window, against a tenth of that when sharing.
+        assertEquals(LoraAirtime.WINDOW_MS / 2, unlocked.allowanceMs())
+        val shared = LoraAirtime(dedicatedUnlocksDuty = true).apply { onRadioConfig(radio(region = LoraRegion.US)) }
+        assertEquals(10L, unlocked.allowanceMs() / shared.allowanceMs())
+    }
+
+    @Test
+    fun aDedicatedSlotNeverLiftsARegionsLegalDutyCycle() {
+        // EU_868's 10 % is law, not manners: a dedicated slot there must budget exactly as a shared one.
+        val dedicated = LoraAirtime(dedicatedUnlocksDuty = true)
+        dedicated.onRadioConfig(radio(region = LoraRegion.EU_868, channelNum = 3))
+        val shared = LoraAirtime(dedicatedUnlocksDuty = true).apply { onRadioConfig(radio(region = LoraRegion.EU_868)) }
+        assertEquals(shared.allowanceMs(), dedicated.allowanceMs())
+    }
+
+    @Test
+    fun theSnapshotReportsWhetherTheBudgetIsRunningDedicated() {
+        val air = LoraAirtime(dedicatedUnlocksDuty = true)
+        air.onRadioConfig(radio(region = LoraRegion.US, channelNum = 12))
+        assertTrue(air.snapshot(0L).dedicated)
+        assertFalse(LoraAirtime().apply { onRadioConfig(radio(region = LoraRegion.US)) }.snapshot(0L).dedicated)
     }
 }

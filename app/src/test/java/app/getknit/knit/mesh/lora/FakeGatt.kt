@@ -122,6 +122,30 @@ internal object BoardBytes {
                 uint32(4, meshPacketId)
             }.toByteArray()
 
+    /**
+     * `FromRadio { config = Config { lora = LoRaConfig { … } } }` — the handshake message the airtime
+     * governor reads its region/preset off, and the one ADR 067's dedicated setup needs before it can work
+     * out which RF slot to pin.
+     */
+    fun loraConfig(
+        region: LoraRegion,
+        preset: ModemPreset = ModemPreset.LONG_FAST,
+        channelNum: Int = 0,
+    ): ByteArray =
+        ProtoWriter()
+            .message(5) {
+                message(6) {
+                    bool(1, true) // use_preset
+                    varint(2, preset.code)
+                    varint(7, if (region == LoraRegion.OTHER) UNMODELLED_REGION_CODE else region.code)
+                    varint(8, 3) // hop_limit
+                    if (channelNum != 0) varint(MeshtasticProto.LORA_CHANNEL_NUM, channelNum)
+                }
+            }.toByteArray()
+
+    /** A real RegionCode (JP) that Knit collapses into [LoraRegion.OTHER], which has no code of its own. */
+    private const val UNMODELLED_REGION_CODE = 5
+
     fun channel(
         index: Int,
         name: String,

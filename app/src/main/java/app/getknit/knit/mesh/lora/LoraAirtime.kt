@@ -46,6 +46,8 @@ internal data class AirtimeSnapshot(
     val bridgeBudgetMs: Long,
     val bootstrapUsedMs: Long,
     val bootstrapBudgetMs: Long,
+    /** Whether the board is on a dedicated RF slot, and so out from under the politeness ceiling (ADR 067). */
+    val dedicated: Boolean = false,
 )
 
 /**
@@ -79,6 +81,13 @@ internal data class AirtimeSnapshot(
  * window. The region and modem preset are read off the board ([LoraRadioConfig]); until the handshake
  * reports them we assume [FALLBACK_PERCENT], which is below every real region's limit. Pure and
  * clock-driven by the caller, like [LoraPacePolicy] — the transport owns the actual clock.
+ *
+ * Those two ceilings are **independent**, which is what [dedicatedUnlocksDuty] turns on (ADR 067, debug
+ * builds only). The regional duty cycle is law and only the firmware's own `override_duty_cycle` escape
+ * hatch lifts it; the politeness ceiling is Knit's own manners toward everyone else sharing the stock
+ * frequency, and on a board pinned to a dedicated RF slot ([LoraRadioConfig.dedicatedSlot], [LoraSlot])
+ * there is no-one there to be polite to. So a dedicated US board runs to the 100 % its region allows and an
+ * EU_868 one still stops at 10 %, because that one was never politeness.
  */
 internal class LoraAirtime(
     private val windowMs: Long = WINDOW_MS,
@@ -87,6 +96,12 @@ internal class LoraAirtime(
     private val politeCeilingPercent: Double = POLITE_CEILING_PERCENT,
     private val tickTailShare: Double = TICK_TAIL_SHARE,
     private val bootstrapShare: Double = BOOTSTRAP_SHARE,
+    /**
+     * Whether a dedicated RF slot lifts the politeness ceiling. False everywhere but a debug build — the
+     * setup that pins the slot is itself debug-only, and a release build must budget exactly as it does
+     * today even against a board somebody pinned by hand in the Meshtastic app.
+     */
+    private val dedicatedUnlocksDuty: Boolean = false,
 ) {
     private class Sample(
         val atMs: Long,
@@ -127,21 +142,22 @@ internal class LoraAirtime(
         return ((PREAMBLE_SYMBOLS + payloadSymbols) * symbolMs).toLong().coerceAtLeast(1)
     }
 
-    /** The window's allowance, in milliseconds of air, before the per-bucket split. */
+    /**
+     * The window's allowance, in milliseconds of air, before the per-bucket split — the lower of the two
+     * ceilings that still apply (see the class doc).
+     */
     fun allowanceMs(): Long {
-        val cfg = radio
-        val percent =
-            when {
-                cfg == null -> FALLBACK_PERCENT
-
-                // The user set the firmware's own duty-cycle override: they have taken the regulatory call,
-                // so we stop applying the regional cap and keep only our own politeness ceiling.
-                cfg.overrideDutyCycle -> politeCeilingPercent
-
-                else -> min(cfg.region.dutyCyclePercent, politeCeilingPercent)
-            }
-        return (windowMs * percent / PERCENT * safety).toLong()
+        val cfg = radio ?: return (windowMs * FALLBACK_PERCENT / PERCENT * safety).toLong()
+        // Law. The user set the firmware's own duty-cycle override: they have taken the regulatory call, so
+        // the regional cap stops applying to us too.
+        val regional = if (cfg.overrideDutyCycle) FULL_PERCENT else cfg.region.dutyCyclePercent
+        // Manners. Nobody to be polite to on a slot of our own, so the ceiling lifts with the shared band.
+        val polite = if (dedicatedUnlocksDuty && cfg.dedicatedSlot) FULL_PERCENT else politeCeilingPercent
+        return (windowMs * min(regional, polite) / PERCENT * safety).toLong()
     }
+
+    /** Whether the budget above is running under the dedicated-slot rules; diagnostics and the settings row. */
+    fun dedicated(): Boolean = dedicatedUnlocksDuty && radio?.dedicatedSlot == true
 
     fun budgetMs(bucket: AirBucket): Long =
         when (bucket) {
@@ -227,6 +243,7 @@ internal class LoraAirtime(
             bridgeBudgetMs = budgetMs(AirBucket.BRIDGE),
             bootstrapUsedMs = bootstrapUsedMs,
             bootstrapBudgetMs = budgetMs(AirBucket.BOOTSTRAP),
+            dedicated = dedicated(),
         )
     }
 
@@ -285,6 +302,9 @@ internal class LoraAirtime(
 
         /** Assumed before the board reports its region — below every real region's limit. */
         const val FALLBACK_PERCENT = 5.0
+
+        /** "This ceiling does not apply": the whole window, left for the other ceiling to bound. */
+        private const val FULL_PERCENT = 100.0
 
         /** Meshtastic header + protobuf/crypto framing around our `Data.payload`. */
         const val PACKET_OVERHEAD_BYTES = 24

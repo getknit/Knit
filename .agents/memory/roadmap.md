@@ -61,6 +61,14 @@ doc). **Don't start a deferred item without explicit direction.**
   was reverted before shipping. **Still owed:** the on-hardware trial in `context/lora-bridge.md` — the
   frequency must be *unchanged*, the battery row must survive the telemetry stretch, and a stock node between
   two boards should extend the range.
+  **A dedicated-frequency setup EXISTS but is DEBUG-ONLY** (2026-08-31, ADR 067): `ProvisionMode.SetupDedicated`
+  pins `lora.channel_num` to a slot derived from the Knit channel name, and `LoraAirtime` then drops the 10 %
+  politeness ceiling (the region's legal duty cycle still stands), for the isolated-fleet case where there is
+  no Meshtastic neighbourhood to borrow relaying from. Refused outside US/ANZ, whose bands are the only ones
+  `LoraSlot` states exactly. **Still owed before it could ever ship to release:** an on-hardware two-board
+  trial on a dedicated slot (nothing has been run on real radios yet), a story for a half-converted fleet —
+  a board left on the shared slot is silently unreachable and looks identical to being out of range — and a
+  decision on whether the 0.5 safety factor is still right once no third party is repeating us.
   Still deferred: a **user-set/shared private PSK** (the shipped
   channel is a public rendezvous; with DMs aboard it is also what would hide their metadata — needs
   out-of-band PSK sharing, QR/URL — and, since the name feeds the slot hash, a private deployment would also

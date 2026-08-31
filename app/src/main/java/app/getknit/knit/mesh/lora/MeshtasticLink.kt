@@ -68,9 +68,13 @@ internal data class ProvisionSpec(
 )
 
 /**
- * The two things a user can do to a board (ADR 045). There is deliberately **no middle setting**: a board
- * is either set up for Knit or it is a stock Meshtastic node, so any two Knit boards are configured
- * identically and meet without coordination.
+ * What a user can do to a board (ADR 045). In a release build there are deliberately **two**, and no middle
+ * setting: a board is either set up for Knit or it is a stock Meshtastic node, so any two Knit boards are
+ * configured identically and meet without coordination.
+ *
+ * [SetupDedicated] is the debug-only third (ADR 067), and it is a different bargain rather than a lighter
+ * one — see its doc. Both setups produce the same channel table; they differ only in whether the radio is
+ * pinned off the shared public slot, and [Restore] undoes either.
  */
 internal enum class ProvisionMode {
     /**
@@ -80,8 +84,28 @@ internal enum class ProvisionMode {
      */
     Setup,
 
-    /** Undoes [Setup]: the Knit channel is disabled, and the board's own intervals and name come back. */
+    /**
+     * [Setup], plus `lora.channel_num` pinned to the slot [LoraSlot] derives for the board's region and
+     * preset — so the fleet has the frequency to itself and `LoraAirtime` drops the politeness ceiling
+     * (ADR 067). **Debug builds only**, and never the default: it trades away the free relaying a stock
+     * Meshtastic neighbourhood does for us, which is worth having wherever there is a neighbourhood. Where
+     * there is not — an isolated farm, a mountain house — there is nothing to trade away and a household
+     * fleet gets its region's whole duty cycle instead of a tenth of it.
+     *
+     * Refused as [ProvisionResult.NoDedicatedSlot] when Knit will not place a slot in the board's region.
+     */
+    SetupDedicated,
+
+    /**
+     * Undoes either setup: the Knit channel is disabled, the board's own intervals and name come back, and
+     * `lora.channel_num` goes back to what the board had — which for a board Knit pinned is 0, the firmware
+     * deriving its slot from the primary's name again.
+     */
     Restore,
+    ;
+
+    /** Whether this mode writes the channel table and the quieting, i.e. is one of the two setups. */
+    val isSetup: Boolean get() = this != Restore
 }
 
 /** The outcome of [MeshtasticLink.provisionChannel]. */
@@ -102,6 +126,15 @@ internal sealed interface ProvisionResult {
 
     /** Every secondary slot (1..7) is already taken by a different channel; the user must free one. */
     data object NoFreeSlot : ProvisionResult
+
+    /**
+     * [ProvisionMode.SetupDedicated] on a board whose region Knit will not place a dedicated RF slot in —
+     * an unknown band, or one with no room to move ([LoraSlot.forRegion]). Nothing was written: picking the
+     * frequency ourselves is only safe where the band is known exactly, so the refusal is the feature.
+     */
+    data class NoDedicatedSlot(
+        val region: LoraRegion,
+    ) : ProvisionResult
 
     /** The board is a stock Meshtastic node again; it carries no Knit channel, so the plane has nowhere to send. */
     data object Restored : ProvisionResult

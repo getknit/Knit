@@ -24,4 +24,10 @@ data class KnitBoardSetup(
     val longName: String = "",
     /** The board's own `User.short_name`, likewise. */
     val shortName: String = "",
+    /**
+     * The board's own `Config.LoRaConfig.channel_num` before the setup — 0 on every board that was left on
+     * the shared public frequency, which is all of them unless the debug-only dedicated setup pinned a slot
+     * (ADR 067). Recorded so a restore hands the radio back to whatever the user had, not to an assumed 0.
+     */
+    val channelNum: Int = 0,
 )

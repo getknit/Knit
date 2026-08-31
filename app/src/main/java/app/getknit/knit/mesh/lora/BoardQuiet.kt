@@ -16,6 +16,13 @@ internal data class BoardSettings(
      * which a restore answers with the name the firmware itself would have given the board.
      */
     val owner: BoardOwner? = null,
+    /**
+     * `Config.LoRaConfig.channel_num` as the board had it — 0 on every board that was left deriving its RF
+     * slot from the primary's name, which is all of them until the debug-only dedicated setup (ADR 067)
+     * pins one. Recorded so a restore puts back *the user's* value rather than assuming 0, in case they had
+     * pinned a slot themselves before Knit ever saw the board.
+     */
+    val channelNum: Int = 0,
 )
 
 /**
@@ -48,10 +55,16 @@ internal object BoardQuiet {
     const val DEFAULT_POSITION_SECS = 900
     const val DEFAULT_TELEMETRY_SECS = 1_800
 
-    /** The board's current settings, read out of the three raw sub-configs and the `User` the admin reads returned. */
+    /**
+     * The board's current settings, read out of the raw sub-configs and the `User` the admin reads returned.
+     * [lora] is supplied only by the dedicated setup, which is the one path that reads
+     * [BoardConfig.LORA] at all (ADR 067); absent, [BoardSettings.channelNum] records 0 — which is what
+     * every board the plain setup touches is left on anyway, since it never writes the field.
+     */
     fun recorded(
         configs: Map<BoardConfig, ByteArray>,
         owner: BoardOwner? = null,
+        lora: ByteArray? = null,
     ): BoardSettings {
         val device = configs[BoardConfig.DEVICE]
         val position = configs[BoardConfig.POSITION]
@@ -65,8 +78,21 @@ internal object BoardQuiet {
             // 0 is a real value here (RebroadcastMode.ALL, the firmware default), not "unset".
             rebroadcastMode = device?.let { readVarintField(it, MeshtasticProto.DEVICE_REBROADCAST_MODE)?.toInt() } ?: 0,
             owner = owner,
+            // Absent is 0 here too, and 0 is the firmware's own "derive the slot from the primary's name".
+            channelNum = lora?.let { readVarintField(it, MeshtasticProto.LORA_CHANNEL_NUM)?.toInt() } ?: 0,
         )
     }
+
+    /**
+     * The field to splice into [BoardConfig.LORA] to pin the radio to [slot] — or, with [SHARED_SLOT], to
+     * hand it back to the firmware's `hash(primary channel name)` and the shared public frequency. The one
+     * radio field Knit ever writes, and only in a debug build (ADR 067); everything else about the radio is
+     * the user's per-board, legally-scoped call (ADR 038 §10).
+     */
+    fun loraSlot(slot: Int): Map<Int, Long> = mapOf(MeshtasticProto.LORA_CHANNEL_NUM to slot.toLong())
+
+    /** `channel_num` 0: the firmware derives the RF slot from the primary's name — ADR 045's shared slot. */
+    const val SHARED_SLOT = 0
 
     /** The fields to splice into [config] to quiet it. */
     fun quiet(config: BoardConfig): Map<Int, Long> =
@@ -87,6 +113,12 @@ internal object BoardQuiet {
 
             BoardConfig.TELEMETRY -> {
                 mapOf(MeshtasticProto.TELEMETRY_DEVICE_UPDATE_INTERVAL to QUIET_SECS.toLong())
+            }
+
+            // Not a quieted config: the radio is only ever written by the dedicated setup, through
+            // [loraSlot], and never as part of the quieting every setup does. See [BoardConfig.QUIET].
+            BoardConfig.LORA -> {
+                emptyMap()
             }
         }
 
@@ -116,6 +148,12 @@ internal object BoardQuiet {
                     MeshtasticProto.TELEMETRY_DEVICE_UPDATE_INTERVAL to
                         (previous?.telemetrySecs ?: DEFAULT_TELEMETRY_SECS).toLong(),
                 )
+            }
+
+            // The restore's own slot write is [loraSlot], driven by the recorded value rather than this
+            // table, because it is written only on the boards that carry one. See [BoardConfig.QUIET].
+            BoardConfig.LORA -> {
+                emptyMap()
             }
         }
 

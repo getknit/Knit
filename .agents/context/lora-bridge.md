@@ -122,6 +122,11 @@ must never need an event to recover. Closes ADR 038's "one board per clique" res
 (231 B at LongFast ≈ 2 s), a rolling **15-minute window** (ADR 054 — it was an hour, and a burst of chat then
 blacked the plane out for the rest of it; the hourly total is unchanged, the worst straddling hour ≤ 6.25 %),
 and one allowance = `min(region duty cycle, 10 % politeness) × 0.5` of the window — **45 s of air at LongFast**.
+Those two ceilings are computed **independently** (ADR 067): the regional duty cycle is law and only the
+firmware's own `override_duty_cycle` lifts it, while the 10 % is Knit's manners toward everyone else on the
+shared band — which a dedicated RF slot makes vacuous. So a board on a dedicated slot in a 100 %-duty region
+gets **450 s a window**, one in EU_868 still gets 45 s, and the unlock is a constructor flag wired to
+`BuildConfig.DEBUG` (`LoraAirtime` itself stays pure and is tested both ways).
 `AirBucket.LIVE` may spend all of it; `AirBucket.BRIDGE` (offers + backfill + the ADR 039 re-offer) is capped
 at 30 %, so backfill degrades before live chat does; `AirBucket.BOOTSTRAP` (a live `profile` fan-out, ours or
 relayed — paired to `FrameClass.BOOTSTRAP` by `AirBucket.defaultFor`) is capped at 25 % and is the **one class
@@ -314,6 +319,29 @@ the board carries the Knit channel and `BoardInfo.owner` — its own `NodeInfo.u
 handshake ADR 041's battery comes from — is a name other than `BoardName.forNode`'s. A board whose firmware
 never sends its own `NodeInfo` reports no name and is left alone.
 
+### The dedicated-frequency setup (ADR 067) — debug builds only
+
+`ProvisionMode.SetupDedicated` is everything above **plus** one spliced varint: `lora.channel_num`, pinning
+the radio to the slot `LoraSlot` derives instead of leaving the firmware to hash it out of the primary's name.
+It exists because ADR 045's bargain has a premise — a Meshtastic neighbourhood to borrow relaying from — and
+an isolated farm or a mountain house does not have one, so the shared slot buys nothing while still costing
+`LoraAirtime`'s politeness ceiling. **Not offered in any release build** (`LoraRadioUiState.dedicatedOffered`
+is `BuildConfig.DEBUG`, re-checked in the ViewModel so no route reaches it), and never the default.
+
+- **The slot is derived, not asked for**: `hash(KnitChannel.NAME) % (region band / preset bandwidth)`, so two
+  boards in the same region on the same preset converge with no coordination, exactly as the shared slot does.
+- **An unknown band is refused, not guessed** (`ProvisionResult.NoDedicatedSlot`, nothing written): picking a
+  slot means picking a transmit frequency, so `LoraRegion` carries a band only for **US** and **ANZ** — the two
+  wide 100 %-duty regions this is worth doing in, un-collapsed from `OTHER`. `MIN_CHANNELS = 2` also refuses a
+  band whose only slot *is* the stock one.
+- **`BoardConfig.LORA` is outside `BoardConfig.QUIET` on purpose**: the ordinary setup still never reads or
+  writes the radio, so ADR 045's promise survives the codec learning to address it. The board's own
+  `channel_num` is recorded like every other prior value, and a restore of a board that was never pinned
+  touches no radio config at all.
+- **What changes on the air** is in `LoraAirtime` below, not here.
+
+Drive it headlessly with `…debug.LORAPROV --es mode dedicated`; `--es mode restore` undoes either setup.
+
 A board whose bound slot is **not** the Knit channel never transmits (`LoraMeshTransport.boundSlotIsKnit`,
 counted as `loraSuppressed`): after a restore, or before a setup, sending would put Knit's cleartext frames
 onto whatever channel the board is on — most likely the public one. A board that reports no channel table at
@@ -407,11 +435,13 @@ where no other Knit board is listening. Set the Meshtastic app's device to **Non
 - `…debug.LORA` (debug bridge): `--es address <MAC>` + `--es name <n>` binds a board, `--ei channel <idx>`,
   `--ez on <true|false>`, `--ez bridge <true|false>`; no extras dumps
   `state/boardNodeNum/snr/rssi/queueFree/heard/role/pocketLinks/pocketSightings/gatewaysHeard/radio/airtime/counters`
-  (`airtime` carries `liveMs`/`bridgeMs`/`bootstrapMs` against their budgets — `loraSent − loraDmSent −
+  (`airtime` also carries `dedicated`, true when the board is on its own RF slot and so off the politeness
+  ceiling — ADR 067; `liveMs`/`bridgeMs`/`bootstrapMs` against their budgets — `loraSent − loraDmSent −
   loraOfferSent` is the profile + room count, and profiles are the fragmented ones; `loraProfileRefanSkipped`
   against `loraSent` is the re-fan redundancy). It is the
   two-board oracle. `…debug.LORATX --es text <s>` sends a raw payload straight to the board (board-side
-  sanity via `meshtastic --noproto`). `…debug.LORAPROV` sets the board up headlessly; `--es mode restore` undoes it.
+  sanity via `meshtastic --noproto`). `…debug.LORAPROV` sets the board up headlessly; `--es mode dedicated`
+  is ADR 067's debug-only dedicated-frequency setup and `--es mode restore` undoes either.
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips
   ✓✓ (sealed tick over LoRa); a reaction crosses. Move B out of BLE/NAN range and repeat. Counters:
   `loraSent/loraReceived/loraReassembled` climb, `loraNak == 0`, `loraDroppedQueue == 0` at chat pace,

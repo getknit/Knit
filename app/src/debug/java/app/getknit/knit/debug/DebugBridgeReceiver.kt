@@ -1129,6 +1129,9 @@ class DebugBridgeReceiver :
             // pocketSightings > pocketLinks is the shape of the field failure: peers heard but not linked.
             .put("pocketSightings", status.pocketSightings)
             .put("radio", status.airtime?.let { "${it.region}/${it.preset}${if (it.known) "" else " (assumed)"}" } ?: JSONObject.NULL)
+            // ADR 067: true means the board is on its own RF slot, so the budgets below are off the
+            // politeness ceiling and bounded only by the region's duty cycle.
+            .put("dedicated", status.airtime?.dedicated ?: JSONObject.NULL)
             .put(
                 "airtime",
                 status.airtime?.let { air ->
@@ -1165,7 +1168,15 @@ class DebugBridgeReceiver :
      */
     private suspend fun handleLoraProv(intent: Intent): JSONObject {
         val mode =
-            if (intent.getStringExtra(EXTRA_MODE)?.lowercase() == "restore") ProvisionMode.Restore else ProvisionMode.Setup
+            when (intent.getStringExtra(EXTRA_MODE)?.lowercase()) {
+                "restore" -> ProvisionMode.Restore
+
+                // ADR 067's debug-only setup, so that a dedicated-frequency trial is drivable headlessly
+                // exactly like the shared-frequency one.
+                "dedicated" -> ProvisionMode.SetupDedicated
+
+                else -> ProvisionMode.Setup
+            }
         val recorded = settings.loraBoardSetup.first()
         val result =
             lora.provisionKnitChannel(
@@ -1183,6 +1194,7 @@ class DebugBridgeReceiver :
                             } else {
                                 BoardOwner(it.longName, it.shortName)
                             },
+                        channelNum = it.channelNum,
                     )
                 },
             )
@@ -1202,6 +1214,7 @@ class DebugBridgeReceiver :
                             rebroadcastMode = previous.rebroadcastMode,
                             longName = previous.owner?.longName.orEmpty(),
                             shortName = previous.owner?.shortName.orEmpty(),
+                            channelNum = previous.channelNum,
                         ),
                     )
                 }

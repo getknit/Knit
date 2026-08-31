@@ -75,6 +75,7 @@ fun LoraRadioScreen(onBack: () -> Unit) {
         onShowAllBoards = viewModel::setShowAllBoards,
         onDismissProvision = viewModel::dismissProvisionOutcome,
         onAskSetup = viewModel::askSetup,
+        onAskSetupDedicated = viewModel::askSetupDedicated,
         onDismissSetup = viewModel::dismissSetup,
         onSetUp = viewModel::setUpBoard,
         onRestore = viewModel::restoreBoard,
@@ -94,6 +95,7 @@ internal fun LoraRadioScreenContent(
     onShowAllBoards: (Boolean) -> Unit = {},
     onDismissProvision: () -> Unit = {},
     onAskSetup: () -> Unit = {},
+    onAskSetupDedicated: () -> Unit = {},
     onDismissSetup: () -> Unit = {},
     onSetUp: () -> Unit = {},
     onRestore: () -> Unit = {},
@@ -177,6 +179,7 @@ internal fun LoraRadioScreenContent(
             SetupSection(
                 state = state,
                 onAskSetup = onAskSetup,
+                onAskSetupDedicated = onAskSetupDedicated,
                 onSetUp = onSetUp,
                 onRestore = onRestore,
                 onDismissProvision = onDismissProvision,
@@ -185,7 +188,7 @@ internal fun LoraRadioScreenContent(
             StatusRow(state = state)
 
             if (state.confirmSetup) {
-                SetupConfirmDialog(onConfirm = onSetUp, onDismiss = onDismissSetup)
+                SetupConfirmDialog(dedicated = state.confirmDedicated, onConfirm = onSetUp, onDismiss = onDismissSetup)
             }
         }
     }
@@ -342,6 +345,7 @@ private fun BoardRow(
 private fun SetupSection(
     state: LoraRadioUiState,
     onAskSetup: () -> Unit,
+    onAskSetupDedicated: () -> Unit,
     onSetUp: () -> Unit,
     onRestore: () -> Unit,
     onDismissProvision: () -> Unit,
@@ -404,6 +408,7 @@ private fun SetupSection(
                 }
             }
         }
+        DedicatedSetupAction(state = state, onAskSetupDedicated = onAskSetupDedicated)
         state.provisionOutcome?.let { outcome ->
             val (message, isError) = outcome.messageAndSeverity()
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -420,20 +425,71 @@ private fun SetupSection(
 }
 
 /**
+ * The debug-only alternative setup (ADR 067): the same board setup, but with the radio pinned to a slot of
+ * its own instead of the shared public frequency. Absent from every release build ([LoraRadioUiState.dedicatedOffered]),
+ * and shown disabled — with the reason — where Knit will not place a slot in the board's region, because a
+ * greyed action that says why is more use than one that fails at the board.
+ *
+ * Offered whether or not the board is already set up: the session applies the slot write to a board that
+ * already carries the Knit channel, so making the user Restore first would be a limitation of this screen
+ * rather than of the thing underneath it. The line below the button says which slot it would pin, and
+ * [LoraRadioUiState.dedicated] says whether the board is already on one.
+ */
+@Composable
+private fun DedicatedSetupAction(
+    state: LoraRadioUiState,
+    onAskSetupDedicated: () -> Unit,
+) {
+    if (!state.dedicatedOffered) return
+    OutlinedButton(
+        onClick = onAskSetupDedicated,
+        enabled = !state.provisioning && state.dedicatedSlot != null,
+        modifier = Modifier.testTag("lora_setup_dedicated"),
+    ) {
+        Text(stringResource(R.string.lora_setup_dedicated_button))
+    }
+    Text(
+        text =
+            when {
+                state.dedicated -> stringResource(R.string.lora_setup_dedicated_active)
+                state.dedicatedSlot != null -> stringResource(R.string.lora_setup_dedicated_body, state.dedicatedSlot)
+                else -> stringResource(R.string.lora_setup_dedicated_unavailable)
+            },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.testTag("lora_setup_dedicated_body"),
+    )
+}
+
+/**
  * Setting a board up changes settings on hardware the user may also use for other things — what it stops
- * broadcasting, and that it stops relaying other people's traffic — so it is confirmed first. What it does
- * *not* touch is the board's own primary channel, and therefore its frequency.
+ * broadcasting, and that it stops relaying other people's traffic — so it is confirmed first. What the
+ * ordinary setup does *not* touch is the board's own primary channel, and therefore its frequency; the
+ * debug-only [dedicated] one does move the radio, and trades the free relaying away, so it says so instead.
  */
 @Composable
 private fun SetupConfirmDialog(
+    dedicated: Boolean,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("lora_setup_dialog"),
-        title = { Text(stringResource(R.string.lora_setup_confirm_title)) },
-        text = { Text(stringResource(R.string.lora_setup_confirm_body)) },
+        title = {
+            Text(
+                stringResource(
+                    if (dedicated) R.string.lora_setup_dedicated_confirm_title else R.string.lora_setup_confirm_title,
+                ),
+            )
+        },
+        text = {
+            Text(
+                stringResource(
+                    if (dedicated) R.string.lora_setup_dedicated_confirm_body else R.string.lora_setup_confirm_body,
+                ),
+            )
+        },
         confirmButton = {
             TextButton(onClick = onConfirm, modifier = Modifier.testTag("lora_setup_confirm")) {
                 Text(stringResource(R.string.lora_setup_confirm_action))
@@ -451,6 +507,7 @@ private fun LoraProvisionOutcome.messageAndSeverity(): Pair<Int, Boolean> =
         LoraProvisionOutcome.AlreadyPresent -> R.string.lora_provision_already to false
         LoraProvisionOutcome.Restored -> R.string.lora_restored to false
         LoraProvisionOutcome.NoFreeSlot -> R.string.lora_provision_no_slot to true
+        LoraProvisionOutcome.NoDedicatedSlot -> R.string.lora_provision_no_dedicated_slot to true
         LoraProvisionOutcome.Failed -> R.string.lora_provision_failed to true
         LoraProvisionOutcome.NotReady -> R.string.lora_provision_not_ready to true
     }

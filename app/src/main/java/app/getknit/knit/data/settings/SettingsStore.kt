@@ -138,13 +138,15 @@ class SettingsStore(
      * choice the user makes rather than one they inherit (docs/SPOOL_PROTOCOL.md §10). With it off, or
      * with [spoolUrls] empty, `ScopeSync` opens no socket at all.
      *
-     * Also the plane's single kill switch while the feature is dark: `BuildConfig.INTERNET_PLANE` is
-     * false in release/staging, and every consumer — `ScopeSync`'s url supplier, the group-root mint
-     * pass, and `RelayStatusRepository.facts` (from which the header cloud, the per-chat relay notice
-     * and the attachment markers all derive) — already reads the plane's liveness through this one
-     * flow. Gating **here** rather than at each of them is what makes the flag total: a new consumer
-     * cannot forget it. The stored preference is deliberately read but not cleared, so a device that
-     * opted in under a flag-on build keeps its choice for whenever the feature ships.
+     * Also the plane's single kill switch: every consumer — `ScopeSync`'s url supplier, the group-root
+     * mint pass, and `RelayStatusRepository.facts` (from which the header cloud, the per-chat relay
+     * notice and the attachment markers all derive) — reads the plane's liveness through this one flow.
+     * Gating **here** rather than at each of them is what makes `BuildConfig.INTERNET_PLANE` total: a
+     * new consumer cannot forget it. That flag is true in every build as of 2.4.0 (ADR 064), which
+     * introduced the feature; it stayed false in release/staging for two releases before that, and
+     * `-PinternetPlane=false` still puts a build back in that state. The stored preference was
+     * deliberately read but never cleared while the flag was off, so a device that opted in under a
+     * flag-on build kept its choice across the introduction rather than being silently reset by it.
      */
     val spoolEnabled: Flow<Boolean> =
         dataStore.data.map { BuildConfig.INTERNET_PLANE && (it[KEY_SPOOL_ENABLED] ?: false) }

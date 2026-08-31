@@ -1,0 +1,15 @@
+Voice notes, and optional Internet relays for when nobody is in radio range.
+
+Knit still works with no internet and no account. But a message to someone out of radio range used to
+wait for the two phones, or a chain of phones between them, to meet. Turn on Internet relays and Knit
+parks a sealed copy on a relay server, which hands it over the next time the other phone connects. It
+stays off until you switch it on, and a one-time explanation spells out what a relay can see — your IP
+address, when you send, roughly how much — and what it cannot: your messages, who you are talking to,
+or who else is in a group. Direct messages, group chats and photos all travel this way.
+
+Hold the microphone in a chat to record a voice note. Too far apart to scan each other's code? Share a
+contact link instead. Two people with the same name are now told apart by the alias Knit gives every
+device.
+
+Fixed: phones that shut Knit down seconds after opening, and a crash when Android restarts the mesh
+out of sight.

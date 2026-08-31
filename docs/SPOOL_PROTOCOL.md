@@ -1461,7 +1461,9 @@ wire.
 
 The plane is **off by default** and gated behind a one-time consent disclosure. With it off, or with
 no
-spool configured, the client opens no socket at all.
+spool configured, the client opens no socket at all. It is **reachable** in shipped builds from the
+reference client's 2.4.0 (ADR 064) — 2.3.0 and 2.3.1 carried this implementation but hid every way into
+it behind a build flag. Neither the wire nor any derivation differs between the two states.
 
 ## Appendix B. Change log
 

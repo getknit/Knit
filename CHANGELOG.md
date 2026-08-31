@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-29T23:30:00Z
+  updated: 2026-08-31T05:12:27Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -18,20 +18,17 @@ document:
 
 # Knit changelog
 
-## Unreleased
+## [2.4.0](https://github.com/getknit/knit/releases/tag/v2.4.0) — 2026-08-31T05:12:27Z
 
 > Voice notes, and optional Internet relays for when nobody is in radio range.
 
 ### Added
 
-- Delivery ticks between up-to-date phones are smaller: the ✓ for a nearby-room or group post now crosses
-  a LoRa board or the Wi-Fi Aware fast lane in one packet instead of two, and every private message or
-  receipt between two current builds is a little lighter on the air. Nothing changes for an older phone —
-  it keeps receiving exactly what it did.
-- Between two current phones, the delivered tick for a private message, a reaction, and a short message
-  now cross a LoRa board or the Wi-Fi Aware fast lane in one packet instead of two, and a profile in two
-  instead of three: the frame travels in a compact form the receiver unpacks before checking the signature,
-  so nothing about what is signed changes. An older phone keeps receiving exactly what it did.
+- Knit puts less on the air. Between two current phones the delivered tick — for a private message, a
+  reaction, a nearby-room or group post — now crosses the Wi-Fi Aware fast lane in one packet instead of
+  two, a short message likewise, and a profile in two instead of three. The frame travels in a compact
+  form the receiver unpacks before checking the signature, so nothing about what is signed changes, and
+  an older phone keeps receiving exactly what it did.
 - Two people with the same name are now told apart. When someone nearby uses a name Knit already knows,
   both show their alias after it — the two-word name Knit gives every device, like "Sam (JoyfulFerret)" —
   in the room, the chat list, Contacts, group members and notifications, and it goes away again when the
@@ -62,6 +59,10 @@ document:
 - A Settings screen for relays lists the ones you use, adds and removes them, and reports each one as
   connected, still connecting, or why it refused. Knit ships with one relay already listed and unused;
   it stays inert until you turn the feature on, and removing it sticks.
+- Each relay also has its own switch, so you can stop using one without deleting it. Deleting forgets
+  its address and any access token it came with, which for a private relay cannot be undone; switching
+  one off just stops sending to it. The main switch still decides whether sealed copies leave your phone
+  at all — a relay's own only narrows which of them carry.
 - Group chats travel over relays as well as direct messages, without anyone learning from the relay
   that a group exists or who is in it.
 - Photos travel over relays too, in sealed pieces. A photo waits while a phone that can carry it is
@@ -78,6 +79,10 @@ document:
   design — it is public and unencrypted, so it is never uploaded, and says so.
 - Diagnostics gains an Internet relays section: what has been sent and received over them, photo
   pieces moved, photos left to the radios, and any errors a relay reported.
+- A fresh install now says what to do next. The chat list always has the Nearby room in it, so it never
+  looked empty even when there was nothing to open; a short card under that row now names the two ways
+  in — broadcast to everyone in range, or add one person. It disappears on its own as soon as you have
+  a conversation to open.
 
 ### Changed
 
@@ -127,6 +132,18 @@ document:
   someone else is theirs to choose. A tiny file can unpack into hundreds of megabytes. Knit now opens every
   photo at the size it actually needs, and remembers the ones it has already opened, so a busy conversation
   does the work once instead of once per message.
+- Opening "New message" no longer flashes "no contacts yet" before your contacts appear. The list takes
+  about a second to read on a cold start, and the screen could not tell "still loading" from "nothing
+  here", so it drew the empty state over the transition. It now shows placeholder rows that fade into the
+  real ones.
+- Phones a few miles away, and phones with no Wi-Fi Aware radio at all, no longer show up as directly
+  connected over Wi-Fi Aware. A relayed message carries its original sender's name, and Knit was crediting
+  that name with the link the message actually arrived on. It now credits the phone that put the message
+  on the air, which is the only sender Wi-Fi Aware really tells it about.
+- Knit no longer re-downloads the same messages from a relay over and over. Relays hold a sealed copy
+  longer than a phone keeps one, so for the back half of that window Knit kept asking for messages it had
+  already delivered and thrown away, on every reconnect, and never counted a conversation as caught up.
+  It now remembers that it dealt with them.
 
 ## [2.3.1](https://github.com/getknit/knit/releases/tag/v2.3.1) — 2026-08-27T19:50:27Z
 

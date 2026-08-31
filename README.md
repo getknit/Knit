@@ -308,11 +308,13 @@ No. There is no Google Nearby / GMS dependency — the radios are driven through
 there are no accounts, sign-ups, phone numbers, or servers.
 
 **If it's offline, why does the app declare the `INTERNET` permission?**
-Not to reach the internet. Wi-Fi Aware forms a direct radio link between two phones and runs a TCP
-socket *over that local link* (link-local IPv6, no router or gateway), which Android gates behind the
-`INTERNET` permission even though no traffic ever leaves the mesh. Knit contacts no servers and bundles
-no analytics, telemetry, or crash reporting — you can confirm both from the source and the deliberately
-GMS-free dependency list.
+For two reasons. Wi-Fi Aware forms a direct radio link between two phones and runs a TCP socket *over
+that local link* (link-local IPv6, no router or gateway), which Android gates behind the `INTERNET`
+permission even though no traffic leaves the mesh — that alone would require it. Since 2.4.0 the
+optional [Internet relay plane](#-roadmap) also uses it, once you switch it on; it is off on a fresh
+install, which therefore makes no network calls at all. Knit bundles no analytics, telemetry, or crash
+reporting either way — you can confirm all of it from the source and the deliberately GMS-free
+dependency list.
 
 **How far can messages travel?**
 Beyond direct radio range. Each phone relays for the others, so a message hops device-to-device across
@@ -379,10 +381,10 @@ offline app sharing.
 - **Encrypting the broadcast room** — the last cleartext plane, and as much a product question as a
   crypto one: a room with no fixed recipient set has nobody in particular to encrypt to.
 
-**Built, off by default:** an optional Internet layer that carries DMs and group messages between
-contacts you already have when no radio path exists, keeping the mesh's delay-tolerant behaviour and
-running through small relays ("spools") that hold sealed frames without learning whose they are or what
-is in them. The protocol is specified in [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) with
+**Shipped since 2.4.0, off until you switch it on:** an optional Internet layer that carries DMs and
+group messages between contacts you already have when no radio path exists, keeping the mesh's
+delay-tolerant behaviour and running through small relays ("spools") that hold sealed frames without
+learning whose they are or what is in them. The protocol is specified in [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) with
 executable test vectors; the client implements it, and the reference spool daemon lives in
 [`getknit/knit-spool`](https://github.com/getknit/knit-spool). **It stays off until you switch it on** —
 enabling it takes an explicit consent sheet in the relay settings screen that spells out what a spool

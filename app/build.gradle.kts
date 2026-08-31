@@ -64,15 +64,19 @@ val bundleRequested = gradle.startParameter.taskNames.any { it.contains("bundle"
 val nativeSymbols = (project.findProperty("knit.nativeSymbols") as? String)?.toBoolean() ?: bundleRequested
 
 // Internet (spool) relay plane — the whole feature's visibility switch, read here because both
-// defaultConfig and buildTypes.release need it. Null means "no opinion", which resolves to ON in debug
-// and OFF in release/staging; `-PinternetPlane=true|false` overrides either way. See the BuildConfig
-// fields below for what the flag actually gates.
+// defaultConfig and buildTypes.release need it. Null means "no opinion", which resolves to ON
+// everywhere as of 2.4.0 (ADR 064 — the feature is introduced, so the switch it hid is now the user's
+// own, not the build's); `-PinternetPlane=true|false` overrides either way. See the BuildConfig fields
+// below for what the flag actually gates, and note that ON here means *visible and reachable*, never
+// *enabled*: `SettingsStore.spoolEnabled` still defaults false behind a consent sheet.
 val internetPlane = (project.findProperty("internetPlane") as? String)?.toBoolean()
 
-// LoRa (Meshtastic-over-BLE) plane — same visibility switch as the Internet plane: ON in debug, OFF in
+// LoRa (Meshtastic-over-BLE) plane — the same kind of visibility switch, still ON in debug and OFF in
 // release/staging, overridable with `-PloraPlane=true|false`. It gates the LoRa child in the composite
 // transport, the settings screen + its route, and SettingsStore.loraEnabled. Not a code strip (R8 prunes
 // the `if (LORA_PLANE)` branches); the default lives in source so F-Droid's -P-free rebuild stays identical.
+// Still dark in shipped builds at 2.4.0: the plane owes the four-device two-pocket trial and the
+// airtime-shaping three-phone trial in `.agents/context/lora-bridge.md` before it can be introduced.
 val loraPlane = (project.findProperty("loraPlane") as? String)?.toBoolean()
 
 // ABIs packaged into the **debug** APK. Debug is unminified and carries both tflite models, so it is
@@ -177,19 +181,23 @@ android {
         // when seedDemo is on; picks the persona/message/avatar set so we can shoot multiple marketing themes.
         val demoTheme = (project.findProperty("demoTheme") as? String) ?: "hiking"
         buildConfigField("String", "DEMO_THEME", "\"$demoTheme\"")
-        // Internet (spool) relay plane — the whole feature's visibility switch. ON in debug, OFF in
-        // release/staging, overridable either way with `-PinternetPlane=true|false`. The plane is
-        // finished but not yet introduced publicly, so shipped builds hide every way in: the Profile
-        // row and its `relays` route disappear, the shipped default spool is not seeded, and
-        // `SettingsStore.spoolEnabled` reads false no matter what the stored preference says — which
-        // parks `ScopeSync` (no socket), stops group-root minting, and collapses every derived
-        // indicator (header cloud, per-chat relay notice, "nearby only" attachment markers) to their
-        // off states, because all of them are already functions of that one flow. Deliberately NOT a
-        // code strip: the classes stay in the APK (R8 only prunes the `if (INTERNET_PLANE)` branches),
-        // which keeps the plane one flag flip away and the unit suite — which builds debug, so the
-        // flag is true — running the real thing. Both defaults live in source (the `?:` fallbacks below)
-        // rather than in gradle.properties or CI, so F-Droid's rebuild — which passes no `-P` — resolves
-        // the same OFF we shipped and stays byte-identical.
+        // Internet (spool) relay plane — the whole feature's visibility switch, ON here and, since
+        // 2.4.0, in release too (ADR 064); `-PinternetPlane=true|false` overrides either way. What it
+        // gates is every way *in*: the Profile row and its `relays` route, the shipped default spool's
+        // one-shot seed, and `SettingsStore.spoolEnabled`, which reads false no matter what the stored
+        // preference says while the flag is off — which parks `ScopeSync` (no socket), stops group-root
+        // minting, and collapses every derived indicator (header cloud, per-chat relay notice, "nearby
+        // only" attachment markers) to their off states, because all of them are already functions of
+        // that one flow. Deliberately NOT a code strip: the classes stay in the APK (R8 only prunes the
+        // `if (INTERNET_PLANE)` branches), which is what let the plane sit finished-but-dark for two
+        // releases and kept the unit suite — which builds debug, so the flag is true — running the real
+        // thing throughout. Both defaults live in source (the `?:` fallbacks below) rather than in
+        // gradle.properties or CI, so F-Droid's rebuild — which passes no `-P` — resolves the same
+        // values we shipped and stays byte-identical.
+        //
+        // ON is not the same as enabled. The user's own switch (`SettingsStore.spoolEnabled`, behind the
+        // consent sheet) still defaults false, so a fresh 2.4.0 install seeds the default relay, shows
+        // the screen, and opens no socket until someone says so.
         buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: true).toString())
         buildConfigField("boolean", "LORA_PLANE", (loraPlane ?: true).toString())
         // Fault injection for the model poison-pill's acceptance test (ADR 037):
@@ -271,9 +279,15 @@ android {
             // its classes ship only in src/debug. Overrides the defaultConfig SEED_DEMO/DEMO_DIRECTOR fields.
             buildConfigField("boolean", "SEED_DEMO", "false")
             buildConfigField("boolean", "DEMO_DIRECTOR", "false")
-            // Hide the Internet-relay plane in every shipped artifact (staging inherits this via
-            // initWith). `-PinternetPlane=true` re-lights it for a lab reflash of a release-shaped build.
-            buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: false).toString())
+            // The Internet-relay plane is introduced at 2.4.0, so a shipped artifact no longer hides it
+            // (ADR 064) — the release default now agrees with debug, and `-PinternetPlane=false` is what
+            // takes it back out. The user still opts in: the plane ships visible and switched off.
+            //
+            // The LoRa plane stays dark in every shipped artifact (staging inherits this via initWith);
+            // `-PloraPlane=true` re-lights it for a lab reflash of a release-shaped build. It is held back
+            // on evidence, not on polish — the two device trials in `.agents/context/lora-bridge.md` are
+            // still owed — so these two lines are deliberately no longer symmetric.
+            buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: true).toString())
             buildConfigField("boolean", "LORA_PLANE", (loraPlane ?: false).toString())
             // Never ship a fault injector, whatever `-PmodelFaultOnLoad` said.
             buildConfigField("String", "MODEL_FAULT_ON_LOAD", "\"\"")

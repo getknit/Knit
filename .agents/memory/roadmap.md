@@ -90,12 +90,14 @@ doc). **Don't start a deferred item without explicit direction.**
   and **faster passive-to-active takeover** when an active gateway's phone dies without leaving
   `foreignReachable` (the 45-min `STALE_MS` is the whole blind spot today).
 
-- **The spool plane is hidden in shipped builds** (2026-08-22, ADR 031) — `BuildConfig.INTERNET_PLANE`
-  is true in debug, false in release/staging, `-PinternetPlane=true|false` overrides. It gates
-  `SettingsStore.spoolEnabled` (which parks `ScopeSync`, group-root minting and every derived indicator
-  in one place), the Profile row, the `relays` route, and the default-spool seed. The code is **not**
-  stripped — flipping the release default to `true` is the whole of "introducing the feature", once the
-  device trials below are done and the CHANGELOG's relay bullets are ready to be public.
+- ~~**The spool plane is hidden in shipped builds**~~ (2026-08-22, ADR 031) — **introduced at 2.4.0**
+  (2026-08-31, ADR 064): `BuildConfig.INTERNET_PLANE` now defaults true in release and staging too, so a
+  shipped build seeds the default relay, shows the Profile row and the `relays` route, and lets
+  `SettingsStore.spoolEnabled` mean what the user stored. `-PinternetPlane=false` puts a build back in
+  the dark state. The user-facing default did **not** move: the plane is visible and switched **off**,
+  behind the consent sheet. The three device trials below (group two-island, attachment deferral,
+  contact-card intro) were **not** complete at the flip — see ADR 064 for what was, and for the residual
+  risk that carries.
 
 - **The spool plane beyond the spec** — everything that makes the protocol run, in order: ~~the
   `knit-spool` reference daemon + conformance suite~~ (**done 2026-08-16** in the `knit-spool`

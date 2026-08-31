@@ -20,6 +20,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -301,6 +302,16 @@ class ContactsViewModelTest {
             // spec §3.2 makes us the preferred minter, and without this the thread reads "Not covered by
             // relays yet" until the next heal (heartbeat / motion / foreground resume).
             assertEquals(1, mesh.mintGroupRootsCount)
+            // The creator never receives a frame about their own group, so without this write they would be
+            // the one member who never sees the "created this group" line every other member gets on first
+            // sight. Both writers mint the same deterministic id, so the two can never double up.
+            val groupId = Conversations.groupIdFor(listOf("a", "b", "me"))
+            val notice = slot<MessageEntity>()
+            coVerify { messages.save(capture(notice)) }
+            assertEquals(MessageEntity.KIND_GROUP_CREATED, notice.captured.kind)
+            assertEquals("created:$groupId", notice.captured.id)
+            assertEquals("me", notice.captured.senderId)
+            assertEquals(groupId, notice.captured.conversationId)
         }
 
     @Test
@@ -316,7 +327,9 @@ class ContactsViewModelTest {
 
             coVerify(exactly = 0) { groups.upsert(any()) }
             assertEquals(1, created.size)
-            // Nothing was created, so there is no new root to mint — reopening must not nudge the plane.
+            // Nothing was created, so there is no new root to mint — reopening must not nudge the plane,
+            // and must not post a second "created this group" line into a thread that already has one.
             assertEquals(0, mesh.mintGroupRootsCount)
+            coVerify(exactly = 0) { messages.save(any()) }
         }
 }

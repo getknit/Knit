@@ -176,7 +176,19 @@
     <string name="chat_group_leave_confirm_title">Leave group?</string>
     <string name="chat_group_leave_confirm_body">You\'ll stop receiving messages and this chat will be removed from this device.</string>
     <string name="chat_group_leave_confirm_action">Leave</string>
-    <string name="chat_group_member_left">%1$s left the chat</string>
+    <string name="chat_notice_member_left">%1$s left the chat</string>
+
+    <!-- Status notices: centered, muted lines shown in a thread for an event rather than a message.
+         Derived on-device from state changes (see MessageEntity.kind); none of them crosses the wire. -->
+    <!-- %1$s is the contact's PREVIOUS name, %2$s their new one. -->
+    <string name="chat_notice_peer_renamed">%1$s is now %2$s</string>
+    <string name="chat_notice_peer_avatar">%1$s changed their photo</string>
+    <!-- %1$s is the member who renamed the group, %2$s the new group name. -->
+    <string name="chat_notice_group_renamed">%1$s renamed the group to %2$s</string>
+    <string name="chat_notice_group_photo">%1$s changed the group photo</string>
+    <string name="chat_notice_group_created">%1$s created this group</string>
+    <string name="chat_notice_group_created_you">You created this group</string>
+    <string name="chat_notice_key_pin_refused">A profile update for %1$s was refused: it didn\'t match their pinned key</string>
     <string name="group_details_title">Group info</string>
     <string name="group_details_members">Members</string>
     <string name="group_details_view_photo">View photo</string>

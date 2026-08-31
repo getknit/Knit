@@ -18,6 +18,17 @@ document:
 
 # Knit changelog
 
+## Unreleased
+
+### Added
+
+- Chats now say what happened in them. A quiet, centered line marks a contact changing their name ("Sam
+  is now Sam Vimes") or their photo, someone renaming a group or changing its picture, and the group
+  being created — alongside the "left the chat" line that was already there. The lines are written by
+  your own phone from things it can already see, so they cost nothing on the air and nobody is told that
+  you saw them. They stay out of the way, too: no notification, no unread badge, and they never take over
+  a chat's preview or push it up your chat list.
+
 ## [2.4.0](https://github.com/getknit/knit/releases/tag/v2.4.0) — 2026-08-31T05:12:27Z
 
 > Voice notes, and optional Internet relays for when nobody is in radio range.

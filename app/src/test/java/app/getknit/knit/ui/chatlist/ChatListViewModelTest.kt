@@ -392,17 +392,19 @@ class ChatListViewModelTest {
         }
 
     @Test
-    fun aStatusNoticeNeverCarriesATick() =
+    fun aStatusNoticeIsInvisibleToTheChatList() =
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x"), createdAt = 50))
-            // A locally-generated "left the chat" notice keyed to us: never sent anywhere, so no tick.
+            // A notice arriving AFTER the newest real message must not speak for the thread: the preview,
+            // the timestamp and the tick all keep describing the last thing someone actually said. A
+            // notice is worth a line inside the thread and is not worth re-sorting someone's chat list.
             messagesFlow.value =
                 listOf(
-                    msg(senderId = "me", sentAt = 100, conversationId = "g-1"),
+                    msg(senderId = "me", sentAt = 100, conversationId = "g-1", body = "see you"),
                     msg(
-                        senderId = "me",
+                        senderId = "x",
                         sentAt = 200,
                         conversationId = "g-1",
                         body = "",
@@ -411,10 +413,103 @@ class ChatListViewModelTest {
                 )
             advanceUntilIdle()
 
-            assertNull(
+            val row =
                 vm.state.value.conversations
                     .first { it.id == "g-1" }
-                    .lastStatus,
+            assertEquals("You: see you", row.lastPreview)
+            assertEquals(100L, row.lastMessageAt)
+            // The tick still belongs to that real send of ours...
+            assertEquals(DeliveryStatus.Sent, row.lastStatus)
+        }
+
+    @Test
+    fun aGroupHoldingOnlyNoticesStillSortsByItsCreationTime() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x"), createdAt = 50))
+            // ...and with no real message there is nothing to describe, so the group falls back to the
+            // empty-group behaviour rather than borrowing the notice's clock. A notice's senderId is the
+            // event's SUBJECT rather than an author, so it must not grow a tick either — which is what
+            // would happen if the filter keyed on authorship instead of on kind.
+            messagesFlow.value =
+                listOf(
+                    msg(
+                        senderId = "me",
+                        sentAt = 200,
+                        conversationId = "g-1",
+                        body = "",
+                        kind = MessageEntity.KIND_GROUP_CREATED,
+                    ),
+                )
+            advanceUntilIdle()
+
+            // The group is in the chat list at all only because we are its creator — see the
+            // request-inbox test below for the case where a notice is the only thing a stranger sent.
+            val row =
+                vm.state.value.conversations
+                    .first { it.id == "g-1" }
+            assertNull(row.lastPreview)
+            assertEquals(50L, row.lastMessageAt)
+            assertNull(row.lastStatus)
+        }
+
+    @Test
+    fun aStatusNoticeRaisesNoUnreadBadge() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x"), createdAt = 50))
+            messagesFlow.value =
+                listOf(
+                    // Ours, so the thread is an accepted chat rather than a request.
+                    msg(senderId = "me", sentAt = 100, conversationId = "g-1"),
+                    msg(senderId = "x", sentAt = 200, conversationId = "g-1"),
+                    msg(
+                        senderId = "x",
+                        sentAt = 300,
+                        conversationId = "g-1",
+                        body = "",
+                        kind = MessageEntity.KIND_PEER_RENAMED,
+                    ),
+                )
+            advanceUntilIdle()
+
+            // One unread, not two: the notice is quiet even though it is unread, from someone else, and
+            // newer than everything else in the thread.
+            assertEquals(
+                1,
+                vm.state.value.conversations
+                    .first { it.id == "g-1" }
+                    .unreadCount,
             )
+        }
+
+    @Test
+    fun aNoticeAloneDoesNotAcceptAStrangersGroup() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x"), createdBy = "x"))
+            // A notice's senderId is the event's subject, so it is not someone "having spoken here": a
+            // group whose only row is a stranger's rename stays a message request. Were notices counted
+            // as speech, renaming yourself would be enough to promote your group into someone's chat list.
+            messagesFlow.value =
+                listOf(
+                    msg(
+                        senderId = "x",
+                        sentAt = 300,
+                        conversationId = "g-1",
+                        body = "",
+                        kind = MessageEntity.KIND_PEER_RENAMED,
+                    ),
+                )
+            advanceUntilIdle()
+
+            assertTrue(
+                vm.state.value.conversations
+                    .none { it.id == "g-1" },
+            )
+            assertEquals(1, vm.state.value.requestCount)
         }
 }

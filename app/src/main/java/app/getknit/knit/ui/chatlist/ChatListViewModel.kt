@@ -16,6 +16,7 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
+import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.relay.RelayPlane
@@ -230,21 +231,24 @@ class ChatListViewModel(
                 avatarHash: String?,
                 discriminator: String? = null,
             ): ConversationRow {
-                val last = threadMsgs.lastOrNull()
+                // Status notices are invisible to this list, entirely: they are not the thread's "last
+                // message", so they never become its preview and never re-sort it to the top. A contact
+                // renaming themselves is worth a line inside the thread and is not worth reordering
+                // someone's chat list — and a notice's senderId is the event's *subject* rather than an
+                // author, so treating one as the last message would also mis-attribute the preview.
+                val last = threadMsgs.lastOrNull { !it.isStatusNotice }
                 val lastReadAt = lastReadAll[conversationId] ?: 0L
                 // Until our own id resolves, count nothing as unread so our own messages aren't miscounted.
-                // Status notices (e.g. "X left the chat") are quiet — they never raise an unread badge.
                 val unread =
                     if (me == null) {
                         0
                     } else {
-                        threadMsgs.count {
-                            it.sentAt > lastReadAt && it.senderId != me && it.kind == MessageEntity.KIND_NORMAL
-                        }
+                        threadMsgs.count { it.sentAt > lastReadAt && it.senderId != me && !it.isStatusNotice }
                     }
-                // The tick, and only for our own ordinary sends: a status notice is locally generated (its
-                // senderId is the event's subject, not an author) and was never sent anywhere.
-                val mineLast = last?.takeIf { it.senderId == me && it.kind == MessageEntity.KIND_NORMAL }
+                // The tick, and only for our own sends: a notice was never sent anywhere. Redundant with
+                // the filter on `last` above and kept anyway — the two express different rules, and this
+                // one is what guarantees no notice can ever grow a delivery tick.
+                val mineLast = last?.takeIf { it.senderId == me && !it.isStatusNotice }
                 return ConversationRow(
                     id = conversationId,
                     title = title,
@@ -352,14 +356,6 @@ class ChatListViewModel(
         me: String?,
         isDm: Boolean,
     ): String {
-        // Status notices have an empty body and their senderId is the event's subject (the member who
-        // left); render the localized line directly rather than "Sender: " with a blank body.
-        if (message.kind == MessageEntity.KIND_MEMBER_LEFT) {
-            return context.getString(
-                R.string.chat_group_member_left,
-                directory.label(message.senderId).text,
-            )
-        }
         val body =
             when {
                 message.body.isNotBlank() -> {

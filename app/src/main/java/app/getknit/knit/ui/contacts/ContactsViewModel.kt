@@ -10,6 +10,7 @@ import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.MeshController
@@ -64,7 +65,7 @@ class ContactsViewModel(
     private val identity: Identity,
     settings: SettingsStore,
     private val groups: GroupRepository,
-    messages: MessageRepository,
+    private val messages: MessageRepository,
 ) : ViewModel() {
     private val myNodeId = MutableStateFlow<String?>(null)
 
@@ -96,17 +97,24 @@ class ContactsViewModel(
                 _created.tryEmit(groupId) // already have this exact group — just open it
                 return@launch
             }
+            val createdAt = System.currentTimeMillis()
             groups.upsert(
                 GroupEntity(
                     groupId = groupId,
                     name = "", // unnamed: titled locally per device until renamed
                     members = GroupMembersStore.encode(members),
                     createdBy = me,
-                    createdAt = System.currentTimeMillis(),
+                    createdAt = createdAt,
                     nameUpdatedAt = 0L,
                     left = false,
                 ),
             )
+            // The same "created this group" line every other member gets on first sight of the group
+            // (InboundPipeline.reconcileGroup), written here because the creator never receives a frame
+            // about their own group and would otherwise be the one person who couldn't see it. Both
+            // writers mint the same deterministic row id, so a member who creates a group that later
+            // reaches them by frame still ends up with one line.
+            messages.save(StatusNotices.groupCreated(groupId, me, createdAt))
             // Ask the Internet plane to mint this group's spool root now (spec §3.2: we are the creator,
             // so we are the preferred minter and mint immediately). Without it the mint waits for the next
             // heal — a heartbeat, a motion trigger or a foreground resume — and the thread reads

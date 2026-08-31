@@ -4,7 +4,7 @@ import androidx.room3.withWriteTransaction
 import app.getknit.knit.data.group.GroupDao
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
-import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 import app.getknit.knit.mesh.spool.GroupRootStore
 import kotlinx.coroutines.flow.Flow
@@ -77,17 +77,7 @@ class GroupRepository(
             // splitting the obligation from the act is what makes rotation survive a crash between them,
             // and it is what lets the mint grace cover a deterministic re-minter who never comes back.
             groupRoots?.markRemintDue(groupId, leftAt)
-            messages.save(
-                MessageEntity(
-                    id = "leave:$groupId:$leaverId",
-                    senderId = leaverId,
-                    conversationId = groupId,
-                    body = "",
-                    sentAt = leftAt,
-                    received = true,
-                    kind = MessageEntity.KIND_MEMBER_LEFT,
-                ),
-            )
+            messages.save(StatusNotices.memberLeft(groupId, leaverId, leftAt))
             true
         }
 

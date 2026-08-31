@@ -14,6 +14,7 @@ import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
+import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -100,9 +101,15 @@ class MessageRequestsViewModel(
                     .toSet()
             val authored = msgs.filter { it.senderId == me }.map { it.conversationId }.toSet()
             // Senders per thread, so a group a known peer has posted in falls through to the chat list
-            // instead of showing here (matches the notify gate and chat list).
+            // instead of showing here (matches the notify gate and chat list). Status notices are
+            // excluded, as they are in MessageDao.sendersIn: a notice's senderId is the event's subject,
+            // not an author, so counting one would let a peer who merely renamed themselves or left
+            // promote a stranger's group out of this list without ever having spoken in it.
             val sendersByConversation =
-                msgs.groupBy { it.conversationId }.mapValues { (_, tms) -> tms.map { it.senderId }.toSet() }
+                msgs
+                    .filterNot { it.isStatusNotice }
+                    .groupBy { it.conversationId }
+                    .mapValues { (_, tms) -> tms.map { it.senderId }.toSet() }
 
             // A conversation is a pending request when it isn't Nearby, isn't blocked, and the shared
             // predicate says it's not yet accepted — matching the notify gate exactly.
@@ -130,7 +137,8 @@ class MessageRequestsViewModel(
                         } else {
                             directory.label(conversationId).text
                         }
-                    val last = threadMsgs.lastOrNull()
+                    // Notices never speak for a thread here either (see ChatListViewModel.rowFor).
+                    val last = threadMsgs.lastOrNull { !it.isStatusNotice }
                     RequestRow(
                         conversationId = conversationId,
                         title = title,
@@ -187,12 +195,6 @@ class MessageRequestsViewModel(
         directory: PeerDirectory,
         isGroup: Boolean,
     ): String {
-        if (message.kind == MessageEntity.KIND_MEMBER_LEFT) {
-            return context.getString(
-                R.string.chat_group_member_left,
-                directory.label(message.senderId).text,
-            )
-        }
         val body =
             when {
                 message.body.isNotBlank() -> {

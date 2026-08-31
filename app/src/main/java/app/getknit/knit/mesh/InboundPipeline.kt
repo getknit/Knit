@@ -19,6 +19,7 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.withReply
 import app.getknit.knit.data.peer.PeerEntity
@@ -914,6 +915,94 @@ class InboundPipeline(
     }
 
     /**
+     * The presentation half's follow-ups to a stored profile: the status notices it earns, the orphan
+     * avatar blob it may free, and the fetch of an avatar it advertised but whose bytes we lack.
+     *
+     * All three are gated on [stalePresentation] together, and that is the point of grouping them. A
+     * profile frame is admitted for two independent reasons on two independent watermarks — its
+     * presentation and its ratchet prekey — so a frame that lost the presentation race still reaches here
+     * for its prekey, carrying a name and an avatar hash *older* than the ones already on screen. Acting
+     * on those would announce a change that never happened, reclaim a live avatar, or re-fetch a
+     * superseded one. Only the prekey columns may move on such a frame.
+     *
+     * Grouping these moved the avatar pull ahead of [applyDeviceTagBlockContinuity], which it used to
+     * follow. That is immaterial rather than merely untested: [pullRelayAvatarIfNeeded] never consults
+     * the blocked set, so a peer blocked by device-tag continuity had its avatar pulled under the old
+     * order too. If that ever becomes undesirable, the fix is a block check inside the pull, not a
+     * re-ordering here — an ordering that only accidentally suppressed it was never the guard.
+     */
+    private suspend fun applyPresentationFollowUps(
+        peerId: String,
+        previous: PeerEntity?,
+        newName: String,
+        advertisedAvatar: String?,
+        haveAvatar: Boolean,
+        version: Long,
+        stalePresentation: Boolean,
+    ) {
+        if (stalePresentation) return
+        peerPresentationNotices(peerId, previous, newName, advertisedAvatar, version)
+        reclaimRemovedAvatarIfCleared(peerId, advertisedAvatar, previous?.avatarHash)
+        pullRelayAvatarIfNeeded(peerId, advertisedAvatar, haveAvatar)
+    }
+
+    /**
+     * Writes the status notices a profile update earns: a rename (carrying the **previous** name, since
+     * the new one is the live directory label at render time) and an avatar change. Shared by both
+     * profile writers — the cleartext frame and the sealed `CTL_PROFILE` — because two writers with two
+     * conventions is exactly how these would start disagreeing about what counts as a change.
+     *
+     * [previous] is the row as it stood **before** the upsert, or null on first contact. Neither a first
+     * sighting nor a first name (an empty stored one) is a rename, and both get no line: there was no old
+     * name to have changed from, and pinning a stranger's key must not conjure a thread out of nothing.
+     *
+     * The avatar comparison is against the *advertised* hash rather than the adopted one, and both
+     * notices key their row id on [version], so the repeated "advertised != stored" that persists while
+     * an avatar's blob is still in flight collapses to a single line per profile version. The
+     * blob-arrival writers ([adoptAdvertisedAvatar], [onAvatarReceived]) deliberately post nothing —
+     * by then this has already said it.
+     */
+    private suspend fun peerPresentationNotices(
+        peerId: String,
+        previous: PeerEntity?,
+        newName: String,
+        advertisedAvatar: String?,
+        version: Long,
+    ) {
+        if (previous == null) return
+        if (previous.name.isNotEmpty() && previous.name != newName) {
+            savePeerNotice(peerId, StatusNotices.peerRenamed(peerId, previous.name, version))
+        }
+        // A cleared avatar is a change too, but there is no "removed their photo" line to draw and the
+        // reclaim path already handles the bytes, so only an actual new avatar is announced.
+        if (advertisedAvatar != null && advertisedAvatar != previous.avatarHash) {
+            savePeerNotice(peerId, StatusNotices.peerAvatarChanged(peerId, version))
+        }
+    }
+
+    /**
+     * Writes a peer status notice into the DM thread with [peerId] — but only if that thread already
+     * holds an ordinary message.
+     *
+     * The gate is the whole reason this is a helper rather than an inline save. A `profile` frame is
+     * flooded to the entire mesh and re-published every 12 h, so every device eventually holds a row for
+     * every peer it has ever heard; without the gate a stranger's rename would conjure a thread into the
+     * chat list and the list would slowly become a directory feed. Requiring an ordinary message means
+     * the notice appears exactly where that peer's name is already on screen. Status rows deliberately
+     * don't satisfy the gate, or one notice would license the next.
+     *
+     * Idempotent by construction: every [StatusNotices] row has a deterministic id, so a re-served or
+     * republished profile upserts the same row rather than stacking a second identical line.
+     */
+    private suspend fun savePeerNotice(
+        peerId: String,
+        notice: MessageEntity,
+    ) {
+        if (!messages.hasMessagesIn(peerId)) return
+        messages.save(notice)
+    }
+
+    /**
      * Applies a sealed `CTL_PROFILE` — the presentation half of a profile update from a contact whose
      * key is already pinned, since a v2 session is the precondition for this frame existing at all.
      * Returns the avatar hash still needing a fetch, for the post-commit pull.
@@ -944,15 +1033,21 @@ class InboundPipeline(
         if (payload.version <= 0L || payload.version < existing.updatedAt) return null
         val advertised = payload.avatarHash
         val haveAvatar = advertised != null && blobStore.has(advertised)
+        val name = payload.name.take(TextLimits.DISPLAY_NAME)
         peers.upsert(
             existing.copy(
                 // Clamp inbound, as the cleartext path does: our own cap bounds only what we originate.
-                name = payload.name.take(TextLimits.DISPLAY_NAME),
+                name = name,
                 status = payload.status.take(TextLimits.STATUS),
                 avatarHash = resolveAvatarHash(advertised, haveAvatar, existing.avatarHash),
                 updatedAt = payload.version,
             ),
         )
+        // Status notices for what actually moved. Compared against the pre-write row, and written here
+        // rather than in a writer of their own because this is the point where both the old and the new
+        // presentation exist at once — a moment nothing else in the profile paths preserves. Free of the
+        // wire: the change is a pure function of two values both ends already hold.
+        peerPresentationNotices(env.senderId, existing, name, advertised, payload.version)
         reclaimRemovedAvatarIfCleared(env.senderId, advertised, existing.avatarHash)
         return advertised?.takeIf { !haveAvatar }
     }
@@ -1571,13 +1666,14 @@ class InboundPipeline(
                 val keepClock = existing?.nameUpdatedAt ?: 0L
                 val takeIncoming = incomingName != null && sentAt >= keepClock
                 val decision = groupPhotoDecision(existing, group)
+                val createdAt = existing?.createdAt ?: sentAt
                 groups.upsert(
                     GroupEntity(
                         groupId = group.id,
                         name = if (takeIncoming) incomingName else keepName,
                         members = GroupMembersStore.encode(roster),
                         createdBy = group.createdBy,
-                        createdAt = existing?.createdAt ?: sentAt,
+                        createdAt = createdAt,
                         nameUpdatedAt = if (takeIncoming) sentAt else keepClock,
                         left = false,
                         departed = existing?.departed ?: GroupMembersStore.encode(emptyList()),
@@ -1585,6 +1681,7 @@ class InboundPipeline(
                         photoUpdatedAt = decision.clock,
                     ),
                 )
+                groupNotices(group, senderId, sentAt, existing, incomingName, keepName, takeIncoming, decision, createdAt)
                 decision
             } ?: return false
         // A newer photo whose bytes we don't hold yet: pull it hop-by-hop (after the upsert advanced the clock,
@@ -1592,6 +1689,43 @@ class InboundPipeline(
         // network-bound blob fetch, not a DB write.
         photo.pull?.let { pullGroupPhoto(group.id, it, photo.clock) }
         return true
+    }
+
+    /**
+     * Writes the status notices a reconciled group frame earns, inside [reconcileGroup]'s transaction so
+     * a notice can never survive a roster change that didn't commit (and vice versa) — the rule
+     * [GroupRepository.recordDeparture] already follows for departures.
+     *
+     * The distinction that matters throughout is **adopted** versus **changed**. `GroupInfo` is
+     * self-describing and rides on every chat frame, so the name and photo we already hold are
+     * re-asserted constantly; [takeIncoming] and [PhotoDecision] answer "does this frame win the
+     * last-writer-wins race", which is true for a frame that merely repeats what we have. Only a value
+     * that actually differs is an event a reader should see.
+     *
+     * First sight ([existing] null) is the other half of that: a group arriving with a name and a photo
+     * has not been renamed or re-photographed, it has been *created*, and it gets exactly one line
+     * saying so. That is also the only join-shaped notice there is — a group's id is the hash of its
+     * founding roster and membership only ever shrinks, so nobody ever joins one.
+     */
+    private suspend fun groupNotices(
+        group: GroupInfo,
+        senderId: String,
+        sentAt: Long,
+        existing: GroupEntity?,
+        incomingName: String?,
+        keepName: String,
+        takeIncoming: Boolean,
+        photo: PhotoDecision,
+        createdAt: Long,
+    ) {
+        if (existing == null) {
+            messages.save(StatusNotices.groupCreated(group.id, group.createdBy, createdAt))
+            return
+        }
+        if (takeIncoming && incomingName != null && incomingName != keepName) {
+            messages.save(StatusNotices.groupRenamed(group.id, senderId, incomingName, sentAt))
+        }
+        photo.changedTo?.let { messages.save(StatusNotices.groupPhotoChanged(group.id, senderId, it, sentAt)) }
     }
 
     /**
@@ -1704,12 +1838,13 @@ class InboundPipeline(
         val keepPhotoClock = existing?.photoUpdatedAt ?: 0L
         val takePhoto =
             incomingPhoto != null && incomingPhoto != keepPhoto && incomingPhotoClock >= keepPhotoClock
-        if (!takePhoto) return PhotoDecision(keepPhoto, keepPhotoClock, pull = null)
+        if (!takePhoto) return PhotoDecision(keepPhoto, keepPhotoClock, pull = null, changedTo = null)
         val haveBytes = blobStore.has(incomingPhoto)
         return PhotoDecision(
             hash = if (haveBytes) incomingPhoto else keepPhoto,
             clock = incomingPhotoClock,
             pull = if (haveBytes) null else incomingPhoto,
+            changedTo = incomingPhoto,
         )
     }
 
@@ -1718,6 +1853,14 @@ class InboundPipeline(
         val hash: String?,
         val clock: Long,
         val pull: String?,
+        /**
+         * The newly-adopted photo when this frame actually changed it, else null — which is **not** the
+         * same question as [hash] or [pull]. [hash] holds the old photo while new bytes are still in
+         * flight and [pull] empties as soon as they land, so neither can tell "the photo changed" from
+         * "the photo is unchanged", and only this distinguishes a real change from the same photo being
+         * re-asserted by every chat frame that carries the group.
+         */
+        val changedTo: String?,
     )
 
     /**
@@ -2228,6 +2371,12 @@ class InboundPipeline(
         if (pinned != null && pinned != pubKey) {
             Log.w(TAG, "drop profile from ${env.senderId}: pinned key change refused (collision/impersonation?)")
             metrics.onDropped(DropReason.PIN_CHANGE_REFUSED)
+            // Surfaced in the thread as well as counted: this is the one profile event a user could act
+            // on, and a metric only a maintainer reads is the wrong place for it. Effectively unreachable
+            // by design — a key that doesn't derive back to the sender's nodeId was already dropped
+            // above, so arriving here needs a 128-bit collision or a corrupted pin — which is exactly why
+            // it should be visible if it ever does happen rather than silent.
+            savePeerNotice(env.senderId, StatusNotices.keyPinRefused(env.senderId, env.sentAt))
             return
         }
         val advertised = content.avatarHash
@@ -2238,10 +2387,11 @@ class InboundPipeline(
         // The pinned key is guaranteed unchanged here (a differing key was refused above), so carrying
         // the prior [verified] state through the upsert is safe.
         val base = existing ?: PeerEntity(env.senderId)
+        val name = content.name.take(TextLimits.DISPLAY_NAME)
         peers.upsert(
             base.copy(
                 // Clamp inbound too: our own cap only bounds what we originate, not what a peer sends.
-                name = if (stalePresentation) base.name else content.name.take(TextLimits.DISPLAY_NAME),
+                name = if (stalePresentation) base.name else name,
                 status = if (stalePresentation) base.status else content.status.take(TextLimits.STATUS),
                 pubKey = pubKey,
                 verified = existing?.verified ?: false,
@@ -2270,15 +2420,8 @@ class InboundPipeline(
                 prekeyProfileAt = if (stalePrekey) base.prekeyProfileAt else version,
             ),
         )
-        // Avatar follow-ups belong to the presentation half — a frame admitted only for its prekey must not
-        // reclaim or re-fetch against an avatar hash we already decided was stale.
-        if (!stalePresentation) {
-            reclaimRemovedAvatarIfCleared(env.senderId, advertised, existing?.avatarHash)
-        }
+        applyPresentationFollowUps(env.senderId, existing, name, advertised, haveAvatar, version, stalePresentation)
         applyDeviceTagBlockContinuity(env.senderId, content.deviceTag)
-        if (!stalePresentation) {
-            pullRelayAvatarIfNeeded(env.senderId, advertised, haveAvatar)
-        }
         // The sender's key is now pinned: retransmit any DMs to them that were stuck awaiting it, and
         // re-send any group epoch seeds their outbox still shows unacked (their prekey may be new).
         flushPending(env.senderId)

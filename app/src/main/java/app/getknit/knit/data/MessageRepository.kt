@@ -105,6 +105,9 @@ class MessageRepository(
     /** Distinct senders who have posted in [conversationId] — a group is accepted once a known peer is among them. */
     suspend fun sendersIn(conversationId: String): List<String> = dao.sendersIn(conversationId)
 
+    /** Whether [conversationId] holds any ordinary message — the gate for writing a peer status notice. */
+    suspend fun hasMessagesIn(conversationId: String): Boolean = dao.hasMessagesIn(conversationId)
+
     /**
      * Bounds the local `messages` table so a Sybil flood can't exhaust storage. Unlike the convergent
      * `forward_store`, `messages` is pure local state (no content digest), so this is plain GC — no mutex, no

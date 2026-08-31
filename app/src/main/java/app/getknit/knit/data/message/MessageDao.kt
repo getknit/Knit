@@ -178,9 +178,26 @@ interface MessageDao {
     @Query("SELECT DISTINCT conversationId FROM messages")
     suspend fun distinctConversations(): List<String>
 
-    /** Distinct node ids that have sent a message in [conversationId] — a group is "known" once one is. */
-    @Query("SELECT DISTINCT senderId FROM messages WHERE conversationId = :conversationId")
+    /**
+     * Distinct node ids that have sent a message in [conversationId] — a group is "known" once one is.
+     *
+     * Status notices are excluded (`kind = 0` is [MessageEntity.KIND_NORMAL]; Room's `@Query` can't
+     * reference the constant). A notice's `senderId` is the event's **subject**, not an author, so
+     * counting it here would let a peer who has never spoken — one who merely renamed themselves, or
+     * left — satisfy the "a known peer has posted here" half of [Conversations.isAccepted] and quietly
+     * promote a message request into an accepted chat.
+     */
+    @Query("SELECT DISTINCT senderId FROM messages WHERE conversationId = :conversationId AND kind = 0")
     suspend fun sendersIn(conversationId: String): List<String>
+
+    /**
+     * Whether [conversationId] holds any ordinary message (`kind = 0`, [MessageEntity.KIND_NORMAL]) —
+     * the gate for writing a peer status notice into a DM thread. A `profile` frame floods the whole
+     * mesh, so without this a stranger's rename would conjure a thread into the chat list; status rows
+     * don't count, or one notice would license the next.
+     */
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE conversationId = :conversationId AND kind = 0)")
+    suspend fun hasMessagesIn(conversationId: String): Boolean
 
     /** Per-conversation row count + newest sentAt, for the retention sweep's cap / age / thread-count decisions. */
     @Query("SELECT conversationId, MAX(sentAt) AS lastSentAt, COUNT(*) AS count FROM messages GROUP BY conversationId")

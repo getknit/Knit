@@ -17,6 +17,7 @@ import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
@@ -311,11 +312,18 @@ class InboundPipelineTest {
             coEvery { groups.find(any()) } answers { groupMap[firstArg()] }
             coEvery { groups.upsert(any()) } answers { groupMap[firstArg<GroupEntity>().groupId] = firstArg() }
             // isAccepted's group branch reads the thread's senders; back it with the fake message map.
+            // Status notices are excluded exactly as the real query is: a notice's senderId is the
+            // event's subject, not an author, so it must not make anyone count as having spoken here.
             coEvery { messages.sendersIn(any()) } answers {
                 msgMap.values
-                    .filter { it.conversationId == firstArg<String>() }
+                    .filter { it.conversationId == firstArg<String>() && !it.isStatusNotice }
                     .map { it.senderId }
                     .distinct()
+            }
+            // The gate on writing a peer status notice — an ordinary message must already exist in the
+            // thread. Mirrors the real query, status rows included in what does NOT satisfy it.
+            coEvery { messages.hasMessagesIn(any()) } answers {
+                msgMap.values.any { it.conversationId == firstArg<String>() && !it.isStatusNotice }
             }
             // Realistic "nothing held" defaults: relaxed mockk otherwise returns "" for a String? and a bare
             // Object (not a byte[]) for a ByteArray?, which would crash the attachment-screen path in onObtained.
@@ -432,6 +440,7 @@ class InboundPipelineTest {
             author: Party,
             avatarHash: String? = null,
             sentAt: Long = 6L,
+            name: String = "Peer",
         ): RelayEnvelope =
             RelayEnvelope(
                 type = FrameType.PROFILE,
@@ -440,7 +449,7 @@ class InboundPipelineTest {
                 sentAt = sentAt,
                 payload =
                     WireCodec.encodePayload(
-                        ProfileContent(name = "Peer", status = "", pubKey = author.bundle.encoded, avatarHash = avatarHash),
+                        ProfileContent(name = name, status = "", pubKey = author.bundle.encoded, avatarHash = avatarHash),
                     ),
             )
 
@@ -820,6 +829,198 @@ class InboundPipelineTest {
             assertEquals("pin must not change", other.bundle.encoded, rig.peerMap[alice.nodeId]?.pubKey)
             assertTrue("verified badge must survive", rig.peerMap[alice.nodeId]?.verified == true)
             assertEquals(1L, rig.drops(DropReason.PIN_CHANGE_REFUSED))
+        }
+
+    // --- Status notices (MessageEntity.kind) -------------------------------------------------------
+    // Every one of these is derived on-device from a change both ends can already see, so none of them
+    // costs a wire field. What the tests pin is the two things that makes fragile: that a notice fires on
+    // a real CHANGE rather than on every re-assertion of the same value, and that it stays out of threads
+    // it has no business creating.
+
+    @Test
+    fun aRenamedContactGetsOneNoticeCarryingTheirPreviousName() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, name = "Old", updatedAt = 1L)
+            // The DM thread must already hold a real message, or the notice is suppressed (see below).
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
+
+            val profile = rig.profile(alice, name = "New", sentAt = 7L)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+
+            val notice = rig.msgMap.values.single { it.kind == MessageEntity.KIND_PEER_RENAMED }
+            assertEquals("the notice belongs in the DM thread with them", alice.nodeId, notice.conversationId)
+            assertEquals("its subject is the peer, not an author", alice.nodeId, notice.senderId)
+            // The PREVIOUS name is what's stored; the new one is the live label at render time.
+            assertEquals("Old", notice.body)
+            assertEquals("New", rig.peerMap[alice.nodeId]?.name)
+        }
+
+    @Test
+    fun aRepublishedProfileAtTheSameVersionDoesNotStackASecondNotice() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, name = "Old", updatedAt = 1L)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
+
+            // The same publish arriving twice — the ordinary case, since a profile is re-flooded on every
+            // peer-epoch and re-served from custody. The deterministic row id is what collapses them.
+            val profile = rig.profile(alice, name = "New", sentAt = 7L)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+
+            assertEquals(1, rig.msgMap.values.count { it.kind == MessageEntity.KIND_PEER_RENAMED })
+        }
+
+    @Test
+    fun anUnchangedProfileProducesNoNotice() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, name = "Peer", updatedAt = 1L)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
+
+            // A profile republishes every 12h whether or not anything changed. Winning the last-writer-wins
+            // race is not the same question as being different, and only the second earns a line.
+            val profile = rig.profile(alice, name = "Peer", sentAt = 99L)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+
+            assertTrue(rig.msgMap.values.none { it.isStatusNotice })
+        }
+
+    @Test
+    fun aFirstProfileIsNotARenameAndProducesNoNotice() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            // No stored row at all: this is first contact. There is no old name to have changed from, and
+            // pinning a stranger's key must not conjure a thread out of nothing.
+            val profile = rig.profile(alice, name = "Peer")
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+
+            assertTrue(rig.msgMap.values.none { it.isStatusNotice })
+        }
+
+    @Test
+    fun aStrangersRenameNeverConjuresAThread() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            // Known and renamed, but we have never exchanged a message. A `profile` frame floods the whole
+            // mesh, so without this gate the chat list would slowly fill with people we have never spoken to.
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, name = "Old", updatedAt = 1L)
+
+            val profile = rig.profile(alice, name = "New", sentAt = 7L)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+
+            assertEquals("New", rig.peerMap[alice.nodeId]?.name)
+            assertTrue("the rename applied, but silently", rig.msgMap.isEmpty())
+        }
+
+    @Test
+    fun aNewAvatarIsAnnouncedOnceEvenBeforeItsBytesLand() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, name = "Peer", updatedAt = 1L)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
+
+            // The hash isn't adopted until its blob arrives, so "stored != advertised" stays true on every
+            // re-serve. Keying the notice on the profile version rather than the hash is what bounds it to one.
+            val profile = rig.profile(alice, avatarHash = "avatar-hash", sentAt = 7L)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+
+            val notice = rig.msgMap.values.single { it.kind == MessageEntity.KIND_PEER_AVATAR }
+            assertEquals(alice.nodeId, notice.conversationId)
+            assertEquals("", notice.body)
+        }
+
+    @Test
+    fun aRefusedPinChangeIsSurfacedInTheThread() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val other = party()
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = other.bundle.encoded, verified = true, updatedAt = 1L)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
+
+            val profile = rig.profile(alice)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+
+            // Counted AND visible: this is the one profile event a user could act on, so a metric only a
+            // maintainer reads is the wrong place to leave it.
+            assertEquals(1L, rig.drops(DropReason.PIN_CHANGE_REFUSED))
+            assertEquals(1, rig.msgMap.values.count { it.kind == MessageEntity.KIND_KEY_PIN_REFUSED })
+        }
+
+    @Test
+    fun firstSightOfAGroupIsCreatedNotRenamed() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val g = rig.group(members = listOf(rig.self.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Book Club")
+
+            rig.deliver(alice, rig.groupUpdate(alice, g, sentAt = 7L))
+
+            // A group arriving with a name and a photo has not been renamed or re-photographed — it has
+            // been created, and it gets exactly one line saying so. (It is also the only join-shaped
+            // notice there is: a group's id is the hash of its founding roster, so nobody ever joins one.)
+            val notice = rig.msgMap.values.single { it.isStatusNotice }
+            assertEquals(MessageEntity.KIND_GROUP_CREATED, notice.kind)
+            assertEquals(g.id, notice.conversationId)
+            assertEquals("its subject is the creator", alice.nodeId, notice.senderId)
+        }
+
+    @Test
+    fun aGroupRenameIsAnnouncedOnceAndItsReAssertionIsNot() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val members = listOf(rig.self.nodeId, alice.nodeId)
+            rig.seedGroup("g-r", members = members, createdBy = alice.nodeId, name = "Book Club", nameUpdatedAt = 5L)
+
+            val renamed = rig.group(members = members, createdBy = alice.nodeId, id = "g-r", name = "Reading Group")
+            rig.deliver(alice, rig.groupUpdate(alice, renamed, sentAt = 8L))
+            // GroupInfo rides on every frame, so the new name is re-asserted constantly. Winning the
+            // last-writer-wins race is not the same question as being different.
+            rig.deliver(alice, rig.groupUpdate(alice, renamed, sentAt = 9L))
+
+            val notice = rig.msgMap.values.single { it.kind == MessageEntity.KIND_GROUP_RENAMED }
+            // The NEW name is stored, the mirror image of a peer rename: a group's old name is gone from
+            // live state, so carrying the new one keeps the line readable after a LATER rename too.
+            assertEquals("Reading Group", notice.body)
+            assertEquals("its subject is whoever renamed it", alice.nodeId, notice.senderId)
+            assertEquals("g-r", notice.conversationId)
+        }
+
+    @Test
+    fun aGroupPhotoChangeIsAnnouncedOnceAndItsReAssertionIsNot() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val members = listOf(rig.self.nodeId, alice.nodeId)
+            rig.seedGroup("g-p", members = members, createdBy = alice.nodeId)
+
+            val withPhoto =
+                rig.group(members = members, createdBy = alice.nodeId, id = "g-p", photoHash = "ph", photoUpdatedAt = 8L)
+            rig.deliver(alice, rig.groupUpdate(alice, withPhoto, sentAt = 8L))
+            // Announced when the change is DECIDED, not when the bytes land — "they changed the photo" is
+            // true either way and the image fills in behind it. So the re-assertion must not add a second.
+            rig.deliver(alice, rig.groupUpdate(alice, withPhoto, sentAt = 9L))
+
+            assertEquals(1, rig.msgMap.values.count { it.kind == MessageEntity.KIND_GROUP_PHOTO })
         }
 
     @Test

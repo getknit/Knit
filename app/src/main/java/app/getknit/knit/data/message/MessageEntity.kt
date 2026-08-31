@@ -68,9 +68,26 @@ import kotlinx.serialization.json.Json
  * "sent, awaiting ack"). It stays true until the recipient's profile arrives and `MeshManager` re-seals
  * and floods it (see `flushPendingFor`). Always false for received messages and broadcast/group sends.
  *
- * [kind] discriminates an ordinary chat message ([KIND_NORMAL]) from a locally-generated status notice
- * ([KIND_MEMBER_LEFT], rendered as a centered "X left the chat" line rather than a bubble). A status row
- * has an empty [body] and its [senderId] is the subject of the event (the member who left).
+ * [kind] discriminates an ordinary chat message ([KIND_NORMAL]) from a locally-generated **status
+ * notice** — a `KIND_`-prefixed value rendered as a centered, muted line rather than a bubble
+ * ("Alice left the chat", "Alice is now Bob"). Every notice is derived on this device from a change
+ * two peers can both see in state they already hold, so none of them costs a wire field; see
+ * [isStatusNotice] and `ChatScreen.statusNoticeText`.
+ *
+ * A status row's [senderId] is the **subject** of the event (the member who left, the peer who
+ * renamed themselves, the member who renamed a group), never an author — which is why status rows are
+ * excluded from unread counts, delivery ticks, the chat-list preview, and the "who has spoken here"
+ * signal that decides whether a conversation is an accepted chat or a message request.
+ *
+ * Its [body] carries the **one name the localized string needs that live state cannot supply**, and is
+ * empty when the string needs none. The rule is deliberately asymmetric: a peer rename stores the
+ * *old* name (the new one is the live directory label), while a group rename stores the *new* name (the
+ * old one is gone from live state, and "Alice renamed the group to Book Club" then stays a correct
+ * historical record after a later rename).
+ *
+ * The row's [id] is always **deterministic** for its event, so a custody replay or a re-served frame
+ * upserts the same row instead of duplicating the notice, and its [sentAt] comes from the frame (or the
+ * sender's profile version), never the local wall clock, so notices order identically on every device.
  */
 @Entity(tableName = "messages", indices = [Index("conversationId")])
 data class MessageEntity(
@@ -108,8 +125,40 @@ data class MessageEntity(
         /** [kind]: an ordinary chat message, shown as a sender bubble. */
         const val KIND_NORMAL = 0
 
+        // [kind] status-notice values. Append-only like every other registry in this codebase: a value
+        // is stored in the database, so recycling one would re-render an old row as a different event.
+        // A build that does not know a value renders the row as an ordinary bubble (see
+        // `ChatScreen.statusNoticeText`), which is why an unknown kind degrades rather than vanishing.
+
         /** [kind]: a "member left the group" status notice, shown as a centered line. */
         const val KIND_MEMBER_LEFT = 1
+
+        /** [kind]: a contact changed their display name. [body] holds their **previous** name. */
+        const val KIND_PEER_RENAMED = 2
+
+        /** [kind]: a contact changed their avatar. [body] is empty. */
+        const val KIND_PEER_AVATAR = 3
+
+        /** [kind]: a member renamed the group. [body] holds the **new** group name. */
+        const val KIND_GROUP_RENAMED = 4
+
+        /** [kind]: a member changed the group photo. [body] is empty. */
+        const val KIND_GROUP_PHOTO = 5
+
+        /**
+         * [kind]: the group was created. [senderId] is its creator (ourselves for a group we made).
+         * A group's id is the hash of its founding roster and membership only ever shrinks, so this is
+         * the only join-shaped event that exists — there is no "member joined".
+         */
+        const val KIND_GROUP_CREATED = 6
+
+        /**
+         * [kind]: a profile update for this contact was refused because it did not match their pinned
+         * key. A safety net rather than a routine notice: a profile whose key does not derive to its
+         * sender's nodeId is already dropped earlier, so reaching this needs a 128-bit nodeId collision
+         * or local pin corruption.
+         */
+        const val KIND_KEY_PIN_REFUSED = 7
     }
 }
 
@@ -124,6 +173,14 @@ object MentionStore {
 
     fun decode(stored: String): List<Mention> = runCatching { json.decodeFromString<List<Mention>>(stored) }.getOrDefault(emptyList())
 }
+
+/**
+ * Whether this row is a locally-generated status notice rather than a message someone sent (see
+ * [MessageEntity.kind]). Tolerant of a `KIND_` value this build doesn't know: anything that isn't
+ * [MessageEntity.KIND_NORMAL] is a notice, so a row written by a newer build is still kept out of
+ * unread counts, ticks and previews even where its text can't be rendered.
+ */
+val MessageEntity.isStatusNotice: Boolean get() = kind != MessageEntity.KIND_NORMAL
 
 /** The plane [receivedVia] names, tolerant of a code this build doesn't know (see [DeliveryPlane.fromCode]). */
 val MessageEntity.receivedPlane: DeliveryPlane get() = DeliveryPlane.fromCode(receivedVia)

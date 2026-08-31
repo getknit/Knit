@@ -801,11 +801,9 @@ internal fun ChatScreenContent(
                                 fadeInSpec = KnitMotion.fastEffects(),
                                 fadeOutSpec = KnitMotion.fastEffects(),
                             )
-                        if (row.kind == MessageEntity.KIND_MEMBER_LEFT) {
-                            SystemNotice(
-                                text = stringResource(R.string.chat_group_member_left, row.senderName),
-                                modifier = itemMotion,
-                            )
+                        val notice = statusNoticeText(row)
+                        if (notice != null) {
+                            SystemNotice(text = notice, modifier = itemMotion)
                         } else {
                             MessageBubble(
                                 row,
@@ -2155,6 +2153,62 @@ private fun TypingIndicatorRow(
     }
 }
 
+/**
+ * The status line [row] should render as, or null when it is an ordinary message that belongs in a
+ * bubble (see [MessageEntity.kind]).
+ *
+ * The text is composed here rather than stored, so a notice is localized per device, costs no wire
+ * bytes, and re-renders against live state — a peer who renames themselves again fixes the second half
+ * of every line about them. [ChatRow.senderName] is the resolved peer label, so a colliding name
+ * arrives already disambiguated as "Alice (JoyfulFerret)" with no work here.
+ *
+ * A kind this build doesn't know falls through to null and draws as a bubble. That is the deliberate
+ * degradation: a row written by a newer build shows up looking odd rather than disappearing, which is
+ * also why [MessageEntity.isStatusNotice] — the predicate that keeps notices out of unread counts and
+ * previews — is written as "not KIND_NORMAL" rather than as a list of the kinds below.
+ */
+@Composable
+private fun statusNoticeText(row: ChatRow): String? =
+    when (row.kind) {
+        MessageEntity.KIND_MEMBER_LEFT -> {
+            stringResource(R.string.chat_notice_member_left, row.senderName)
+        }
+
+        // body is the PREVIOUS name; the current one is the live label (see MessageEntity.kind).
+        MessageEntity.KIND_PEER_RENAMED -> {
+            stringResource(R.string.chat_notice_peer_renamed, row.body, row.senderName)
+        }
+
+        MessageEntity.KIND_PEER_AVATAR -> {
+            stringResource(R.string.chat_notice_peer_avatar, row.senderName)
+        }
+
+        // body is the NEW group name — the old one is gone from live state by the time this renders.
+        MessageEntity.KIND_GROUP_RENAMED -> {
+            stringResource(R.string.chat_notice_group_renamed, row.senderName, row.body)
+        }
+
+        MessageEntity.KIND_GROUP_PHOTO -> {
+            stringResource(R.string.chat_notice_group_photo, row.senderName)
+        }
+
+        MessageEntity.KIND_GROUP_CREATED -> {
+            if (row.mine) {
+                stringResource(R.string.chat_notice_group_created_you)
+            } else {
+                stringResource(R.string.chat_notice_group_created, row.senderName)
+            }
+        }
+
+        MessageEntity.KIND_KEY_PIN_REFUSED -> {
+            stringResource(R.string.chat_notice_key_pin_refused, row.senderName)
+        }
+
+        else -> {
+            null
+        }
+    }
+
 /** A centered, muted status line in the thread (e.g. "Alice left the chat"); not a sender bubble. */
 @Composable
 private fun SystemNotice(
@@ -3095,7 +3149,14 @@ fun EmptyStatePreview() =
 @Composable
 fun SystemNoticePreview() =
     KnitPreview {
-        SystemNotice(text = "Ada left the chat")
+        Column {
+            SystemNotice(text = "Ada left the chat")
+            SystemNotice(text = "Ada is now Ada Lovelace")
+            SystemNotice(text = "Ada Lovelace changed their photo")
+            SystemNotice(text = "Ada renamed the group to Analytical Engine")
+            SystemNotice(text = "Ada changed the group photo")
+            SystemNotice(text = "You created this group")
+        }
     }
 
 @Preview(showBackground = true)

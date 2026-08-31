@@ -5,7 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.MessageRepository
-import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.ui.ISSUES_URL
@@ -72,7 +72,7 @@ class ReviewPrompter(
         val me = identity.nodeId()
         val msgs = messages.observeMessages().first()
         return ReviewPromptPolicy.Inputs(
-            peerMessageCount = msgs.count { it.senderId != me && it.kind == MessageEntity.KIND_NORMAL },
+            peerMessageCount = msgs.count { it.senderId != me && !it.isStatusNotice },
             sentMessageCount = msgs.count { it.senderId == me },
             engagementStartedAt = settings.reviewEngagementStartedAt.first(),
             lastAttemptAt = settings.reviewLastAttemptAt.first(),

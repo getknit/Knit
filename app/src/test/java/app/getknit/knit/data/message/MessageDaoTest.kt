@@ -236,6 +236,32 @@ class MessageDaoTest : RoomDbTest() {
             assertNull(dao.observeById("m1").first())
         }
 
+    @Test
+    fun `sendersIn ignores status notices, whose senderId is a subject rather than an author`() =
+        runTest {
+            dao.upsert(msg("m1", conversationId = "g-1", sender = "spoke"))
+            dao.upsert(msg("n1", conversationId = "g-1", sender = "renamed", kind = MessageEntity.KIND_PEER_RENAMED))
+            dao.upsert(msg("n2", conversationId = "g-1", sender = "departed", kind = MessageEntity.KIND_MEMBER_LEFT))
+
+            // This list feeds Conversations.isAccepted. Counting a notice's subject as a sender would let
+            // someone who merely renamed themselves — or left — promote a stranger's thread out of the
+            // message-request inbox without ever having said anything in it.
+            assertEquals(listOf("spoke"), dao.sendersIn("g-1"))
+        }
+
+    @Test
+    fun `hasMessagesIn is satisfied by an ordinary message and never by a notice alone`() =
+        runTest {
+            dao.upsert(msg("n1", conversationId = "quiet", kind = MessageEntity.KIND_PEER_RENAMED))
+            // A notice must not satisfy the gate that decides whether to write a notice, or the first one
+            // would license the next and a stranger's rename would still conjure a thread.
+            assertFalse(dao.hasMessagesIn("quiet"))
+            assertFalse(dao.hasMessagesIn("empty"))
+
+            dao.upsert(msg("m1", conversationId = "quiet"))
+            assertTrue(dao.hasMessagesIn("quiet"))
+        }
+
     private fun msg(
         id: String,
         recipientId: String? = null,
@@ -245,6 +271,7 @@ class MessageDaoTest : RoomDbTest() {
         pendingKey: Boolean = false,
         sender: String = "s",
         sentAt: Long = 1L,
+        kind: Int = MessageEntity.KIND_NORMAL,
     ) = MessageEntity(
         id = id,
         senderId = sender,
@@ -255,5 +282,6 @@ class MessageDaoTest : RoomDbTest() {
         received = received,
         attachmentHash = attachmentHash,
         pendingKey = pendingKey,
+        kind = kind,
     )
 }

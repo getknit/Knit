@@ -1,7 +1,7 @@
 package app.getknit.knit.data.receipt
 
-import androidx.room.Entity
-import androidx.room.Index
+import androidx.room3.Entity
+import androidx.room3.Index
 import app.getknit.knit.data.message.DeliveryPlane
 
 /**

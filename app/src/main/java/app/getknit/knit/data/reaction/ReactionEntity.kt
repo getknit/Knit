@@ -1,7 +1,7 @@
 package app.getknit.knit.data.reaction
 
-import androidx.room.Entity
-import androidx.room.Index
+import androidx.room3.Entity
+import androidx.room3.Index
 
 /**
  * One person's reaction to one message, as stored on this device. The composite primary key

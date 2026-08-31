@@ -1,15 +1,15 @@
 package app.getknit.knit.data.ratchet
 
-import androidx.room.Dao
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.Upsert
+import androidx.room3.Dao
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
+import androidx.room3.Upsert
 
 /**
  * Row-level operations for the group sender-key ratchet state (crypto scheme v2, group form). Thin by rule
  * (`.agents/rules/coding.md`): no `@Transaction` methods — atomicity lives at the repository callers'
- * `db.withTransaction`.
+ * `db.withWriteTransaction`.
  */
 @Suppress("TooManyFunctions") // small focused queries over four tables; splitting would obscure
 @Dao

@@ -1,6 +1,6 @@
 package app.getknit.knit.data
 
-import androidx.room.withTransaction
+import androidx.room3.withWriteTransaction
 import app.getknit.knit.data.reaction.ReactionDao
 import app.getknit.knit.data.reaction.ReactionEntity
 import kotlinx.coroutines.flow.Flow
@@ -29,7 +29,7 @@ class ReactionRepository(
      * and receive paths run on different coroutines, so this is not hypothetical).
      */
     suspend fun apply(reaction: ReactionEntity) {
-        db.withTransaction {
+        db.withWriteTransaction {
             val current = dao.updatedAtFor(reaction.messageId, reaction.reactorNodeId)
             if (current == null || reaction.updatedAt > current) dao.upsert(reaction)
         }

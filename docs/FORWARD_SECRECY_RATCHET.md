@@ -235,7 +235,7 @@ in-memory, 10 min, reset per mesh session). Two consequences are baked in:
   but never fed to the reset heuristic. Drop reason `UNSIGNED_REFUSED` for every other empty-signature frame.
 
 Persistence is atomic: the engine returns `(plaintext, StateDelta)` and the pipeline commits the
-delta with the message row in one `withTransaction`. A crash before commit re-processes cleanly on
+delta with the message row in one `withWriteTransaction`. A crash before commit re-processes cleanly on
 the next re-serve (state unchanged, message absent). The send side mirrors this (commit the chain
 advance + local row, then flood); a crash between commit and flood is just a chain hole the
 skipped-key path absorbs.

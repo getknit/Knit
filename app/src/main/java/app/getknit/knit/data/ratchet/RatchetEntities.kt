@@ -1,8 +1,8 @@
 package app.getknit.knit.data.ratchet
 
-import androidx.room.Entity
-import androidx.room.Index
-import androidx.room.PrimaryKey
+import androidx.room3.Entity
+import androidx.room3.Index
+import androidx.room3.PrimaryKey
 
 /**
  * One DM ratchet session per peer (crypto scheme v2 — docs/FORWARD_SECRECY_RATCHET.md). Columns mirror

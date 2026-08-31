@@ -105,7 +105,7 @@ one order: **transaction OUTER, mutex INNER**. Both facades enforce it themselve
 `SessionTransactor` — take the lock through the private `locked { }` helper, never `mutex.withLock`
 directly, and never add a store call under the lock by another route.
 
-Get it backwards and the app deadlocks: the decrypt path (`db.withTransaction { commitOpen(…) }`) holds
+Get it backwards and the app deadlocks: the decrypt path (`db.withWriteTransaction { commitOpen(…) }`) holds
 the connection and waits for the mutex, while a seal/sweep/export path holds the mutex and waits for the
 connection. **Both parties are suspended coroutines, so a thread dump shows nothing** — no thread holds a
 transaction, yet every later DB user blocks forever and the process ANRs on whatever reads the database

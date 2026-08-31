@@ -1,6 +1,6 @@
 package app.getknit.knit.data
 
-import androidx.room.withTransaction
+import androidx.room3.withWriteTransaction
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.receipt.MessageReceiptDao
 import app.getknit.knit.data.receipt.MessageReceiptEntity
@@ -42,7 +42,7 @@ class MessageReceiptRepository(
         acker: String?,
         via: DeliveryPlane,
         at: Long,
-    ) = db.withTransaction {
+    ) = db.withWriteTransaction {
         messages.markReceived(messageId, via)
         if (acker != null) dao.insertIfAbsent(MessageReceiptEntity(messageId, acker, at, via.code))
     }

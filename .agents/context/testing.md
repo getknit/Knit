@@ -29,28 +29,40 @@ under Robolectric 4.16, plus a `MigrationTestHelper` harness. They run inside th
 before "simplifying":
 
 - **The in-memory test DB skips SQLCipher.** `RoomDbTest` builds via `Room.inMemoryDatabaseBuilder(...)` with
-  **no** `openHelperFactory`, so it uses Robolectric's framework SQLite — no passphrase, no `libsqlcipher.so`.
+  **no** `setDriver`, so it uses Robolectric's framework SQLite — no passphrase, no `libsqlcipher.so`.
   The eviction/GC SQL runs identically (SQLCipher only encrypts at rest). Never call `KnitDatabase.build()` in
-  a test. Call `suspend` DAO methods inside `runTest { }`.
+  a *unit* test. Call `suspend` DAO methods inside `runTest { }`.
+- **The one place SQLCipher itself is under test is `androidTest`.** `SqlCipherDriverUpgradeTest`
+  (`app/src/androidTest/java/app/getknit/knit/data/`) opens a real encrypted database, because
+  `KnitDatabase.build()` installs SQLCipher through `setDriver(SQLCipherDriver(...))` — Room 3 deletes
+  `openHelperFactory`, so that is the only remaining seam, and "the driver reads what the old factory wrote"
+  is not something ADR 008 lets us assume. It covers both a factory-written database reopened through the
+  driver and a v1-era database walking the whole `KnitMigrations` chain under it. It uses a throwaway db
+  name and a literal passphrase — it never touches the real `knit.db` or `DatabaseKey`. That is the carve-out
+  to the rule above; it does not license a `KnitDatabase.build()` call in a Robolectric test.
 - **`robolectric.properties` forces `application=android.app.Application`.** The real `KnitApplication.onCreate`
   starts Koin, whose static `GlobalContext` isn't reset between tests → `KoinApplicationAlreadyStartedException`
   on the 2nd test. DAO tests bypass Koin, so a plain Application is correct. `sdk=36` deliberately trails
   compileSdk 37.1 — Robolectric 4.16.x has no android-all runtime above 36; raise it with Robolectric, not
   with compileSdk.
-- **`exportSchema = true`** on `KnitDatabase` + the Room Gradle plugin's
-  `room { schemaDirectory("$projectDir/schemas") }` emit
+- **`exportSchema = true`** on `KnitDatabase` + the Room 3 Gradle plugin's
+  `room3 { schemaDirectory("$projectDir/schemas") }` emit
   `app/schemas/app.getknit.knit.data.KnitDatabase/<version>.json` (checked in). Regenerate by clearing
-  `app/schemas/` and rebuilding after any `@Database` version bump (KSP caching can otherwise skip re-export).
+  `app/schemas/` and rebuilding after any `@Database` version bump (KSP caching can otherwise skip
+  re-export) — then `git checkout -- app/schemas/` to restore versions 1..N-1, which Room never
+  regenerates. Only the current version is exported; the rest are history these tests read.
 - **`MigrationTestHelper` reads the schema from *debug*-variant assets** —
   `sourceSets["debug"].assets.srcDir("schemas")` in `app/build.gradle.kts`. Robolectric serves the merged
   **debug** assets (unit tests run against debug) but **not** the `test` source set's own assets; release APKs
   never carry the schema. It uses **`AndroidSQLiteDriver`** (the Robolectric-shadowed engine) — the
   connection-returning API needs a `SQLiteDriver`, and `BundledSQLiteDriver` can't load its Android native
-  `.so` on the host JVM. **DB v1 is the frozen launch baseline** — there is **no** destructive fallback: from
+  `.so` on the host JVM. Under Room 3 `createDatabase` / `runMigrationsAndValidate` are **suspend**, so every
+  case here runs inside `runTest { }` — and `Migration.migrate` is suspend too (`KnitMigrations`). **DB v1 is the frozen launch baseline** — there is **no** destructive fallback: from
   v1 forward every `@Database` bump MUST add a tested `Migration` to `KnitMigrations` (`data/KnitMigrations.kt`,
-  `ALL` is empty at launch) and a from→to case to `KnitDatabaseMigrationTest` — a missing migration throws at
-  open time (caught here in CI), never silently wipes. Today the harness validates the exported v1 schema; the
-  first real migration (`MIGRATION_1_2`) fills in the commented template. (The pre-1.0 alpha builds churned
+  appended to `ALL`) and a from→to case to `KnitDatabaseMigrationTest` — a missing migration throws at
+  open time (caught here in CI), never silently wipes. The DB is at **v7** today, with six migrations
+  (`MIGRATION_1_2` … `MIGRATION_6_7`) and a `KnitDatabaseMigrationTest` case for each, plus a current-schema
+  smoke test whose hardcoded `version` must be bumped by hand. (The pre-1.0 alpha builds churned
   through destructive v2…v22 bumps that rode the wire/crypto breaks; that history is collapsed — see
   `docs/WIRE_COMPAT.md` for the break record.)
 - After adding a test dep, **regenerate the lockfile** (`:app:dependencies --write-locks`, all configs) — see

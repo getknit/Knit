@@ -109,16 +109,38 @@ advisory `test:coverage` job (mirrors `verify:detekt`), which archives the HTML/
 `koverLogDebug`. Adding the plugin changed the lockfile (`kover-jvm-agent`) — regenerate per the lockfile
 rule in `rules/build-and-test.md` after any Kover bump.
 
-## Room schema export: the `androidx.room` Gradle plugin
+## Room 3 (`androidx.room3`) and its Gradle plugin
 
-Room's schema JSON is exported by the **`androidx.room` Gradle plugin** (`room { schemaDirectory("$projectDir/schemas") }`
-in `app/build.gradle.kts`), not the raw `ksp { arg("room.schemaLocation", …) }` — the plugin *rejects* an
-explicit `room.schemaLocation` arg, so don't add one back. It requires `exportSchema = true` on
-`KnitDatabase` and Room ≥ 2.7.0-alpha13 for KSP2 support (we're on 2.8.4 / KSP 2.3.11). With only build
-types (no product flavors) it writes to the flat `app/schemas/<db-class>/<version>.json` — the same layout
-the KSP arg produced — so the debug-asset wiring and `KnitDatabaseMigrationTest` are unchanged. **Gotcha:**
-KSP incremental caching can skip re-export when the committed schema is unchanged (`copyRoomSchemas` shows
-`NO-SOURCE`); to force a fresh export after a `@Database` bump, clear `app/schemas/` and rebuild.
+Room is **`androidx.room3:room3-*` 3.0.2**, not `androidx.room` — Room 3 is a new group and a new package,
+not a version bump. Imports are `androidx.room3.*`; `androidx.sqlite.*` did **not** move. Consequences worth
+knowing before you touch the data layer:
+
+- **There is no `openHelperFactory`.** Room 3 deletes the SupportSQLite layer from the core API, so
+  `setDriver(SQLiteDriver)` is the only seam for a custom engine. SQLCipher rides in as
+  `SQLCipherDriver` (`net.zetetic:sqlcipher-android` 4.18.0, the release that added it) — see ADR 065.
+  That is why Room 3 and SQLCipher move together; neither can be bumped past the other alone.
+- **There is no `room3-ktx`.** `withWriteTransaction` / `useWriterConnection` / `immediateTransaction` are in
+  `room3-runtime`. `androidx.room.withTransaction` is gone; `withWriteTransaction` is its replacement and is
+  reentrant the same way (the connection rides in the coroutine context).
+- **`Migration.migrate` and the `MigrationTestHelper` methods are `suspend`.** Migrations declare
+  `override suspend fun migrate(connection: SQLiteConnection)`, and every `KnitDatabaseMigrationTest` case
+  runs inside `runTest { }`.
+- Room 3 does **not** force the KMP builder form: `Room.databaseBuilder(context, Klass::class.java, name)`
+  and `inMemoryDatabaseBuilder(context, Klass::class.java)` still exist, and the Android builder defaults to
+  `AndroidSQLiteDriver` when no driver is set — which is what the Robolectric DAO tests rely on.
+
+The schema JSON is exported by the **`androidx.room3` Gradle plugin**, whose extension is `room3 { }` (not
+`room { }`): `room3 { schemaDirectory("$projectDir/schemas") }` in `app/build.gradle.kts`, not the raw
+`ksp { arg("room.schemaLocation", …) }` — the plugin *rejects* an explicit `room.schemaLocation` arg, so
+don't add one back. It requires `exportSchema = true` on `KnitDatabase`. With only build types (no product
+flavors) it writes to the flat `app/schemas/<db-class>/<version>.json`, so the debug-asset wiring and
+`KnitDatabaseMigrationTest` are unchanged.
+
+**Gotcha:** KSP incremental caching can skip re-export when the committed schema is unchanged
+(`copyRoomSchemas` shows `NO-SOURCE`); to force a fresh export after a `@Database` bump, clear
+`app/schemas/` and rebuild — then **`git checkout -- app/schemas/` to bring back versions 1..N-1**, which
+Room does not regenerate. Only the *current* version is ever exported; the older files are history the
+migration tests read, and clearing the directory deletes them.
 
 ## The debug APK packages two ABIs, not four
 

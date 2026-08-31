@@ -6,7 +6,7 @@ import app.getknit.knit.mesh.spool.GroupRootStore
 /**
  * Room-backed [GroupRootStore] for the spool plane's shared group roots (`docs/SPOOL_PROTOCOL.md` §3.2).
  * Pure row mapping plus the drain sweep; **no transactions here** — callers wrap the mutating methods in
- * the same `db.withTransaction` as the surrounding mutation, matching [GroupRatchetRepository].
+ * the same `db.withWriteTransaction` as the surrounding mutation, matching [GroupRatchetRepository].
  *
  * [markEligible] and [markRemintDue] read-modify-write on purpose: both are idempotent stamps that must
  * NOT move once set. Re-stamping [GroupRootState.firstEligibleAt] would restart the mint grace on every

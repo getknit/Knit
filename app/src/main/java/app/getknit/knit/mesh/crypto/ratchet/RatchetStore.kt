@@ -5,7 +5,7 @@ package app.getknit.knit.mesh.crypto.ratchet
  * in-memory fakes in tests) — the `ForwardStore`/`ForwardRepository` pattern. Methods are
  * **transaction-agnostic**: `applyOpen`/`commitSend` perform only their own row operations, and the
  * caller (`InboundPipeline`/`MeshManager` via `RatchetSessions`) wraps them in the same
- * `db.withTransaction` as the message row so ratchet advance and plaintext persistence commit
+ * `db.withWriteTransaction` as the message row so ratchet advance and plaintext persistence commit
  * atomically (Room transactions are reentrant across suspend calls in the same context).
  */
 @Suppress("TooManyFunctions") // A persistence seam mirrors its table set; splitting it would hide the atomicity contract.

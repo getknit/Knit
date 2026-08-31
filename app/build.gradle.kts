@@ -9,7 +9,7 @@ plugins {
     alias(libs.plugins.kover) // test coverage — instruments bytecode + hooks the test run
     alias(libs.plugins.detekt) // static analysis (dev.detekt)
     alias(libs.plugins.ktlint) // Kotlin style/format lint (ktlintCheck / ktlintFormat)
-    alias(libs.plugins.androidx.room) // Room schema export (room { schemaDirectory(…) } below)
+    alias(libs.plugins.androidx.room) // Room 3 schema export (room3 { schemaDirectory(…) } below)
 }
 
 // Release signing credentials. Loaded from a gitignored keystore.properties at the repo root, falling back
@@ -483,7 +483,9 @@ val checkModerationModels =
 
 tasks.named("preBuild") { dependsOn(checkModerationModels) }
 
-room {
+// `room3`, not `room`: the Room 3 Gradle plugin (id "androidx.room3") registers its extension under that
+// name. Same DSL, same output layout.
+room3 {
     // Export the Room schema JSON via the Room Gradle plugin (replaces the raw ksp `room.schemaLocation`
     // arg — the plugin rejects that arg if also set). With only build types (no product flavors) it writes
     // the flat schemas/app.getknit.knit.data.KnitDatabase/<version>.json — same layout the ksp arg produced —
@@ -572,7 +574,6 @@ dependencies {
 
     // Persistence
     implementation(libs.androidx.room.runtime)
-    implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.sqlcipher.android) // at-rest encryption for the Room DB (SQLCipher)

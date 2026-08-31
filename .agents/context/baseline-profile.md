@@ -41,13 +41,15 @@ and see `.agents/rules/devices.md` before pointing this at lab hardware).
 Then copy the generated profile over the committed one and rebuild:
 
 ```bash
-cp baselineprofile/build/outputs/connected_android_test_additional_output/nonMinifiedRelease/*/*baseline-prof.txt \
+cp "baselineprofile/build/outputs/connected_android_test_additional_output/nonMinifiedRelease/connected/<AVD> - <api>/BaselineProfileGenerator_startupAndFirstConversation-baseline-prof.txt" \
    app/src/main/baseline-prof.txt
 ./gradlew :app:assembleRelease
 ```
 
 Regenerate when the startup or chat path changes shape — not on every commit. A stale profile is not a
 correctness problem, only a smaller win; a *churning* one is a large, unreviewable diff on every PR.
+**Regenerate on the same AVD as last time** (`Pixel_10_Pro_XL`) — the device is most of the diff otherwise:
+the same change collected on `Knit_Mesh_BT` moved 2500 lines where `Pixel_10_Pro_XL` moved 600.
 
 ## Two things that are easy to get wrong
 

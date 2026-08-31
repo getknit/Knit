@@ -5,7 +5,7 @@ package app.getknit.knit.mesh.spool
  * `data/ratchet/GroupRootRepository` over Room and by in-memory fakes in tests — the
  * [app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore] pattern, same **transaction-agnostic**
  * contract: each method performs only its own row operation, and the caller wraps it in whatever
- * `db.withTransaction` the surrounding mutation already owns.
+ * `db.withWriteTransaction` the surrounding mutation already owns.
  *
  * Roots live outside the (nullable, opt-in) [ScopeSync] lifetime on purpose: a device with the Internet
  * plane switched off still adopts and re-gossips the newest root it sees, which is what lets a root

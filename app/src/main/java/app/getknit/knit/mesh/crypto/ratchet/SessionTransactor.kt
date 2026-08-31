@@ -5,9 +5,10 @@ package app.getknit.knit.mesh.crypto.ratchet
  *
  * **Why this exists — the deadlock it removes.** Every `mutex.withLock` block in [RatchetSessions] and
  * [GroupRatchetSessions] touches the store, and Room over SQLCipher serves this app through a *single*
- * connection. So two orders were reachable at once:
+ * connection: `SQLCipherDriver` reports `hasConnectionPool() = true`, so Room keeps one connection of
+ * its own and lets SQLCipher pool underneath it. So two orders were reachable at once:
  *
- * - `db.withTransaction { commitOpen(…) }` — the inbound decrypt path: **transaction, then mutex**.
+ * - `db.withWriteTransaction { commitOpen(…) }` — the inbound decrypt path: **transaction, then mutex**.
  * - `sealDm` / `sealGroup` / `currentSeeds` / `sweep` / `exportedRoots` called with no enclosing
  *   transaction — **mutex, then (implicitly) the connection**.
  *
@@ -19,8 +20,9 @@ package app.getknit.knit.mesh.crypto.ratchet
  *
  * The class doc used to state the order as a rule for callers to follow. It is enforced here instead:
  * the facades take the transaction *before* the lock on every path, so the one global order holds
- * whether or not a caller wrapped the call. Room's `withTransaction` is reentrant for the same
- * coroutine, so a caller that already opened one (the decrypt path) simply joins it.
+ * whether or not a caller wrapped the call. Room carries the write connection in the coroutine
+ * context, so `withWriteTransaction` nested inside another one joins the outer transaction rather than
+ * opening a second — a caller that already wrapped its commit (the decrypt path) simply falls through.
  *
  * Kept as an interface rather than a `db` reference so both facades stay Android-free and plain-JVM
  * testable — the same lambda-mediation the rest of the mesh layer uses.

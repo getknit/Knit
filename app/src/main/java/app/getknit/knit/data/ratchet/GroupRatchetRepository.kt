@@ -7,7 +7,7 @@ import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 /**
  * Room-backed [GroupRatchetStore]. Pure row mapping plus the retention sweep; **no transactions
  * here** — the callers (via `GroupRatchetSessions`) wrap the mutating methods in the same
- * `db.withTransaction` as the surrounding mutation (the interface contract, matching
+ * `db.withWriteTransaction` as the surrounding mutation (the interface contract, matching
  * [RatchetRepository]).
  *
  * The sweep is the group forward-secrecy enforcement point (docs/GROUP_FORWARD_SECRECY.md §10):

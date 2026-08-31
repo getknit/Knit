@@ -158,7 +158,7 @@ class SessionTransactorOrderTest {
     @Test
     fun `a caller that already opened a transaction joins it rather than deadlocking`() =
         runTest {
-            // The decrypt path's shape: db.withTransaction { commitOpen(...) }. The facade takes the
+            // The decrypt path's shape: db.withWriteTransaction { commitOpen(...) }. The facade takes the
             // transaction again internally; Room's is reentrant, so this must not self-deadlock.
             val s = sessions()
             withTimeout(5_000) {

@@ -14,7 +14,7 @@ notice is incorporated here by reference. The full text of the Apache License 2.
 
 | Component | Project | License |
 |---|---|---|
-| Android Jetpack / AndroidX (`androidx.*` — core-ktx, activity-compose, navigation-compose, lifecycle-\*, room, datastore, exifinterface) | [Android Open Source Project](https://developer.android.com/jetpack) | Apache-2.0 |
+| Android Jetpack / AndroidX (`androidx.*` — core-ktx, activity-compose, navigation-compose, lifecycle-\*, room3, datastore, exifinterface) | [Android Open Source Project](https://developer.android.com/jetpack) | Apache-2.0 |
 | Jetpack Compose (Material 3, UI, tooling — via the Compose BOM) | [Android Open Source Project](https://developer.android.com/jetpack/compose) | Apache-2.0 |
 | Kotlin standard library | [JetBrains — Kotlin](https://github.com/JetBrains/kotlin) | Apache-2.0 |
 | kotlinx.coroutines | [JetBrains — kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines) | Apache-2.0 |

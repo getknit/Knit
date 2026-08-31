@@ -75,7 +75,7 @@ class GroupRatchetSessions(
     /**
      * Phase two: re-opens on fresh state under the shared lock and, on success, persists the chain
      * delta and runs [onOpened] (the caller's row write) in the same enclosing Room transaction —
-     * callers MUST wrap this call in `db.withTransaction { }` when they persist anything alongside it.
+     * callers MUST wrap this call in `db.withWriteTransaction { }` when they persist anything alongside it.
      * Returns false when the frame no longer opens (a concurrent delivery consumed it) — benign; the
      * caller's exists/isNew gates make the visible outcome idempotent.
      */

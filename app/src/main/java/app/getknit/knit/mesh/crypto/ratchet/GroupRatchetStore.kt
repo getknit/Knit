@@ -21,7 +21,7 @@ class GroupKeySendState(
  * `data/ratchet/GroupRatchetRepository` over Room; in-memory fakes in tests) — the [RatchetStore]
  * pattern, same **transaction-agnostic** contract: methods perform only their own row operations, and
  * the caller (via `GroupRatchetSessions`) wraps `applyOpen`/`commitSend`/`insertRecvChain` in the same
- * `db.withTransaction` as the surrounding mutation so state advance and plaintext persistence commit
+ * `db.withWriteTransaction` as the surrounding mutation so state advance and plaintext persistence commit
  * atomically.
  */
 @Suppress("TooManyFunctions") // one seam, four row families (send/recv/skipped/outbox); splitting would obscure

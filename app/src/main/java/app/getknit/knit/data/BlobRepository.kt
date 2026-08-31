@@ -1,6 +1,6 @@
 package app.getknit.knit.data
 
-import androidx.room.withTransaction
+import androidx.room3.withWriteTransaction
 import app.getknit.knit.data.blob.BlobDao
 import app.getknit.knit.data.blob.BlobEntity
 import app.getknit.knit.data.blob.BlobVerdictDao
@@ -69,11 +69,11 @@ class BlobRepository(
     suspend fun deleteIfUnreferenced(hash: String?) {
         if (hash == null) return
         if (hash == settings.ownAvatarHash.first()) return
-        db.withTransaction {
-            if (messages.countByAttachmentHash(hash) > 0) return@withTransaction
-            if (peers.countByAvatarHash(hash) > 0) return@withTransaction
-            if (groups.countByPhotoHash(hash) > 0) return@withTransaction
-            if (forward.countByAttachmentHash(hash) > 0) return@withTransaction
+        db.withWriteTransaction {
+            if (messages.countByAttachmentHash(hash) > 0) return@withWriteTransaction
+            if (peers.countByAvatarHash(hash) > 0) return@withWriteTransaction
+            if (groups.countByPhotoHash(hash) > 0) return@withWriteTransaction
+            if (forward.countByAttachmentHash(hash) > 0) return@withWriteTransaction
             blobs.delete(hash)
             verdicts.delete(hash)
         }
@@ -93,7 +93,7 @@ class BlobRepository(
      */
     suspend fun deleteOrphans() {
         val own = settings.ownAvatarHash.first()
-        db.withTransaction {
+        db.withWriteTransaction {
             blobs.orphanHashes().filter { it != own }.forEach {
                 blobs.delete(it)
                 verdicts.delete(it)

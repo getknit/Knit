@@ -1,8 +1,8 @@
 package app.getknit.knit.data.forward
 
-import androidx.room.Entity
-import androidx.room.Index
-import androidx.room.PrimaryKey
+import androidx.room3.Entity
+import androidx.room3.Index
+import androidx.room3.PrimaryKey
 
 /**
  * A floodable frame this device is carrying for store-and-forward delivery — a DM/group/broadcast-room chat

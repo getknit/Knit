@@ -1,7 +1,7 @@
 package app.getknit.knit.data.peer
 
-import androidx.room.Entity
-import androidx.room.PrimaryKey
+import androidx.room3.Entity
+import androidx.room3.PrimaryKey
 
 /**
  * Cached profile of a peer learned from the mesh, keyed by its [nodeId]. [avatarHash] is the content

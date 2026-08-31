@@ -5,7 +5,7 @@ import app.getknit.knit.mesh.crypto.ratchet.RatchetStore
 
 /**
  * Room-backed [RatchetStore]. Pure row mapping plus the retention sweep; **no transactions here** — the
- * callers (via `RatchetSessions`) wrap `applyOpen`/`commitSend` in the same `db.withTransaction` as the
+ * callers (via `RatchetSessions`) wrap `applyOpen`/`commitSend` in the same `db.withWriteTransaction` as the
  * message row (the interface contract).
  *
  * The sweep is the forward-secrecy enforcement point (docs/FORWARD_SECRECY_RATCHET.md §"retention"):

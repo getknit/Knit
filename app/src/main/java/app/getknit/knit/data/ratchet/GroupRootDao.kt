@@ -1,13 +1,13 @@
 package app.getknit.knit.data.ratchet
 
-import androidx.room.Dao
-import androidx.room.Query
-import androidx.room.Upsert
+import androidx.room3.Dao
+import androidx.room3.Query
+import androidx.room3.Upsert
 
 /**
  * Row-level operations for the spool plane's shared group roots. Thin by rule
  * (`.agents/rules/coding.md`): no `@Transaction` methods — atomicity lives at the repository callers'
- * `db.withTransaction`.
+ * `db.withWriteTransaction`.
  */
 @Dao
 interface GroupRootDao {

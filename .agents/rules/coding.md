@@ -34,16 +34,17 @@ Invariants for all Kotlin/Compose/data code. (Mesh-specific invariants are in `r
   written off that path — UI actions on `viewModelScope`, `NotificationActionReceiver` on the app mesh
   scope, and session-scope loops (the 10-min custody prune, `watch*`, `heal`) — all on multi-threaded
   dispatchers, so a read-then-write or two-table write **can** interleave. Any such mutation runs in
-  **`db.withTransaction { }` at the repository layer** (the `GroupRepository.recordDeparture` idiom; there
-  are **no** DAO `@Transaction` methods — keep DAOs thin). `withTransaction` issues `BEGIN EXCLUSIVE`, so a
-  second transaction's `SELECT` can't run until the first commits — that alone closes the check-then-act
-  cases (`ReactionRepository.apply`'s LWW, `ForwardRepository`'s count→evict, `GroupRepository.leave/delete`,
+  **`db.withWriteTransaction { }` at the repository layer** (the `GroupRepository.recordDeparture` idiom;
+  there are **no** DAO `@Transaction` methods — keep DAOs thin). It takes the write lock at `BEGIN` (Room 3
+  issues `IMMEDIATE`; Room 2's `withTransaction` issued `EXCLUSIVE`), so a second write transaction cannot
+  interleave with the first — that closes the check-then-act cases (`ReactionRepository.apply`'s LWW,
+  `ForwardRepository`'s count→evict, `GroupRepository.leave/delete`,
   `BlobRepository.deleteIfUnreferenced`) and the UI-`leave`-vs-`InboundPipeline.reconcileGroup`
   group-resurrection race (both sides must be transactional, or the blind roster upsert re-creates a
   just-left group). **Two things a Room transaction can't cover:** (1) in-memory state that must stay in
   lockstep with the committed rows — `ForwardRepository`'s shared `StoreDigest` — also needs a repo-level
-  **`Mutex`, held *outer* to `withTransaction`** (inner deadlocks on SQLCipher's single connection), with
-  the digest updated **after** commit under that lock; (2) a **DataStore** read (own-avatar hash,
+  **`Mutex`, held *outer* to `withWriteTransaction`** (inner deadlocks on SQLCipher's single connection),
+  with the digest updated **after** commit under that lock; (2) a **DataStore** read (own-avatar hash,
   blocked-ids) can't enroll, so hoist it **before** the transaction. A blob GC racing an *independent*
   inserter is only narrowed, not closed — the content-addressed blob self-heals via a `BlobExchange`
   re-pull. Finding #13 in `docs/ARCHITECTURE_REVIEW.md`.

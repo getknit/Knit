@@ -1,6 +1,6 @@
 package app.getknit.knit.data.forward
 
-import androidx.room.withTransaction
+import androidx.room3.withWriteTransaction
 import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.mesh.CarriedFrame
 import app.getknit.knit.mesh.ForwardStore
@@ -48,7 +48,7 @@ class ForwardRepository(
     // wholesale rebuild would otherwise clobber an incremental add (leaving a live row absent from the digest
     // and breaking StoreDigest's `current() == liveFingerprint` invariant). These run off the inbound collector
     // too — own sends on viewModelScope / the notification scope, the sweep on the 10-min prune loop — so it is
-    // real contention, not belt-and-suspenders. Held OUTER to db.withTransaction; the reverse deadlocks on
+    // real contention, not belt-and-suspenders. Held OUTER to db.withWriteTransaction; the reverse deadlocks on
     // SQLCipher's single connection (a coroutine holding the connection while waiting on the mutex, vs. one
     // holding the mutex while waiting to BEGIN).
     private val mutex = Mutex()
@@ -111,12 +111,12 @@ class ForwardRepository(
                 attachmentHash = attachmentHash,
                 expiresAt = expiresAt,
             )
-        // The row insert + quota eviction (atomic under withTransaction) and the in-memory digest update are one
+        // The row insert + quota eviction (atomic under withWriteTransaction) and the in-memory digest update are one
         // critical section (mutex). The digest update runs AFTER commit but still under the lock, so a rolled-back
         // transaction never leaves the digest ahead of the table and no concurrent store/sweep interleaves between
         // the commit and the update.
         mutex.withLock {
-            val didEvict = db.withTransaction { insertAndTrim(row, isBroadcastChat, now) }
+            val didEvict = db.withWriteTransaction { insertAndTrim(row, isBroadcastChat, now) }
             // Eviction removed ids we don't track individually here, so rebuild the fingerprint wholesale;
             // otherwise fold the single new id in incrementally (the hot path when no bucket is over quota).
             if (didEvict) rebuildDigest(now) else digest.add(row.id, row.expiresAt, now)

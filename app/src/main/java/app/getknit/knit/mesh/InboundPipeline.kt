@@ -1,7 +1,7 @@
 package app.getknit.knit.mesh
 
 import android.util.Log
-import androidx.room.withTransaction
+import androidx.room3.withWriteTransaction
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
@@ -685,7 +685,7 @@ class InboundPipeline(
      * The v2 (epoch-ratchet) decrypt-and-deliver. Two-phase against [RatchetSessions]' concurrency
      * contract: a lock-free peek yields the plaintext for moderation/row-building, then the persist
      * hook handed to [deliverChat] re-opens on fresh state and commits the ratchet delta atomically
-     * with the message row (`db.withTransaction` outer, session lock inner). Typed engine failures map
+     * with the message row (`db.withWriteTransaction` outer, session lock inner). Typed engine failures map
      * to drop reasons — all delivery-local; the frame already custodied and will still relay.
      */
     @Suppress("ReturnCount") // a drop-reason gate ladder; early returns ARE the readable form (cf. decrypt)
@@ -737,7 +737,7 @@ class InboundPipeline(
         if (unsignedButNotATick(signed, plain)) return
         val commit: suspend (suspend () -> Unit) -> Boolean = { onOpened ->
             val committed =
-                db.withTransaction {
+                db.withWriteTransaction {
                     ratchet.commitOpen(me, env.senderId, peerIkPub, wireHeader, nonce, enc.ct, aad, now, onOpened)
                 }
             // After the transaction and outside the session lock: the hook may seal an answer of its own.
@@ -1059,7 +1059,7 @@ class InboundPipeline(
     /**
      * The group-form (sender-key) decrypt-and-deliver — [decryptAndDeliverV2]'s shape re-applied: a
      * lock-free peek yields the plaintext for moderation/row-building, then the persist hook re-opens
-     * on fresh state and commits the chain delta atomically with the message row (`db.withTransaction`
+     * on fresh state and commits the chain delta atomically with the message row (`db.withWriteTransaction`
      * outer, the shared ratchet lock inner). Typed engine failures map to drop reasons — all
      * delivery-local; the frame already custodied and will still relay. [reconcileGroup] already
      * vetted the roster and membership before this runs.
@@ -1098,7 +1098,7 @@ class InboundPipeline(
             return
         }
         val commit: suspend (suspend () -> Unit) -> Boolean = { onOpened ->
-            db.withTransaction {
+            db.withWriteTransaction {
                 groupRatchet.commitOpen(groupId, env.senderId, wireHeader, enc.nonce, enc.ct, aad, now, onOpened)
             }
         }
@@ -1542,9 +1542,12 @@ class InboundPipeline(
         // and resurrect the group. Returns the PhotoDecision on adoption (its bytes may still need pulling), or null
         // when the frame is refused.
         val photo =
-            db.withTransaction {
+            // Explicit type argument: withWriteTransaction's block is a TransactionScope<R> receiver, and R is
+            // invariant, so inference latches onto the first `return@` (null) instead of unifying with the
+            // PhotoDecision returned at the end.
+            db.withWriteTransaction<PhotoDecision?> {
                 val existing = groups.find(group.id)
-                if (groupFrameRefused(group, senderId, existing, blocked)) return@withTransaction null
+                if (groupFrameRefused(group, senderId, existing, blocked)) return@withWriteTransaction null
                 val roster =
                     when (val verdict = vetRoster(group, senderId, existing, me)) {
                         is RosterVerdict.Accept -> {
@@ -1552,12 +1555,12 @@ class InboundPipeline(
                         }
 
                         RosterVerdict.NotOurs -> {
-                            return@withTransaction null
+                            return@withWriteTransaction null
                         }
 
                         RosterVerdict.Refused -> {
                             metrics.onDropped(DropReason.GROUP_ROSTER_REFUSED)
-                            return@withTransaction null
+                            return@withWriteTransaction null
                         }
                     }
 

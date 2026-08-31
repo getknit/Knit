@@ -1,6 +1,6 @@
 package app.getknit.knit.data.receipt
 
-import androidx.room.withTransaction
+import androidx.room3.withWriteTransaction
 import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.RoomDbTest
@@ -17,7 +17,7 @@ import org.junit.Test
 /**
  * Executes the **real** [MessageReceiptDao] SQL, plus the one thing about [MessageReceiptRepository.record]
  * that cannot be reasoned about from the call sites: the sealed-receipt path already runs inside the ctl
- * commit's `db.withTransaction`, so `record` opens a **nested** transaction on SQLCipher's single
+ * commit's `db.withWriteTransaction`, so `record` opens a **nested** transaction on SQLCipher's single
  * connection. Room reuses the in-flight transaction rather than starting a second one — but the failure
  * mode if that were wrong is a silent coroutine deadlock (no thread holds anything, nothing throws), so it
  * is pinned here rather than assumed.
@@ -83,7 +83,7 @@ class MessageReceiptRepositoryTest : RoomDbTest() {
             // transaction, and record opens its own inside it.
             seed("m4")
 
-            db.withTransaction {
+            db.withWriteTransaction {
                 repo.record("m4", acker = "sam", via = DeliveryPlane.Nearby, at = 10L)
             }
 

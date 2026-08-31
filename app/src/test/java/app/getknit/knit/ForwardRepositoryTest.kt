@@ -1,6 +1,6 @@
 package app.getknit.knit
 
-import androidx.room.Room
+import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
 import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.RoomDbTest

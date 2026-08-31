@@ -22,14 +22,20 @@ composeBom = "2026.08.00"
 # KSP adopted independent (KSP2) versioning at 2.3.0 — no longer the old <kotlin>-<ksp> scheme. It is
 # decoupled from the compiler and supports Kotlin 2.2+, so this single version tracks Kotlin 2.4.x.
 ksp = "2.3.11"
-room = "2.8.4"
+# Room 3 — a different group and package (`androidx.room3` / `androidx.room3:room3-*`), not a version bump of
+# `androidx.room`. It deletes the SupportSQLite layer from the core API, so `openHelperFactory` is gone and
+# `setDriver(SQLiteDriver)` is the only seam for a custom engine — which is why this waited on SQLCipher
+# 4.18.0's SQLCipherDriver. room3-runtime's AAR is minCompileSdk 34 / minAgp 8.1.1, well under our gate.
+# There is no `room3-ktx`: `withWriteTransaction` and friends live in room3-runtime.
+room3 = "3.0.2"
 # SQLCipher for Android: at-rest encryption for the Room DB. Native .so plus (since 4.18.0) a kotlin-stdlib
 # 2.2.10 floor — that direction is harmless, since a Kotlin 2.4 compiler reads 2.2 metadata fine; the hazard
 # is only the reverse (an older compiler reading Kotlin-2.4 metadata, which is what used to pin Coil). Its
-# other transitive dep is androidx.sqlite, and 4.18.0 raises that floor to **2.7.0**, so SQLCipher — not
-# Room 2.8.4 (which asks 2.6.2) — now decides that version in the lockfile. sqlite 2.7.0's AAR is
-# minCompileSdk 34, so it changes nothing about the SDK gate. Its .so are 16 KB-page-aligned on all four
-# ABIs (`readelf -lW` → LOAD align 0x4000), the same requirement that pins litert to 1.4.x.
+# other transitive dep is androidx.sqlite, which both it and Room 3 now put at **2.7.0** — 4.18.0 raised
+# SQLCipher's floor there, and room3-runtime asks for exactly the same, so the two agree and neither has to
+# win. sqlite 2.7.0's AAR is minCompileSdk 34, so it changes nothing about the SDK gate. Its .so are
+# 16 KB-page-aligned on all four ABIs (`readelf -lW` → LOAD align 0x4000), the same requirement that pins
+# litert to 1.4.x. 4.18.0 is also what supplies SQLCipherDriver, so Room 3 and SQLCipher move together.
 sqlcipher = "4.18.0"
 coroutines = "1.11.0"
 kotlinxSerializationJson = "1.11.0"
@@ -183,10 +189,9 @@ androidx-compose-ui-test-junit4-accessibility = { group = "androidx.compose.ui",
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 
-androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
-androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
-androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
-androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
+androidx-room-runtime = { group = "androidx.room3", name = "room3-runtime", version.ref = "room3" }
+androidx-room-compiler = { group = "androidx.room3", name = "room3-compiler", version.ref = "room3" }
+androidx-room-testing = { group = "androidx.room3", name = "room3-testing", version.ref = "room3" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 
 # JVM Room/DAO + migration test deps (finding #5) — see the [versions] notes above.
@@ -259,5 +264,6 @@ detekt = { id = "dev.detekt", version.ref = "detekt" }
 # (lints app/src Kotlin). `ktlintCheck` verifies, `ktlintFormat` autocorrects.
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintPlugin" }
 # Room schema export — replaces the raw `ksp { arg("room.schemaLocation", …) }`. Applied on :app; the
-# schema dir is set via `room { schemaDirectory(…) }`. Versioned with room (2.8.4).
-androidx-room = { id = "androidx.room", version.ref = "room" }
+# schema dir is set via `room3 { schemaDirectory(…) }` — the Room 3 plugin's extension is `room3`, not
+# `room`. Its id is `androidx.room3`; versioned with room3 (3.0.2).
+androidx-room = { id = "androidx.room3", version.ref = "room3" }

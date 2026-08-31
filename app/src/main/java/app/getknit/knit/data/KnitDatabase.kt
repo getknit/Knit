@@ -1,9 +1,9 @@
 package app.getknit.knit.data
 
 import android.content.Context
-import androidx.room.Database
-import androidx.room.Room
-import androidx.room.RoomDatabase
+import androidx.room3.Database
+import androidx.room3.Room
+import androidx.room3.RoomDatabase
 import app.getknit.knit.data.blob.BlobDao
 import app.getknit.knit.data.blob.BlobEntity
 import app.getknit.knit.data.blob.BlobVerdictDao
@@ -32,7 +32,7 @@ import app.getknit.knit.data.reaction.ReactionDao
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.receipt.MessageReceiptDao
 import app.getknit.knit.data.receipt.MessageReceiptEntity
-import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
 
 @Database(
     entities = [
@@ -103,8 +103,9 @@ abstract class KnitDatabase : RoomDatabase() {
     companion object {
         /**
          * Builds the encrypted database. [passphrase] is the SQLCipher key (see
-         * [app.getknit.knit.data.crypto.DatabaseKey]); SQLCipher zeroes it once the DB is opened.
-         * The native `libsqlcipher.so` must be loaded explicitly before the factory is created.
+         * [app.getknit.knit.data.crypto.DatabaseKey]); the driver holds the array for the life of the
+         * database — nothing zeroes it, so that class stays its owner. The native
+         * `libsqlcipher.so` must be loaded explicitly before the driver is constructed.
          */
         @Suppress("SpreadOperator") // vararg Room migrations API; a one-time DB-init copy
         fun build(
@@ -114,7 +115,13 @@ abstract class KnitDatabase : RoomDatabase() {
             System.loadLibrary("sqlcipher")
             return Room
                 .databaseBuilder(context, KnitDatabase::class.java, "knit.db")
-                .openHelperFactory(SupportOpenHelperFactory(passphrase))
+                // SQLCipher rides in as a SQLiteDriver, not the old SupportOpenHelperFactory: Room 3 deletes
+                // `openHelperFactory` outright, and `setDriver` is the one seam left for a custom engine
+                // (net.zetetic:sqlcipher-android 4.18.0 added SQLCipherDriver for exactly this). The hook and
+                // error-handler args stay null, matching what SupportOpenHelperFactory(passphrase) passed.
+                // It reports hasConnectionPool() = true, so Room opens ONE connection through it and lets
+                // SQLCipher pool underneath — the invariant SessionTransactor's lock ordering rests on.
+                .setDriver(SQLCipherDriver(passphrase, null, null))
                 // Production migration posture: v1 is the frozen launch baseline, with NO destructive fallback.
                 // Every schema change from here ships a tested KnitMigrations entry; a version bump with no
                 // matching migration makes Room throw at open time (caught by KnitDatabaseMigrationTest) — a loud

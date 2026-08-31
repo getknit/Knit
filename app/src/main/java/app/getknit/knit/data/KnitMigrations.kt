@@ -1,6 +1,6 @@
 package app.getknit.knit.data
 
-import androidx.room.migration.Migration
+import androidx.room3.migration.Migration
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 
@@ -25,7 +25,7 @@ object KnitMigrations {
     val MIGRATION_1_2 =
         object : Migration(1, 2) {
             @Suppress("LongMethod") // a flat list of CREATE TABLE/INDEX statements; splitting would obscure the schema
-            override fun migrate(connection: SQLiteConnection) {
+            override suspend fun migrate(connection: SQLiteConnection) {
                 connection.execSQL(
                     "CREATE TABLE IF NOT EXISTS `ratchet_sessions` (" +
                         "`peerId` TEXT NOT NULL, `confirmed` INTEGER NOT NULL, `weAreInitiator` INTEGER NOT NULL, " +
@@ -110,7 +110,7 @@ object KnitMigrations {
      */
     val MIGRATION_2_3 =
         object : Migration(2, 3) {
-            override fun migrate(connection: SQLiteConnection) {
+            override suspend fun migrate(connection: SQLiteConnection) {
                 connection.execSQL(
                     "CREATE TABLE IF NOT EXISTS `group_roots` (" +
                         "`groupId` TEXT NOT NULL, `root` BLOB, `version` INTEGER NOT NULL, `minter` TEXT NOT NULL, " +
@@ -130,7 +130,7 @@ object KnitMigrations {
      */
     val MIGRATION_3_4 =
         object : Migration(3, 4) {
-            override fun migrate(connection: SQLiteConnection) {
+            override suspend fun migrate(connection: SQLiteConnection) {
                 connection.execSQL("ALTER TABLE `messages` ADD COLUMN `receivedVia` INTEGER NOT NULL DEFAULT 0")
             }
         }
@@ -146,7 +146,7 @@ object KnitMigrations {
      */
     val MIGRATION_4_5 =
         object : Migration(4, 5) {
-            override fun migrate(connection: SQLiteConnection) {
+            override suspend fun migrate(connection: SQLiteConnection) {
                 connection.execSQL("ALTER TABLE `messages` ADD COLUMN `voiceDurationMs` INTEGER DEFAULT NULL")
                 connection.execSQL("ALTER TABLE `messages` ADD COLUMN `voicePeaks` TEXT DEFAULT NULL")
             }
@@ -164,7 +164,7 @@ object KnitMigrations {
      */
     val MIGRATION_5_6 =
         object : Migration(5, 6) {
-            override fun migrate(connection: SQLiteConnection) {
+            override suspend fun migrate(connection: SQLiteConnection) {
                 connection.execSQL(
                     "CREATE TABLE IF NOT EXISTS `message_receipts` (" +
                         "`messageId` TEXT NOT NULL, `ackerNodeId` TEXT NOT NULL, `notedAt` INTEGER NOT NULL, " +
@@ -190,7 +190,7 @@ object KnitMigrations {
      */
     val MIGRATION_6_7 =
         object : Migration(6, 7) {
-            override fun migrate(connection: SQLiteConnection) {
+            override suspend fun migrate(connection: SQLiteConnection) {
                 connection.execSQL("ALTER TABLE `messages` ADD COLUMN `arrivedAt` INTEGER DEFAULT NULL")
             }
         }

@@ -1,9 +1,9 @@
 package app.getknit.knit.data.forward
 
-import androidx.room.Dao
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
+import androidx.room3.Dao
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
 
 /**
  * An `(id, expiresAt)` projection of a live carried frame — the rebuild source for the

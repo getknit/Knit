@@ -1,9 +1,9 @@
 package app.getknit.knit.data.blob
 
-import androidx.room.Dao
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
+import androidx.room3.Dao
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
 import kotlinx.coroutines.flow.Flow
 
 /** One stored blob's identity and size, projected by [BlobDao.observeSizes] without reading the bytes. */

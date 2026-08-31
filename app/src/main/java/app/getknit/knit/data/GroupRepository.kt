@@ -1,6 +1,6 @@
 package app.getknit.knit.data
 
-import androidx.room.withTransaction
+import androidx.room3.withWriteTransaction
 import app.getknit.knit.data.group.GroupDao
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
@@ -54,11 +54,11 @@ class GroupRepository(
         leaverId: String,
         leftAt: Long,
     ): Boolean =
-        db.withTransaction {
-            val group = dao.findById(groupId) ?: return@withTransaction false
-            if (group.left) return@withTransaction false
+        db.withWriteTransaction {
+            val group = dao.findById(groupId) ?: return@withWriteTransaction false
+            if (group.left) return@withWriteTransaction false
             val members = GroupMembersStore.decode(group.members)
-            if (leaverId !in members) return@withTransaction false
+            if (leaverId !in members) return@withWriteTransaction false
             val departed = GroupMembersStore.decode(group.departed)
             dao.upsert(
                 group.copy(
@@ -102,7 +102,7 @@ class GroupRepository(
      * row as still-present between the two writes and resurrect it.
      */
     suspend fun leave(groupId: String) {
-        db.withTransaction {
+        db.withWriteTransaction {
             dao.markLeft(groupId)
             messages.deleteByConversation(groupId)
             // All group ratchet state dies with our membership (chains, skipped keys, outbox) — and with it
@@ -119,7 +119,7 @@ class GroupRepository(
      * transaction so they can't tear apart.
      */
     suspend fun delete(groupId: String) {
-        db.withTransaction {
+        db.withWriteTransaction {
             dao.deleteById(groupId)
             messages.deleteByConversation(groupId)
             // A re-created group (via reconcileGroup) starts with clean ratchet state — and a clean root, so

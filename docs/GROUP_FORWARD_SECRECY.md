@@ -178,7 +178,7 @@ alongside the ratchet voids FS against the straggler's static key anyway).
 The pre-decrypt exists-gate and two-phase peek/commit contract are unchanged from v2:
 `decryptAndDeliver` short-circuits ids already in `messages`; a group open runs lock-free `peekOpen`
 (moderation classifies the plaintext before anything persists), then re-opens and commits the state
-delta atomically with the message row (`withTransaction` outer, the shared ratchet mutex inner).
+delta atomically with the message row (`withWriteTransaction` outer, the shared ratchet mutex inner).
 `GroupRatchetSessions` shares the **one** mutex with `RatchetSessions` — seed adoption runs inside
 the DM commit's `onOpened`, and two locks there would invite an inversion.
 

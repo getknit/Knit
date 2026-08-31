@@ -3,7 +3,7 @@ package app.getknit.knit.di
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
-import androidx.room.withTransaction
+import androidx.room3.withWriteTransaction
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
@@ -113,12 +113,12 @@ val meshModule =
         // a DM commit, so one instance makes the lock-order question vanish by construction.
         single(ratchetMutex) { Mutex() }
         // The other half of that contract: the transaction both services open BEFORE taking the lock, so
-        // every critical section acquires the DB and the mutex in one global order. Room's withTransaction
+        // every critical section acquires the DB and the mutex in one global order. Room's withWriteTransaction
         // is reentrant per coroutine, so the decrypt path (which already wraps its commit) just joins.
         single<SessionTransactor> {
             val db = get<KnitDatabase>()
             object : SessionTransactor {
-                override suspend fun <T> transact(block: suspend () -> T): T = db.withTransaction { block() }
+                override suspend fun <T> transact(block: suspend () -> T): T = db.withWriteTransaction { block() }
             }
         }
         // The DM epoch-ratchet session service (crypto scheme v2). Identity access is lambda-mediated so

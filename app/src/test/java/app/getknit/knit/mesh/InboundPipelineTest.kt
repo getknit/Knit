@@ -1,6 +1,6 @@
 package app.getknit.knit.mesh
 
-import androidx.room.Room
+import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.BlobRepository
@@ -218,7 +218,7 @@ class InboundPipelineTest {
         val imageScreening = mockk<ImageScreeningService>(relaxed = true)
         val blobStore = mockk<MeshBlobStore>(relaxed = true)
 
-        // A real in-memory DB purely as the transaction runner for reconcileGroup's db.withTransaction; the repos
+        // A real in-memory DB purely as the transaction runner for reconcileGroup's db.withWriteTransaction; the repos
         // are mocked, so the mocked find/upsert calls just run harmlessly inside a real (empty) transaction.
         val db =
             Room

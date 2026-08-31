@@ -8,3 +8,7 @@ prior authorization doesn't carry over to a new task or a new conversation.
 
 The *how* of driving a device once authorized (the headless debug bridge, resource-ids, cold-start
 navigation) is in `context/debug-bridge.md`; emulator adb tips are in `context/testing.md`.
+
+Before reaching for a physical phone just to get another mesh node: an emulator can be given a **real BLE
+radio** by passing a USB Bluetooth dongle through to it (`scripts/emulator-ble-mesh.sh`, and *Real BLE from
+an emulator* in `context/testing.md`). It joins the actual mesh, and it is fair game under the rule above.

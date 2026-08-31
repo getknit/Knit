@@ -5,7 +5,9 @@
 1. `./gradlew :app:testDebugUnitTest` for mesh/protocol/data logic — now including **Robolectric +
    in-memory Room** tests that execute the real DAO SQL (see below).
 2. Emulator smoke test for UI/startup (launch, Koin init, screen rendering, no crash) — the app
-   runs fine on an emulator, it just can't form a real mesh there.
+   runs fine on an emulator, and it can even join the *real* BLE mesh there if you pass a USB Bluetooth
+   dongle through to it (see **Real BLE from an emulator** below); its Bluetooth is otherwise a simulation
+   that no physical phone can reach.
 3. Two physical phones for discovery → connect → relay and profile/avatar exchange.
 4. **Seeded UI instrumentation suite** (`app/src/androidTest/…/ui/`) for populated-screen rendering across
    devices/API levels — locally on an emulator (`:app:connectedDebugAndroidTest -PseedDemo=true`) or on
@@ -14,8 +16,9 @@
 5. **Accessibility (ATF) suite** (`app/src/androidTest/…/a11y/`) runs Google's Accessibility Test Framework —
    the same checks the Play Console pre-launch report runs — on API 34+. See below.
 
-> Wi-Fi Aware needs physical devices — an emulator can't do NAN. Use `FakeLoopTransport` for logic tests
-> and two physical Wi-Fi-Aware-capable phones (e.g. Pixels) for real discovery → data path → relay.
+> Wi-Fi Aware needs physical devices — an emulator can't do NAN, whatever you do about Bluetooth. Use
+> `FakeLoopTransport` for logic tests and two physical Wi-Fi-Aware-capable phones (e.g. Pixels) for real
+> discovery → data path → relay.
 
 ## JVM Room/DAO + migration tests (Robolectric)
 
@@ -179,3 +182,46 @@ When driving the emulator over `adb`: the soft keyboard overlaps via `adjustResi
 coordinates from `uiautomator dump` rather than guessing; seed the photo picker by `screencap`-ing
 into `/sdcard/Pictures` if you need an image to select. For the headless debug bridge (send/verify without
 screenshots), see `context/debug-bridge.md`.
+
+## Real BLE from an emulator (USB passthrough)
+
+`scripts/emulator-ble-mesh.sh` puts a **real** BLE radio behind an emulator, so it joins the actual mesh
+alongside the lab phones — advertising, L2CAP CoC connects, frames, the lot. Useful when you want a third
+node, or a node you can drive with `adb`/screenshots, without a third handset. Verified 2026-08-30 on the
+Edimax BT-8500 (`7392:c611`, RTL8761BU) against two lab Pixels.
+
+The built-in emulator Bluetooth is **netsim/rootcanal**, a pure simulation: two emulators on one host see
+each other through it, a physical phone never can. The only route to real RF is
+[USB passthrough](https://source.android.com/docs/automotive/start/passthrough) —
+`emulator -usb-passthrough vendorid=…,productid=…`, which QEMU turns into a `usb-host` device on its
+`qemu-xhci`. It lands in the guest's own BT stack because
+`android.hardware.bluetooth-service.default` binds a **kernel** HCI device (mgmt socket + `HCI_CHANNEL_USER`,
+`waitHciDev` taking the exact index or the next larger), not a QEMU serial port.
+
+- `host` prints the two sudo commands the host needs (a udev rule for the USB node, and an unbind from the
+  host's own `btusb`); `up` launches the AVD; `bootstrap` is once per AVD; `setup` is once per boot;
+  `status` shows the hci wiring, the adapter address and the mesh state; `down` gives the dongle back.
+- **`-feature -BluetoothEmulation`** or `bt_vhci_forwarder` supplies a virtual controller that shadows the
+  real one. Both still exist as separate `hci*` nodes — `status` labels which is which.
+- **The image has to be rootable *and* complete.** Play-Store images can't `adb root`, so no firmware push
+  and no `dmesg`. `aosp_atd` roots fine but ships **no SystemUI and no launcher**: its window is permanently
+  black and only instrumentation can drive it (`pm path com.android.systemui` comes back empty — that is
+  the tell, not a GPU problem). `google_apis` is the one that is both; the AVD here is `Knit_Mesh_BT`
+  (`system-images;android-36;google_apis;x86_64`).
+- **Realtek firmware is the trap.** The SDK images carry `btusb`/`btrtl` but no `rtl_bt/*`, and QEMU's
+  attach resets the chip to ROM (`lmp_subver=8761`), so the host's own patch does not carry over.
+  `bootstrap` stages `rtl8761bu_fw.bin` + `_config.bin` from the host's `/lib/firmware/rtl_bt` (zstd) into
+  `/vendor/firmware/rtl_bt` over `adb remount` — which needs `-writable-system` and only arms overlayfs on
+  the *next* boot. It then persists in that AVD.
+- **Failure signature to recognise:** the HAL logs `opening hci interface 0` → `waiting for hci interface 0`
+  and never `found`, and the adapter sits in `BLE_TURNING_ON` with a null address. That is the controller
+  never having been opened — firmware missing, or the driver not rebound — because a controller whose
+  `hci_dev_open` failed is never announced on the mgmt socket, even though `/sys/class/bluetooth/hciN`
+  exists. `dmesg | grep RTL:` is the ground truth; `RTL: fw version 0x…` means it came up.
+- **Per boot, all three reset** (this is what `setup` does): `firmware_class.path`, `setenforce 0` (the
+  kernel reading `vendor_file` is denied and neither `firmware_file` nor `vendor_fw_file` exists in this
+  policy, so relabelling is not an option), and the `btusb` unbind/bind — the rebind being what actually
+  opens the controller. The hci index climbs on each rebind (hci0 → hci2 → …); harmless.
+- **BLE only.** No Wi-Fi Aware, so the composite transport runs BLE-only and NAN reports unavailable.
+- Test with an **unseeded** debug APK: a `-PseedDemo=true` build fakes its peers, so `debug.STATE` will
+  cheerfully report a mesh that isn't there.

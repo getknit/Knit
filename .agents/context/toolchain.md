@@ -1,6 +1,6 @@
 # Toolchain (bleeding-edge — do not "fix" these without reading why)
 
-This project intentionally runs on very new tooling (AGP 9.3.2, Gradle 9.7.0, Kotlin 2.4.10,
+This project intentionally runs on very new tooling (AGP 9.3.2, Gradle 9.7.1, Kotlin 2.4.10,
 Compose BOM 2026.08.00, compileSdk 37.1). That forces several non-obvious choices. **Read this before
 changing build config, dependencies, or the DI graph.**
 
@@ -57,9 +57,10 @@ literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reprod
 - Pin third-party versions in `gradle/libs.versions.toml` (version catalog); probe Maven before
   bumping anything that could pull in a newer Kotlin stdlib.
 - **Stable releases only**, with one standing exception: `detekt` 2.0.0-alpha.x, because the 1.23.x
-  stable line cannot run on Gradle 9 at all. So `navigation-compose` stays on 2.9.8 (2.10.0 is rc),
-  `cameraX` on 1.6.1 (1.7.0 is alpha), `datastore` on 1.2.1 (1.3.0 is alpha), `robolectric` on the
-  4.16.x line (4.17 is beta), and AGP on 9.3.2 (9.4.0 is rc).
+  stable line cannot run on Gradle 9 at all. So `cameraX` stays on 1.6.2 (1.7.0 is alpha), `datastore`
+  on 1.2.1 (1.3.0 is alpha), `robolectric` on the 4.16.x line (4.17 is beta), `lifecycle` on 2.11.0
+  (2.12.0 is alpha), `activity-compose` on 1.13.0 (1.14.0 is alpha), and AGP on 9.3.2 (9.5.0 is alpha;
+  9.4.0 is rc). `navigation-compose` was held at 2.9.8 by this rule until 2.10.0 went stable.
 
 ## Static analysis: detekt / ktlint Gradle plugins
 

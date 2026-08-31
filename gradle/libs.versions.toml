@@ -12,7 +12,10 @@ espressoCore = "3.7.0"
 # fits; 2.12.0 is alpha.
 lifecycle = "2.11.0"
 activityCompose = "1.13.0"
-navigationCompose = "2.9.8"
+# 2.10.0 went stable (it was rc when navigation was last pinned). Its Android artifact is the KMP
+# `navigation-compose-android` AAR, minCompileSdk=37 / minAGP 9.1.0 — cleared by compileSdk 37.1 and
+# AGP 9.3.2. It declares androidx.compose.* 1.10.5 floors, well under the Compose BOM's 1.12.0.
+navigationCompose = "2.10.0"
 kotlin = "2.4.10"
 # Compose UI 1.12.0 / Material3 1.4.0. UI 1.12.0's AAR sets minCompileSdk=37, which compileSdk 37.1 clears.
 composeBom = "2026.08.00"
@@ -20,10 +23,14 @@ composeBom = "2026.08.00"
 # decoupled from the compiler and supports Kotlin 2.2+, so this single version tracks Kotlin 2.4.x.
 ksp = "2.3.11"
 room = "2.8.4"
-# SQLCipher for Android: at-rest encryption for the Room DB. Java + native .so (no Kotlin metadata),
-# so it is immune to the AGP-bundled-Kotlin metadata constraint that used to pin Coil. Its only transitive
-# dep is androidx.sqlite (already pulled at 2.6.1 by Room, which wins).
-sqlcipher = "4.17.0"
+# SQLCipher for Android: at-rest encryption for the Room DB. Native .so plus (since 4.18.0) a kotlin-stdlib
+# 2.2.10 floor — that direction is harmless, since a Kotlin 2.4 compiler reads 2.2 metadata fine; the hazard
+# is only the reverse (an older compiler reading Kotlin-2.4 metadata, which is what used to pin Coil). Its
+# other transitive dep is androidx.sqlite, and 4.18.0 raises that floor to **2.7.0**, so SQLCipher — not
+# Room 2.8.4 (which asks 2.6.2) — now decides that version in the lockfile. sqlite 2.7.0's AAR is
+# minCompileSdk 34, so it changes nothing about the SDK gate. Its .so are 16 KB-page-aligned on all four
+# ABIs (`readelf -lW` → LOAD align 0x4000), the same requirement that pins litert to 1.4.x.
+sqlcipher = "4.18.0"
 coroutines = "1.11.0"
 kotlinxSerializationJson = "1.11.0"
 datastore = "1.2.1"
@@ -41,7 +48,7 @@ koin = "4.2.2"
 # Coil 3.4.0+ is built with Kotlin 2.4.0. We now compile :app with Kotlin 2.4.0 (built-in Kotlin is
 # overridden off AGP's bundled 2.2.10 — see the buildscript classpath in the root build.gradle.kts), so
 # the 2.4 metadata is readable again and Coil is free to track latest.
-coil = "3.5.0"
+coil = "3.6.0"
 # On-device NSFW image classifier runtime — the classic TFLite interpreter, which upstream renamed to
 # "LiteRT". org.tensorflow:tensorflow-lite dead-ends at 2.17.0, whose x86_64/x86/armeabi-v7a .so segments
 # are only 4 KB-aligned (p_align=0x1000) and fail to load on a 16 KB-page image such as the emulator;
@@ -72,8 +79,8 @@ tink = "1.23.0"
 # HandlerThread with no try/catch — a device whose camera HAL delivers a preview size/stride other than
 # the one it reported makes RawImageData.cropAndScale throw ArrayIndexOutOfBoundsException off the main
 # thread and kills the process. It has no seam to patch (BarcodeView.startDecoderThread is private).
-# See ADR 015. Constraints that pin CameraX 1.6.1 specifically — check ALL of these before bumping:
-#   - minCompileSdk=36 (1.5.x is 35), comfortably under our compileSdk 37.1. 1.6.1 is the newest stable —
+# See ADR 015. Constraints that pin CameraX to the 1.6.x line — check ALL of these before bumping:
+#   - minCompileSdk=36 (1.5.x is 35), comfortably under our compileSdk 37.1. 1.6.2 is the newest stable —
 #     1.7.x is alpha, which is what holds it here, not the SDK gate.
 #   - Its transitive floors are far below ours (lifecycle-livedata 2.3.1, core 1.3.2), so it applies no
 #     upgrade pressure to the pinned androidx graph.
@@ -82,7 +89,7 @@ tink = "1.23.0"
 #     Re-check with `readelf -lW` after any bump; a 4 KB-aligned .so won't load on 16 KB-page devices.
 #   - It ships its own consumer R8 rules, so keepRules/knit-r8.keep needs nothing for it.
 # NEVER add camera-mlkit-vision — it pulls GMS, which this app does not ship.
-cameraX = "1.6.1"
+cameraX = "1.6.2"
 zxingCore = "3.5.4"
 # On-device APK merge + re-sign for the offline "Share Knit app" flow when Knit was installed from Play
 # as an App Bundle (split APKs). ARSCLib merges the on-disk splits into one universal APK; apksig re-signs

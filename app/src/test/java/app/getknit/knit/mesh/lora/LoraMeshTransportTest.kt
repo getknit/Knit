@@ -259,6 +259,14 @@ class LoraMeshTransportTest {
         farFrames: suspend (String) -> List<WireEnvelope> = { emptyList() },
         channelName: String = KnitChannel.NAME,
         pace: LoraPacePolicy = LoraPacePolicy(minGapMs = 0),
+        // No jitter, for the reason LoraGossipPolicy documents the seam: its Trickle timer transmits at a
+        // *random* point in each interval's second half, so the default policy puts an OFFER on the air at a
+        // wall-clock-independent but run-dependent time. Any test that advances virtual time across an
+        // interval boundary then counts a packet it did not send — which is not hypothetical: it made
+        // `aProfileIsFannedOncePerPublishNotOnEverySeenSetLapse` fail on CI (`expected:<3> but was:<4>`,
+        // the offer landing inside its 4 s re-fan window) while passing everywhere else. With `random = { 0 }`
+        // the offer goes out at exactly the midpoint, as it already does in LoraBridgeTest.
+        gossip: LoraGossipPolicy = LoraGossipPolicy(random = { 0 }),
         now: () -> Long,
     ): Rig {
         val link = FakeMeshtasticLink(nodeNum, air, channelName)
@@ -275,6 +283,7 @@ class LoraMeshTransportTest {
                 clock = now,
                 wallClock = now,
                 pace = pace,
+                gossip = gossip,
             )
         val received = mutableListOf<InboundFrame>()
         scope.launch { transport.inbound.collect { received += it } }

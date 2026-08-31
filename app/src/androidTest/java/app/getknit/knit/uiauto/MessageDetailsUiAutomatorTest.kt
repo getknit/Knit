@@ -68,8 +68,12 @@ class MessageDetailsUiAutomatorTest : SeededUiAutomatorTest() {
         const val SAM = "samr1v00"
         const val SAM_NAME = "Sam Rivera"
 
-        /** The one seeded member the message has NOT reached — the "waiting on" half. */
-        const val THEO = "theod001"
+        /**
+         * The one seeded member the message has NOT reached — the "waiting on" half. `theob123` is
+         * `DemoSeeder.THEO`; the id in `MessageDetailsScreen`'s @Preview fixture ("Theo Diaz",
+         * `theod001`) is a different person and was never seeded, so don't copy it back from there.
+         */
+        const val THEO = "theob123"
 
         const val OPEN_ATTEMPTS = 3
         const val OPEN_POLL_MS = 12_000L

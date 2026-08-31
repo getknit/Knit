@@ -164,6 +164,20 @@ abstract class SeededUiAutomatorTest {
     ): UiObject2 = requireNotNull(waitDesc(desc, timeoutMs)) { "no view with contentDescription '$desc' within ${timeoutMs}ms" }
 
     /**
+     * Like [requireDesc] but scoped to [parent]'s subtree. Use wherever a control repeats once per row and
+     * the unscoped selector would return whichever copy the tree happens to yield first — the Requests
+     * inbox draws one overflow per request, and the seeded inbox is never a single row. [parent] came from
+     * a waiting call, so its children are already materialized and this needs no timeout of its own.
+     */
+    protected fun requireDescIn(
+        parent: UiObject2,
+        desc: String,
+    ): UiObject2 =
+        requireNotNull(parent.findObject(By.descContains(desc))) {
+            "no view with contentDescription '$desc' inside '${parent.resourceName}'"
+        }
+
+    /**
      * Waits up to [timeoutMs] for a view whose visible text equals [text] **exactly**; returns it or null.
      * Use where a substring match ([waitText]) is ambiguous — a dialog's confirm button often repeats a word
      * from its title (e.g. the "Block" button vs. the "Block this person?" title).
@@ -184,6 +198,16 @@ abstract class SeededUiAutomatorTest {
         tag: String,
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
     ) = assertTrue("expected testTag '$tag' on screen within ${timeoutMs}ms", waitTag(tag, timeoutMs) != null)
+
+    /**
+     * Asserts the view with testTag [tag] leaves the screen (or was never there) within [timeoutMs].
+     * The counterpart to [assertTag] for a row that an action is supposed to remove — an empty-state
+     * assertion would only hold if that row were the last one on the screen.
+     */
+    protected fun assertTagGone(
+        tag: String,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+    ) = assertTrue("expected testTag '$tag' to leave the screen within ${timeoutMs}ms", device.wait(Until.gone(byTag(tag)), timeoutMs))
 
     /** Asserts a view whose text contains [text] appears within [timeoutMs]. */
     protected fun assertText(

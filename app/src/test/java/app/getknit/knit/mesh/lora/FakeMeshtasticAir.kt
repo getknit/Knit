@@ -37,6 +37,8 @@ internal class FakeMeshtasticLink(
     val nodeNum: UInt,
     private val air: FakeMeshtasticAir,
     private val channelName: String = KnitChannel.NAME,
+    /** What the handshake reports as the board's firmware. Pre-2.8 by default: the signature era is opt-in. */
+    private val firmware: String = "2.5.0",
 ) : MeshtasticLink {
     private val _state = MutableStateFlow<LinkState>(LinkState.Idle)
     override val state = _state
@@ -104,7 +106,7 @@ internal class FakeMeshtasticLink(
 
     /** The handshake completing (at ATT MTU 512, the ESP32 line's ceiling): what a real board reports last. */
     fun ready() {
-        _state.value = LinkState.Ready(BoardInfo(nodeNum, "heltec-v4", "2.5.0"), listOf(ChannelInfo(0, channelName, 1)), 512)
+        _state.value = LinkState.Ready(BoardInfo(nodeNum, "heltec-v4", firmware), listOf(ChannelInfo(0, channelName, 1)), 512)
     }
 
     override fun stop() {

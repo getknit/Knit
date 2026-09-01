@@ -217,6 +217,7 @@ class MeshMetrics {
     private val loraSent = AtomicLong()
     private val loraFragSent = AtomicLong()
     private val loraTranscoded = AtomicLong()
+    private val loraPadded = AtomicLong()
     private val loraReceived = AtomicLong()
     private val loraReassembled = AtomicLong()
     private val loraTooBig = AtomicLong()
@@ -572,6 +573,15 @@ class MeshMetrics {
         loraTranscoded.incrementAndGet()
     }
 
+    /**
+     * A LoRa frame whose last packet was padded past the firmware's signature cliff (ADR 2026-09.mhs5), trading a
+     * 66-byte signature the board would have added for a few bytes of pad. Counted because the saving is
+     * otherwise invisible: a padded frame and an unpadded one look the same everywhere but the air.
+     */
+    fun onLoraPadded() {
+        loraPadded.incrementAndGet()
+    }
+
     /** A frame received over the LoRa plane (after reassembly + decode). */
     fun onLoraReceived() {
         loraReceived.incrementAndGet()
@@ -750,6 +760,7 @@ class MeshMetrics {
             loraSent = loraSent.get(),
             loraFragSent = loraFragSent.get(),
             loraTranscoded = loraTranscoded.get(),
+            loraPadded = loraPadded.get(),
             loraReceived = loraReceived.get(),
             loraReassembled = loraReassembled.get(),
             loraTooBig = loraTooBig.get(),
@@ -836,6 +847,7 @@ class MeshMetrics {
         val loraSent: Long = 0,
         val loraFragSent: Long = 0,
         val loraTranscoded: Long = 0,
+        val loraPadded: Long = 0,
         val loraReceived: Long = 0,
         val loraReassembled: Long = 0,
         val loraTooBig: Long = 0,

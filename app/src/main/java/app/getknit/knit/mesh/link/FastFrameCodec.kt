@@ -59,6 +59,7 @@ import java.util.zip.Inflater
  *
  * Pure (no Android), so the codec is JVM-unit-testable ([app.getknit.knit.FastFrameCodecTest]).
  */
+@Suppress("TooManyFunctions") // one wire format's encode/decode/fragment surface; splitting it would scatter the layout
 internal object FastFrameCodec {
     /** A single compact frame (layout above). */
     const val TAG_COMPACT: Byte = 0x03
@@ -169,6 +170,21 @@ internal object FastFrameCodec {
     fun isFrameTag(tag: Byte): Boolean = tag == TAG_COMPACT || tag == TAG_TRANSCODED
 
     /**
+     * Whether a complete 0x03/0x05 [frame]'s body is a deflate stream — and so, **whether trailing bytes
+     * appended after it are ignored on decode**. That second reading is the one callers actually want, and it
+     * is a property of [inflate]: the loop stops the moment the stream says it is finished and never looks at
+     * what follows, so every build in the field already tolerates a padded frame. A **stored** body has no
+     * such marker — on 0x03 the extra bytes become the tail of `signed` and the frame dies later at CBOR
+     * decode or signature verification, on 0x05 [FrameTranscoder.rebuild] rejects it outright.
+     *
+     * `LoraFrameCodec` pads on exactly this basis (ADR 2026-09.mhs5): a Meshtastic 2.8 board signs any packet small
+     * enough to still fit a signature, so growing one past that cliff trades 66 bytes of firmware signature
+     * for a few bytes of pad. False for anything that is not a complete frame, so a fragment (0x04) — whose
+     * flags live inside the frame it carries a slice of — is never mistaken for a paddable one.
+     */
+    fun deflated(frame: ByteArray): Boolean = frame.size > 1 && isFrameTag(frame[0]) && (frame[1].toInt() and FLAG_DEFLATED) != 0
+
+    /**
      * The [WireEnvelope] a 0x03 or 0x05 message reconstructs, or null when it is malformed: wrong tag, shorter
      * than header + sig, a reserved flag bit set (an unknown future variant — the flood copy is the
      * backstop), a dictId the tag does not take, a deflate stream that fails to inflate, or (0x05) a body the
@@ -188,6 +204,35 @@ internal object FastFrameCodec {
             sig = message.copyOfRange(HEADER_BYTES, HEADER_BYTES + sigBytes),
             signed = signed,
         )
+    }
+
+    /**
+     * The DEFLATED equivalent of a **stored** 0x03/0x05 [frame] — the same envelope, the same body, re-encoded
+     * as a deflate stream so that trailing bytes after it are ignored on decode ([deflated]). Null when [frame]
+     * is already deflated, is not a complete frame, or the re-encoding is not decodable.
+     *
+     * The point is not compression — an incompressible body grows by the deflate framing — but *paddability*:
+     * a Meshtastic 2.8 board charges 66 bytes of signature for a packet under its cliff, and a few bytes of
+     * deflate framing plus a few of pad buy that back (ADR 2026-09.mhs5). [encodeCompact] deliberately never does this
+     * (a compact frame must never out-grow its stored form for the coordination plane); the LoRa sender asks
+     * for it explicitly, and only where it has priced the trade.
+     */
+    fun deflatedForm(frame: ByteArray): ByteArray? {
+        if (frame.size < HEADER_BYTES || !isFrameTag(frame[0]) || deflated(frame)) return null
+        val flags = frame[1].toInt() and BYTE_MASK
+        if (flags and RESERVED_MASK != 0) return null
+        val sigBytes = if (flags and FLAG_UNSIGNED != 0) 0 else SIG_BYTES
+        if (frame.size < HEADER_BYTES + sigBytes) return null
+        val transcoded = frame[0] == TAG_TRANSCODED
+        val dictId = if (transcoded) DICT_ID_NONE else DICT_ID_V1
+        val body = frame.copyOfRange(HEADER_BYTES + sigBytes, frame.size)
+        val stream = deflate(body, if (transcoded) null else DICT_V1)
+        // deflate() reports an expansion by handing the input straight back; that is not a stream, so refuse.
+        if (stream.contentEquals(body)) return null
+        val out = frame.copyOf(HEADER_BYTES + sigBytes + stream.size)
+        out[1] = (flags or FLAG_DEFLATED or (dictId shl DICT_SHIFT)).toByte()
+        stream.copyInto(out, HEADER_BYTES + sigBytes)
+        return out
     }
 
     private fun representable(wire: WireEnvelope): Boolean = wire.sig.isEmpty() || wire.sig.size == SIG_BYTES
@@ -321,7 +366,15 @@ internal object FastFrameCodec {
         }
     }
 
-    /** Inflates a raw-deflate [bytes] stream with the preset [dictionary] (none for 0x05), or null if malformed/oversized. */
+    /**
+     * Inflates a raw-deflate [bytes] stream with the preset [dictionary] (none for 0x05), or null if
+     * malformed/oversized.
+     *
+     * **Trailing bytes past the end of the stream are ignored, and senders depend on that** — see [deflated].
+     * Rejecting them would read as a safe tightening and would silently break every padded LoRa sender
+     * against older receivers, which is why `FastFrameCodecTest` pins the tolerance rather than leaving it an
+     * accident of the loop below.
+     */
     private fun inflate(
         bytes: ByteArray,
         dictionary: ByteArray?,

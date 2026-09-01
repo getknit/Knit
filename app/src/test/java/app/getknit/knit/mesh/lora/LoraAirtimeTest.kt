@@ -304,6 +304,73 @@ class LoraAirtimeTest {
         assertTrue(new.timeOnAirMs(MeshtasticProto.MAX_SIGNED_PAYLOAD) > old.timeOnAirMs(MeshtasticProto.MAX_SIGNED_PAYLOAD))
     }
 
+    // --- ADR 2026-09.mhs5: padding past the cliff ---
+
+    private fun air28(preset: ModemPreset = ModemPreset.LONG_FAST) =
+        LoraAirtime().apply {
+            onRadioConfig(radio(preset))
+            onFirmware("2.8.0.7239fe8")
+        }
+
+    @Test
+    fun aPacketAtTheCliffIsPaddedOneBytePastItAndGetsCheaper() {
+        val cliff = MeshtasticProto.MAX_SIGNED_PAYLOAD
+        for (preset in listOf(ModemPreset.LONG_FAST, ModemPreset.LONG_TURBO, ModemPreset.MEDIUM_FAST)) {
+            val air = air28(preset)
+            assertEquals("$preset must pad to just past the cliff", cliff + 1, air.padTo(cliff, MeshtasticProto.MAX_PAYLOAD))
+            assertTrue(
+                "$preset: padding must actually cost less air (${air.timeOnAirMs(cliff + 1)} vs ${air.timeOnAirMs(cliff)})",
+                air.timeOnAirMs(cliff + 1) < air.timeOnAirMs(cliff),
+            )
+        }
+    }
+
+    @Test
+    fun aPacketFarBelowTheCliffIsLeftAloneBecauseThePadWouldCostMoreThanTheSignature() {
+        val air = air28()
+        // A 66-byte signature buys back at most 66 bytes of pad, so anything needing more must stay put.
+        assertEquals(40, air.padTo(40, MeshtasticProto.MAX_PAYLOAD))
+        assertEquals(80, air.padTo(80, MeshtasticProto.MAX_PAYLOAD))
+        assertTrue("...and the band that does pay reaches well below the cliff", air.padTo(120, MeshtasticProto.MAX_PAYLOAD) > 120)
+    }
+
+    @Test
+    fun nothingIsPaddedWhenThereIsNoSignatureToDodge() {
+        val old =
+            LoraAirtime().apply {
+                onRadioConfig(radio())
+                onFirmware("2.7.26.b246bcd")
+            }
+        val cliff = MeshtasticProto.MAX_SIGNED_PAYLOAD
+        assertEquals("a pre-2.8 board signs nothing, so a pad is pure loss", cliff, old.padTo(cliff, MeshtasticProto.MAX_PAYLOAD))
+        val air = air28()
+        assertEquals("already past the cliff", cliff + 1, air.padTo(cliff + 1, MeshtasticProto.MAX_PAYLOAD))
+        assertEquals(
+            "and a full packet stays full",
+            MeshtasticProto.MAX_PAYLOAD,
+            air.padTo(MeshtasticProto.MAX_PAYLOAD, MeshtasticProto.MAX_PAYLOAD),
+        )
+    }
+
+    @Test
+    fun aCapTooSmallToClearTheCliffRefusesToPad() {
+        // A board whose MTU sizes the payload cap below the cliff has nowhere to pad to; growing to the cap
+        // would spend bytes and still be signed.
+        val air = air28()
+        assertEquals(140, air.padTo(140, MeshtasticProto.MAX_SIGNED_PAYLOAD))
+        assertEquals(140, air.padTo(140, 120))
+    }
+
+    @Test
+    fun theCliffDodgeIsWorthTheFigureTheBenchMeasured() {
+        // Heltec V4 / 2.8.0.7239fe8, 2026-08-31: 165 B measured 1655 ms and 166 B measured 1262 ms at
+        // LongTurbo. That 393 ms is the whole reason padding exists, so pin it rather than only claiming it.
+        val air = air28(ModemPreset.LONG_TURBO)
+        val cliff = MeshtasticProto.MAX_SIGNED_PAYLOAD
+        assertEquals(1_655, air.timeOnAirMs(cliff))
+        assertEquals(1_262, air.timeOnAirMs(air.padTo(cliff, MeshtasticProto.MAX_PAYLOAD)))
+    }
+
     @Test
     fun theSurchargeComesOutOfTheWindowRatherThanBesideIt() {
         // The point of charging for it at all: a 2.8 board must fit fewer ticks in a window, not the same

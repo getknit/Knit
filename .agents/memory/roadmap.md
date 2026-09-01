@@ -101,10 +101,24 @@ doc). **Don't start a deferred item without explicit direction.**
   cliff is at **exactly 165 B** and `LoraAirtime` now matches the firmware's own `Packet TX:` figure to
   **≤ 1 ms** across 140–231 B; the payload cap is **still 231**; and ADR 045's provisioning transaction is
   intact, with `Config.lora` byte-identical before and after (its "never writes the radio" promise, on
-  hardware). **Still owed:** a decision on `packet_signature_policy` (defaults to `COMPATIBLE`, so nothing is
-  broken — but a user who picks `STRICT` silently loses every frame over the cliff); `BoardName.stock`, which
-  computes the fallback name from the node number while 2.8's default name is still MAC-derived; and a second
-  board for the receive half. Full write-up in the private overlay. Still deferred
+  hardware). **The cliff is now a saving rather than only a tax** (2026-09-01, ADR 2026-09.mhs5): a frame's last
+  packet is grown to 166 B so the board sends it unsigned — a few bytes of pad instead of 66 of signature,
+  ~20 % off both the one-packet tick and the room post. Legal only on a **deflated** body, and since the
+  frames with most to gain *store* (the ADR 060 transcoder already took the compressible keys out), a stored
+  one-packet frame is re-deflated first for a measured +5 B whenever `LoraAirtime` prices the result cheaper.
+  Not covered: fragmented stored frames, and `LoraCtl` offers (whose byte-identity the gossip suppression
+  depends on). **Device-verified the same day** on the Heltec / 2.8.0.7239fe8, in two halves: the codec pads a
+  real room post (`lora pad fanout:chat +46B`, `loraPadded` 0 → 1, no NAK), and a 166-byte payload leaves the
+  board **unsigned** — read off a *second* board over the air as `Lora RX … encrypted len=190` / `Packet RX:
+  1262ms`, against `len=255` / `1655ms` at 165 B. (That `encrypted len` line is a better instrument than
+  `Packet TX:`: `len = payload + 24` unsigned, +66 signed, so it reads the signature off directly.) **Still owed:** a decision on `packet_signature_policy` (defaults to `COMPATIBLE`, so nothing is
+  broken — but a user who picks `STRICT` now loses *every* frame, not just those over the cliff);
+  `BoardName.stock`, which
+  computes the fallback name from the node number while 2.8's default name is still MAC-derived; a second
+  board for the receive half (partly answered — the USB board turned out to be a separate node that does hear
+  the phone's board, though nothing on this mesh runs anything but the `COMPATIBLE` signature policy); and
+  **one packet observed being both padded and unsigned** — the two halves above were measured separately
+  because ADR 044's pocket election put the phone `PASSIVE` before they could be caught together. Full write-up in the private overlay. Still deferred
   here: an **IBLT/Bloom offer body** (48 prefixes is a window — the upgrade if a busy pocket's oldest frames
   start falling off it), **acknowledged backfill** (a served frame lost to the air waits for the next round),
   and **faster passive-to-active takeover** when an active gateway's phone dies without leaving

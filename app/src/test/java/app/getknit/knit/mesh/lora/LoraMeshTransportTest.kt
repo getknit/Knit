@@ -159,6 +159,59 @@ class LoraMeshTransportTest {
             b.transport.stop()
         }
 
+    /**
+     * ADR 2026-09.mhs5: against a 2.8 board a frame under the signature cliff leaves **grown past it** — the firmware
+     * would otherwise bolt on 66 bytes of its own — and the far side decodes it exactly as before.
+     */
+    @Test
+    fun aFrameUnderTheSignatureCliffLeavesPaddedPastItOnA28Board() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope, firmware = "2.8.0.7239fe8") { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+            val paddedBefore = a.metrics.snapshot().loraPadded
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate, ten minutes. bring the long cable."))
+            runCurrent()
+            val sent = a.link.sent.last()
+            assertEquals("one packet, one byte past the cliff", MeshtasticProto.MAX_SIGNED_PAYLOAD + 1, sent.size)
+            assertEquals(paddedBefore + 1, a.metrics.snapshot().loraPadded)
+            assertTrue("and bob still decodes it through the same inbound path", b.received.any { it.envelope.senderId == "alice" })
+            assertTrue(
+                b.metrics
+                    .snapshot()
+                    .fastDropsByReason
+                    .isEmpty(),
+            )
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    /** The same frame against a pre-2.8 board, which signs nothing: a pad there would be pure loss. */
+    @Test
+    fun aPre28BoardIsLeftExactlyAsItWas() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate, ten minutes. bring the long cable."))
+            runCurrent()
+            assertTrue(
+                "still under the cliff, unpadded",
+                a.link.sent
+                    .last()
+                    .size <= MeshtasticProto.MAX_SIGNED_PAYLOAD,
+            )
+            assertEquals(0L, a.metrics.snapshot().loraPadded)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
     /** A frame the transcoder cannot reproduce keeps the `0x03` framing and is counted, never lost or mangled. */
     @Test
     fun aFrameTheTranscoderRefusesStillRidesCompactAndIsCounted() =
@@ -267,9 +320,10 @@ class LoraMeshTransportTest {
         // the offer landing inside its 4 s re-fan window) while passing everywhere else. With `random = { 0 }`
         // the offer goes out at exactly the midpoint, as it already does in LoraBridgeTest.
         gossip: LoraGossipPolicy = LoraGossipPolicy(random = { 0 }),
+        firmware: String = "2.5.0",
         now: () -> Long,
     ): Rig {
-        val link = FakeMeshtasticLink(nodeNum, air, channelName)
+        val link = FakeMeshtasticLink(nodeNum, air, channelName, firmware)
         val metrics = MeshMetrics()
         val transport =
             LoraMeshTransport(

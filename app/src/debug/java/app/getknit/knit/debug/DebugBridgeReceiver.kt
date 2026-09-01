@@ -919,6 +919,7 @@ class DebugBridgeReceiver :
             .put("loraSent", snap.loraSent)
             .put("loraFragSent", snap.loraFragSent)
             .put("loraTranscoded", snap.loraTranscoded)
+            .put("loraPadded", snap.loraPadded)
             .put("loraReceived", snap.loraReceived)
             .put("loraReassembled", snap.loraReassembled)
             .put("loraTooBig", snap.loraTooBig)
@@ -1132,6 +1133,9 @@ class DebugBridgeReceiver :
             // ADR 067: true means the board is on its own RF slot, so the budgets below are off the
             // politeness ceiling and bounded only by the region's duty cycle.
             .put("dedicated", status.airtime?.dedicated ?: JSONObject.NULL)
+            // ADR 2026-09.mhs5: whether this board's firmware signs what we hand it, and so whether the budget charges
+            // for that signature and the codec pads past its cliff. Without it neither is observable here.
+            .put("signing", status.airtime?.signing ?: JSONObject.NULL)
             .put(
                 "airtime",
                 status.airtime?.let { air ->

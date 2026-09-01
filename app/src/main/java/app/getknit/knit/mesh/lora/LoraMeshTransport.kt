@@ -393,7 +393,16 @@ internal class LoraMeshTransport(
         // ships to release this needs a gate — every peer heard on the plane advertising the bit through the
         // profile frame it beacons here — recorded in the roadmap; an older debug build on the channel drops
         // 0x05 as UNKNOWN_TAG until then.
-        val encoded = LoraFrameCodec.encodeBest(wire, fragSeq.getAndIncrement() and FRAG_ID_MASK, maxPayload, transcode = true)
+        val encoded =
+            LoraFrameCodec.encodeBest(
+                wire,
+                fragSeq.getAndIncrement() and FRAG_ID_MASK,
+                maxPayload,
+                transcode = true,
+                // ADR 2026-09.mhs5: the governor prices the packet against this board's own preset and firmware, so a
+                // frame under the 2.8 signature cliff is grown past it and leaves cheaper than it arrived.
+                cost = pace.airtime,
+            )
         if (encoded == null) {
             metrics.onLoraTooBig()
             log("lora too-big $label")
@@ -401,6 +410,10 @@ internal class LoraMeshTransport(
         }
         if (encoded.transcodeRefused) metrics.onTranscodeFallback()
         if (encoded.transcoded) metrics.onLoraTranscoded()
+        if (encoded.grewBy > 0) {
+            metrics.onLoraPadded()
+            log("lora pad $label +${encoded.grewBy}B past the signature cliff")
+        }
         return encoded.parts
     }
 

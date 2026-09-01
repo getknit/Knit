@@ -30,7 +30,21 @@ Everything else (group-form chat, `groupupdate`/`groupleave`, `typing`, `blobreq
 
 Outbound decodes `wire.signed` only to apply the policy, then reuses `FastFrameCodec` (ADR 030) to
 compact/fragment: `sig`/`signed` pass through byte-exact, so this is **not a wire change** and the
-originator's signature verifies unchanged. Meshtastic `Data.payload` cap = **231 B** on the air for a Knit
+originator's signature verifies unchanged. One packet may leave *larger* than the frame needs
+(ADR 2026-09.mhs5): a 2.8 board signs anything at or under 165 B, so `LoraFrameCodec` grows the frame's **last**
+packet to 166 and the board sends it unsigned — a few bytes of pad instead of 66 of signature, ~20 % off the
+tick and the room post. Two rules keep that safe. The pad is only legal where a receiver ignores trailing
+bytes, which is a **deflated** body (`FastFrameCodec.deflated`; a stored `0x03` would swallow the pad into
+`signed` and corrupt silently, a stored `0x05` rejects it) — and the frames with most to gain *store*, because
+the ADR 060 transcoder already took the compressible keys out, so a stored one-packet frame is re-deflated
+first (`FastFrameCodec.deflatedForm`, a measured +5 B) whenever `LoraAirtime` prices the result cheaper.
+Only the last packet moves, so the fragment count cannot change; fragmented stored frames are the case this
+does not reach. Verified on a 2.8 board (2026-09-01): a real room post logs `lora pad fanout:chat +46B past
+the signature cliff`, and a 166-byte payload is heard on a second board as `Lora RX … encrypted len=190` /
+`Packet RX: 1262ms` where 165 B reads `len=255` / `1655ms` — that `encrypted len` is the cleanest signing
+oracle there is, since `len = payload + 24` unsigned and +66 signed. **The tolerance is an accident of `inflate`'s loop, not a designed property** —
+`FastFrameCodecTest.aDeflatedFrameIgnoresTrailingBytesBecauseThePaddedLoraSenderDependsOnIt` is what stops a
+future "hardening" from breaking every padded sender against older receivers. Meshtastic `Data.payload` cap = **231 B** on the air for a Knit
 packet (`MeshtasticProto.MAX_PAYLOAD`: the firmware transmits at most a 237-byte `Data`, and the two-byte
 `PRIVATE_APP` portnum plus the payload framing take 6 — the proto's `DATA_PAYLOAD_LEN = 233` assumes a one-byte
 portnum; measured 2026-08-29: 231 queues, 232 NAKs `TOO_LARGE`) → ≤ 3 fragments (ceiling `3 × 227 = 681 B`
@@ -85,9 +99,10 @@ Golden byte vectors pin every field number; malformed input decodes to null, nev
   fits signed — so a Knit payload **≤ 165 B** (`MeshtasticProto.MAX_SIGNED_PAYLOAD`) grows by 66 B on the air
   and a larger one goes unsigned exactly as before. It is a cliff, not a ramp, and it falls between ADR 060's
   one-packet room tick (157 B, +36 % air) and its one-packet DM ✓✓ (221 B, unchanged). Knit cannot ask for it
-  or decline it; `LoraAirtime` charges for it. Receiving is unaffected while
+  or decline it; `LoraAirtime` charges for it, and since ADR 2026-09.mhs5 **dodges** it — see the codec note
+  below. Receiving is unaffected while
   `Config.SecurityConfig.packet_signature_policy` is at its `COMPATIBLE` default — under `STRICT` a board
-  drops every unsigned packet, which is every Knit frame over the cliff.
+  drops every unsigned packet, which after the padding is every Knit frame rather than most of them.
 
 ## Key bootstrap (the far side has never seen the author's profile)
 
@@ -131,7 +146,8 @@ must never need an event to recover. Closes ADR 038's "one board per clique" res
 **An airtime governor.** `LoraAirtime` (pure): time-on-air from the LoRa formula at the board's own preset
 (231 B at LongFast ≈ 2 s) **plus the signature 2.8 adds to anything under the cliff** — gated on the board's
 firmware (`LoraAirtime.signsPackets`, from the handshake's `DeviceMetadata`; unknown reads as signing, since
-under-charging can cost compliance where over-charging only costs throughput), a rolling **15-minute window** (ADR 054 — it was an hour, and a burst of chat then
+under-charging can cost compliance where over-charging only costs throughput) **less whatever `padTo` dodges**
+(ADR 2026-09.mhs5 — the same governor that prices the cliff is the one the codec asks whether to pad past it), a rolling **15-minute window** (ADR 054 — it was an hour, and a burst of chat then
 blacked the plane out for the rest of it; the hourly total is unchanged, the worst straddling hour ≤ 6.25 %),
 and one allowance = `min(region duty cycle, 10 % politeness) × 0.5` of the window — **45 s of air at LongFast**.
 Those two ceilings are computed **independently** (ADR 067): the regional duty cycle is law and only the

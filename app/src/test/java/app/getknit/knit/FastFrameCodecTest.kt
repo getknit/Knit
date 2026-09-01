@@ -1,10 +1,13 @@
 package app.getknit.knit
 
+import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.TinkInit
 import app.getknit.knit.mesh.link.FastFrameCodec
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.EncEnvelope
+import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
@@ -33,6 +36,22 @@ class FastFrameCodecTest {
         hops: Int = 0,
         relay: Boolean = true,
     ) = WireEnvelope(ttl = ttl, hops = hops, relay = relay, sig = sig, signed = signed)
+
+    /** A sealed v3 chat envelope: valid CBOR the transcoder models, whose body is ciphertext and will not deflate. */
+    private fun incompressibleCbor(): ByteArray =
+        WireCodec.encodeEnvelope(
+            RelayEnvelope(
+                type = FrameType.CHAT,
+                id = FrameId.new(),
+                senderId = NodeId.derive("alice"),
+                sentAt = 1_755_700_000_000L,
+                recipientId = NodeId.derive("bob"),
+                payload =
+                    WireCodec.encodePayload(
+                        ChatContent(enc = EncEnvelope(v = 3, nonce = ByteArray(0), ct = rng.nextBytes(120), keys = emptyList())),
+                    ),
+            ),
+        )
 
     /** A realistic CBOR `signed` blob (a receipt routing envelope) — compressible, unlike random bytes. */
     private fun cborSigned(): ByteArray =
@@ -81,6 +100,68 @@ class FastFrameCodecTest {
         assertTrue("CBOR text deflates", (compact[1].toInt() and 0x02) != 0)
         assertTrue("deflated form is smaller", compact.size < FastFrameCodec.HEADER_BYTES + FastFrameCodec.SIG_BYTES + original.signed.size)
         assertArrayEquals(original.signed, FastFrameCodec.decodeCompact(compact)!!.signed)
+    }
+
+    /**
+     * **Load-bearing for the LoRa plane: senders depend on this tolerance (ADR 2026-09.mhs5).**
+     *
+     * A deflate stream carries its own end marker, so bytes appended after it are never read — which is what
+     * lets `LoraFrameCodec` pad a packet past the Meshtastic 2.8 signature cliff and still be decoded by every
+     * build already in the field. Nothing else pins that property, so tightening [FastFrameCodec] to reject
+     * trailing input would read as a safe cleanup and would silently break padded senders against older
+     * receivers. If this test ever has to change, the padding has to be retired first.
+     */
+    @Test
+    fun aDeflatedFrameIgnoresTrailingBytesBecauseThePaddedLoraSenderDependsOnIt() {
+        val original = wire(signed = cborSigned())
+        for (form in listOf(
+            checkNotNull(FastFrameCodec.encodeCompact(original)),
+            checkNotNull(FastFrameCodec.encodeTranscoded(original)),
+        )) {
+            assertTrue("this form must be deflated for the pad to be legal", FastFrameCodec.deflated(form))
+            for (pad in listOf(1, 9, 64)) {
+                val padded = form + ByteArray(pad)
+                val decoded = checkNotNull(FastFrameCodec.decodeCompact(padded)) { "tag ${form[0]} + $pad pad bytes" }
+                assertArrayEquals("sig survives $pad pad bytes on tag ${form[0]}", original.sig, decoded.sig)
+                assertArrayEquals("signed survives $pad pad bytes on tag ${form[0]}", original.signed, decoded.signed)
+            }
+        }
+    }
+
+    /**
+     * [FastFrameCodec.deflatedForm] is how a stored frame becomes paddable at all: the frames with most to gain
+     * (a transcoded sealed tick) have no compressible bytes left, so deflating them is a *cost*. It is a small,
+     * fixed one — and that is what makes the trade against a 66-byte firmware signature worth taking.
+     */
+    @Test
+    fun aStoredFrameCanBeReDeflatedForAFixedFiveBytesAndStillRoundTrips() {
+        for (stored in listOf(
+            checkNotNull(FastFrameCodec.encodeCompact(wire(signed = rng.nextBytes(120)))),
+            checkNotNull(FastFrameCodec.encodeTranscoded(wire(signed = incompressibleCbor()))),
+        )) {
+            assertFalse("fixture must store", FastFrameCodec.deflated(stored))
+            val forced = checkNotNull(FastFrameCodec.deflatedForm(stored)) { "tag ${stored[0]}" }
+            assertTrue("it is now paddable", FastFrameCodec.deflated(forced))
+            assertEquals("deflate framing over incompressible bytes costs exactly five bytes", stored.size + 5, forced.size)
+            val original = checkNotNull(FastFrameCodec.decodeCompact(stored))
+            val decoded = checkNotNull(FastFrameCodec.decodeCompact(forced + ByteArray(4)))
+            assertArrayEquals("sig survives the re-encode and a pad", original.sig, decoded.sig)
+            assertArrayEquals("and so does signed", original.signed, decoded.signed)
+            assertEquals(stored[0], forced[0])
+            assertNull("an already-deflated frame has nothing to convert", FastFrameCodec.deflatedForm(forced))
+        }
+    }
+
+    /** The other half of the pad's gate: a stored body has no end marker, so the sender must never pad one. */
+    @Test
+    fun aStoredFrameIsNotReportedAsPaddable() {
+        val stored = checkNotNull(FastFrameCodec.encodeCompact(wire(signed = rng.nextBytes(120))))
+        assertFalse("random bytes store rather than deflate", FastFrameCodec.deflated(stored))
+        assertFalse(
+            "a fragment is never paddable — its flags belong to the frame inside it",
+            FastFrameCodec.deflated(byteArrayOf(FastFrameCodec.TAG_FRAG, 0x02)),
+        )
+        assertFalse("and neither is something too short to have flags", FastFrameCodec.deflated(byteArrayOf(FastFrameCodec.TAG_COMPACT)))
     }
 
     @Test

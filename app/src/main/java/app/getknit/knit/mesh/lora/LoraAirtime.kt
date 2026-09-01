@@ -35,6 +35,22 @@ internal enum class AirBucket {
     }
 }
 
+/**
+ * How a caller prices a packet on the air, and what it would rather the packet weighed. [LoraAirtime] is the
+ * implementation that matters; the interface exists so [LoraFrameCodec] can stay pure — priced against a fake
+ * in its own tests, and against nothing at all (null) by a caller with no board to price for.
+ */
+internal interface PacketCost {
+    /** Milliseconds [payloadBytes] will occupy the medium, the firmware's own signature included. */
+    fun timeOnAirMs(payloadBytes: Int): Long
+
+    /** The size [payloadBytes] is *cheaper* at, or [payloadBytes] itself; [cap] is the board's payload limit. */
+    fun padTo(
+        payloadBytes: Int,
+        cap: Int,
+    ): Int
+}
+
 /** A read-only view of the governor for the settings row and the `…debug.LORA` dump. */
 internal data class AirtimeSnapshot(
     val preset: ModemPreset,
@@ -89,7 +105,8 @@ internal data class AirtimeSnapshot(
  * enough to still fit one ([MeshtasticProto.MAX_SIGNED_PAYLOAD]). Knit neither asks for that nor can decline
  * it, but it is real air, and unbudgeted it lands hardest on exactly the frames ADR 060 shrank into one
  * packet — a 157-byte transcoded tick is 36 % more air than this class used to charge for. So
- * [timeOnAirMs] adds the signature itself, gated on the board's firmware ([signsPackets]).
+ * [timeOnAirMs] adds the signature itself, gated on the board's firmware ([signsPackets]) — and [padTo]
+ * turns the same cliff back into a saving, since a packet grown one byte past it sheds all 66 (ADR 2026-09.mhs5).
  *
  * Those two ceilings are **independent**, which is what [dedicatedUnlocksDuty] turns on (ADR 067, debug
  * builds only). The regional duty cycle is law and only the firmware's own `override_duty_cycle` escape
@@ -111,7 +128,7 @@ internal class LoraAirtime(
      * today even against a board somebody pinned by hand in the Meshtastic app.
      */
     private val dedicatedUnlocksDuty: Boolean = false,
-) {
+) : PacketCost {
     private class Sample(
         val atMs: Long,
         val ms: Long,
@@ -152,7 +169,7 @@ internal class LoraAirtime(
      * covers the Meshtastic header and protobuf/crypto framing around it. This is a governor's estimate, not
      * a measurement — it does not know the board's preamble length or whether a rebroadcaster repeated us.
      */
-    fun timeOnAirMs(payloadBytes: Int): Long {
+    override fun timeOnAirMs(payloadBytes: Int): Long {
         val preset = radio?.modemPreset ?: ModemPreset.LONG_FAST
         val sf = preset.spreadFactor
         val symbolMs = 2.0.pow(sf) * MS_PER_SECOND / preset.bandwidthHz
@@ -172,6 +189,30 @@ internal class LoraAirtime(
      */
     private fun signatureBytes(payloadBytes: Int): Int =
         if (signing && payloadBytes <= MeshtasticProto.MAX_SIGNED_PAYLOAD) MeshtasticProto.XEDDSA_SIGNATURE_FIELD else 0
+
+    /**
+     * The size to grow a [payloadBytes] packet to so the firmware will **not** sign it, or [payloadBytes]
+     * itself when that trade does not pay (ADR 2026-09.mhs5). [cap] is the largest `Data.payload` this board takes.
+     *
+     * The gate the firmware applies is a cliff, so the packets just under it pay a 66-byte signature that a
+     * packet one byte larger does not — a 165-byte payload and a 231-byte one cost the same air. Padding past
+     * the cliff buys that back for the width of the pad, and the comparison is made with [timeOnAirMs] rather
+     * than in bytes so it is exact at the board's own preset and symbol quantization. Everything else falls
+     * out of that one comparison: a board that does not sign ([signing] false) never sees a saving, and
+     * neither does a packet already over the cliff.
+     *
+     * The **caller** owes the other half of the bargain — pad only a frame whose body is a deflate stream
+     * ([app.getknit.knit.mesh.link.FastFrameCodec.deflated]), the only form where a receiver ignores the
+     * trailing bytes.
+     */
+    override fun padTo(
+        payloadBytes: Int,
+        cap: Int,
+    ): Int {
+        val target = MeshtasticProto.MAX_SIGNED_PAYLOAD + 1
+        if (payloadBytes >= target || target > cap) return payloadBytes
+        return if (timeOnAirMs(target) < timeOnAirMs(payloadBytes)) target else payloadBytes
+    }
 
     /**
      * The window's allowance, in milliseconds of air, before the per-bucket split — the lower of the two

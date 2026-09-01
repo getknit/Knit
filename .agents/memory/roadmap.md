@@ -96,11 +96,15 @@ doc). **Don't start a deferred item without explicit direction.**
   the 66-byte XEdDSA signature 2.8 bolts onto any broadcast under 165 B (gated on the board's firmware),
   `ModemPreset` names codes 9–16 (`LongTurbo` is 2.8's new US default and is deaf to `LongFast`), `LoraRegion`
   names the duty-limited regions that were collapsing into `OTHER`'s 100 % (`EU_866` 2.5 %, `EU_N_868` 10 %,
-  `TH` 10 %), and the LoRa screen warns on a preset mismatch beside the renamed-primary warning. **Still
-  owed:** a 2.8 board on the bench — re-measure the payload cap, confirm the signature lands where the cliff
-  predicts, and re-run the provisioning transaction (2.8 calls `disableBluetooth()` at `commit_edit_settings`);
-  and a decision on whether the setup should write `packet_signature_policy = COMPATIBLE`, since `STRICT`
-  silently drops every Knit frame over the cliff. Still deferred
+  `TH` 10 %), and the LoRa screen warns on a preset mismatch beside the renamed-primary warning. **Bench-verified on a
+  Heltec V4 / 2.8.0.7239fe8 (2026-08-31):** a wiped US board really does come up `LONG_TURBO`; the signature
+  cliff is at **exactly 165 B** and `LoraAirtime` now matches the firmware's own `Packet TX:` figure to
+  **≤ 1 ms** across 140–231 B; the payload cap is **still 231**; and ADR 045's provisioning transaction is
+  intact, with `Config.lora` byte-identical before and after (its "never writes the radio" promise, on
+  hardware). **Still owed:** a decision on `packet_signature_policy` (defaults to `COMPATIBLE`, so nothing is
+  broken — but a user who picks `STRICT` silently loses every frame over the cliff); `BoardName.stock`, which
+  computes the fallback name from the node number while 2.8's default name is still MAC-derived; and a second
+  board for the receive half. Full write-up in the private overlay. Still deferred
   here: an **IBLT/Bloom offer body** (48 prefixes is a window — the upgrade if a busy pocket's oldest frames
   start falling off it), **acknowledged backfill** (a served frame lost to the air waits for the next round),
   and **faster passive-to-active takeover** when an active gateway's phone dies without leaving

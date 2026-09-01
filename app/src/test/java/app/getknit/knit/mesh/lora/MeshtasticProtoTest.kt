@@ -343,6 +343,48 @@ class MeshtasticProtoTest {
     }
 
     @Test
+    fun the28PresetsAreNamedRatherThanFallingBackToLongFast() {
+        // Falling back is right for a preset that does not exist yet and wrong for one that does: LONG_FAST's
+        // parameters would have priced LongTurbo's airtime and counted its RF slots at twice the real number.
+        assertEquals(ModemPreset.LONG_TURBO, ModemPreset.fromCode(9))
+        assertEquals(ModemPreset.LITE_FAST, ModemPreset.fromCode(10))
+        assertEquals(ModemPreset.LITE_SLOW, ModemPreset.fromCode(11))
+        assertEquals(ModemPreset.NARROW_FAST, ModemPreset.fromCode(12))
+        assertEquals(ModemPreset.NARROW_SLOW, ModemPreset.fromCode(13))
+        assertEquals(ModemPreset.TINY_FAST, ModemPreset.fromCode(14))
+        assertEquals(ModemPreset.TINY_SLOW, ModemPreset.fromCode(15))
+        assertEquals(ModemPreset.MEDIUM_TURBO, ModemPreset.fromCode(16))
+        // The one that matters: 500 kHz at CR 4/8, which is why a US board that took 2.8's new default is
+        // deaf to every LongFast board and costs a different amount of air.
+        assertEquals(500_000, ModemPreset.LONG_TURBO.bandwidthHz)
+        assertEquals(8, ModemPreset.LONG_TURBO.codingRate)
+        assertEquals("LongTurbo", ModemPreset.LONG_TURBO.defaultChannelName)
+    }
+
+    @Test
+    fun the28DutyLimitedRegionsAreNamedRatherThanCollapsingIntoOther() {
+        // OTHER means "100 % duty", so a duty-limited region that lands there is granted an allowance the law
+        // does not: forty times the legal one for EU_866.
+        assertEquals(LoraRegion.EU_866, LoraRegion.fromCode(29))
+        assertEquals(LoraRegion.EU_N_868, LoraRegion.fromCode(32))
+        assertEquals(LoraRegion.TH, LoraRegion.fromCode(12))
+        assertEquals(2.5, LoraRegion.EU_866.dutyCyclePercent, 0.0)
+        assertEquals(10.0, LoraRegion.EU_N_868.dutyCyclePercent, 0.0)
+        assertEquals(10.0, LoraRegion.TH.dutyCyclePercent, 0.0)
+    }
+
+    @Test
+    fun aRegionsStockPresetIsStatedOnlyWhereKnitKnowsItExactly() {
+        // The convergence warning is built on this, so a guess here is a warning shown to somebody whose
+        // board is fine. OTHER buckets the ham regions (TinyFast/NarrowSlow) in with the LongFast ones.
+        assertEquals(ModemPreset.LONG_FAST, LoraRegion.US.defaultPreset)
+        assertEquals(ModemPreset.LONG_FAST, LoraRegion.EU_868.defaultPreset)
+        assertEquals(ModemPreset.LITE_FAST, LoraRegion.EU_866.defaultPreset)
+        assertEquals(ModemPreset.NARROW_SLOW, LoraRegion.EU_N_868.defaultPreset)
+        assertNull(LoraRegion.OTHER.defaultPreset)
+    }
+
+    @Test
     fun decodeRebooted() {
         assertEquals(FromRadio.Rebooted, MeshtasticProto.decodeFromRadio(hex("40 01")))
     }
@@ -540,7 +582,26 @@ class MeshtasticProtoTest {
         // DATA_PAYLOAD_LEN (233) assumes a one-byte portnum, and PRIVATE_APP takes two.
         assertEquals(6, MeshtasticProto.DATA_FRAMING)
         assertEquals(231, MeshtasticProto.MAX_PAYLOAD)
+        assertEquals(237, MeshtasticProto.LORA_DATA_MAX)
         assertEquals(MeshtasticProto.LORA_DATA_MAX, MeshtasticProto.MAX_PAYLOAD + MeshtasticProto.DATA_FRAMING)
         assertTrue(MeshtasticProto.MAX_PAYLOAD < MeshtasticProto.DATA_PAYLOAD_LEN)
+        // The firmware's own budget is 239 (MAX_LORA_PAYLOAD_LEN 255 less the 16-byte header); the two bytes
+        // between that and what the lab measured are the bitfield it fills in after us.
+        assertEquals(239, MeshtasticProto.DATA_ENCODED_MAX)
+    }
+
+    @Test
+    fun theSignatureCliffIsWhereTheFirmwareStopsBeingAbleToFitOne() {
+        // Mirrors Router.cpp's signedDataFits: 2.8 signs what still fits signed and sends the rest unsigned,
+        // so this is a cliff, not a ramp — and it falls between ADR 060's one-packet tick and its one-packet
+        // DM tick, which is exactly why the airtime budget has to know about it.
+        assertEquals(66, MeshtasticProto.XEDDSA_SIGNATURE_FIELD)
+        assertEquals(165, MeshtasticProto.MAX_SIGNED_PAYLOAD)
+        assertTrue(MeshtasticProto.MAX_SIGNED_PAYLOAD < MeshtasticProto.MAX_PAYLOAD)
+        // A payload at the cliff plus its signature is exactly what the firmware's TX path allows.
+        assertEquals(
+            MeshtasticProto.DATA_ENCODED_MAX,
+            MeshtasticProto.MAX_SIGNED_PAYLOAD + MeshtasticProto.DATA_FRAMING + 2 + MeshtasticProto.XEDDSA_SIGNATURE_FIELD,
+        )
     }
 }

@@ -47,7 +47,10 @@ internal object LoraSlot {
     ): Int {
         val bandKhz = region.bandWidthKhz
         if (bandKhz <= 0) return 0
-        return bandKhz / (preset.bandwidthHz / HZ_PER_KHZ)
+        // In Hz, not kHz: since 2.8 the preset list includes bandwidths that are not a whole number of
+        // kilohertz (TinyFast/TinySlow are 15.6, the narrow pair 62.5), and truncating those to kHz first
+        // would count slots the band does not have.
+        return bandKhz * HZ_PER_KHZ / preset.bandwidthHz
     }
 
     /**

@@ -36,6 +36,17 @@ data class BoardOption(
     val selected: Boolean,
 )
 
+/**
+ * A board on a modem preset other than the one a stock board in its region picks. Two radios on different
+ * presets are mutually deaf, so this board meets no other Knit board however well it is set up — the same
+ * total, silent failure a renamed primary causes, and the one 2.8 made likely by defaulting new US boards to
+ * `LongTurbo`. Both names are the firmware's own, so they read exactly as the Meshtastic app writes them.
+ */
+data class PresetMismatch(
+    val board: String,
+    val stock: String,
+)
+
 /** How the LoRa link is doing, as a UI-facing enum decoupled from the internal link state. */
 enum class LoraConnState { Off, Connecting, Ready, Reconnecting, NeedsPairing, Unavailable }
 
@@ -101,6 +112,12 @@ data class LoraRadioUiState(
      * it is the one thing worth saying out loud on this screen.
      */
     val customPrimary: Boolean = false,
+    /**
+     * The board is on a preset no other Knit board in its region will be on — see [PresetMismatch]. Null
+     * whenever there is nothing to say, which includes every region whose stock preset Knit does not claim
+     * to know exactly ([app.getknit.knit.mesh.lora.LoraRegion.defaultPreset]).
+     */
+    val presetMismatch: PresetMismatch? = null,
     val boards: List<BoardOption> = emptyList(),
     /** Bonded devices the picker hides as not board-like (`BoardFilter`); the "show all" toggle reveals them. */
     val hiddenBoards: Int = 0,
@@ -200,6 +217,7 @@ internal class LoraRadioViewModel(
                 // gets the benefit of the doubt, exactly as an unreadable channel table does.
                 needsRename = setUp && wanted != null && ready?.board?.owner?.let { it != wanted } == true,
                 customPrimary = ready?.let { isCustomPrimary(it) } == true,
+                presetMismatch = ready?.let(::presetMismatch),
                 confirmSetup = provision.confirm,
                 boards =
                     BoardFilter
@@ -227,6 +245,20 @@ internal class LoraRadioViewModel(
         val preset = ready.radio?.modemPreset ?: return false
         val primary = ready.channels.firstOrNull { it.index == 0 } ?: return false
         return primary.name.isNotEmpty() && primary.name != preset.defaultChannelName
+    }
+
+    /**
+     * Whether the board sits on a different modem preset from the one every other board in its region picks
+     * by itself, and so — like a renamed primary — will never meet another Knit board. Silent on the two
+     * cases where the answer would be a guess: a region whose stock preset Knit does not state exactly, and a
+     * board on hand-rolled radio settings, whose `modem_preset` field says nothing about what it transmits.
+     */
+    private fun presetMismatch(ready: LinkState.Ready): PresetMismatch? {
+        val radio = ready.radio ?: return null
+        if (!radio.usePreset) return null
+        val stock = radio.region.defaultPreset ?: return null
+        if (radio.modemPreset == stock) return null
+        return PresetMismatch(board = radio.modemPreset.defaultChannelName, stock = stock.defaultChannelName)
     }
 
     /**

@@ -76,8 +76,18 @@ Golden byte vectors pin every field number; malformed input decodes to null, nev
   want_ack=false}`. NAKs: portnum ROUTING_APP(5), `request_id` = our id, `error_reason` (NO_CHANNEL 6,
   TOO_LARGE 7, DUTY_CYCLE_LIMIT 9, RATE_LIMIT_EXCEEDED 38) — counted per reason as `loraNakByReason`.
 - The router transmits at most a **237-byte `Data`** (`MeshtasticProto.LORA_DATA_MAX`, measured 2026-08-29 on a
-  Heltec V4 / 2.7.26 with `…debug.LORATX`: a 231-byte payload queues, 232 and 233 NAK `TOO_LARGE`). The ATT
+  Heltec V4 / 2.7.26 with `…debug.LORATX`: a 231-byte payload queues, 232 and 233 NAK `TOO_LARGE`). The
+  firmware's own budget is 239 (`MAX_LORA_PAYLOAD_LEN` 255 − the 16-byte header, `MeshtasticProto.DATA_ENCODED_MAX`);
+  the two-byte gap the lab measured is `Data.bitfield`, which `Router::perhapsEncode` fills in after us. The ATT
   MTU is the *other* limit (`mtu − 27` at MTU 255 = 228); the effective cap is the smaller of the two.
+- **Firmware 2.8 signs the broadcasts it sends for us.** `Router::perhapsEncode` attaches a 64-byte XEdDSA
+  signature (`Data.xeddsa_signature`, +66 B with framing) to any non-PKI broadcast it originates that still
+  fits signed — so a Knit payload **≤ 165 B** (`MeshtasticProto.MAX_SIGNED_PAYLOAD`) grows by 66 B on the air
+  and a larger one goes unsigned exactly as before. It is a cliff, not a ramp, and it falls between ADR 060's
+  one-packet room tick (157 B, +36 % air) and its one-packet DM ✓✓ (221 B, unchanged). Knit cannot ask for it
+  or decline it; `LoraAirtime` charges for it. Receiving is unaffected while
+  `Config.SecurityConfig.packet_signature_policy` is at its `COMPATIBLE` default — under `STRICT` a board
+  drops every unsigned packet, which is every Knit frame over the cliff.
 
 ## Key bootstrap (the far side has never seen the author's profile)
 
@@ -119,7 +129,9 @@ must never need an event to recover. Closes ADR 038's "one board per clique" res
 > gap between heard and linked is visible rather than inferred.
 
 **An airtime governor.** `LoraAirtime` (pure): time-on-air from the LoRa formula at the board's own preset
-(231 B at LongFast ≈ 2 s), a rolling **15-minute window** (ADR 054 — it was an hour, and a burst of chat then
+(231 B at LongFast ≈ 2 s) **plus the signature 2.8 adds to anything under the cliff** — gated on the board's
+firmware (`LoraAirtime.signsPackets`, from the handshake's `DeviceMetadata`; unknown reads as signing, since
+under-charging can cost compliance where over-charging only costs throughput), a rolling **15-minute window** (ADR 054 — it was an hour, and a burst of chat then
 blacked the plane out for the rest of it; the hourly total is unchanged, the worst straddling hour ≤ 6.25 %),
 and one allowance = `min(region duty cycle, 10 % politeness) × 0.5` of the window — **45 s of air at LongFast**.
 Those two ceilings are computed **independently** (ADR 067): the regional duty cycle is law and only the
@@ -272,8 +284,13 @@ out-of-band via a channel QR/URL) is deferred — see `roadmap.md`.
 > plane whose whole job is reach. (ADR 038 claimed the *channel* kept Knit off LongFast; it never did, and
 > ADR 045 decided it should not.)
 >
-> **The catch: convergence rests on the primary.** Two boards meet only if their primary names hash alike —
-> automatic for stock boards, false for anyone who renamed theirs. `LoraRadioUiState.customPrimary` warns.
+> **The catch: convergence rests on the primary — and on the preset.** Two boards meet only if their primary
+> names hash alike (automatic for stock boards, false for anyone who renamed theirs) *and* they are on the same
+> modem preset, since two presets are mutually deaf. 2.8 made the second one likely by defaulting freshly
+> flashed **US** boards to `LongTurbo` where they used to pick `LongFast`. `LoraRadioUiState.customPrimary`
+> warns about the first, `LoraRadioUiState.presetMismatch` about the second — the latter off
+> `LoraRegion.defaultPreset`, which like `bandStartKhz` is stated only where Knit knows it exactly, so
+> `OTHER` (which buckets the ham carve-outs and their `TinyFast`/`NarrowSlow` defaults) simply stays quiet.
 
 ## Setting a board up (ADR 045)
 

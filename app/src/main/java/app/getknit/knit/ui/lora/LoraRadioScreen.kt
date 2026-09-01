@@ -376,6 +376,16 @@ private fun SetupSection(
                 modifier = Modifier.testTag("lora_custom_primary"),
             )
         }
+        // The other way a well-configured board still meets nobody: two radios on different presets cannot
+        // hear each other at all. Firmware 2.8 made that likely by defaulting new US boards to LongTurbo.
+        state.presetMismatch?.let { mismatch ->
+            Text(
+                text = stringResource(R.string.lora_preset_mismatch_warning, mismatch.board, mismatch.stock),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("lora_preset_mismatch"),
+            )
+        }
         // Until it is done, this is the emphasized button on the screen; afterwards all that is left is the
         // way back out, which never wants emphasis.
         if (state.boardSetUp) {

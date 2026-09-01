@@ -246,4 +246,87 @@ class LoraAirtimeTest {
         assertTrue(air.snapshot(0L).dedicated)
         assertFalse(LoraAirtime().apply { onRadioConfig(radio(region = LoraRegion.US)) }.snapshot(0L).dedicated)
     }
+
+    @Test
+    fun signingIsFirmware28AndAnythingItCannotReadIsChargedForAnyway() {
+        assertTrue(LoraAirtime.signsPackets("2.8.0.7239fe8"))
+        assertTrue(LoraAirtime.signsPackets("2.9.1.abc"))
+        assertTrue(LoraAirtime.signsPackets("3.0.0"))
+        assertFalse(LoraAirtime.signsPackets("2.7.26.b246bcd"))
+        assertFalse(LoraAirtime.signsPackets("2.5.0"))
+        assertFalse(LoraAirtime.signsPackets("1.9.9"))
+        // Unknown has to be the expensive reading: under-charging against firmware that signs spends air the
+        // budget never allowed for, and in a duty-limited region that is law rather than manners.
+        assertTrue(LoraAirtime.signsPackets(null))
+        assertTrue(LoraAirtime.signsPackets(""))
+        assertTrue(LoraAirtime.signsPackets("unknown"))
+        assertTrue(LoraAirtime.signsPackets("2"))
+    }
+
+    @Test
+    fun a28BoardIsChargedForTheSignatureItAddsToOurSmallPackets() {
+        val old =
+            LoraAirtime().apply {
+                onRadioConfig(radio())
+                onFirmware("2.7.26.b246bcd")
+            }
+        val new =
+            LoraAirtime().apply {
+                onRadioConfig(radio())
+                onFirmware("2.8.0.7239fe8")
+            }
+        // ADR 060's transcoded room tick: one packet either way, but 66 bytes more of it on 2.8.
+        val tick = 157
+        assertTrue(
+            "2.8 must cost more air for a $tick B tick (${new.timeOnAirMs(tick)} vs ${old.timeOnAirMs(tick)})",
+            new.timeOnAirMs(tick) > old.timeOnAirMs(tick),
+        )
+        assertEquals(old.timeOnAirMs(tick + MeshtasticProto.XEDDSA_SIGNATURE_FIELD), new.timeOnAirMs(tick))
+    }
+
+    @Test
+    fun aPacketTooBigToSignCostsTheSameOnEitherFirmware() {
+        val old =
+            LoraAirtime().apply {
+                onRadioConfig(radio())
+                onFirmware("2.7.26.b246bcd")
+            }
+        val new =
+            LoraAirtime().apply {
+                onRadioConfig(radio())
+                onFirmware("2.8.0.7239fe8")
+            }
+        // Above the cliff the firmware sends it unsigned exactly as 2.7 did, so nothing is owed.
+        for (size in listOf(MeshtasticProto.MAX_SIGNED_PAYLOAD + 1, 221, MeshtasticProto.MAX_PAYLOAD)) {
+            assertEquals("$size B must cost the same", old.timeOnAirMs(size), new.timeOnAirMs(size))
+        }
+        // And at the cliff itself it is still signed.
+        assertTrue(new.timeOnAirMs(MeshtasticProto.MAX_SIGNED_PAYLOAD) > old.timeOnAirMs(MeshtasticProto.MAX_SIGNED_PAYLOAD))
+    }
+
+    @Test
+    fun theSurchargeComesOutOfTheWindowRatherThanBesideIt() {
+        // The point of charging for it at all: a 2.8 board must fit fewer ticks in a window, not the same
+        // number plus a note.
+        fun ticksPerWindow(firmware: String): Int {
+            val air =
+                LoraAirtime().apply {
+                    onRadioConfig(radio())
+                    onFirmware(firmware)
+                }
+            var n = 0
+            while (air.admits(AirBucket.LIVE, FrameClass.ROOM, listOf(157), 0L)) {
+                air.record(AirBucket.LIVE, 157, 0L)
+                n++
+            }
+            return n
+        }
+        assertTrue(ticksPerWindow("2.8.0.7239fe8") < ticksPerWindow("2.7.26.b246bcd"))
+    }
+
+    @Test
+    fun theSnapshotReportsWhetherTheSignatureIsBeingChargedFor() {
+        assertTrue(LoraAirtime().snapshot(0L).signing)
+        assertFalse(LoraAirtime().apply { onFirmware("2.7.26.b246bcd") }.snapshot(0L).signing)
+    }
 }

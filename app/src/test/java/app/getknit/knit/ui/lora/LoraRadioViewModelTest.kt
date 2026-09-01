@@ -315,6 +315,91 @@ class LoraRadioViewModelTest {
         }
 
     @Test
+    fun `a board on a preset its region does not default to is flagged, since two presets are mutually deaf`() =
+        runTest {
+            val vm = start()
+
+            fun connect(
+                preset: ModemPreset,
+                region: LoraRegion,
+                usePreset: Boolean = true,
+            ) {
+                status.value =
+                    LoraStatus(
+                        state =
+                            ready(listOf(ChannelInfo(0, "", 1), ChannelInfo(1, "Knit", 2)))
+                                .copy(radio = LoraRadioConfig(usePreset, preset, region, hopLimit = 3, overrideDutyCycle = false)),
+                    )
+            }
+
+            // 2.8's new US default: a board nobody on LongFast can hear.
+            connect(ModemPreset.LONG_TURBO, LoraRegion.US)
+            advanceUntilIdle()
+            assertEquals(PresetMismatch(board = "LongTurbo", stock = "LongFast"), vm.state.value.presetMismatch)
+
+            connect(ModemPreset.LONG_FAST, LoraRegion.US)
+            advanceUntilIdle()
+            assertNull(vm.state.value.presetMismatch)
+
+            // EU_866 defaults to LiteFast, so there the warning is the other way round.
+            connect(ModemPreset.LITE_FAST, LoraRegion.EU_866)
+            advanceUntilIdle()
+            assertNull(vm.state.value.presetMismatch)
+            connect(ModemPreset.LONG_FAST, LoraRegion.EU_866)
+            advanceUntilIdle()
+            assertEquals(PresetMismatch(board = "LongFast", stock = "LiteFast"), vm.state.value.presetMismatch)
+        }
+
+    @Test
+    fun `the preset warning stays quiet where the answer would be a guess`() =
+        runTest {
+            val vm = start()
+            // OTHER buckets regions with different stock presets (the ham carve-outs default to TinyFast), so
+            // there is nothing here Knit can say without risking a warning to somebody whose board is fine.
+            status.value =
+                LoraStatus(
+                    state =
+                        ready(listOf(ChannelInfo(1, "Knit", 2)))
+                            .copy(
+                                radio =
+                                    LoraRadioConfig(
+                                        usePreset = true,
+                                        ModemPreset.TINY_FAST,
+                                        LoraRegion.OTHER,
+                                        hopLimit = 3,
+                                        overrideDutyCycle = false,
+                                    ),
+                            ),
+                )
+            advanceUntilIdle()
+            assertNull(vm.state.value.presetMismatch)
+
+            // Hand-rolled radio settings: modem_preset says nothing about what the board actually transmits.
+            status.value =
+                LoraStatus(
+                    state =
+                        ready(listOf(ChannelInfo(1, "Knit", 2)))
+                            .copy(
+                                radio =
+                                    LoraRadioConfig(
+                                        usePreset = false,
+                                        ModemPreset.LONG_TURBO,
+                                        LoraRegion.US,
+                                        hopLimit = 3,
+                                        overrideDutyCycle = false,
+                                    ),
+                            ),
+                )
+            advanceUntilIdle()
+            assertNull(vm.state.value.presetMismatch)
+
+            // And a board that has not reported its radio config at all.
+            status.value = LoraStatus(state = ready(listOf(ChannelInfo(1, "Knit", 2))))
+            advanceUntilIdle()
+            assertNull(vm.state.value.presetMismatch)
+        }
+
+    @Test
     fun `a board carrying Knit in a secondary slot reads as set up`() =
         runTest {
             val vm = start()

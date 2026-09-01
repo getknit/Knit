@@ -19,13 +19,29 @@ internal object MeshtasticProto {
     const val DATA_PAYLOAD_LEN = 233
 
     /**
-     * The largest encoded `Data` message the firmware's router will transmit — `MAX_RHPACKETLEN` (256) minus
-     * the 16-byte packet header minus 3. Measured on a Heltec V4 on 2.7.26 (2026-08-29): a 231-byte
-     * `PRIVATE_APP` payload (237-byte `Data`) is queued, 232 and 233 come back `Routing.error_reason =
-     * TOO_LARGE`. Every packet that ever NAKed `TOO_LARGE` on the lab boards was one chunked at
+     * The largest encoded `Data` the firmware's TX path allows: `MAX_LORA_PAYLOAD_LEN` (255) less
+     * `MESHTASTIC_HEADER_LENGTH` (16), both from `RadioInterface.h`. This is the budget the *firmware*
+     * measures against, and it counts [DATA_BITFIELD_BYTES] that Knit never writes — see [LORA_DATA_MAX].
+     */
+    const val DATA_ENCODED_MAX = 239
+
+    /**
+     * `Data.bitfield` (field 9), which the firmware fills in on every packet it originates on our behalf
+     * (`Router::perhapsEncode`) — an optional varint whose value is 0 for us, so tag + value = 2 bytes. Knit
+     * never encodes it, but it lands on the air inside our budget, which is why it is subtracted here rather
+     * than left as slack.
+     */
+    private const val DATA_BITFIELD_BYTES = 2
+
+    /**
+     * The largest encoded `Data` **Knit** may hand the board. [DATA_ENCODED_MAX] less the bitfield the
+     * firmware adds after us. This is exactly what the lab measured on a Heltec V4 on 2.7.26 (2026-08-29) —
+     * a 231-byte `PRIVATE_APP` payload (237-byte `Data`) is queued, 232 and 233 come back
+     * `Routing.error_reason = TOO_LARGE` — so the two byte gap that used to be unexplained slack is the
+     * bitfield. Every packet that ever NAKed `TOO_LARGE` on the lab boards was one chunked at
      * [DATA_PAYLOAD_LEN].
      */
-    const val LORA_DATA_MAX = 237
+    const val LORA_DATA_MAX = DATA_ENCODED_MAX - DATA_BITFIELD_BYTES
 
     /** What `Data` adds around a maximum payload: the two-byte private portnum and the payload's tag + length. */
     val DATA_FRAMING: Int =
@@ -38,6 +54,28 @@ internal object MeshtasticProto {
 
     /** `Data.payload`'s hard cap on the air for a Knit packet: [LORA_DATA_MAX] less [DATA_FRAMING] — 231. */
     val MAX_PAYLOAD: Int = LORA_DATA_MAX - DATA_FRAMING
+
+    /**
+     * What `Data.xeddsa_signature` (field 10) costs on the air: the firmware's `XEDDSA_SIGNATURE_FIELD_BYTES`
+     * — 64 signature bytes plus their one-byte tag and one-byte length.
+     *
+     * Firmware 2.8 signs every broadcast it originates, ours included (`Router::perhapsEncode`: not
+     * PKI-encrypted, `isBroadcast(to)`, and it fits). Knit never asks for this and cannot decline it — the
+     * board owns signing for packets it sends — so for the plane it is simply 66 bytes of airtime that
+     * [app.getknit.knit.mesh.lora.LoraAirtime] must charge for. See [MAX_SIGNED_PAYLOAD].
+     */
+    const val XEDDSA_SIGNATURE_FIELD = 66
+
+    /**
+     * The largest `Data.payload` the firmware will still fit a signature onto, mirroring its own
+     * `signedDataFits` gate (`Router.cpp`): the encoded `Data` **with** the signature must clear
+     * [DATA_ENCODED_MAX]. Above this the packet simply goes unsigned rather than failing — which is why a
+     * full-size Knit fragment costs nothing extra and a small one costs [XEDDSA_SIGNATURE_FIELD].
+     *
+     * The cliff lands awkwardly for the frames ADR 060 worked hardest to shrink: a transcoded room tick
+     * (157 B) is under it and pays the surcharge, while a signed DM ✓✓ (221 B) is over it and does not.
+     */
+    val MAX_SIGNED_PAYLOAD: Int = DATA_ENCODED_MAX - DATA_FRAMING - DATA_BITFIELD_BYTES - XEDDSA_SIGNATURE_FIELD
 
     /**
      * The bytes a `ToRadio { packet }` wraps around a maximum `Data.payload`, measured by encoding one
@@ -915,6 +953,8 @@ internal enum class ModemPreset(
 ) {
     LONG_FAST(0, 11, 250_000, 5, "LongFast"),
     LONG_SLOW(1, 12, 125_000, 8, "LongSlow"),
+
+    /** Deprecated in the protobuf and dropped from the firmware's name table, which now calls it "Invalid". */
     VERY_LONG_SLOW(2, 12, 62_500, 8, "VeryLongSlow"),
     MEDIUM_SLOW(3, 10, 250_000, 5, "MediumSlow"),
     MEDIUM_FAST(4, 9, 250_000, 5, "MediumFast"),
@@ -922,6 +962,26 @@ internal enum class ModemPreset(
     SHORT_FAST(6, 7, 250_000, 5, "ShortFast"),
     LONG_MODERATE(7, 11, 125_000, 8, "LongMod"),
     SHORT_TURBO(8, 7, 500_000, 5, "ShortTurbo"),
+
+    /**
+     * What a **freshly flashed US board picks on 2.8** where it used to pick [LONG_FAST], and the reason the
+     * rest of this list stopped being optional: the two cannot hear each other, so a board on this preset
+     * meets no Knit board on the other however well it is set up (see [LoraRegion.defaultPreset]).
+     */
+    LONG_TURBO(9, 11, 500_000, 8, "LongTurbo"),
+
+    // The EU 2.8 additions. Not reachable from a stock EU_868 board — each belongs to a sibling region whose
+    // preset list is disjoint (`PROFILE_LITE` / `PROFILE_NARROW`) — but a board in one of those regions
+    // reports them, and a preset Knit cannot name is one whose time-on-air it computes wrong.
+    LITE_FAST(10, 9, 125_000, 5, "LiteFast"),
+    LITE_SLOW(11, 10, 125_000, 5, "LiteSlow"),
+    NARROW_FAST(12, 7, 62_500, 6, "NarrowFast"),
+    NARROW_SLOW(13, 8, 62_500, 6, "NarrowSlow"),
+
+    /** The ham 20 kHz presets: 15.6 kHz on the air, which the firmware pads out to a 20 kHz slot. */
+    TINY_FAST(14, 7, 15_600, 5, "TinyFast"),
+    TINY_SLOW(15, 8, 15_600, 6, "TinySlow"),
+    MEDIUM_TURBO(16, 9, 500_000, 5, "MediumTurbo"),
     ;
 
     companion object {
@@ -941,6 +1001,12 @@ internal enum class ModemPreset(
  * stated only where it is known exactly, [OTHER] carries none — it is a bucket of regions with different
  * bands, and the narrowest of them (RU, ~0.5 MHz) has no room to move — and [LoraSlot] refuses everything it
  * cannot place. Everything else about a region, the duty cycle included, is unaffected by this.
+ *
+ * [defaultPreset] follows the same "stated only where it is known exactly" rule, for the same reason: it
+ * exists to warn a user whose board will not meet other Knit boards (ADR 045 rests on every board landing on
+ * the stock frequency by itself), and a guess there is a warning shown to somebody with nothing wrong. So
+ * [OTHER] carries none — it buckets the ham regions, whose defaults are `TinyFast`/`NarrowSlow`, together
+ * with the LongFast ones — and the warning simply stays quiet there.
  */
 @Suppress("MagicNumber") // the numbers ARE meshtastic's RegionCode wire codes and the band edges in kHz
 internal enum class LoraRegion(
@@ -950,12 +1016,29 @@ internal enum class LoraRegion(
     val bandStartKhz: Int = 0,
     /** Band end in kHz, or 0 alongside a 0 [bandStartKhz]. */
     val bandEndKhz: Int = 0,
+    /**
+     * The preset a stock board in this region picks for itself (`RegionInfo::defaultPreset`), or null where
+     * Knit will not claim to know. A board on any other preset is deaf to every board on this one.
+     */
+    val defaultPreset: ModemPreset? = ModemPreset.LONG_FAST,
 ) {
     UNSET(0, DUTY_LIMITED_PERCENT),
     EU_433(2, DUTY_LIMITED_PERCENT),
     EU_868(3, DUTY_LIMITED_PERCENT),
     UA_433(14, DUTY_LIMITED_PERCENT),
+
+    /** Deprecated in the protobuf and gone from the firmware's region table; still reported by 2.7 boards. */
     UA_868(15, DUTY_LIMITED_PERCENT),
+
+    /** Thailand, 10 % — duty-limited since long before 2.8 and missed here until the 2.8 audit. */
+    TH(12, DUTY_LIMITED_PERCENT),
+
+    /**
+     * 2.8's EU siblings on the 868 band, both duty-limited and neither defaulting to LongFast. Collapsing
+     * these into [OTHER] granted them the 100 % allowance, which for [EU_866] is forty times the legal one.
+     */
+    EU_866(29, EU_866_DUTY_PERCENT, defaultPreset = ModemPreset.LITE_FAST),
+    EU_N_868(32, DUTY_LIMITED_PERCENT, defaultPreset = ModemPreset.NARROW_SLOW),
 
     /** 902–928 MHz: 104 slots at LongFast's 250 kHz, which is what makes a dedicated slot worth having. */
     US(1, 100.0, bandStartKhz = 902_000, bandEndKhz = 928_000),
@@ -963,8 +1046,8 @@ internal enum class LoraRegion(
     /** 915–928 MHz: 52 slots at 250 kHz. */
     ANZ(6, 100.0, bandStartKhz = 915_000, bandEndKhz = 928_000),
 
-    /** Every remaining region the firmware runs at 100 % duty (JP, IN, RU, …); named once rather than enumerated. */
-    OTHER(-1, 100.0),
+    /** Every remaining region the firmware runs at 100 % duty (JP, IN, RU, the ham carve-outs, …). */
+    OTHER(-1, 100.0, defaultPreset = null),
     ;
 
     /** How wide the band is, in kHz; 0 where Knit does not know it (see [bandStartKhz]). */
@@ -977,6 +1060,9 @@ internal enum class LoraRegion(
 
 /** The duty cycle the firmware enforces in the ETSI-style regions above. */
 private const val DUTY_LIMITED_PERCENT = 10.0
+
+/** EU_866's own limit (2.5 %), the tightest the firmware enforces anywhere. */
+private const val EU_866_DUTY_PERCENT = 2.5
 
 /**
  * `Routing.Error` values (`meshtastic/mesh.proto`), pinned by number. [UNKNOWN] catches a future code so a

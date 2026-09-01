@@ -92,7 +92,15 @@ doc). **Don't start a deferred item without explicit direction.**
   the board), a 15-min budget window at the same 5 %, a `TICK` class that sheds first and never spends a
   window's tail, coalesced DM receipts (`DmAckCoalescer`, ≤ 45 s hold, one tick per burst) piggybacked on a
   reply behind `CAP_INLINE_ACK`, and the saturated-chat notice. **Still owed:** its three-phone trial
-  (`context/lora-bridge.md`). Still deferred
+  (`context/lora-bridge.md`). **Meshtastic 2.8 caught up with** (2026-08-31): `LoraAirtime` now charges for
+  the 66-byte XEdDSA signature 2.8 bolts onto any broadcast under 165 B (gated on the board's firmware),
+  `ModemPreset` names codes 9–16 (`LongTurbo` is 2.8's new US default and is deaf to `LongFast`), `LoraRegion`
+  names the duty-limited regions that were collapsing into `OTHER`'s 100 % (`EU_866` 2.5 %, `EU_N_868` 10 %,
+  `TH` 10 %), and the LoRa screen warns on a preset mismatch beside the renamed-primary warning. **Still
+  owed:** a 2.8 board on the bench — re-measure the payload cap, confirm the signature lands where the cliff
+  predicts, and re-run the provisioning transaction (2.8 calls `disableBluetooth()` at `commit_edit_settings`);
+  and a decision on whether the setup should write `packet_signature_policy = COMPATIBLE`, since `STRICT`
+  silently drops every Knit frame over the cliff. Still deferred
   here: an **IBLT/Bloom offer body** (48 prefixes is a window — the upgrade if a busy pocket's oldest frames
   start falling off it), **acknowledged backfill** (a served frame lost to the air waits for the next round),
   and **faster passive-to-active takeover** when an active gateway's phone dies without leaving

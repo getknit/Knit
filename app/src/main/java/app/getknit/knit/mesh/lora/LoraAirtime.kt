@@ -48,6 +48,8 @@ internal data class AirtimeSnapshot(
     val bootstrapBudgetMs: Long,
     /** Whether the board is on a dedicated RF slot, and so out from under the politeness ceiling (ADR 067). */
     val dedicated: Boolean = false,
+    /** Whether the budget is charging for the signature 2.8 firmware adds to our small packets. */
+    val signing: Boolean = true,
 )
 
 /**
@@ -81,6 +83,13 @@ internal data class AirtimeSnapshot(
  * window. The region and modem preset are read off the board ([LoraRadioConfig]); until the handshake
  * reports them we assume [FALLBACK_PERCENT], which is below every real region's limit. Pure and
  * clock-driven by the caller, like [LoraPacePolicy] — the transport owns the actual clock.
+ *
+ * One thing the packet we hand the board is not: what leaves it. Firmware **2.8 signs every broadcast it
+ * originates**, ours included, adding [MeshtasticProto.XEDDSA_SIGNATURE_FIELD] bytes to any packet small
+ * enough to still fit one ([MeshtasticProto.MAX_SIGNED_PAYLOAD]). Knit neither asks for that nor can decline
+ * it, but it is real air, and unbudgeted it lands hardest on exactly the frames ADR 060 shrank into one
+ * packet — a 157-byte transcoded tick is 36 % more air than this class used to charge for. So
+ * [timeOnAirMs] adds the signature itself, gated on the board's firmware ([signsPackets]).
  *
  * Those two ceilings are **independent**, which is what [dedicatedUnlocksDuty] turns on (ADR 067, debug
  * builds only). The regional duty cycle is law and only the firmware's own `override_duty_cycle` escape
@@ -118,9 +127,23 @@ internal class LoraAirtime(
     var radio: LoraRadioConfig? = null
         private set
 
+    /**
+     * Whether the bound board's firmware signs the broadcasts it sends for us, and so whether [timeOnAirMs]
+     * charges for the signature. True until a board says otherwise: the unknown case has to be the expensive
+     * one, since guessing "unsigned" against firmware that signs is the one error that spends air we never
+     * budgeted — and in a duty-limited region that is somebody else's law, not our politeness.
+     */
+    var signing: Boolean = true
+        private set
+
     /** Records the board's radio settings from the config handshake; a null report leaves the last one standing. */
     fun onRadioConfig(config: LoraRadioConfig?) {
         if (config != null) radio = config
+    }
+
+    /** Records the board's firmware version, from the handshake's `DeviceMetadata`; null reads as unknown. */
+    fun onFirmware(version: String?) {
+        signing = signsPackets(version)
     }
 
     /**
@@ -135,12 +158,20 @@ internal class LoraAirtime(
         val symbolMs = 2.0.pow(sf) * MS_PER_SECOND / preset.bandwidthHz
         // Low-data-rate optimize: the firmware enables it once a symbol exceeds 16 ms, which costs 2 bits/symbol.
         val de = if (symbolMs > LDO_THRESHOLD_MS) 1 else 0
-        val phyBytes = payloadBytes + PACKET_OVERHEAD_BYTES
+        val phyBytes = payloadBytes + PACKET_OVERHEAD_BYTES + signatureBytes(payloadBytes)
         val numerator = (BITS_PER_BYTE * phyBytes - 4 * sf + PAYLOAD_CONST + CRC_BITS).toDouble()
         val denominator = (4 * (sf - 2 * de)).toDouble()
         val payloadSymbols = PAYLOAD_SYMBOL_BASE + maxOf(0.0, ceil(numerator / denominator) * preset.codingRate)
         return ((PREAMBLE_SYMBOLS + payloadSymbols) * symbolMs).toLong().coerceAtLeast(1)
     }
+
+    /**
+     * The signature the board will bolt onto this packet, or 0. Mirrors the firmware's own `signedDataFits`
+     * gate: it signs what still fits signed and sends the rest as it always did, so this is a *cliff* rather
+     * than a ramp — a 165-byte payload costs 66 bytes more than a 166-byte one.
+     */
+    private fun signatureBytes(payloadBytes: Int): Int =
+        if (signing && payloadBytes <= MeshtasticProto.MAX_SIGNED_PAYLOAD) MeshtasticProto.XEDDSA_SIGNATURE_FIELD else 0
 
     /**
      * The window's allowance, in milliseconds of air, before the per-bucket split — the lower of the two
@@ -244,6 +275,7 @@ internal class LoraAirtime(
             bootstrapUsedMs = bootstrapUsedMs,
             bootstrapBudgetMs = budgetMs(AirBucket.BOOTSTRAP),
             dedicated = dedicated(),
+            signing = signing,
         )
     }
 
@@ -262,6 +294,26 @@ internal class LoraAirtime(
     }
 
     companion object {
+        /**
+         * Whether [version] — the board's `DeviceMetadata.firmware_version`, e.g. `"2.8.0.7239fe8"` — is
+         * firmware that signs the broadcasts it originates. Signing arrived in **2.8**; anything older adds
+         * nothing to our packets and must not be charged for it, or the plane quietly loses a third of its
+         * capacity on the boards everyone is actually running today.
+         *
+         * A version it cannot read is treated as signing, for the reason [signing] gives: over-charging
+         * costs throughput, under-charging can cost compliance.
+         */
+        fun signsPackets(version: String?): Boolean {
+            val parts = version?.trim()?.split('.') ?: return true
+            val major = parts.getOrNull(0)?.toIntOrNull() ?: return true
+            val minor = parts.getOrNull(1)?.toIntOrNull() ?: return true
+            return major > SIGNING_MAJOR || (major == SIGNING_MAJOR && minor >= SIGNING_MINOR)
+        }
+
+        /** The firmware release that started signing broadcasts (`Router::perhapsEncode`, 2.8.0). */
+        private const val SIGNING_MAJOR = 2
+        private const val SIGNING_MINOR = 8
+
         /**
          * The rolling window every budget is expressed over. It was an hour (ADR 044) — the unit the EU duty
          * cycle is written in — which let a burst of chat spend the whole allowance in minutes and then left

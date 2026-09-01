@@ -64,6 +64,15 @@ class LoraSlotTest {
     }
 
     @Test
+    fun longTurboHalvesTheUsSlotCountTheSlotDerivationMustFollow() {
+        // 2.8's new US default. Computing 104 slots for a board the firmware gives 52 would let Knit pin a
+        // channel_num the firmware rejects outright ("Channel number %u invalid for %s, max is %u").
+        assertEquals(52, LoraSlot.channelCount(LoraRegion.US, ModemPreset.LONG_TURBO))
+        assertEquals(26, LoraSlot.channelCount(LoraRegion.ANZ, ModemPreset.LONG_TURBO))
+        assertTrue(LoraSlot.forRegion(LoraRegion.US, ModemPreset.LONG_TURBO)!! <= 52)
+    }
+
+    @Test
     fun aBandWithNowhereToMoveIsRefusedRatherThanPinnedToItsOnlySlot() {
         // MIN_CHANNELS is what stops "dedicated" meaning "the stock slot, but with the politeness ceiling
         // lifted" — which would be the worst of both.

@@ -898,9 +898,12 @@ internal class LoraMeshTransport(
             }
             metrics.onLoraSessionUp()
             pace.airtime.onRadioConfig(state.radio)
+            // 2.8 signs the broadcasts it sends for us, which is airtime the budget has to know about.
+            pace.airtime.onFirmware(state.board.firmwareVersion)
             log(
                 "lora ready board=${state.board.myNodeNum} mtu=${state.mtu} maxPayload=$maxPayload " +
-                    "radio=${state.radio?.region}/${state.radio?.modemPreset}",
+                    "radio=${state.radio?.region}/${state.radio?.modemPreset} " +
+                    "fw=${state.board.firmwareVersion} signing=${pace.airtime.signing}",
             )
             scope.launch { beaconProfile(PROFILE_FLOOR_MS) }
         }

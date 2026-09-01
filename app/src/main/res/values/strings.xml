@@ -545,6 +545,7 @@
     <string name="lora_setup_rename_button">Rename this board \u201C%1$s\u201D</string>
     <string name="lora_setup_needs_rename">Set up for Knit, but still called \u201C%1$s\u201D on the mesh. Rename it and the board\'s own screen will say so too.</string>
     <string name="lora_custom_primary_warning">This board\'s main channel has been renamed, which puts its radio on a different frequency. Other Knit boards won\'t hear it. Set the main channel back to the default in the Meshtastic app.</string>
+    <string name="lora_preset_mismatch_warning">This board is set to %1$s, but boards in this region use %2$s. Radios on different presets can\'t hear each other, so it won\'t meet other Knit boards. Change the preset in the Meshtastic app.</string>
     <string name="lora_setup_confirm_title">Set this board up for Knit?</string>
     <string name="lora_setup_confirm_body">This adds the Knit channel to your board and changes a few of its settings: it renames the board \u201CKnit\u201D so you can pick it out on the mesh, stops broadcasting its position and node info, and stops relaying other radios\' traffic to save battery.\n\nYour board\'s own main channel is left alone and it stays on the public Meshtastic frequency, so other radios can still pass your messages along.\n\nYou can undo this at any time.</string>
     <string name="lora_setup_confirm_action">Set up</string>

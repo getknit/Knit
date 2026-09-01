@@ -104,6 +104,12 @@ internal object BoardBytes {
                 string(13, pioEnv)
             }.toByteArray()
 
+    /**
+     * `FromRadio { metadata = DeviceMetadata { firmware_version } }` — how the board says which release it
+     * runs, which decides whether it can store the unmonitored mark (ADR 2026-09.emd7).
+     */
+    fun metadata(firmware: String): ByteArray = ProtoWriter().message(13) { string(1, firmware) }.toByteArray()
+
     fun configComplete(nonce: UInt): ByteArray = ProtoWriter().uint32(7, nonce).toByteArray()
 
     fun rebooted(): ByteArray = ProtoWriter().bool(8, true).toByteArray()

@@ -340,10 +340,16 @@ class MeshtasticSessionTest {
 
     private val provisionSpec = ProvisionSpec(name = "Knit", psk = byteArrayOf(1, 2, 3, 4))
 
-    /** [BoardBytes.myInfo] hands the session node 0xABCD, so this is what Knit renames that board to. */
-    private val knitOwner = BoardOwner("Knit abcd", "Knit")
+    /** Firmware that stores the unmonitored mark, and the release just before it (ADR 2026-09.emd7). */
+    private companion object {
+        const val MARKING_FIRMWARE = "2.6.9.f223b8a"
+        const val PRE_MARK_FIRMWARE = "2.6.8.ef9d0d7"
+    }
 
-    /** The stock name the same board arrives with — what a setup records and a restore puts back. */
+    /** [BoardBytes.myInfo] hands the session node 0xABCD, so this is the identity Knit writes that board. */
+    private val knitOwner = BoardOwner("Knit abcd", "Knit", unmessagable = true)
+
+    /** The stock identity the same board arrives with — what a setup records and a restore puts back. */
     private val stockOwner = BoardOwner("Meshtastic abcd", "abcd")
 
     /**
@@ -360,8 +366,11 @@ class MeshtasticSessionTest {
             .varint(6, 1) // is_licensed
             .toByteArray()
 
-    /** The same board once Knit has renamed it — the starting point for a re-run of the setup. */
-    private val knitUser =
+    /**
+     * A board an older Knit set up: named, but never marked — the ADR 2026-09.emd7 half of the unfinished
+     * identity a re-run of the setup comes back to finish.
+     */
+    private val namedKnitUser =
         spliceStringFields(
             boardUser,
             mapOf(
@@ -369,6 +378,9 @@ class MeshtasticSessionTest {
                 MeshtasticProto.USER_SHORT_NAME to knitOwner.shortName,
             ),
         )!!
+
+    /** The same board once Knit has written its whole identity — the starting point for a re-run. */
+    private val knitUser = spliceVarintFields(namedKnitUser, mapOf(MeshtasticProto.USER_IS_UNMESSAGABLE to 1L))!!
 
     /** What [boardConfigs] and [boardUser] say the board was set to, in the shape a setup reports back. */
     private val boardIntervals =
@@ -417,9 +429,24 @@ class MeshtasticSessionTest {
     private val quietedConfigs =
         boardConfigs.mapValues { (config, raw) -> spliceVarintFields(raw, BoardQuiet.quiet(config))!! }
 
+    /** The board's side of the `want_config` handshake, up to and including `config_complete_id`. */
+    private fun replyToWantConfig(
+        ch: FakeGattChannel,
+        channels: List<Triple<Int, String, Int>>,
+        radio: ByteArray?,
+        firmware: String?,
+    ) {
+        ch.enqueueRead(BoardBytes.myInfo(0xABCDu, "heltec-v4"))
+        firmware?.let { ch.enqueueRead(BoardBytes.metadata(it)) }
+        channels.forEach { (i, n, r) -> ch.enqueueRead(BoardBytes.channel(i, n, r)) }
+        radio?.let { ch.enqueueRead(it) }
+        ch.enqueueRead(BoardBytes.configComplete(nonce))
+    }
+
     /**
-     * Scripts a board: the config handshake reports [channels] (index, name, role), admin GETs return a
-     * passkey, and admin SETs are ACKed — except the first [nakFirstSet] SETs, which NAK with [nakReason].
+     * Scripts a board: the config handshake reports [channels] (index, name, role) and [firmware], admin
+     * GETs return a passkey, and admin SETs are ACKed — except the first [nakFirstSet] SETs, which NAK with
+     * [nakReason].
      */
     private fun scriptBoard(
         ch: FakeGattChannel,
@@ -429,15 +456,13 @@ class MeshtasticSessionTest {
         configs: Map<BoardConfig, ByteArray>? = null,
         user: ByteArray? = boardUser,
         radio: ByteArray? = null,
+        firmware: String? = MARKING_FIRMWARE,
     ) {
         var sets = 0
         ch.onWrite = { bytes ->
             when {
                 BoardBytes.isWantConfig(bytes) -> {
-                    ch.enqueueRead(BoardBytes.myInfo(0xABCDu, "heltec-v4"))
-                    channels.forEach { (i, n, r) -> ch.enqueueRead(BoardBytes.channel(i, n, r)) }
-                    radio?.let { ch.enqueueRead(it) }
-                    ch.enqueueRead(BoardBytes.configComplete(nonce))
+                    replyToWantConfig(ch, channels, radio, firmware)
                 }
 
                 BoardBytes.isAdminGetConfig(bytes) -> {
@@ -527,6 +552,70 @@ class MeshtasticSessionTest {
             assertEquals("hw_model survived", 9L, readVarintField(user, 5))
             // A `User` built from scratch would read is_licensed = false and clear override_duty_cycle with it.
             assertEquals("is_licensed survived", 1L, readVarintField(user, 6))
+            session.stop()
+        }
+
+    @Test
+    fun provisionMarksTheBoardUnmonitored() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            async { session.provisionChannel(provisionSpec) }.await()
+            // Knit keeps only PRIVATE_APP off the air, so a stranger's Meshtastic DM here is ACKed by the
+            // firmware and then dropped unseen; the mark is what stops their app offering the board at all.
+            val user = ch.writes.mapNotNull { BoardBytes.adminSetOwnerRaw(it) }.single()
+            assertEquals(1L, readVarintField(user, MeshtasticProto.USER_IS_UNMESSAGABLE))
+            session.stop()
+        }
+
+    @Test
+    fun provisionLeavesTheMarkOffFirmwareThatWouldOnlyDropIt() =
+        runTest {
+            val ch = FakeGattChannel()
+            scriptBoard(ch, channels = listOf(Triple(0, "", 1)), configs = boardConfigs, firmware = PRE_MARK_FIRMWARE)
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            async { session.provisionChannel(provisionSpec) }.await()
+            // 2.6.8 drops field 9 and never echoes it back, so writing it would leave the setup looking
+            // permanently unfinished on a board that is in fact fine. The rename still happens.
+            val user = ch.writes.mapNotNull { BoardBytes.adminSetOwnerRaw(it) }.single()
+            assertNull(readVarintField(user, MeshtasticProto.USER_IS_UNMESSAGABLE))
+            assertEquals(knitOwner.longName, readStringField(user, MeshtasticProto.USER_LONG_NAME))
+            session.stop()
+        }
+
+    @Test
+    fun provisionOnANamedButUnmarkedBoardMarksItAndKeepsTheNameItRecorded() =
+        runTest {
+            val ch = FakeGattChannel()
+            // Set up and named by an older Knit, but never marked: the ADR 2026-09.emd7 migration.
+            scriptBoard(
+                ch,
+                channels = listOf(Triple(0, "", 1), Triple(2, "Knit", 2)),
+                configs = boardConfigs,
+                user = namedKnitUser,
+            )
+            val session = session(FakeGattDialer(ch), backgroundScope) { testScheduler.currentTime }
+            session.start("AA")
+            runCurrent()
+
+            val stored = BoardSettings(900, 600, true, 1_800, rebroadcastMode = 0, owner = stockOwner)
+            val result = async { session.provisionChannel(provisionSpec.copy(previous = stored)) }.await()
+            // The board is *already* called "Knit abcd", so filling the record in from it here would
+            // overwrite the stock name — the only copy a restore has to put back.
+            assertEquals(ProvisionResult.Provisioned(2, alreadyPresent = true, previous = stored), result)
+            val user = ch.writes.mapNotNull { BoardBytes.adminSetOwnerRaw(it) }.single()
+            assertEquals(1L, readVarintField(user, MeshtasticProto.USER_IS_UNMESSAGABLE))
+            assertTrue(
+                "neither the channel table nor the intervals are rewritten",
+                ch.writes.none { BoardBytes.isAdminSet(it) || BoardBytes.isAdminSetConfig(it) },
+            )
             session.stop()
         }
 
@@ -735,6 +824,9 @@ class MeshtasticSessionTest {
             val user = ch.writes.mapNotNull { BoardBytes.adminSetOwnerRaw(it) }.single()
             assertEquals(stockOwner.longName, readStringField(user, MeshtasticProto.USER_LONG_NAME))
             assertEquals(stockOwner.shortName, readStringField(user, MeshtasticProto.USER_SHORT_NAME))
+            // The mark goes back with the name: a restored board is a stock node, and a stock node is read.
+            // A zero is written by omission, which is the encoding of "never said" and reads as messagable.
+            assertNull(readVarintField(user, MeshtasticProto.USER_IS_UNMESSAGABLE))
             session.stop()
         }
 

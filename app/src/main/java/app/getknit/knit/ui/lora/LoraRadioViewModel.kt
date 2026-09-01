@@ -198,7 +198,9 @@ internal class LoraRadioViewModel(
                     ?.name
                     ?.takeIf { it.isNotEmpty() }
             val setUp = ready?.channels?.any { it.name == KnitChannel.NAME } == true
-            val wanted = status.boardNodeNum?.let { BoardName.forNode(it) }
+            // The identity the board should carry, which the firmware it runs is half of: a board too old
+            // to store the unmonitored mark is wanted exactly as it is (ADR 2026-09.emd7).
+            val wanted = status.boardNodeNum?.let { BoardName.forNode(it, ready?.board?.firmwareVersion) }
             LoraRadioUiState(
                 enabled = enabled,
                 dmEnabled = dmEnabled,
@@ -221,8 +223,10 @@ internal class LoraRadioViewModel(
                 boardSetUp = setUp,
                 meshName = ready?.board?.owner?.longName,
                 knitName = wanted?.longName,
-                // Only a *known* stock name asks for a rename: firmware that never sends its own NodeInfo
-                // gets the benefit of the doubt, exactly as an unreadable channel table does.
+                // Only a *known* identity asks to be finished: firmware that never sends its own NodeInfo
+                // gets the benefit of the doubt, exactly as an unreadable channel table does. Two things
+                // can be unfinished here — the name (ADR 049) and the unmonitored mark (ADR 2026-09.emd7) —
+                // and the screen tells them apart by comparing [meshName] against [knitName].
                 needsRename = setUp && wanted != null && ready?.board?.owner?.let { it != wanted } == true,
                 customPrimary = ready?.let { isCustomPrimary(it) } == true,
                 presetMismatch = ready?.let(::presetMismatch),

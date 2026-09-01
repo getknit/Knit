@@ -346,28 +346,52 @@ coordination. `provisionKnitChannel(ProvisionMode.Setup)` — the "Set up this b
    `rebroadcast_mode = LOCAL_ONLY` so the board keeps relaying its own channels — all ADR 044's bridge needs —
    and stops spending its battery repeating the rest of the band. The GPS itself is not touched: silencing
    what the board *broadcasts* is Knit's business, powering down the user's hardware is not.
-4. `set_owner` renaming the board **`Knit abcd`** / short name **`Knit`** (`BoardName`, ADR 049) — the suffix
-   is the low two bytes of its node number, the same shape the firmware's own `Meshtastic abcd` default uses,
-   so two boards in one pocket stay distinguishable. Read first (`get_owner_request`, **before** the
-   transaction, like the configs) and spliced with `spliceStringFields`: `handleSetOwner` merges non-empty
-   strings, but `is_licensed` is a presence-less bool whose absence clears `override_duty_cycle`, so only the
-   two names may be written. Deliberately **not** the user's display name — a `NodeInfo` is cleartext on the
-   public frequency.
+4. `set_owner` writing the board's **Knit identity** (`BoardOwner`/`BoardName`): the long name
+   **`Knit abcd`** / short name **`Knit`** (ADR 049) — the suffix is the low two bytes of its node number,
+   the same shape the firmware's own `Meshtastic abcd` default uses, so two boards in one pocket stay
+   distinguishable — plus **`is_unmessagable`** (ADR 2026-09.emd7). Read first (`get_owner_request`,
+   **before** the transaction, like the configs) and spliced over the board's own bytes,
+   `spliceStringFields` for the names then `spliceVarintFields` for the mark. Never composed from scratch:
+   `handleSetOwner` merges rather than assigns, and **both** its bools are cleared by an omission —
+   `is_licensed` has no presence at all (and takes `override_duty_cycle` with it), while `is_unmessagable`
+   has presence yet is still assigned whenever the two presence bits differ. Deliberately **not** the user's
+   display name — a `NodeInfo` is cleartext on the public frequency.
 
-The settings **and the name** the board had first come back as `ProvisionResult.Provisioned.previous` and are
-persisted per board (`SettingsStore.loraBoardSetup`); **Restore** writes them back and disables every Knit
-channel. With no name recorded, the restore writes the one the firmware itself would have chosen
-(`BoardName.stock`) rather than leave a restored board saying Knit. It
+   **The mark says what the board already is.** Knit's intake keeps only `PRIVATE_APP`, so a stranger's
+   `TEXT_MESSAGE_APP` DM to a Knit board is ACKed by the firmware's routing layer and then dropped unseen —
+   a *delivered* tick against a message nobody will read. Clients that honour the flag grey the node out
+   instead. It is a `NodeInfo` hint and changes no routing, which is why it is this and **not**
+   `device.role = CLIENT_MUTE`: that would stop rebroadcast outright, and ADR 044's bridge needs
+   `LOCAL_ONLY`'s own-channel relaying. Gated on firmware **2.6.9** (`BoardName.honoursUnmessagable`), where
+   the plumbing landed; older boards drop field 9 and never echo it back, so writing it would leave the
+   setup looking permanently unfinished. A version that will not parse counts as **too old** — the opposite
+   of `LoraAirtime.signsPackets`' reading of the same string, because here a wrong guess writes to somebody's
+   hardware rather than merely over-charging for airtime.
+
+The settings **and the identity** the board had first come back as `ProvisionResult.Provisioned.previous`
+and are persisted per board (`SettingsStore.loraBoardSetup`); **Restore** writes them back and disables every
+Knit channel — the mark included, since a restored board is a stock node and a stock node is read. With no
+name recorded, the restore writes the one the firmware itself would have chosen
+(`BoardName.stock`, unmarked) rather than leave a restored board saying Knit. It
 leaves **no** Knit channel, so the caller switches the plane off with it — otherwise the next fan-out would go
 out over whatever channel remains — and restoring a board that carries none is refused, since there is nothing
 to undo and the config writes would push somebody's board to values it never had. Re-running the setup on a
-board that already has the channel is a reported no-op **except for the rename**: a board set up before ADR
-049 gets one `set_owner` and nothing else, carrying the caller's existing record forward with the old name
-filled in, so the recorded settings are never overwritten with the quieted ones. The screen offers exactly that as a
-**rename button** (`lora_rename`, no confirmation — one reversible field) whenever `LoraRadioUiState.needsRename`:
-the board carries the Knit channel and `BoardInfo.owner` — its own `NodeInfo.user`, decoded off the same
-handshake ADR 041's battery comes from — is a name other than `BoardName.forNode`'s. A board whose firmware
-never sends its own `NodeInfo` reports no name and is left alone.
+board that already has the channel is a reported no-op **except for the identity write**: a board set up by
+an older Knit — missing its name (pre-ADR 049), the unmonitored mark (pre-ADR 2026-09.emd7), or both — gets
+one `set_owner` and nothing else, so the recorded settings are never overwritten with the quieted ones. The
+screen offers exactly that as a single button (`lora_rename`, no confirmation — one reversible write)
+whenever `LoraRadioUiState.needsRename`: the board carries the Knit channel and `BoardInfo.owner` — its own
+`NodeInfo.user`, decoded off the same handshake ADR 041's battery comes from — differs from
+`BoardName.forNode`'s. A board whose firmware never sends its own `NodeInfo` reports nothing and is left
+alone. Two traps here:
+
+- **The button's label depends on which half is missing.** The screen compares `meshName` against
+  `knitName`: equal names mean the board is already called what Knit calls it and the *mark* is what is
+  missing, so it says "Mark this board unmonitored" instead of lying about a rename.
+- **`renameOnly` fills the recorded name in, it does not overwrite it** (`previous.owner ?: was.owner`). A
+  board missing only the mark is *already* `Knit abcd`, and recording that would destroy the only copy of
+  the stock name a Restore has to put back. Unconditional overwrite was safe only while this path was
+  reachable exclusively on a stock-named board.
 
 ### The dedicated-frequency setup (ADR 067) — debug builds only
 
@@ -397,7 +421,8 @@ counted as `loraSuppressed`): after a restore, or before a setup, sending would 
 onto whatever channel the board is on — most likely the public one. A board that reports no channel table at
 all is given the benefit of the doubt, since going mute on unreadable firmware is the worse failure.
 
-**The cost, which the confirmation states out loud:** the board is renamed for Knit, stops broadcasting its
+**The cost, which the confirmation states out loud:** the board is renamed for Knit, is marked unmonitored
+so other people's apps stop offering it as a message target, stops broadcasting its
 position and node info, and stops relaying other radios' traffic. Its own main channel is left alone and it stays on the public
 frequency, so nothing else about its place in the Meshtastic network changes.
 
@@ -405,7 +430,8 @@ Admin wire (pinned by `MeshtasticProtoTest`): `AdminMessage{ get_channel_request
 get_owner_request=3, get_owner_response=4, get_config_request=5, get_config_response=6,
 get_module_config_request=7, get_module_config_response=8, set_owner=32, set_channel=33, set_config=34,
 set_module_config=35, begin_edit_settings=64, commit_edit_settings=65, session_passkey=101 }`;
-`User{ long_name=2, short_name=3 }`; `Channel{ index=1, settings=2, role=3 }` (Role SECONDARY=2, DISABLED=0);
+`User{ long_name=2, short_name=3, is_unmessagable=9 }` (field 9 is `optional`, so absent and an explicit
+false are two encodings — both read as messagable); `Channel{ index=1, settings=2, role=3 }` (Role SECONDARY=2, DISABLED=0);
 `ChannelSettings{ psk=2, name=3, module_settings=7 }` with `ModuleSettings{ position_precision=1 }`;
 `Config{ device=1, position=2 }` / `ModuleConfig{ telemetry=6 }` (the request enums number differently:
 `ConfigType{ DEVICE=0, POSITION=1 }`, `ModuleConfigType{ TELEMETRY=5 }`);

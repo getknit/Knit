@@ -143,14 +143,27 @@ internal object MeshtasticProto {
     /** `ModuleConfig.TelemetryConfig.device_update_interval` — the *mesh* broadcast, not the phone-only feed. */
     const val TELEMETRY_DEVICE_UPDATE_INTERVAL = 1
 
-    // The two `User` fields the setup renames (ADR 049). Public for the same reason as the intervals above:
-    // [BoardName] owns the *names*, the field numbers stay here with the rest of the pinned wire.
+    // The `User` fields the setup writes (ADR 049, ADR 2026-09.emd7). Public for the same reason as the
+    // intervals above: [BoardName] owns the *identity*, the field numbers stay here with the rest of the
+    // pinned wire.
 
     /** `User.long_name` — up to 39 characters; what a node list and the Meshtastic app show. */
     const val USER_LONG_NAME = 2
 
     /** `User.short_name` — up to **4** characters (`char[5]`); what the small on-board screens have room for. */
     const val USER_SHORT_NAME = 3
+
+    /**
+     * `User.is_unmessagable` — "this node is not read by anybody", what the Meshtastic app offers as
+     * *Unmonitored or infrastructure*. A Knit board is exactly that: its inbound path keeps only
+     * [PORT_PRIVATE_APP], so a stranger's `TEXT_MESSAGE_APP` direct message is ACKed by the firmware and
+     * then dropped, unseen. Clients that honour the flag grey the node out instead of offering it as a
+     * message target.
+     *
+     * Unlike `is_licensed` this one is declared `optional`, so it has presence on the wire: absent is
+     * "this board never said", which every client and [BoardOwnerRaw] read as messagable.
+     */
+    const val USER_IS_UNMESSAGABLE = 9
 
     // --- ToRadio (phone → board) ---
 
@@ -200,12 +213,16 @@ internal object MeshtasticProto {
 
     /**
      * `AdminMessage { set_owner = User { … } }`. [raw] is the board's own `User` as `get_owner_request`
-     * returned it, with only [USER_LONG_NAME] / [USER_SHORT_NAME] spliced ([spliceStringFields]).
+     * returned it, with only [USER_LONG_NAME] / [USER_SHORT_NAME] ([spliceStringFields]) and
+     * [USER_IS_UNMESSAGABLE] ([spliceVarintFields]) spliced.
      *
      * The firmware merges rather than assigns here — `handleSetOwner` copies each *non-empty* string — but
-     * `is_licensed` is a plain proto3 bool with no presence, so a `User` built from scratch would read as
-     * `false` and clear it, and with it `config.lora.override_duty_cycle`. Splicing the board's own bytes
-     * keeps that, the public key, and everything else this codec does not model.
+     * **both** bools it merges are cleared by omission, so a `User` built from scratch would silently reset
+     * them. `is_licensed` has no presence at all, so an absent one reads as `false` and takes
+     * `config.lora.override_duty_cycle` with it; `is_unmessagable` does have presence, yet the firmware's
+     * merge assigns `owner.is_unmessagable = o.is_unmessagable` whenever the two presence bits differ, so an
+     * absent one still clears a board that had it set. Splicing the board's own bytes keeps both, the public
+     * key, and everything else this codec does not model.
      */
     fun encodeAdminSetOwner(
         raw: ByteArray,
@@ -793,8 +810,8 @@ internal class BoardConfigRaw(
 )
 
 /**
- * The board's `User` exactly as it sent it — the base the rename splices into — alongside the two names
- * decoded out of it, which are what a setup records so a restore can put them back.
+ * The board's `User` exactly as it sent it — the base the owner write splices into — alongside the identity
+ * decoded out of it, which is what a setup records so a restore can put it back.
  */
 internal class BoardOwnerRaw(
     val raw: ByteArray,
@@ -803,6 +820,9 @@ internal class BoardOwnerRaw(
         BoardOwner(
             longName = readStringField(raw, MeshtasticProto.USER_LONG_NAME).orEmpty(),
             shortName = readStringField(raw, MeshtasticProto.USER_SHORT_NAME).orEmpty(),
+            // `optional`, so absent and explicitly-false are distinguishable on the wire — but not to any
+            // reader: both mean the node accepts messages, which is what a stock board is.
+            unmessagable = (readVarintField(raw, MeshtasticProto.USER_IS_UNMESSAGABLE) ?: 0L) != 0L,
         )
 }
 

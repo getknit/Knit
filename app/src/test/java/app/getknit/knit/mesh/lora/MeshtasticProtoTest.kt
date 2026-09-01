@@ -238,6 +238,26 @@ class MeshtasticProtoTest {
     }
 
     @Test
+    fun decodeAdminReadsTheUnmonitoredMarkOffTheOwner() {
+        // User { long_name = "Knit abcd", short_name = "Knit", is_unmessagable = true } — field 9, tag 0x48.
+        val marked = MeshtasticProto.decodeAdmin(hex("22 13 12 09 4B 6E 69 74 20 61 62 63 64 1A 04 4B 6E 69 74 48 01"))!!
+        assertEquals(BoardOwner("Knit abcd", "Knit", unmessagable = true), marked.owner!!.owner)
+        // `optional`, so absent and an explicit false are two encodings — both of which read as messagable.
+        assertFalse(
+            MeshtasticProto
+                .decodeAdmin(hex("22 02 48 00"))!!
+                .owner!!
+                .owner.unmessagable,
+        )
+        assertFalse(
+            MeshtasticProto
+                .decodeAdmin(hex("22 00"))!!
+                .owner!!
+                .owner.unmessagable,
+        )
+    }
+
+    @Test
     fun decodeAdminReadsASubConfigAsRawBytes() {
         // get_config_response(6){ Config{ position(2) = 08 84 07 } } + session_passkey(101)
         val reply = MeshtasticProto.decodeAdmin(hex("32 05 12 03 08 84 07 AA 06 03 AA BB CC"))!!

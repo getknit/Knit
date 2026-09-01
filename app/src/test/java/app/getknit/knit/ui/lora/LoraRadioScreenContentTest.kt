@@ -231,6 +231,26 @@ class LoraRadioScreenContentTest {
     }
 
     @Test
+    fun aBoardStillUnderItsOldNameIsOfferedTheRename() {
+        var setUp = 0
+        render(connected().copy(needsRename = true, meshName = "Meshtastic 002a", knitName = "Knit 002a"), onSetUp = { setUp++ })
+        compose.onNodeWithText("still called \u201CMeshtastic 002a\u201D", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("lora_rename").performScrollTo().performClick()
+        assertEquals(1, setUp)
+    }
+
+    @Test
+    fun aBoardMissingOnlyTheUnmonitoredMarkIsOfferedThatInstead() {
+        // Same one `set_owner`, but the board is already named — so calling it a rename would be a lie
+        // (ADR 2026-09.emd7). The names matching is how the screen tells the two halves apart.
+        var setUp = 0
+        render(connected().copy(needsRename = true, meshName = "Knit 002a", knitName = "Knit 002a"), onSetUp = { setUp++ })
+        compose.onNodeWithText("the mesh isn't told nobody reads it", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("lora_rename").performScrollTo().performClick()
+        assertEquals(1, setUp)
+    }
+
+    @Test
     fun anUnconnectedBoardIsNeverOfferedTheSetupStep() {
         render(LoraRadioUiState(enabled = true, anyBonded = true))
         compose.onNodeWithTag("lora_setup").assertDoesNotExist()

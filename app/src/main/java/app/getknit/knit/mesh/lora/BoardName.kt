@@ -2,12 +2,18 @@ package app.getknit.knit.mesh.lora
 
 /**
  * A Meshtastic node's user-visible identity — the pair of names its own screen, every other radio's node
- * list and the Meshtastic app all show. Recorded before a setup rewrites it so a restore can put the
- * user's own name back rather than guess.
+ * list and the Meshtastic app all show, and whether it admits to being read by anybody. Recorded before a
+ * setup rewrites it so a restore can put the user's own back rather than guess.
  */
 internal data class BoardOwner(
     val longName: String,
     val shortName: String,
+    /**
+     * `User.is_unmessagable` — the Meshtastic app's *Unmonitored or infrastructure* (ADR 2026-09.emd7).
+     * False is what a stock board is and what an absent field reads as, so the default is the honest one
+     * for every identity that was not deliberately marked.
+     */
+    val unmessagable: Boolean = false,
 )
 
 /**
@@ -22,6 +28,8 @@ internal data class BoardOwner(
  * Deliberately **not** the user's display name: a `NodeInfo` is cleartext on the public frequency, and the
  * plane's standing metadata cost (`context/lora-bridge.md`) is already the most this should leak.
  *
+ * The identity also carries [BoardOwner.unmessagable] (ADR 2026-09.emd7) — see [honoursUnmessagable].
+ *
  * Pure policy over strings, so a test can read both directions.
  */
 internal object BoardName {
@@ -34,8 +42,41 @@ internal object BoardName {
     /** The firmware's own default prefix, for a restore with no recorded name to put back. */
     const val STOCK_PREFIX = "Meshtastic"
 
-    /** What Knit renames the board with node number [nodeNum] to. */
-    fun forNode(nodeNum: UInt): BoardOwner = BoardOwner(longName = "$PREFIX ${suffix(nodeNum)}", shortName = SHORT)
+    /**
+     * The identity Knit writes to the board with node number [nodeNum], running [firmware] — its
+     * `DeviceMetadata.firmware_version`, which decides only whether the unmonitored mark is part of it
+     * ([honoursUnmessagable]).
+     */
+    fun forNode(
+        nodeNum: UInt,
+        firmware: String?,
+    ): BoardOwner =
+        BoardOwner(
+            longName = "$PREFIX ${suffix(nodeNum)}",
+            shortName = SHORT,
+            unmessagable = honoursUnmessagable(firmware),
+        )
+
+    /**
+     * Whether [firmware] is new enough to store `User.is_unmessagable` — **2.6.9**, where the plumbing
+     * landed (`AdminModule::handleSetOwner`, firmware `2e72850d`, released 2025-05-25); 2.6.8 and older
+     * drop the field as an unknown one and never echo it back.
+     *
+     * A version this cannot read counts as **too old**, the opposite of [LoraAirtime.signsPackets]'s
+     * reading of the same string, because the costs are the opposite way round. There, guessing wrong
+     * spends airtime the board did not need; here, guessing wrong means writing to somebody's hardware on
+     * a hunch, and — since a board that drops the field never reports it back — leaving Knit's setup
+     * permanently, visibly unfinished on a board that is in fact fine.
+     */
+    fun honoursUnmessagable(firmware: String?): Boolean {
+        val parts = firmware?.trim()?.split('.') ?: return false
+        val major = parts.getOrNull(0)?.toIntOrNull() ?: return false
+        val minor = parts.getOrNull(1)?.toIntOrNull() ?: return false
+        val patch = parts.getOrNull(2)?.toIntOrNull() ?: return false
+        if (major != UNMESSAGABLE_MAJOR) return major > UNMESSAGABLE_MAJOR
+        if (minor != UNMESSAGABLE_MINOR) return minor > UNMESSAGABLE_MINOR
+        return patch >= UNMESSAGABLE_PATCH
+    }
 
     /**
      * The name the firmware would have given this board itself (`NodeDB` builds both out of the last two
@@ -46,6 +87,11 @@ internal object BoardName {
 
     /** The four lowercase hex digits both names end in: the low two bytes of [nodeNum]. */
     fun suffix(nodeNum: UInt): String = (nodeNum and SUFFIX_MASK).toInt().toString(HEX_RADIX).padStart(SUFFIX_CHARS, '0')
+
+    /** The firmware release that started storing `User.is_unmessagable`: 2.6.9. */
+    private const val UNMESSAGABLE_MAJOR = 2
+    private const val UNMESSAGABLE_MINOR = 6
+    private const val UNMESSAGABLE_PATCH = 9
 
     private const val SUFFIX_MASK = 0xFFFFu
     private const val SUFFIX_CHARS = 4

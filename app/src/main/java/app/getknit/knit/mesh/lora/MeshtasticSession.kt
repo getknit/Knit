@@ -517,15 +517,17 @@ internal class MeshtasticSession(
         cmd: Cmd.Provision,
     ): SessionEnd? {
         val was = readBoardOwner(channel, myNode) ?: return failProvision(cmd, "board did not return its name")
-        val rename = renameStep(was, BoardName.forNode(myNode)) ?: return failProvision(cmd, MALFORMED_OWNER)
+        val identity =
+            ownerStep(was, BoardName.forNode(myNode, board?.firmwareVersion))
+                ?: return failProvision(cmd, MALFORMED_OWNER)
         // Read and refuse before anything is written: a region Knit will not place a slot in must leave the
         // board untouched rather than half set up (ADR 067).
         val slot = slotWrite(channel, myNode, cmd) ?: return null
         val existing = knitChannel(cmd.spec.name)
         return if (existing != null) {
-            renameOnly(channel, myNode, cmd, existing, was, rename, slot)
+            identityOnly(channel, myNode, cmd, existing, was, identity, slot)
         } else {
-            writeSetup(channel, myNode, cmd, was, rename, slot)
+            writeSetup(channel, myNode, cmd, was, identity, slot)
         }
     }
 
@@ -574,7 +576,7 @@ internal class MeshtasticSession(
         myNode: UInt,
         cmd: Cmd.Provision,
         was: BoardOwnerRaw,
-        rename: List<AdminStep>,
+        identity: List<AdminStep>,
         slot: SlotWrite,
     ): SessionEnd? {
         val index = freeSecondarySlot() ?: return noFreeSlot(cmd)
@@ -591,7 +593,7 @@ internal class MeshtasticSession(
                         ),
                     ),
                 )
-                addAll(rename)
+                addAll(identity)
                 addAll(quietSteps(raws) { config -> BoardQuiet.quiet(config) } ?: return failProvision(cmd, MALFORMED_CONFIG))
                 addAll(slot.steps)
             }
@@ -612,28 +614,33 @@ internal class MeshtasticSession(
 
     /**
      * The board already carries the Knit channel, so its channel table and its quieted intervals are left
-     * exactly as they are — but a board set up before Knit named boards (ADR 049) still gets its name, on
-     * its own. The record the caller already holds is carried forward with the old name filled in, because
-     * that is the one moment the old name is still knowable; re-recording the *intervals* here would write
-     * back the quieted ones and destroy the only copy of the board's own.
+     * exactly as they are — but a board an older Knit set up still gets the half of its identity that is
+     * missing, on its own: its name (ADR 049), the unmonitored mark (ADR 2026-09.emd7), or both. The record
+     * the caller already holds is carried forward with the old name **filled in**, because on the ADR 049
+     * board there is none and this is the one moment it is still knowable; re-recording the *intervals* here
+     * would write back the quieted ones and destroy the only copy of the board's own.
      */
-    private suspend fun renameOnly(
+    private suspend fun identityOnly(
         channel: GattChannel,
         myNode: UInt,
         cmd: Cmd.Provision,
         existing: ChannelInfo,
         was: BoardOwnerRaw,
-        rename: List<AdminStep>,
+        identity: List<AdminStep>,
         slot: SlotWrite,
     ): SessionEnd? {
         // The record keeps the board's own channel_num the first time a dedicated setup reads it; on the
         // shared-frequency path there is nothing read and nothing to add.
         val previous =
             cmd.spec.previous?.copy(
-                owner = was.owner,
+                // Filled in, never overwritten: on the ADR 049 board this was written for there is no
+                // recorded name and [was] is the board's own, but on a board that is only missing ADR
+                // 2026-09.emd7's mark [was] is already "Knit abcd" — and writing that here would destroy
+                // the only copy of the name a restore has to put back.
+                owner = cmd.spec.previous.owner ?: was.owner,
                 channelNum = slot.recordedChannelNum ?: cmd.spec.previous.channelNum,
             )
-        val steps = rename + slot.steps
+        val steps = identity + slot.steps
         if (steps.isEmpty()) {
             log("lora provision already set up ch${existing.index} '${cmd.spec.name}'")
             cmd.reply.complete(ProvisionResult.Provisioned(existing.index, alreadyPresent = true))
@@ -645,7 +652,8 @@ internal class MeshtasticSession(
             steps = steps,
             label =
                 listOfNotNull(
-                    "renamed the board '${BoardName.forNode(myNode).longName}'".takeIf { rename.isNotEmpty() },
+                    "wrote the board's Knit identity '${BoardName.forNode(myNode, board?.firmwareVersion).longName}'"
+                        .takeIf { identity.isNotEmpty() },
                     slot.label.takeIf { it.isNotEmpty() },
                 ).joinToString(" "),
             reply = cmd.reply,
@@ -701,7 +709,7 @@ internal class MeshtasticSession(
         val steps =
             buildList {
                 addAll(disableKnitChannels(cmd.spec.name))
-                addAll(renameStep(was, name) ?: return failProvision(cmd, MALFORMED_OWNER))
+                addAll(ownerStep(was, name) ?: return failProvision(cmd, MALFORMED_OWNER))
                 addAll(
                     quietSteps(raws) { config -> BoardQuiet.restore(config, cmd.spec.previous) }
                         ?: return failProvision(cmd, MALFORMED_CONFIG),
@@ -753,26 +761,37 @@ internal class MeshtasticSession(
     }
 
     /**
-     * The `set_owner` write that renames the board to [want] — empty when it is already called that (the
+     * The `set_owner` write that gives the board the identity [want] — its two names and whether it tells
+     * the mesh nobody reads it (ADR 2026-09.emd7). Empty when the board already carries that identity (the
      * firmware would treat the write as a no-op anyway, and an empty step list is what lets a re-run of the
      * setup stay a reported no-op), or null when the board sent a `User` this codec could not walk.
      *
      * A read-modify-write like every config write, but for a different reason: `handleSetOwner` merges the
-     * non-empty strings rather than assigning, yet `is_licensed` is a presence-less proto3 bool, so a `User`
-     * built from scratch would clear it — and with it the firmware's `override_duty_cycle` escape hatch.
+     * non-empty strings rather than assigning, yet both the bools it merges are cleared by an omission — see
+     * [MeshtasticProto.encodeAdminSetOwner] — so a `User` built from scratch would drop `is_licensed`, and
+     * with it the firmware's `override_duty_cycle` escape hatch.
+     *
+     * The mark is spliced as a varint over the *string* splice's output, and a `false` clears the field
+     * outright: [ProtoWriter] writes a zero by omission, which is the encoding of "this board never said"
+     * and reads as messagable everywhere. That is what a restore puts back on a board Knit marked.
      */
-    private fun renameStep(
+    private fun ownerStep(
         was: BoardOwnerRaw,
         want: BoardOwner,
     ): List<AdminStep>? {
         if (was.owner == want) return emptyList()
-        val spliced =
+        val named =
             spliceStringFields(
                 was.raw,
                 mapOf(
                     MeshtasticProto.USER_LONG_NAME to want.longName,
                     MeshtasticProto.USER_SHORT_NAME to want.shortName,
                 ),
+            ) ?: return null
+        val spliced =
+            spliceVarintFields(
+                named,
+                mapOf(MeshtasticProto.USER_IS_UNMESSAGABLE to if (want.unmessagable) 1L else 0L),
             ) ?: return null
         val step: AdminStep = { passkey -> MeshtasticProto.encodeAdminSetOwner(spliced, passkey) }
         return listOf(step)

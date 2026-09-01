@@ -107,11 +107,15 @@ class LoraRadioViewModelTest {
     private fun ready(
         channels: List<ChannelInfo>,
         owner: BoardOwner? = null,
+        firmware: String = "2.5.0",
     ) = LinkState.Ready(
-        board = BoardInfo(myNodeNum = 42u, pioEnv = "heltec-v4", firmwareVersion = "2.5.0", owner = owner),
+        board = BoardInfo(myNodeNum = 42u, pioEnv = "heltec-v4", firmwareVersion = firmware, owner = owner),
         channels = channels,
         mtu = 512,
     )
+
+    /** Firmware new enough to store the unmonitored mark (ADR 2026-09.emd7); the default above is not. */
+    private val marking = "2.6.9.f223b8a"
 
     @Test
     fun `the picker hides devices that do not look like boards, and show-all reveals them`() =
@@ -550,6 +554,65 @@ class LoraRadioViewModelTest {
             assertTrue(vm.state.value.boardSetUp)
             assertFalse(vm.state.value.needsRename)
             assertEquals("Knit 002a", vm.state.value.meshName)
+        }
+
+    @Test
+    fun `a set-up board that never told the mesh it is unmonitored is offered the action`() =
+        runTest {
+            // Named by an older Knit but never marked (ADR 2026-09.emd7). The names match, which is how the
+            // screen knows to offer the mark rather than a rename.
+            status.value =
+                LoraStatus(
+                    state =
+                        ready(
+                            listOf(ChannelInfo(0, "LongFast", 1), ChannelInfo(1, "Knit", 2)),
+                            owner = BoardOwner("Knit 002a", "Knit"),
+                            firmware = marking,
+                        ),
+                    boardNodeNum = 42u,
+                )
+            val vm = start()
+
+            assertTrue(vm.state.value.needsRename)
+            assertEquals(vm.state.value.knitName, vm.state.value.meshName)
+        }
+
+    @Test
+    fun `a board carrying the whole Knit identity is left alone`() =
+        runTest {
+            status.value =
+                LoraStatus(
+                    state =
+                        ready(
+                            listOf(ChannelInfo(0, "LongFast", 1), ChannelInfo(1, "Knit", 2)),
+                            owner = BoardOwner("Knit 002a", "Knit", unmessagable = true),
+                            firmware = marking,
+                        ),
+                    boardNodeNum = 42u,
+                )
+            val vm = start()
+
+            assertFalse(vm.state.value.needsRename)
+        }
+
+    @Test
+    fun `a board too old to store the mark is never nagged about it`() =
+        runTest {
+            // 2.6.8 drops field 9 and never reports it back, so the prompt would never go away. Writing to
+            // somebody's hardware on a hunch is the worse failure here, exactly as an unreadable name is.
+            status.value =
+                LoraStatus(
+                    state =
+                        ready(
+                            listOf(ChannelInfo(0, "LongFast", 1), ChannelInfo(1, "Knit", 2)),
+                            owner = BoardOwner("Knit 002a", "Knit"),
+                            firmware = "2.6.8.ef9d0d7",
+                        ),
+                    boardNodeNum = 42u,
+                )
+            val vm = start()
+
+            assertFalse(vm.state.value.needsRename)
         }
 
     @Test

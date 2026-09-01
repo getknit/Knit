@@ -61,6 +61,13 @@ doc). **Don't start a deferred item without explicit direction.**
   was reverted before shipping. **Still owed:** the on-hardware trial in `context/lora-bridge.md` — the
   frequency must be *unchanged*, the battery row must survive the telemetry stretch, and a stock node between
   two boards should extend the range.
+  **The setup also marks the board unmonitored** (2026-09-01, ADR 2026-09.emd7): `User.is_unmessagable`
+  rides the same `set_owner` as the rename, so other people's clients stop offering a board whose inbound
+  path keeps only `PRIVATE_APP` as a message target; Restore clears it, and firmware older than 2.6.9 is
+  left alone because it drops the field and would leave the setup looking permanently unfinished.
+  **Still owed:** the device half — on a 2.6.9+ board, confirm the Meshtastic app shows the node as
+  unmonitored after a setup and messagable again after a Restore, and that a pre-2.6.9 board is never
+  prompted to finish a setup it has already finished.
   **A dedicated-frequency setup EXISTS but is DEBUG-ONLY** (2026-08-31, ADR 067): `ProvisionMode.SetupDedicated`
   pins `lora.channel_num` to a slot derived from the Knit channel name, and `LoraAirtime` then drops the 10 %
   politeness ceiling (the region's legal duty cycle still stands), for the isolated-fleet case where there is

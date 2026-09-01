@@ -54,6 +54,9 @@ internal class DemoLoraPlane : LoraPlaneStatus {
         /** Node number → the `!` id on the screen, the `Knit 9f2c` mesh name, and the board-name check. */
         private val NODE_NUM = 0xDA3C9F2Cu
 
+        /** The board's firmware. Shown on the screen, and what decides the identity a setup writes it. */
+        private const val FIRMWARE = "2.5.20.4c97351"
+
         private val RADIO =
             LoraRadioConfig(
                 usePreset = true,
@@ -74,8 +77,8 @@ internal class DemoLoraPlane : LoraPlaneStatus {
                     BoardInfo(
                         myNodeNum = NODE_NUM,
                         pioEnv = "heltec-v3",
-                        firmwareVersion = "2.5.20.4c97351",
-                        owner = BoardName.forNode(NODE_NUM),
+                        firmwareVersion = FIRMWARE,
+                        owner = BoardName.forNode(NODE_NUM, FIRMWARE),
                     ),
                 channels =
                     listOf(

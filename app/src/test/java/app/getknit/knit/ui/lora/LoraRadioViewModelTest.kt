@@ -315,7 +315,7 @@ class LoraRadioViewModelTest {
         }
 
     @Test
-    fun `a board on a preset its region does not default to is flagged, since two presets are mutually deaf`() =
+    fun `a board on a preset its region does not default to is noticed, since every other board must match`() =
         runTest {
             val vm = start()
 
@@ -332,7 +332,8 @@ class LoraRadioViewModelTest {
                     )
             }
 
-            // 2.8's new US default: a board nobody on LongFast can hear.
+            // 2.8's new US default: a board nobody on LongFast can hear. The notice reports it rather than
+            // prescribing LongFast — which preset is right depends on the local mesh, not on the region.
             connect(ModemPreset.LONG_TURBO, LoraRegion.US)
             advanceUntilIdle()
             assertEquals(PresetMismatch(board = "LongTurbo", stock = "LongFast"), vm.state.value.presetMismatch)
@@ -351,11 +352,11 @@ class LoraRadioViewModelTest {
         }
 
     @Test
-    fun `the preset warning stays quiet where the answer would be a guess`() =
+    fun `the preset notice stays quiet where the answer would be a guess`() =
         runTest {
             val vm = start()
             // OTHER buckets regions with different stock presets (the ham carve-outs default to TinyFast), so
-            // there is nothing here Knit can say without risking a warning to somebody whose board is fine.
+            // there is nothing here Knit can say without risking a notice to somebody whose board is fine.
             status.value =
                 LoraStatus(
                     state =

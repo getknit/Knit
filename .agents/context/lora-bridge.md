@@ -286,11 +286,28 @@ out-of-band via a channel QR/URL) is deferred — see `roadmap.md`.
 >
 > **The catch: convergence rests on the primary — and on the preset.** Two boards meet only if their primary
 > names hash alike (automatic for stock boards, false for anyone who renamed theirs) *and* they are on the same
-> modem preset, since two presets are mutually deaf. 2.8 made the second one likely by defaulting freshly
-> flashed **US** boards to `LongTurbo` where they used to pick `LongFast`. `LoraRadioUiState.customPrimary`
-> warns about the first, `LoraRadioUiState.presetMismatch` about the second — the latter off
-> `LoraRegion.defaultPreset`, which like `bandStartKhz` is stated only where Knit knows it exactly, so
-> `OTHER` (which buckets the ham carve-outs and their `TinyFast`/`NarrowSlow` defaults) simply stays quiet.
+> modem preset. The preset decides **both** halves: it is the modulation, and — because `Channels::getName`
+> substitutes the preset's own display name for an unnamed primary — it is also the string hashed into the RF
+> slot. So in the US a stock `MediumFast` board sits on slot 45 of 104 and a stock `LongFast` one on slot 20:
+> different frequency *and* different modulation, doubly deaf. 2.8 made this easy to trip over by defaulting
+> freshly flashed US boards to `LongTurbo` (slot 14 of 52, a third grid again).
+>
+> **Knit does not pick a preset, and must not start.** ADR 045's bargain is borrowing hops from stock nodes,
+> and `rebroadcast_mode = ALL` repeats only traffic "from another mesh with the same lora params" — so those
+> hops exist only on the preset the neighbours actually run, which is regularly not the region default
+> (observed 2026-08-31: a `MediumFast` neighbourhood in a `LongFast`-default region). Pinning a global default
+> would trade every borrowed relay for at best 5 dB. `MediumFast` also costs **0.30×** the air of `LongFast`
+> (71 signed ticks a window against 21) for 0.68× the range, so following the neighbours is usually the better
+> trade on both axes anyway.
+>
+> `LoraRadioUiState.customPrimary` warns about the renamed primary — that one really is a misconfiguration.
+> `LoraRadioUiState.presetMismatch` is a **notice, not a warning**: neutral-coloured, it says what the board is
+> on and that the user's *other* boards have to match, and never asks them to change this one. It triggers off
+> `LoraRegion.defaultPreset`, which like `bandStartKhz` is stated only where Knit knows it exactly, so `OTHER`
+> (which buckets the ham carve-outs and their `TinyFast`/`NarrowSlow` defaults) simply stays quiet. Gating it
+> on evidence instead is not available: `boardsHeard` counts only radios that sent a **Knit** frame
+> (`noteBoard` sits on the Knit intake path), never stock neighbours, so "heard nobody" is the ordinary state
+> of a solo user.
 
 ## Setting a board up (ADR 045)
 

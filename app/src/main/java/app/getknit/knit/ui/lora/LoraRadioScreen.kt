@@ -376,13 +376,14 @@ private fun SetupSection(
                 modifier = Modifier.testTag("lora_custom_primary"),
             )
         }
-        // The other way a well-configured board still meets nobody: two radios on different presets cannot
-        // hear each other at all. Firmware 2.8 made that likely by defaulting new US boards to LongTurbo.
+        // The other setting that decides who this board can hear. Not an error, and deliberately not
+        // coloured like one: Knit cannot know which preset the local mesh runs, so this states the coupling
+        // and leaves the choice alone. See [PresetMismatch].
         state.presetMismatch?.let { mismatch ->
             Text(
-                text = stringResource(R.string.lora_preset_mismatch_warning, mismatch.board, mismatch.stock),
+                text = stringResource(R.string.lora_preset_mismatch_notice, mismatch.board, mismatch.stock),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("lora_preset_mismatch"),
             )
         }

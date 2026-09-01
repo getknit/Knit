@@ -375,8 +375,9 @@ class MeshtasticProtoTest {
 
     @Test
     fun aRegionsStockPresetIsStatedOnlyWhereKnitKnowsItExactly() {
-        // The convergence warning is built on this, so a guess here is a warning shown to somebody whose
-        // board is fine. OTHER buckets the ham regions (TinyFast/NarrowSlow) in with the LongFast ones.
+        // The convergence notice is built on this, so a guess here is a notice shown to somebody whose board
+        // is fine. OTHER buckets the ham regions (TinyFast/NarrowSlow) in with the LongFast ones. It is a
+        // default, never a preset Knit wants a board moved to — that one is whatever the local mesh runs.
         assertEquals(ModemPreset.LONG_FAST, LoraRegion.US.defaultPreset)
         assertEquals(ModemPreset.LONG_FAST, LoraRegion.EU_868.defaultPreset)
         assertEquals(ModemPreset.LITE_FAST, LoraRegion.EU_866.defaultPreset)

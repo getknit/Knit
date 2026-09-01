@@ -1002,11 +1002,10 @@ internal enum class ModemPreset(
  * bands, and the narrowest of them (RU, ~0.5 MHz) has no room to move — and [LoraSlot] refuses everything it
  * cannot place. Everything else about a region, the duty cycle included, is unaffected by this.
  *
- * [defaultPreset] follows the same "stated only where it is known exactly" rule, for the same reason: it
- * exists to warn a user whose board will not meet other Knit boards (ADR 045 rests on every board landing on
- * the stock frequency by itself), and a guess there is a warning shown to somebody with nothing wrong. So
- * [OTHER] carries none — it buckets the ham regions, whose defaults are `TinyFast`/`NarrowSlow`, together
- * with the LongFast ones — and the warning simply stays quiet there.
+ * [defaultPreset] follows the same "stated only where it is known exactly" rule, for the same reason: a guess
+ * there is a notice shown to somebody with nothing wrong. So [OTHER] carries none — it buckets the ham
+ * regions, whose defaults are `TinyFast`/`NarrowSlow`, together with the LongFast ones — and the notice
+ * simply stays quiet there.
  */
 @Suppress("MagicNumber") // the numbers ARE meshtastic's RegionCode wire codes and the band edges in kHz
 internal enum class LoraRegion(
@@ -1018,7 +1017,15 @@ internal enum class LoraRegion(
     val bandEndKhz: Int = 0,
     /**
      * The preset a stock board in this region picks for itself (`RegionInfo::defaultPreset`), or null where
-     * Knit will not claim to know. A board on any other preset is deaf to every board on this one.
+     * Knit will not claim to know. A board on any other preset is deaf to every board on this one, and picks
+     * a different RF slot besides — the firmware hashes the preset's own display name whenever the primary
+     * channel is unnamed (`Channels::getName`), so the two differ in frequency as well as in modulation.
+     *
+     * This is **not** the preset Knit wants a board to be on. Knit does not choose one at all: ADR 045 buys
+     * its reach by borrowing hops from whatever stock nodes are nearby, and those only relay traffic sharing
+     * their own radio parameters, so the right preset is whatever the local mesh actually runs — regularly
+     * something other than this. It is a default, not an authority; [app.getknit.knit.ui.lora.PresetMismatch]
+     * uses it only to notice that the user now has a setting to keep in step across their own boards.
      */
     val defaultPreset: ModemPreset? = ModemPreset.LONG_FAST,
 ) {

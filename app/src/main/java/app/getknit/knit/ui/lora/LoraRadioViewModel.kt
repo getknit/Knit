@@ -38,9 +38,17 @@ data class BoardOption(
 
 /**
  * A board on a modem preset other than the one a stock board in its region picks. Two radios on different
- * presets are mutually deaf, so this board meets no other Knit board however well it is set up — the same
- * total, silent failure a renamed primary causes, and the one 2.8 made likely by defaulting new US boards to
- * `LongTurbo`. Both names are the firmware's own, so they read exactly as the Meshtastic app writes them.
+ * presets are mutually deaf — the same total, silent coupling a renamed primary has — so this is what every
+ * other Knit board has to match, and the one 2.8 made easy to trip over by defaulting new US boards to
+ * `LongTurbo`.
+ *
+ * **It is a notice, not a verdict.** The right preset is whatever the *local* mesh runs, and Knit has no way
+ * to see that: ADR 045's whole bargain is borrowing relays from stock nodes, and `rebroadcast_mode = ALL`
+ * repeats only traffic "from another mesh with the same lora params" — so a region whose community settled on
+ * `MediumFast` is a region where `MediumFast` is correct and this region's `LongFast` would leave the board
+ * alone on a slot of its own. Hence [stock] is context for why the notice appeared, never an instruction: the
+ * message it renders tells the user what their *other* boards must match, and does not ask them to change
+ * this one. Both names are the firmware's own, so they read exactly as the Meshtastic app writes them.
  */
 data class PresetMismatch(
     val board: String,
@@ -113,9 +121,9 @@ data class LoraRadioUiState(
      */
     val customPrimary: Boolean = false,
     /**
-     * The board is on a preset no other Knit board in its region will be on — see [PresetMismatch]. Null
-     * whenever there is nothing to say, which includes every region whose stock preset Knit does not claim
-     * to know exactly ([app.getknit.knit.mesh.lora.LoraRegion.defaultPreset]).
+     * The board is on a preset other than its region's stock one, so every other Knit board has to match it —
+     * see [PresetMismatch]. Null whenever there is nothing to say, which includes every region whose stock
+     * preset Knit does not claim to know exactly ([app.getknit.knit.mesh.lora.LoraRegion.defaultPreset]).
      */
     val presetMismatch: PresetMismatch? = null,
     val boards: List<BoardOption> = emptyList(),
@@ -248,10 +256,11 @@ internal class LoraRadioViewModel(
     }
 
     /**
-     * Whether the board sits on a different modem preset from the one every other board in its region picks
-     * by itself, and so — like a renamed primary — will never meet another Knit board. Silent on the two
-     * cases where the answer would be a guess: a region whose stock preset Knit does not state exactly, and a
-     * board on hand-rolled radio settings, whose `modem_preset` field says nothing about what it transmits.
+     * Whether the board sits on a different modem preset from the one a stock board in its region picks by
+     * itself — the point at which the preset stops being something the user can leave alone, since every
+     * board they want to reach now has to be set to match. Silent on the two cases where the answer would be
+     * a guess: a region whose stock preset Knit does not state exactly, and a board on hand-rolled radio
+     * settings, whose `modem_preset` field says nothing about what it actually transmits.
      */
     private fun presetMismatch(ready: LinkState.Ready): PresetMismatch? {
         val radio = ready.radio ?: return null

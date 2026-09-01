@@ -47,3 +47,7 @@ app/release/*
 
 # Private working area: marketing masters (see above) + personal files — kept out of the public repo.
 .private/
+
+# Bytecode cache from `scripts/*.py` — `scripts/adr.py` is importable (a one-shot script
+# or a test can `from adr import ...`), and importing it writes one of these.
+scripts/__pycache__/

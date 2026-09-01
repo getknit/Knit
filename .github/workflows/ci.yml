@@ -67,3 +67,15 @@ jobs:
         run: ./gradlew detekt --stacktrace --console=plain
       - name: ktlint
         run: ./gradlew ktlintCheck --stacktrace --console=plain
+
+  adr-index:
+    name: ADR router is in sync
+    runs-on: ubuntu-latest
+    # No JDK, no Android SDK, no Gradle: this only reads `.agents/memory/decisions/`.
+    # Enforced (not advisory) because a stale router silently hides a decision from
+    # every agent that reads it, and `merge=union` on the generated file means a bad
+    # merge lands quietly rather than as a conflict.
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check .agents/memory/decisions.md
+        run: python3 scripts/adr.py index --check

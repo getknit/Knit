@@ -7,3 +7,16 @@
 # LFS here means F-Droid would ship a quietly unmoderated app that also fails reproducible-build
 # verification. Plain blobs make that impossible; the build additionally hard-fails on a stub model
 # (see the checkModerationModels task in app/build.gradle.kts).
+
+# `.agents/memory/decisions.md` is a generated router (`python3 scripts/adr.py index`)
+# over `.agents/memory/decisions/`, and its only churn is appended table rows — one per
+# new ADR. This repo is worked in several git worktrees at once; each one adding a
+# decision conflicts on that append every time, and the resolution is always "keep both
+# rows". `merge=union` does exactly that automatically, which is the whole point of the
+# one-file-per-decision split (see the script's header).
+#
+# Union can duplicate a line if two branches edit the *preamble* rather than the table.
+# That is not a merge to resolve by hand either: rerun `python3 scripts/adr.py index`
+# and it overwrites the file wholesale. `python3 scripts/adr.py index --check` proves
+# the committed router matches the files it describes, and CI runs it.
+.agents/memory/decisions.md merge=union

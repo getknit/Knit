@@ -59,8 +59,9 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   Play pre-launch report).
 - **When driving the app on a device:** obey `.agents/rules/devices.md` first, then use
   `.agents/context/debug-bridge.md`.
-- **Before an architectural choice:** CONSULT `.agents/memory/decisions.md`; for what's deliberately
-  deferred, CHECK `.agents/memory/roadmap.md`.
+- **Before an architectural choice:** CONSULT `.agents/memory/decisions.md` — a generated router table
+  over one-file-per-decision ADRs in `.agents/memory/decisions/`; open the files whose row matches, don't
+  work from the titles. For what's deliberately deferred, CHECK `.agents/memory/roadmap.md`.
 - **For maintainer-only workflows a public clone doesn't include** (release testing on physical devices,
   soak/convergence trials, store/marketing capture — and more over time): a local, gitignored **`.private/`
   overlay** may be present. If `.private/AGENTS.md` exists, load it as a nested router (nearest-wins); it is
@@ -72,7 +73,9 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   and `dotagents-standard` (maintain this AGENTS.md router / `.agents/` layout). Skills are vendored in
   the repo (real files under `.agents/skills/`, surfaced to Claude Code via `.claude/skills/` symlinks),
   so cloners get them without any global install.
-- APPEND durable decisions to `.agents/memory/decisions.md`; update `.agents/memory/roadmap.md` as
-  deferred scope ships.
+- ADD a durable decision with `python3 scripts/adr.py new "<title>" --topics a,b`, write the body it
+  scaffolds, then `python3 scripts/adr.py index`. Never hand-edit `.agents/memory/decisions.md` (generated)
+  and never pick an ADR number: ids are minted `YYYY-MM.suffix` so parallel worktrees can't collide, while
+  `001`-`067` keep their sequence forever. Update `.agents/memory/roadmap.md` as deferred scope ships.
 - If a task needs context this router doesn't point to, treat the missing routing as a bug — do the work,
   then add the routing line here.

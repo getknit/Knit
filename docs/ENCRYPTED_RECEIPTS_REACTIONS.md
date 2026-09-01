@@ -37,6 +37,13 @@ CTL_REACTION = 6   MessageContent.rp: ReactionPayload?  // { messageId, emoji? }
 ReactionPayload { messageId: String, emoji: String? }   // emoji null = retraction
 ```
 
+`emoji` is any string; by convention one fully-qualified RGI emoji (the picker is the only emitter and
+emits nothing else). Receivers refuse a blank or over-long value — more than `TextLimits.REACTION` (32
+UTF-16 units) — by applying nothing and counting `DropReason.REACTION_REFUSED`; the value is never
+truncated (that splits a sequence into tofu) and never read as a retraction (retraction is the explicit
+`null`). Length only, never an emoji-class check, so a build predating a Unicode release still applies its
+emoji; the sender applies the same predicate (`isValidReactionEmoji`) before writing its own row.
+
 `MessageContent.VERSION` stays 1 (nullable additive fields, rule 1). `ReactionPayload` is
 deliberately field-compatible with the cleartext `ReactionContent` (same names, same CBOR — one
 codec for a port; golden vectors pin both forms). The DM form carries `CTL_RECEIPT`/`CTL_REACTION`;
@@ -83,7 +90,8 @@ land atomically; a crash re-processes cleanly on re-serve):
   regardless of which form each emit rode. Orphan-permissive (target may not have arrived; the 24 h
   reaper bounds junk). Group-form sender authenticity is the chain itself (an adopted seed implies
   roster membership at adoption); a departed member can still seal reactions under the draining
-  chain for ≤48 h — the same window as their in-flight chats, accepted.
+  chain for ≤48 h — the same window as their in-flight chats, accepted. A refused emoji (§2) is a
+  chain-advancing no-op exactly like an unknown ctl code: consumed, counted, nothing applied.
 
 ## 4. The vaccine-purge retirement (the structural trade)
 
@@ -198,6 +206,8 @@ receipt and reaction are untouched.
 | Constant | Value | Tied to |
 |---|---|---|
 | `CTL_RECEIPT` / `CTL_REACTION` | 5 / 6 | `MessageContent.ctl` registry (append-only) |
+| `TextLimits.REACTION` | 32 UTF-16 units | send + receive cap on a reaction emoji, both forms; ~2× the longest RGI sequence (15); bounds a sealed v3 reaction at ≤ ~290 B transcoded — two LoRa packets, never three |
+| `DropReason.REACTION_REFUSED` | counter | an inbound reaction whose emoji is blank or over the cap: nothing applied, frame still custodied/relayed, chain still advanced |
 | sealed receipt custody TTL | 24 h via stamped `sentAt` | frame-global custody expiry (ADR 006; the e11aa89 lesson) |
 | tick seal budget | 1 chain key per owed tick / per escalated batch | AckSync seal-once cache; ≤500 owed entries / 24 h |
 | `TICK_BATCH_DEBOUNCE_MS` | 45 s | how long an absent author's acks accumulate before escalating (heal is the backstop) |

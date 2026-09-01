@@ -412,6 +412,19 @@ the literal map in `FrameTranscoderTest`); the layout is versioned by *tag*, nev
 reach — and the next break can (`docs/NEXT_WIRE_BREAK.md` item 8) — is the stored form: the 7-B empty nonce
 in custody, the text ids inside sealed payloads, the millisecond clock. `GoldenVectorTest` moved nothing.
 
+**Precedent: the DB v19 field reuse a sixth time — any emoji in a reaction (2026-09-01).** `ReactionContent.emoji`,
+`ReactionPayload.emoji` and `ReactionV2.emoji` were always free-form text; populating them with a skin-tone,
+flag or ZWJ sequence instead of one of six fixed glyphs changes nothing on the wire, and the `0x05`
+transcoder passes the string verbatim (`pass("emoji", 2)`). The one new receiver rule is the rule-5 shape
+applied to a *size*: an emoji over `TextLimits.REACTION` (32 UTF-16 units, ~2× the longest RGI sequence) or
+blank applies nothing locally and counts `REACTION_REFUSED`, while custody, relay, fan-out and the ratchet
+chain advance are untouched — `canCarry` never reads it, so the custody rule stays identical on every build
+(ADR 006). Length-only on purpose: an emoji-class test would make an old build drop every emoji Unicode adds
+after it shipped. No field, no `type`, no ctl, no capability bit, no DB change (`emoji TEXT` since v1);
+`GoldenVectorTest` moved nothing (its 👍 fixtures are unchanged). *Metadata cost:* a room reaction's emoji
+was already cleartext; a sealed reaction's size now varies by up to 61 B with the emoji (229 B → 261 B for
+the longest sequence, two LoRa packets instead of one), a weak hint that a reaction is a sequence.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + every branch that
 tests the version (`InboundPipeline.decryptAndDeliver`, `MeshManager`'s inline-ack give-back,

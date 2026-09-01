@@ -29,6 +29,7 @@ import app.getknit.knit.identity.IdentitySource
 import app.getknit.knit.identity.NodeId
 import app.getknit.knit.identity.PeerLabelIndex
 import app.getknit.knit.identity.displayNameFor
+import app.getknit.knit.isValidReactionEmoji
 import app.getknit.knit.mesh.crypto.AesGcm
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.MessageContent
@@ -524,11 +525,18 @@ class InboundPipeline(
      * Applies an inbound reaction. [ReactionRepository.apply] is last-writer-wins, so duplicates and
      * out-of-order add/retract/replace frames are idempotent. The target message may not exist yet
      * (reactions can outrun the message over the mesh) — the row persists regardless and the UI joins.
+     * An emoji the wire refuses ([isValidReactionEmoji]) applies nothing and counts
+     * [DropReason.REACTION_REFUSED]; never truncated (that splits a sequence into tofu) and never read as
+     * a retraction (garbage would erase a valid reaction). Custody and relay already happened upstream.
      */
     private suspend fun handleReaction(env: RelayEnvelope) {
         // Blocked sender: drop the reaction (the router still relays it onward to other peers).
         if (env.senderId in settings.blockedNodeIds.first()) return
         val content = WireCodec.decodePayload<ReactionContent>(env.payload) ?: return
+        if (content.emoji != null && !isValidReactionEmoji(content.emoji)) {
+            metrics.onDropped(DropReason.REACTION_REFUSED)
+            return
+        }
         reactions.apply(
             ReactionEntity(
                 messageId = content.messageId,
@@ -1088,6 +1096,11 @@ class InboundPipeline(
         rp: ReactionPayload?,
     ) {
         rp ?: return
+        // Same refusal as the cleartext path; the chain/ratchet advance that carried it is unaffected.
+        if (rp.emoji != null && !isValidReactionEmoji(rp.emoji)) {
+            metrics.onDropped(DropReason.REACTION_REFUSED)
+            return
+        }
         reactions.apply(ReactionEntity(rp.messageId, env.senderId, rp.emoji, env.sentAt))
     }
 

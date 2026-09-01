@@ -23,6 +23,8 @@ import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.crypto.DatabaseKey
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.crypto.KeystoreSecret
+import app.getknit.knit.data.emoji.AndroidGlyphCheck
+import app.getknit.knit.data.emoji.EmojiCatalogLoader
 import app.getknit.knit.data.forward.ForwardRepository
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.GroupRootRepository
@@ -56,6 +58,9 @@ val appModule =
             }
         }
         single { SettingsStore(get()) }
+        // Emoji catalog for the reaction picker: parsed once per process, off the main thread, the first time the
+        // sheet opens; emoji this device's fonts cannot draw are dropped at load (Paint.hasGlyph).
+        single { EmojiCatalogLoader(open = { androidContext().assets.open(EmojiCatalogLoader.ASSET) }, canRender = AndroidGlyphCheck()) }
         // Stable per-device id (ANDROID_ID) — seeds the soft block-continuity DeviceTag, not the nodeId.
         single<DeviceIdSource> { AndroidDeviceIdSource(androidContext()) }
         // E2E identity keypair, wrapped under a hardware AndroidKeyStore key in filesDir (outside the DB).

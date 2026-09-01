@@ -8,7 +8,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import app.getknit.knit.ui.theme.LocalReduceMotion
 
@@ -23,10 +25,19 @@ import app.getknit.knit.ui.theme.LocalReduceMotion
  * which also composes no transition at all.
  */
 @Composable
-fun skeletonPulseAlpha(label: String): Float {
-    if (LocalReduceMotion.current) return SKELETON_STILL_ALPHA
+fun skeletonPulseAlpha(label: String): Float = skeletonPulseAlphaState(label).value
+
+/**
+ * The same pulse as a [State], for a placeholder that reads it **in its draw lambda** rather than in
+ * composition: a skeleton with many blocks then re-draws once per frame without recomposing or re-laying
+ * out a node per block (the emoji picker's grid placeholder, ~50 blocks, went from 49 recompositions per
+ * animation frame to none this way).
+ */
+@Composable
+fun skeletonPulseAlphaState(label: String): State<Float> {
+    if (LocalReduceMotion.current) return remember { mutableFloatStateOf(SKELETON_STILL_ALPHA) }
     val transition = rememberInfiniteTransition(label = label)
-    val alpha by transition.animateFloat(
+    return transition.animateFloat(
         initialValue = SKELETON_MIN_ALPHA,
         targetValue = SKELETON_MAX_ALPHA,
         animationSpec =
@@ -36,7 +47,6 @@ fun skeletonPulseAlpha(label: String): Float {
             ),
         label = "${label}Alpha",
     )
-    return alpha
 }
 
 /**
@@ -45,8 +55,13 @@ fun skeletonPulseAlpha(label: String): Float {
  * disappear.
  */
 @Composable
-fun skeletonBlockColor(pulseAlpha: Float): Color =
-    MaterialTheme.colorScheme.onSurface.copy(alpha = SKELETON_PULSE_RANGE * pulseAlpha + SKELETON_BASE_ALPHA)
+fun skeletonBlockColor(pulseAlpha: Float): Color = skeletonBlockColor(MaterialTheme.colorScheme.onSurface, pulseAlpha)
+
+/** Non-composable twin of [skeletonBlockColor] for a draw lambda: pass the theme's `onSurface` from composition. */
+fun skeletonBlockColor(
+    onSurface: Color,
+    pulseAlpha: Float,
+): Color = onSurface.copy(alpha = SKELETON_PULSE_RANGE * pulseAlpha + SKELETON_BASE_ALPHA)
 
 private const val SKELETON_MIN_ALPHA = 0.3f
 private const val SKELETON_MAX_ALPHA = 0.9f

@@ -15,6 +15,7 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.emoji.RecentReactions
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
@@ -559,6 +560,12 @@ class ChatViewModel(
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState(isRoom = isRoom))
 
+    /** The long-press quick-reaction row: the [RecentReactions.SHOWN] most recent picks, newest first. */
+    val recentReactions: StateFlow<List<String>> =
+        settings.recentReactions
+            .map { it.take(RecentReactions.SHOWN) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecentReactions.DEFAULTS)
+
     /**
      * Reach for the image staged in the composer, so the user learns a photo is nearby-only *before*
      * sending rather than after. Its own flow rather than a [ChatUiState] field: the staged attachment is
@@ -687,10 +694,18 @@ class ChatViewModel(
         messageId: String,
         emoji: String,
     ) {
+        // Tapping the chip you already own retracts — undoing a choice, not making one — so only an add or a
+        // replace fronts the recents. Judged from the highlighted chip the user is looking at, after the send.
+        val retracting =
+            state.value.rows
+                .firstOrNull { it.id == messageId }
+                ?.reactions
+                ?.any { it.mine && it.emoji == emoji } == true
         viewModelScope.launch {
             val group = if (isRoom) null else groups.find(conversationId)?.toGroupInfo()
             val recipientId = if (isRoom || group != null) null else conversationId
             meshManager.sendReaction(messageId, emoji, recipientId, group)
+            if (!retracting) settings.recordReaction(emoji)
         }
     }
 

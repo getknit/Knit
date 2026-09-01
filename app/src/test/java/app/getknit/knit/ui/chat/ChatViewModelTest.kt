@@ -13,6 +13,7 @@ import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.emoji.RecentReactions
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
@@ -85,6 +86,7 @@ class ChatViewModelTest {
 
     private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
     private val reactionsFlow = MutableStateFlow(emptyList<ReactionEntity>())
+    private val recentsFlow = MutableStateFlow(RecentReactions.DEFAULTS)
     private val blockedFlow = MutableStateFlow(emptySet<String>())
     private val sizesFlow = MutableStateFlow(emptyMap<String, Int>())
     private val flaggedFlow = MutableStateFlow(emptyList<String>())
@@ -106,6 +108,7 @@ class ChatViewModelTest {
         every { messages.observeMessages(Conversations.NEARBY) } returns messagesFlow
         every { reactions.observeReactions() } returns reactionsFlow
         every { settings.blockedNodeIds } returns blockedFlow
+        every { settings.recentReactions } returns recentsFlow
         every { blobs.observeSizes() } returns sizesFlow
         every { imageScreening.observeFlaggedHashes() } returns flaggedFlow
         every { settings.contentFilteringEnabled } returns filteringFlow
@@ -338,6 +341,50 @@ class ChatViewModelTest {
             assertTrue("we reacted with the thumbs-up", tallies.getValue("👍").mine)
             assertEquals(1, tallies.getValue("❤️").count)
             assertFalse(tallies.getValue("❤️").mine)
+        }
+
+    @Test
+    fun recentReactionsExposeTheNewestSix() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.recentReactions.collect {} }
+            recentsFlow.value = (1..RecentReactions.KEPT).map { "e$it" }
+            advanceUntilIdle()
+
+            assertEquals((1..RecentReactions.SHOWN).map { "e$it" }, vm.recentReactions.value)
+        }
+
+    @Test
+    fun reactingWithANewEmojiSendsItAndFrontsTheRecents() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            messagesFlow.value = listOf(msg(senderId = "bob", id = "m1", conversationId = Conversations.NEARBY))
+            advanceUntilIdle()
+
+            vm.react("m1", "🦄")
+            advanceUntilIdle()
+
+            assertEquals(listOf("m1" to "🦄"), mesh.sentReactions)
+            coVerify(exactly = 1) { settings.recordReaction("🦄") }
+        }
+
+    @Test
+    fun retractingYourOwnReactionSendsButLeavesTheRecentsAlone() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            messagesFlow.value = listOf(msg(senderId = "bob", id = "m1", conversationId = Conversations.NEARBY))
+            reactionsFlow.value = listOf(reaction("m1", "me", "👍"))
+            advanceUntilIdle()
+
+            vm.react("m1", "👍") // the chip you already own: a toggle-off, not a choice
+            vm.react("m1", "❤️") // a replace: a fresh choice
+            advanceUntilIdle()
+
+            assertEquals(listOf("m1" to "👍", "m1" to "❤️"), mesh.sentReactions)
+            coVerify(exactly = 0) { settings.recordReaction("👍") }
+            coVerify(exactly = 1) { settings.recordReaction("❤️") }
         }
 
     @Test

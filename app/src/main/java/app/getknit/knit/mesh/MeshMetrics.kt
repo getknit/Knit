@@ -89,6 +89,13 @@ enum class DropReason {
      * stay a clean "nothing legitimate looks like this" signal.
      */
     UNSIGNED_REFUSED,
+
+    /**
+     * An inbound reaction, cleartext or sealed, whose emoji is blank or longer than `TextLimits.REACTION`
+     * — nothing is applied locally, while the frame is still custodied and relayed (cleartext) or its
+     * ratchet chain still advances (sealed): a size gate is a delivery gate, never a relay gate.
+     */
+    REACTION_REFUSED,
 }
 
 /**

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.getknit.knit.BuildConfig
+import app.getknit.knit.data.emoji.RecentReactions
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -98,6 +99,13 @@ class SettingsStore(
      * a fresh request (a one-tap re-accept; the verified / own-message signals usually cover it anyway).
      */
     override val acceptedConversations: Flow<Set<String>> = dataStore.data.map { it[KEY_ACCEPTED] ?: emptySet() }
+
+    /**
+     * The quick-reaction row's most-recently-used emoji, newest first — the classic six until the first
+     * pick. One separator-joined string, not a preference *set*: order is the whole datum. The codec, seed
+     * and cap live in [RecentReactions]; the seed is never written, so absence means defaults.
+     */
+    val recentReactions: Flow<List<String>> = dataStore.data.map { RecentReactions.decode(it[KEY_RECENT_REACTIONS]) }
 
     /**
      * Whether to hide sensitive content received from others. Defaults to on. Gates receive-side hiding
@@ -323,6 +331,13 @@ class SettingsStore(
 
     /** Accepts [conversationId] out of the message-request queue (a DM peer id or a "g-…" group id). */
     suspend fun accept(conversationId: String) = dataStore.edit { it[KEY_ACCEPTED] = (it[KEY_ACCEPTED] ?: emptySet()) + conversationId }
+
+    /** Fronts [emoji] in [recentReactions] — read-modify-write inside one edit, which DataStore serializes. */
+    suspend fun recordReaction(emoji: String) =
+        dataStore.edit { prefs ->
+            val current = RecentReactions.decode(prefs[KEY_RECENT_REACTIONS])
+            prefs[KEY_RECENT_REACTIONS] = RecentReactions.encode(RecentReactions.push(current, emoji))
+        }
 
     /**
      * The intro driver's durable state (`IntroSync`): the peers an intro is pending with, and the
@@ -567,5 +582,6 @@ class SettingsStore(
         val KEY_LORA_PRIOR_CHANNEL_NUM = intPreferencesKey("lora_prior_channel_num")
         val KEY_LORA_PRIOR_LONG_NAME = stringPreferencesKey("lora_prior_long_name")
         val KEY_LORA_PRIOR_SHORT_NAME = stringPreferencesKey("lora_prior_short_name")
+        val KEY_RECENT_REACTIONS = stringPreferencesKey("recent_reactions")
     }
 }

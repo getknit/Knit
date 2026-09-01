@@ -79,3 +79,15 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check .agents/memory/decisions.md
         run: python3 scripts/adr.py index --check
+
+  generated-assets:
+    name: Generated assets are in sync
+    runs-on: ubuntu-latest
+    # No JDK, no Android SDK, no Gradle: the emoji catalog is a committed file generated from a vendored
+    # Unicode source, so a hand edit or a re-vendor without a regenerate must fail here, not on a device.
+    steps:
+      - uses: actions/checkout@v7
+      - name: Generator unit tests
+        run: python3 -m unittest scripts/test_gen_emoji_catalog.py
+      - name: Check app/src/main/assets/emoji/emoji_en.tsv
+        run: python3 scripts/gen-emoji-catalog.py --check

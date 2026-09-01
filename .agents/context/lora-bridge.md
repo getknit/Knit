@@ -233,7 +233,9 @@ frame originated `relay = true`, so it crosses back on the same rule, and it re-
 the pre-decrypt exists-gate (which is how a tick lost over LoRa heals when the DM is re-offered). Between two
 builds that read crypto scheme v3 (ADR 059) every sealed DM-form frame is ~30 B lighter (derived nonce,
 compact plaintext), and through ADR 060's `0x05` transcoder the signed, custodied DM ✓✓ crosses in **one
-packet** (221 B at 228/231/255), a sealed reaction in one at 231, the profile bootstrap in two at 228 instead
+packet** (221 B at 228/231/255), a sealed reaction with a single-code-point emoji in one at 231 (a skin-tone,
+flag or ZWJ-sequence reaction is two — 261 B for the longest RGI sequence, 290 B at the `TextLimits.REACTION`
+cap — never three), the profile bootstrap in two at 228 instead
 of three; AckSync's `relay = false` tick for a room or group post crosses **unsigned as one packet** (157 B
 transcoded, ~218 B on `0x03`; at the MTU-255 ESP32 boards the latter needs the measured cap, `TORADIO_OVERHEAD` 27 → 228-B payloads, pinned by `CoordinationPlaneSizeBudgetTest`; verified on the
 lab Pixel 9's MTU-255 ESP32 board 2026-08-29 — `lora ready … mtu=255 maxPayload=228`, fragmented 228-B writes accepted).

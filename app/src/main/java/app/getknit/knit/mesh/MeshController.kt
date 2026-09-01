@@ -124,7 +124,8 @@ interface MeshController {
      * Toggles this device's emoji reaction on [messageId] and floods the change — sealed when the
      * target conversation can carry it ([recipientId] for a DM thread, [group] for a group thread;
      * both null = broadcast room, always cleartext). The caller passes the thread context it already
-     * holds, like [sendChat]; the manager never re-derives it from the message row.
+     * holds, like [sendChat]; the manager never re-derives it from the message row. Ignored (logged) when
+     * [emoji] is blank or exceeds `TextLimits.REACTION`.
      */
     suspend fun sendReaction(
         messageId: String,

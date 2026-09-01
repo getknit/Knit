@@ -1078,6 +1078,54 @@ class InboundPipelineTest {
         }
 
     @Test
+    fun anOversizedCleartextReactionIsRefusedAndCountedButStillCustodied() =
+        runTest {
+            // The open emoji set's one receiver rule: past TextLimits.REACTION nothing is applied — never
+            // truncated, never read as a retraction — while custody (and so relay) is untouched, because a
+            // size gate is a delivery gate and canCarry never reads the emoji.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val env = rig.reaction(alice, messageId = "m1", emoji = "👍".repeat(17))
+
+            rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
+
+            coVerify(exactly = 0) { rig.reactions.apply(any()) }
+            assertEquals(1L, rig.drops(DropReason.REACTION_REFUSED))
+            assertTrue("still custodied for onward carry", rig.forwardStore.has(env.id))
+        }
+
+    @Test
+    fun aBlankCleartextReactionIsRefusedRatherThanReadAsARetraction() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val env = rig.reaction(alice, messageId = "m1", emoji = " ")
+
+            rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
+
+            coVerify(exactly = 0) { rig.reactions.apply(any()) }
+            assertEquals(1L, rig.drops(DropReason.REACTION_REFUSED))
+        }
+
+    @Test
+    fun theLongestRgiSequenceIsAppliedVerbatim() =
+        runTest {
+            // Length-only on purpose: a 10-code-point ZWJ sequence — or any emoji Unicode adds later — must
+            // never be dropped by a build that predates it.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val env = rig.reaction(alice, messageId = "m1", emoji = LONGEST_RGI)
+
+            rig.pipeline.onDeliver(alice.sign(env), env, alice.nodeId)
+
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", alice.nodeId, LONGEST_RGI, 7L)) }
+            assertEquals(0L, rig.drops(DropReason.REACTION_REFUSED))
+        }
+
+    @Test
     fun receiptFromTheDmRecipientMarksTheMessageReceived() =
         runTest {
             val rig = Rig(backgroundScope)
@@ -3864,6 +3912,99 @@ class InboundPipelineTest {
         }
 
     @Test
+    fun anOversizedSealedDmReactionAdvancesTheChainAndAppliesNothing() =
+        runTest {
+            // The sealed twin of the cleartext refusal: the ratchet consumed the frame (the next one from
+            // the same author still opens), the row was never written, and the drop is counted.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+
+            rig.deliver(
+                alice,
+                author.dm("ctl-o1", "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m1", "👍".repeat(17)), sentAt = 7L),
+            )
+            rig.deliver(alice, author.dm("ctl-o2", "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m1", "👍"), sentAt = 9L))
+
+            coVerify(exactly = 1) { rig.reactions.apply(any()) }
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", alice.nodeId, "👍", 9L)) }
+            assertEquals(1L, rig.drops(DropReason.REACTION_REFUSED))
+            assertFalse(rig.msgMap.containsKey("ctl-o1"))
+        }
+
+    @Test
+    fun anOversizedSealedGroupReactionAppliesNothingInsideTheChainCommit() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-o", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            rig.deliver(
+                alice,
+                author.groupFrame(
+                    group,
+                    id = "ctl-go1",
+                    body = "",
+                    ctl = MessageContent.CTL_REACTION,
+                    rp = ReactionPayload("gm7", " "),
+                    sentAt = 11L,
+                ),
+            )
+            rig.deliver(
+                alice,
+                author.groupFrame(
+                    group,
+                    id = "ctl-go2",
+                    body = "",
+                    ctl = MessageContent.CTL_REACTION,
+                    rp = ReactionPayload("gm7", "🔥"),
+                    sentAt = 12L,
+                ),
+            )
+
+            coVerify(exactly = 1) { rig.reactions.apply(any()) }
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("gm7", alice.nodeId, "🔥", 12L)) }
+            assertEquals(1L, rig.drops(DropReason.REACTION_REFUSED))
+        }
+
+    @Test
+    fun aSealedV3ReactionWithTheLongestRgiSequenceApplies() =
+        runTest {
+            // The v3 compact layout raw-encodes the message id but keeps the emoji a text string: a 35-byte
+            // sequence round-trips untouched.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+            val target = FrameId.new() // the compact form needs a canonical id to raw-encode
+
+            rig.deliver(
+                alice,
+                author.dm(
+                    "ctl-v3l",
+                    "",
+                    ctl = MessageContent.CTL_REACTION,
+                    rp = ReactionPayload(target, LONGEST_RGI),
+                    sentAt = 7L,
+                    v3 = true,
+                ),
+            )
+
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity(target, alice.nodeId, LONGEST_RGI, 7L)) }
+            assertEquals(0L, rig.drops(DropReason.REACTION_REFUSED))
+        }
+
+    @Test
     fun aBlockedPeersSealedCtlDiesAtTheBlockedGate() =
         runTest {
             val rig = Rig(backgroundScope)
@@ -4313,5 +4454,8 @@ class InboundPipelineTest {
 
         /** The prekey id the Rig's fake identity serves (mirrors IdentityKeyStore.prekeyPrivFor). */
         const val SPK_ID = 1
+
+        /** 👩🏽‍❤️‍💋‍👨🏼 — the longest RGI emoji sequence Unicode ships: 10 code points, 15 UTF-16 units, 35 B UTF-8. */
+        const val LONGEST_RGI = "\uD83D\uDC69\uD83C\uDFFD\u200D\u2764\uFE0F\u200D\uD83D\uDC8B\u200D\uD83D\uDC68\uD83C\uDFFC"
     }
 }

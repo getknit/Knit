@@ -43,6 +43,11 @@ notice is incorporated here by reference. The full text of the Apache License 2.
   `scripts/gen-profanity-list.py`. It is redistributed under the MIT License; the full license text,
   source URL, pinned commit, and transform/curation rules are in
   [`app/src/main/assets/moderation/README.md`](app/src/main/assets/moderation/README.md).
+- **`emoji_en.tsv`** — the reaction picker's emoji catalog under `app/src/main/assets/emoji/` is a derived
+  work generated from Unicode's [`emoji-test.txt`](https://www.unicode.org/reports/tr51) (Unicode License
+  v3, © Unicode, Inc.), pinned at Emoji 17.0, by `scripts/gen-emoji-catalog.py`. It is redistributed under
+  the Unicode License v3; the full license text, source URL, pinned version, and transform rules are in
+  [`app/src/main/assets/emoji/README.md`](app/src/main/assets/emoji/README.md).
 
 ## Build- and test-only dependencies (not distributed)
 

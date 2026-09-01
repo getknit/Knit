@@ -17,7 +17,26 @@ object TextLimits {
 
     /** Chat message body. Generous, but bounded so a frame stays well within the transport's payload budget. */
     const val MESSAGE = 2000
+
+    /**
+     * A reaction emoji, in UTF-16 units — the unit every other cap here is enforced in. The longest RGI emoji
+     * sequences are 15 units (a two-person kiss with skin tones) and 14 (a tag-sequence subdivision flag), so
+     * 32 is ~2× the worst case with room for Unicode to grow a sequence, while bounding the UTF-8 form at
+     * 64 B — the whole of a sealed reaction's size variance on the wire. Enforced on both send and receive by
+     * [isValidReactionEmoji]; a length cap only, never an emoji-class test (see that function).
+     */
+    const val REACTION = 32
 }
+
+/**
+ * Whether [emoji] is a reaction the wire accepts: non-blank and at most [TextLimits.REACTION] UTF-16 units.
+ * Shared by the sender ([app.getknit.knit.mesh.MeshManager.sendReaction]) and both inbound paths so the
+ * two can never drift. Deliberately **length-only**: an emoji-class check (code-point ranges, "one grapheme
+ * cluster") would make an old build drop every emoji Unicode adds after it shipped, and grapheme
+ * segmentation varies with the device ICU — the picker is the only emitter and is where "one RGI emoji"
+ * is guaranteed. Blank is refused rather than read as a retraction: retraction is the explicit `null`.
+ */
+fun isValidReactionEmoji(emoji: String): Boolean = emoji.isNotBlank() && emoji.length <= TextLimits.REACTION
 
 /**
  * Normalizes a single-line field: trims the ends and collapses internal whitespace runs (including

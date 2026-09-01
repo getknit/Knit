@@ -268,7 +268,8 @@ doc). **Don't start a deferred item without explicit direction.**
 - **Frame compaction: what round 2 (ADR 060, the `0x05` transcoder) left** — round 1 (ADR 059, crypto v3)
   and round 2 (ADR 060: a schema-aware re-encoding of `signed` the receiver rebuilds byte-exact before
   verifying) both landed 2026-08-29; measured after: signed v3 ✓✓ tick **221 B, one packet at 228/231/255**,
-  unsigned tick 157, sealed reaction 229 (one at 231/255), 40-char DM 244 (one NAN message, two LoRa
+  unsigned tick 157, sealed reaction 229 with 👍 (one at 231/255; 261 with the longest RGI emoji sequence and
+  290 at the `TextLimits.REACTION` cap — two packets on every plane, never three), 40-char DM 244 (one NAN message, two LoRa
   packets), 100-char DM 304 (two — the structural floor, sig 64 + ids 48 + ek 32 + ct 124), profile 352
   (3 → 2 parts at 228), 12-ack tick 409 (3 → 2). Still owed: **(a) the LoRa gate before that plane ships to
   release** — today every LoRa frame the transcoder reproduces rides `0x05` (a flag-day, acceptable only while

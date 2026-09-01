@@ -22,6 +22,17 @@ document:
 
 ### Added
 
+- React with any emoji. Long-press a message and tap the new "+" beside the quick reactions to open the
+  whole emoji set — browse it by group or search it by name — with skin tones, flags and family sequences
+  all included. The quick row now remembers what you actually use, newest first, instead of the same six
+  forever. Older phones show whatever you picked as soon as their font knows it, and a phone that cannot
+  draw an emoji never offers it in the first place.
+
+### Changed
+
+- Knit no longer feeds what is on screen to Android's content-capture service (the on-device "app content"
+  suggestions). An offline, end-to-end-encrypted messenger has no business streaming its screen text to
+  another process; it also made long lists smoother.
 - Chats now say what happened in them. A quiet, centered line marks a contact changing their name ("Sam
   is now Sam Vimes") or their photo, someone renaming a group or changing its picture, and the group
   being created — alongside the "left the chat" line that was already there. The lines are written by

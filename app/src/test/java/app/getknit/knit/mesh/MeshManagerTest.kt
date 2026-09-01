@@ -1330,6 +1330,42 @@ class MeshManagerTest {
             assertEquals(1L, rig.metrics.snapshot().reactionsSealedFallback)
         }
 
+    @Test
+    fun anOversizedReactionIsRefusedBeforeItTouchesTheRowOrTheWire() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The picker can't produce one, but the debug bridge can: past TextLimits.REACTION the manager
+            // logs and ignores — no optimistic row, no frame of either form, no counter.
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+
+            rig.manager.sendReaction("m1", "👍".repeat(17), recipientId = rig.bob.nodeId)
+            rig.manager.sendReaction("m1", " ", recipientId = rig.bob.nodeId)
+            advanceUntilIdle()
+
+            coVerify(exactly = 0) { rig.reactions.apply(any()) }
+            assertTrue(rig.sentChatFrames().isEmpty())
+            assertTrue(rig.sentReactionFrames().isEmpty())
+            assertEquals(0L, rig.metrics.snapshot().reactionsSealed)
+            assertEquals(0L, rig.metrics.snapshot().reactionsSealedFallback)
+        }
+
+    @Test
+    fun theLongestRgiSequenceRidesSealedVerbatim() =
+        runTest(UnconfinedTestDispatcher()) {
+            // An open emoji set is no wire change: a 10-code-point ZWJ sequence is just a longer string.
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            val kiss = "\uD83D\uDC69\uD83C\uDFFD\u200D\u2764\uFE0F\u200D\uD83D\uDC8B\u200D\uD83D\uDC68\uD83C\uDFFC"
+
+            rig.manager.sendReaction("m1", kiss, recipientId = rig.bob.nodeId)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", rig.me.nodeId, kiss, rig.now)) }
+            assertTrue(rig.sentReactionFrames().isEmpty())
+            assertEquals(1, rig.sentChatFrames().size)
+            assertEquals(1L, rig.metrics.snapshot().reactionsSealed)
+        }
+
     private companion object {
         const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"
 

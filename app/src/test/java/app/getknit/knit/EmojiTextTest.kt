@@ -47,6 +47,32 @@ class EmojiTextTest {
         assertEquals(1, emojiOnlyCount(redHeart))
     }
 
+    // --- BMP emoji outside the SMP blocks (pinned by EmojiCatalogAssetTest against the whole catalog) ---
+
+    @Test
+    fun bmpEmojiPresentationSymbolsCountWithoutVs16() {
+        assertEquals(1, emojiOnlyCount("\u2B50")) // ⭐ star
+        assertEquals(1, emojiOnlyCount("\u2705")) // ✅ check mark button
+        assertEquals(1, emojiOnlyCount("\u231A")) // ⌚ watch
+        assertEquals(1, emojiOnlyCount("\u2648")) // ♈ Aries
+        assertEquals(3, emojiOnlyCount("\u2B50\u2B50\u2B50"))
+    }
+
+    @Test
+    fun scatteredBmpSymbolsAreEmojiOnlyWithVs16() {
+        assertEquals(1, emojiOnlyCount("\u00A9\uFE0F")) // ©️
+        assertEquals(0, emojiOnlyCount("\u00A9")) // © — text presentation
+        assertEquals(1, emojiOnlyCount("\u2194\uFE0F")) // ↔️
+        assertEquals(0, emojiOnlyCount("\u2194")) // ↔ — text presentation
+        assertEquals(1, emojiOnlyCount("\u3297\uFE0F")) // ㊗️
+    }
+
+    @Test
+    fun tagSequenceSubdivisionFlagIsOneEmoji() {
+        // 🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scotland: black flag + seven tag characters + cancel tag.
+        assertEquals(1, emojiOnlyCount("\uD83C\uDFF4\uDB40\uDC67\uDB40\uDC62\uDB40\uDC73\uDB40\uDC63\uDB40\uDC74\uDB40\uDC7F"))
+    }
+
     // --- whitespace is ignored ---
 
     @Test

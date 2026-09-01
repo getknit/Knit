@@ -290,14 +290,17 @@ class CoordinationPlaneSizeBudgetTest {
             ),
         )
 
-    private fun cleartextReaction(alice: Party): WireEnvelope =
+    private fun cleartextReaction(
+        alice: Party,
+        emoji: String = "👍",
+    ): WireEnvelope =
         alice.sign(
             RelayEnvelope(
                 type = FrameType.REACTION,
                 id = FrameId.new(),
                 senderId = alice.nodeId,
                 sentAt = SENT_AT,
-                payload = WireCodec.encodePayload(ReactionContent(messageId = FrameId.new(), emoji = "👍")),
+                payload = WireCodec.encodePayload(ReactionContent(messageId = FrameId.new(), emoji = emoji)),
             ),
         )
 
@@ -574,6 +577,56 @@ class CoordinationPlaneSizeBudgetTest {
         assertTrue("a 100-char DM is the structural floor: still 2 LoRa packets", checkNotNull(transcodedLoraParts(long)) <= 2)
     }
 
+    /**
+     * The open emoji set (any RGI emoji, capped at [TextLimits.REACTION] UTF-16 units on both ends): the
+     * emoji rides verbatim inside the AEAD and through the transcoder, so every extra UTF-8 byte is one
+     * wire byte. The longest sequence Unicode ships (a two-person kiss with skin tones, 35 B) takes the
+     * sealed v3 reaction from 229 B to 261 B — two coordination messages and two LoRa packets, the
+     * pre-ADR-060 status quo — and the cap's own worst case (290 B) stays two: never three, never refused.
+     * The cleartext room form has the headroom and stays one packet everywhere.
+     */
+    @Test
+    fun theWorstCaseEmojiKeepsEveryReactionFormWithinTwoPackets() {
+        val alice = party()
+        val bob = party()
+        val sealer = V2Sealer(alice, bob, RatchetCrypto.generateKeyPair())
+        sealer.confirm()
+        assertTrue("the fixture is a legal reaction", isValidReactionEmoji(LONGEST_RGI))
+        assertEquals("the cap's worst case is exactly at the cap", TextLimits.REACTION, CAP_MAX.length)
+        val longest =
+            alice.sign(
+                sealer.dm(
+                    FrameId.new(),
+                    body = "",
+                    ctl = MessageContent.CTL_REACTION,
+                    rp = ReactionPayload(FrameId.new(), LONGEST_RGI),
+                    v3 = true,
+                ),
+            )
+        val longestSizes = report("sealed-reaction-longest-rgi-v3", longest, alice)
+        assertEquals("the longest RGI sequence pushes a sealed reaction back to two messages", 2, longestSizes.transcodedParts)
+        assertTrue(checkNotNull(transcodedLoraParts(longest)) <= 2)
+        assertTrue(checkNotNull(transcodedLoraParts(longest, esp32PayloadCap)) <= 2)
+        val capMax =
+            alice.sign(
+                sealer.dm(
+                    FrameId.new(),
+                    body = "",
+                    ctl = MessageContent.CTL_REACTION,
+                    rp = ReactionPayload(FrameId.new(), CAP_MAX),
+                    v3 = true,
+                ),
+            )
+        report("sealed-reaction-cap-max-v3", capMax, alice)
+        assertTrue("the receive cap bounds a sealed reaction at two LoRa packets", checkNotNull(transcodedLoraParts(capMax)) <= 2)
+        assertTrue(checkNotNull(transcodedLoraParts(capMax, esp32PayloadCap)) <= 2)
+        val room = cleartextReaction(alice, LONGEST_RGI)
+        val roomSizes = report("cleartext-reaction-longest-rgi", room, alice)
+        assertEquals("a room reaction keeps one message", 1, roomSizes.transcodedParts)
+        assertEquals(1, transcodedLoraParts(room))
+        assertEquals(1, transcodedLoraParts(room, esp32PayloadCap))
+    }
+
     @Test
     fun fragBudgetArithmetic() {
         // 3 parts x (cap - 4 B frag header) is the ceiling for any compact frame on this plane.
@@ -807,6 +860,11 @@ class CoordinationPlaneSizeBudgetTest {
     }
 
     private companion object {
+        /** 👩🏽‍❤️‍💋‍👨🏼 — the longest RGI emoji sequence Unicode ships: 10 code points, 15 UTF-16 units, 35 B UTF-8. */
+        const val LONGEST_RGI = "\uD83D\uDC69\uD83C\uDFFD\u200D\u2764\uFE0F\u200D\uD83D\uDC8B\u200D\uD83D\uDC68\uD83C\uDFFC"
+
+        /** The largest string the receive cap admits: 16 × 👍 = 32 UTF-16 units, 64 B UTF-8. */
+        val CAP_MAX = "👍".repeat(TextLimits.REACTION / 2)
         const val PRINTABLE_FIRST = 0x21
         const val PRINTABLE_COUNT = 0x5E
         const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"

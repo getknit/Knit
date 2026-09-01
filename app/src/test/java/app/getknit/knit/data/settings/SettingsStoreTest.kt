@@ -1,6 +1,7 @@
 package app.getknit.knit.data.settings
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import app.getknit.knit.data.emoji.RecentReactions
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -57,6 +58,27 @@ class SettingsStoreTest {
             store.setStatus("offline")
             assertEquals("Grace", store.displayName.first())
             assertEquals("offline", store.status.first())
+        }
+
+    @Test
+    fun `recent reactions default to the classic six until the first pick`() =
+        runTest {
+            val store = newStore()
+            assertEquals(RecentReactions.DEFAULTS, store.recentReactions.first())
+        }
+
+    @Test
+    fun `recordReaction fronts the pick, dedupes, persists and caps`() =
+        runTest {
+            val store = newStore()
+            store.recordReaction("🦄")
+            assertEquals(listOf("🦄") + RecentReactions.DEFAULTS, store.recentReactions.first())
+            store.recordReaction("😂")
+            assertEquals(listOf("😂", "🦄", "👍", "❤️", "😮", "😢", "🙏"), store.recentReactions.first())
+            repeat(13) { store.recordReaction("e$it") }
+            val recents = store.recentReactions.first()
+            assertEquals(RecentReactions.KEPT, recents.size)
+            assertEquals("e12", recents.first())
         }
 
     @Test

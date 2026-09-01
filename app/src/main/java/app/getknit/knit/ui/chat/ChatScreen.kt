@@ -85,6 +85,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material3.AlertDialog
@@ -113,6 +114,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -133,6 +135,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.pluralStringResource
@@ -173,6 +176,8 @@ import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.emoji.EmojiCatalogLoader
+import app.getknit.knit.data.emoji.RecentReactions
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
@@ -228,6 +233,12 @@ private enum class SendAction { Sending, Send, Attach }
 private const val LOCK_SLOP_PX = 120f
 private const val CANCEL_SLOP_PX = 160f
 
+// The long-press menu's quick-reaction row geometry (see ReactionPicker): a 48 dp cell + 4 dp gap, the row's
+// 8 dp side padding twice, and the fewest recents worth showing beside the "+".
+private const val QUICK_CELL_PITCH_DP = 52
+private const val QUICK_ROW_PADDING_DP = 16
+private const val MIN_QUICK_REACTIONS = 4
+
 @Composable
 fun ChatScreen(
     conversationId: String,
@@ -244,8 +255,13 @@ fun ChatScreen(
     val stagedAttachmentRelay by viewModel.stagedAttachmentRelay.collectAsStateWithLifecycle()
     val voiceRecording by viewModel.voiceRecording.collectAsStateWithLifecycle()
     val voicePlayback by viewModel.voicePlayback.collectAsStateWithLifecycle()
+    val recentReactions by viewModel.recentReactions.collectAsStateWithLifecycle()
     val inputState = rememberTextFieldState()
     val shareInbox = koinInject<ShareInbox>()
+    // Warm the emoji catalog (parse + per-glyph font check, once per process, off the main thread) as soon as
+    // a chat is open, so the reaction picker's sheet composes its grid on its first frame instead of a skeleton.
+    val emojiCatalog = koinInject<EmojiCatalogLoader>()
+    LaunchedEffect(emojiCatalog) { emojiCatalog.load() }
     // Mentions the user inserted via autocomplete, draft-local alongside inputState (per the AGENTS.md
     // gotcha, draft state stays in the screen, not the ViewModel/DataStore). Filtered against the final
     // text on send so a mention whose "@name" was deleted doesn't ship.
@@ -399,6 +415,7 @@ fun ChatScreen(
         onStartReply = { replyingTo = it },
         onCancelReply = { replyingTo = null },
         onReact = viewModel::react,
+        quickReactions = recentReactions,
         onDeleteMessage = viewModel::deleteMessage,
         onBlock = viewModel::block,
         onUnblock = viewModel::unblock,
@@ -477,6 +494,8 @@ internal fun ChatScreenContent(
     onStartReply: (ReplyRef) -> Unit,
     onCancelReply: () -> Unit,
     onReact: (messageId: String, emoji: String) -> Unit,
+    // The quick-reaction row's emoji (most recent picks). Defaulted so previews and the content tests keep working.
+    quickReactions: List<String> = RecentReactions.DEFAULTS,
     onDeleteMessage: (messageId: String) -> Unit,
     onBlock: (nodeId: String) -> Unit,
     onUnblock: (nodeId: String) -> Unit,
@@ -495,6 +514,9 @@ internal fun ChatScreenContent(
     onVoiceSeek: (hash: String, positionMs: Int) -> Unit = { _, _ -> },
 ) {
     var fullscreenImage by remember { mutableStateOf<FullscreenImage?>(null) }
+    // The message the full emoji picker is open for (from the long-press menu's "+"), or null. Saveable so a
+    // rotation mid-pick keeps the sheet; hosted here, not in the row, so scrolling can't dispose it.
+    var emojiSheetFor by rememberSaveable { mutableStateOf<String?>(null) }
     // The message a tapped quote scrolled to, briefly highlighted then cleared (see the LaunchedEffect
     // below and MessageBubble). Null when nothing is highlighted.
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
@@ -818,6 +840,8 @@ internal fun ChatScreenContent(
                                 onImageClick = { fullscreenImage = it },
                                 onOpenProfile = onOpenProfile,
                                 onReact = onReact,
+                                quickReactions = quickReactions,
+                                onMoreReactions = { emojiSheetFor = it },
                                 onReply = { msg ->
                                     onStartReply(
                                         ReplyRef(
@@ -866,6 +890,16 @@ internal fun ChatScreenContent(
             now = now,
             onDismiss = { fullscreenImage = null },
             onSave = { onSaveAttachment(fs.image.hash, fs.image.key, fs.image.mime) },
+        )
+    }
+
+    emojiSheetFor?.let { messageId ->
+        EmojiPickerSheet(
+            onPick = { emoji ->
+                onReact(messageId, emoji)
+                emojiSheetFor = null
+            },
+            onDismiss = { emojiSheetFor = null },
         )
     }
 
@@ -1101,9 +1135,6 @@ private fun ColumnScope.NearbyOnlyMarker(onClick: () -> Unit) {
     }
 }
 
-/** The short set of quick reactions offered when long-pressing a message. */
-private val REACTION_EMOJI = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
@@ -1121,6 +1152,9 @@ private fun MessageBubble(
     onImageClick: (FullscreenImage) -> Unit,
     onOpenProfile: (nodeId: String) -> Unit,
     onReact: (messageId: String, emoji: String) -> Unit,
+    // The long-press menu's quick-reaction row and its "+" (opens the full picker); defaulted for previews.
+    quickReactions: List<String> = RecentReactions.DEFAULTS,
+    onMoreReactions: (messageId: String) -> Unit = {},
     // Reply to this message / tap its quote to jump to the original; defaulted no-ops for previews.
     onReply: (ChatRow) -> Unit = {},
     onQuoteClick: (messageId: String) -> Unit = {},
@@ -1413,9 +1447,14 @@ private fun MessageBubble(
                 }
                 if (showPicker) {
                     ReactionPicker(
+                        quickReactions = quickReactions,
                         onPick = { emoji ->
                             onReact(row.id, emoji)
                             showPicker = false
+                        },
+                        onMore = {
+                            showPicker = false
+                            onMoreReactions(row.id)
                         },
                         onReply = {
                             onReply(row)
@@ -1552,7 +1591,11 @@ private fun QuotedMessage(
  */
 @Composable
 private fun ReactionPicker(
+    // The quick row: the user's most recent picks (RecentReactions.DEFAULTS until the first), newest first.
+    quickReactions: List<String>,
     onPick: (String) -> Unit,
+    // The trailing "+": opens the full emoji picker for this message.
+    onMore: () -> Unit,
     onReply: () -> Unit,
     onCopy: (() -> Unit)?,
     onDetails: () -> Unit,
@@ -1561,6 +1604,15 @@ private fun ReactionPicker(
     onDismiss: () -> Unit,
 ) {
     val spacingPx = with(LocalDensity.current) { 8.dp.roundToPx() }
+    // 48 dp cells with 4 dp gaps inside 8 dp side padding, plus the "+" cell: six recents need 376 dp, past
+    // a 360 dp phone, and the popup can only clamp to the window edge, not shrink. Show as many recents as
+    // the window fits (never fewer than MIN_QUICK_REACTIONS) so the row never clips.
+    val windowWidthDp =
+        with(LocalDensity.current) {
+            LocalWindowInfo.current.containerSize.width
+                .toDp()
+        }.value.toInt()
+    val shown = ((windowWidthDp - QUICK_ROW_PADDING_DP) / QUICK_CELL_PITCH_DP - 1).coerceIn(MIN_QUICK_REACTIONS, RecentReactions.SHOWN)
     // Center the bar horizontally over the bubble and place it above; drop below only if it would clip
     // the top of the window.
     val positionProvider =
@@ -1598,7 +1650,7 @@ private fun ReactionPicker(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    REACTION_EMOJI.forEach { emoji ->
+                    quickReactions.take(shown).forEach { emoji ->
                         val reactWith = stringResource(R.string.chat_react_with, emoji)
                         Text(
                             text = emoji,
@@ -1611,6 +1663,9 @@ private fun ReactionPicker(
                                     .semantics { contentDescription = reactWith }
                                     .padding(8.dp),
                         )
+                    }
+                    IconButton(onClick = onMore, modifier = Modifier.testTag("chat_react_more")) {
+                        Icon(Icons.Outlined.AddReaction, contentDescription = stringResource(R.string.chat_react_more))
                     }
                 }
                 // Delete is always offered, so the divider below the emoji row always shows.
@@ -3112,7 +3167,9 @@ fun ReactionRowPreview() =
 fun ReactionPickerPreview() =
     KnitPreview {
         ReactionPicker(
+            quickReactions = RecentReactions.DEFAULTS,
             onPick = {},
+            onMore = {},
             onReply = {},
             onCopy = {},
             onDetails = {},

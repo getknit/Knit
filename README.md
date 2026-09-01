@@ -476,6 +476,10 @@ works, redistributed under their own licenses (full notices in
   (MobileNetV2), used under the **MIT License**, © 2020 The nsfw_model Developers.
 - **Profanity word list** — generated from [**dsojevic/profanity-list**](https://github.com/dsojevic/profanity-list),
   used under the **MIT License**, © 2021 David Sojevic.
+- **Emoji catalog** (`app/src/main/assets/emoji/`) — generated from Unicode's
+  [**`emoji-test.txt`**](https://www.unicode.org/reports/tr51) (Emoji 17.0), used under the
+  **Unicode License v3**, © Unicode, Inc. (full notice in
+  [`app/src/main/assets/emoji/README.md`](app/src/main/assets/emoji/README.md)).
 
 See [`docs/CONTENT_MODERATION.md`](docs/CONTENT_MODERATION.md) for how they are used.
 

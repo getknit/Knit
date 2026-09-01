@@ -24,6 +24,7 @@ import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.isValidReactionEmoji
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
@@ -1450,6 +1451,8 @@ class MeshManager(
      * every member ratchet-eligible), else as the legacy cleartext `reaction` frame (a broadcast-room
      * target always: the room is plaintext by design). `sentAt` is the wall clock used for
      * last-writer-wins so concurrent reactors across the mesh converge, whichever form each one rode.
+     * An emoji the wire refuses ([isValidReactionEmoji]) is logged and ignored before the optimistic
+     * row — the picker can't produce one, but the debug bridge can.
      */
     override suspend fun sendReaction(
         messageId: String,
@@ -1457,6 +1460,10 @@ class MeshManager(
         recipientId: String?,
         group: GroupInfo?,
     ) {
+        if (!isValidReactionEmoji(emoji)) {
+            Log.w(TAG, "reaction refused: ${emoji.length} units on $messageId")
+            return
+        }
         val me = identity.nodeId()
         val next = if (reactions.currentEmoji(messageId, me) == emoji) null else emoji
         val now = clock()

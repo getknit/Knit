@@ -952,11 +952,14 @@ internal fun ChatScreenContent(
                 LoraReach.LoraOnlyDmsOff -> R.string.chat_lora_only_dms_off_title to R.string.chat_lora_only_dms_off_body
                 LoraReach.LoraOnlySaturated -> R.string.chat_lora_saturated_title to R.string.chat_lora_saturated_body
                 LoraReach.RoomSaturated -> R.string.chat_lora_room_saturated_title to R.string.chat_lora_room_saturated_body
+                LoraReach.GroupUnsupported -> R.string.chat_lora_group_title to R.string.chat_lora_group_body
                 LoraReach.LoraOnly, LoraReach.Silent -> R.string.chat_lora_only_title to R.string.chat_lora_only_body
             }
-        // Every DM body names the peer; the room's is about a mixed audience and takes no argument, so it
-        // is resolved without one rather than formatted against a placeholder it does not carry.
-        val loraNamesPeer = state.loraReach != LoraReach.RoomSaturated
+        // Every DM body names the peer; the room's and the group's are about a set of people and take no
+        // argument, so they are resolved without one rather than formatted against a placeholder they do
+        // not carry.
+        val loraNamesPeer =
+            state.loraReach != LoraReach.RoomSaturated && state.loraReach != LoraReach.GroupUnsupported
         AlertDialog(
             onDismissRequest = { showLoraInfo = false },
             icon = { Icon(Icons.Outlined.Sensors, contentDescription = null) },
@@ -1098,6 +1101,7 @@ private fun LoraNotice(
             LoraReach.LoraOnlyDmsOff -> R.string.chat_lora_only_dms_off
             LoraReach.LoraOnlySaturated -> R.string.chat_lora_saturated
             LoraReach.RoomSaturated -> R.string.chat_lora_room_saturated
+            LoraReach.GroupUnsupported -> R.string.chat_lora_group
             LoraReach.Silent -> return
         }
     Surface(
@@ -3256,6 +3260,7 @@ fun LoraNoticePreview() =
             LoraNotice(reach = LoraReach.LoraOnlyDmsOff, onClick = {})
             LoraNotice(reach = LoraReach.LoraOnlySaturated, onClick = {})
             LoraNotice(reach = LoraReach.RoomSaturated, onClick = {})
+            LoraNotice(reach = LoraReach.GroupUnsupported, onClick = {})
         }
     }
 

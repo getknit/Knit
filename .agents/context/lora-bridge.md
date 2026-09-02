@@ -502,6 +502,15 @@ false are two encodings — both read as messagable); `Channel{ index=1, setting
   gate (the room rides whatever the DM switch says) and no dismissal (it clears itself as the rolling window
   ages air back, so "never again" would hide it exactly when it matters). Its copy names nobody and says what
   still works — everyone in phone-radio range gets the post at once.
+  A **group** thread has its own rule too, `loraGroupReachFor` → `LoraReach.GroupUnsupported`
+  (ADR 2026-09.6ww7), and it is the odd one out: every other notice here is congestion, this one is
+  **capability** — `LoraFramePolicy` refuses group-form chat, so a member only the board can hear does not
+  get these messages at all until they are back in phone-radio range or a relay carries the group scope.
+  Gated on this group's **roster** (`members.any { it != me && it in loraOnlyIds }`, never the room's
+  existential test — a LoRa-only stranger is not in the group), silenced by `RelayReach.Covered` (a group
+  scope *is* scope-eligible where the room is not), and with no airtime or `dms` gate, both of which would
+  be category errors. `ChatViewModel.LoraAudience` is the sealed `Peer`/`Room`/`Group` projection that feeds
+  all three, chosen once from `Conversations.kindFor`.
   **`LoraStatus` is republished on every accepted send** (`LoraMeshTransport.sendMessage`), not only on the
   60-s linger sweep: a send is the only thing that spends the ledger, so without it the notice — and the
   radio screen's `lora_airtime` percentage — trailed the fact by up to a minute. The pacer's 3-s floor bounds

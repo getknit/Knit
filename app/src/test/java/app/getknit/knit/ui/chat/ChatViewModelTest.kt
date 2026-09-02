@@ -758,6 +758,43 @@ class ChatViewModelTest {
         }
 
     @Test
+    fun aGroupSaysItsMessagesDoNotTravelOverLoraWhileAMemberIsBehindTheBoard() =
+        runTest {
+            loraFactsFlow.value = LoraFacts(LoraPlane.Live, dms = true)
+            val vm = vm(GROUP)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            groupFlow.value = group(GROUP, members = listOf("me", "sam", "priya"))
+            // Priya is in the group and only the board hears her.
+            mesh.peerTransports.value = mapOf("priya" to setOf(TransportKind.LoRa))
+            advanceUntilIdle()
+
+            assertEquals(LoraReach.GroupUnsupported, vm.state.value.loraReach)
+            // No composer hint: nothing in a group rides the plane, so there is no budget to overrun.
+            assertEquals(LoraCarry.None, vm.state.value.loraCarry)
+
+            // She comes back onto a phone radio and the notice retires itself.
+            mesh.peerTransports.value = mapOf("priya" to setOf(TransportKind.Bluetooth))
+            advanceUntilIdle()
+            assertEquals(LoraReach.Silent, vm.state.value.loraReach)
+        }
+
+    @Test
+    fun aGroupIgnoresLoraOnlyIdsThatAreNotOnItsRoster() =
+        runTest {
+            loraFactsFlow.value = LoraFacts(LoraPlane.Live, dms = true)
+            val vm = vm(GROUP)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            groupFlow.value = group(GROUP, members = listOf("me", "sam"))
+            // A LoRa-only stranger says nothing about whether *this group's* messages land; and our own
+            // id is not somebody we can fail to deliver to, even were it ever to appear in the map.
+            mesh.peerTransports.value =
+                mapOf("theo" to setOf(TransportKind.LoRa), "me" to setOf(TransportKind.LoRa))
+            advanceUntilIdle()
+
+            assertEquals(LoraReach.Silent, vm.state.value.loraReach)
+        }
+
+    @Test
     fun loraCarryFollowsThePlaneAndTheDmSwitch() =
         runTest {
             stubDm("ana")

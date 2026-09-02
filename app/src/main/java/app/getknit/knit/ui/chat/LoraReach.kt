@@ -26,6 +26,15 @@ enum class LoraReach {
     LoraOnlySaturated,
 
     /**
+     * A group thread's one and only LoRa state: the plane refuses group-form frames outright
+     * (`LoraFramePolicy`), so a member the board alone can hear will not see these messages over it —
+     * they wait in custody for that member to come back within phone-radio range, or for a relay.
+     * Unlike every other state here this is about a **capability**, not congestion: no amount of
+     * airtime would carry it.
+     */
+    GroupUnsupported,
+
+    /**
      * The room's one and only LoRa state: the window is spent and somebody here is behind the board, so
      * posts reach them minutes late while everyone in phone-radio range still gets them at once. The room
      * has no [LoraOnly] counterpart on purpose (ADR 2026-09.ursc) — its audience is always a mix, so a
@@ -93,6 +102,28 @@ fun loraRoomReachFor(
         !loraOnlyPeer -> LoraReach.Silent
         !facts.airtimeSpent -> LoraReach.Silent
         else -> LoraReach.RoomSaturated
+    }
+
+/**
+ * The [LoraReach] for a group thread (ADR 2026-09.6ww7). [loraOnlyMember] is true while at least one member
+ * of *this group's roster* is reachable over the board alone — a LoRa-only stranger says nothing about
+ * whether a group message lands, so unlike the room this is never "anyone at all".
+ *
+ * The plane refuses group-form chat by policy, so there is nothing to say about airtime or about
+ * `facts.dms` here: no setting and no spare window would carry it. A relay-covered group **is** carried by
+ * the Internet plane (a group scope is scope-eligible where the room is not), so that silences it exactly
+ * as it silences the DM rule.
+ */
+fun loraGroupReachFor(
+    facts: LoraFacts,
+    loraOnlyMember: Boolean,
+    relayReach: RelayReach,
+): LoraReach =
+    when {
+        facts.plane != LoraPlane.Live -> LoraReach.Silent
+        !loraOnlyMember -> LoraReach.Silent
+        relayReach == RelayReach.Covered -> LoraReach.Silent
+        else -> LoraReach.GroupUnsupported
     }
 
 /** The [LoraCarry] for a draft in [conversationId]. */

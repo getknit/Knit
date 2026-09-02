@@ -77,6 +77,25 @@ class LoraReachTest {
     }
 
     @Test
+    fun `a group says its messages do not travel over LoRa while a member is behind the board`() {
+        assertEquals(LoraReach.GroupUnsupported, loraGroupReachFor(live, loraOnlyMember = true, RelayReach.Silent))
+        assertEquals(LoraReach.GroupUnsupported, loraGroupReachFor(live, loraOnlyMember = true, RelayReach.Pending))
+        // Nothing about this is congestion: a spent window and the DM switch are both beside the point,
+        // because the plane refuses group-form frames whatever the ledger says.
+        val spent = live.copy(airtimeSpent = true, dms = false)
+        assertEquals(LoraReach.GroupUnsupported, loraGroupReachFor(spent, loraOnlyMember = true, RelayReach.Silent))
+    }
+
+    @Test
+    fun `a group stays quiet with every member on a phone radio, no board, or a relay carrying it`() {
+        assertEquals(LoraReach.Silent, loraGroupReachFor(live, loraOnlyMember = false, RelayReach.Silent))
+        // A group scope *is* scope-eligible, unlike the room — a covered thread has a carrier.
+        assertEquals(LoraReach.Silent, loraGroupReachFor(live, loraOnlyMember = true, RelayReach.Covered))
+        assertEquals(LoraReach.Silent, loraGroupReachFor(LoraFacts(LoraPlane.Down), true, RelayReach.Silent))
+        assertEquals(LoraReach.Silent, loraGroupReachFor(LoraFacts(), loraOnlyMember = true, RelayReach.Silent))
+    }
+
+    @Test
     fun `LoRa-only is the board and nothing else`() {
         assertTrue(isLoraOnly(boardOnly))
         assertFalse(isLoraOnly(setOf(TransportKind.LoRa, TransportKind.Bluetooth)))

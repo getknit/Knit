@@ -19,6 +19,7 @@ import app.getknit.knit.data.emoji.RecentReactions
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
+import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
@@ -379,21 +380,33 @@ class ChatViewModel(
         val audience: LoraAudience,
     )
 
-    // Which peers the notice reasons over. A DM watches its own entry; the room, addressed to nobody,
-    // watches whether *anyone* is behind the board. One or the other, never both — and the map is reduced
-    // to the answer before `distinctUntilChanged`, so another peer's sighting never rebuilds the screen.
-    private data class LoraAudience(
-        val peerKinds: Set<TransportKind>? = null,
-        val roomLoraOnly: Boolean = false,
-    )
+    // Which peers the notice reasons over — one shape per conversation kind, decided by the thread's id at
+    // construction, so a thread only ever computes the one it can use. The transport map is reduced to that
+    // shape before `distinctUntilChanged`, so another peer's sighting never rebuilds the screen.
+    private sealed interface LoraAudience {
+        /** A DM: the radios that currently reach this thread's peer; null when none do. */
+        data class Peer(
+            val kinds: Set<TransportKind>?,
+        ) : LoraAudience
+
+        /** The room, addressed to nobody: whether *anyone* at all sits behind the board. */
+        data class Room(
+            val loraOnly: Boolean,
+        ) : LoraAudience
+
+        /** A group: every id behind the board, narrowed to this group's roster where the state is built. */
+        data class Group(
+            val loraOnly: Set<String>,
+        ) : LoraAudience
+    }
 
     private val loraAudience: Flow<LoraAudience> =
         meshManager.peerTransports
             .map { transports ->
-                if (isRoom) {
-                    LoraAudience(roomLoraOnly = transports.values.any(::isLoraOnly))
-                } else {
-                    LoraAudience(peerKinds = transports[conversationId])
+                when (Conversations.kindFor(conversationId)) {
+                    ConversationKind.NEARBY -> LoraAudience.Room(transports.values.any(::isLoraOnly))
+                    ConversationKind.GROUP -> LoraAudience.Group(transports.filterValues(::isLoraOnly).keys)
+                    ConversationKind.DM -> LoraAudience.Peer(transports[conversationId])
                 }
             }.distinctUntilChanged()
 
@@ -588,15 +601,29 @@ class ChatViewModel(
                 relayPlane = planeFor(relay),
                 loraPlane = mesh.lora.facts.plane,
                 loraReach =
-                    if (isRoom) {
-                        loraRoomReachFor(mesh.lora.facts, mesh.lora.audience.roomLoraOnly)
-                    } else {
-                        loraReachFor(
-                            conversationId,
-                            mesh.lora.facts,
-                            mesh.lora.audience.peerKinds,
-                            reachFor(conversationId, relay),
-                        )
+                    when (val audience = mesh.lora.audience) {
+                        is LoraAudience.Room -> {
+                            loraRoomReachFor(mesh.lora.facts, audience.loraOnly)
+                        }
+
+                        is LoraAudience.Group -> {
+                            loraGroupReachFor(
+                                mesh.lora.facts,
+                                // The roster, never the whole directory: a LoRa-only stranger is not in
+                                // this group, and our own id is not somebody we fail to deliver to.
+                                loraOnlyMember = members.any { it != me && it in audience.loraOnly },
+                                relayReach = reachFor(conversationId, relay),
+                            )
+                        }
+
+                        is LoraAudience.Peer -> {
+                            loraReachFor(
+                                conversationId,
+                                mesh.lora.facts,
+                                audience.kinds,
+                                reachFor(conversationId, relay),
+                            )
+                        }
                     },
                 loraCarry = loraCarryFor(conversationId, isGroup, mesh.lora.facts),
             )

@@ -7,7 +7,9 @@ import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.lora.LoraSizeHint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The LoRa-only notice, the composer's carry form, and its budget — pure rules over the plane facts. */
@@ -23,8 +25,9 @@ class LoraReachTest {
 
     @Test
     fun `the notice stays quiet whenever a better plane has the peer, or there is no board`() {
-        // The room is addressed to no one; a peer another radio reaches needs no ornament.
+        // The room is addressed to no one, so it never reaches the DM rule — it has loraRoomReachFor.
         assertEquals(LoraReach.Silent, loraReachFor(Conversations.NEARBY, live, boardOnly, RelayReach.Room))
+        // A peer another radio reaches needs no ornament.
         assertEquals(LoraReach.Silent, loraReachFor("ana", live, setOf(TransportKind.LoRa, TransportKind.Bluetooth), RelayReach.Silent))
         assertEquals(LoraReach.Silent, loraReachFor("ana", live, setOf(TransportKind.WifiAware), RelayReach.Silent))
         // Not reachable over anything: the existing offline behaviour speaks, not this notice.
@@ -45,11 +48,41 @@ class LoraReachTest {
     fun `with the airtime window spent a LoRa-only DM is told it will wait`() {
         val spent = LoraFacts(LoraPlane.Live, dms = true, airtimeSpent = true)
         assertEquals(LoraReach.LoraOnlySaturated, loraReachFor("ana", spent, boardOnly, RelayReach.Silent))
-        // Only where the LoRa-only notice would have shown: a better carrier or the room still says nothing…
+        // Only where the LoRa-only notice would have shown: a better carrier still says nothing…
         assertEquals(LoraReach.Silent, loraReachFor("ana", spent, setOf(TransportKind.LoRa, TransportKind.Bluetooth), RelayReach.Silent))
+        // …and the room never comes through this rule at all, spent or not.
         assertEquals(LoraReach.Silent, loraReachFor(Conversations.NEARBY, spent, boardOnly, RelayReach.Room))
         // …and the DMs-off notice outranks it (nothing is going out at all, spent or not).
         assertEquals(LoraReach.LoraOnlyDmsOff, loraReachFor("ana", spent.copy(dms = false), boardOnly, RelayReach.Silent))
+    }
+
+    @Test
+    fun `the room says so once the window is spent and somebody is behind the board`() {
+        val spent = live.copy(airtimeSpent = true)
+        assertEquals(LoraReach.RoomSaturated, loraRoomReachFor(spent, loraOnlyPeer = true))
+        // The room rides LoRa whatever the DM switch says, so a spent window still speaks with DMs off.
+        assertEquals(LoraReach.RoomSaturated, loraRoomReachFor(spent.copy(dms = false), loraOnlyPeer = true))
+    }
+
+    @Test
+    fun `the room stays quiet when a spent window delays nobody, or when there is air left`() {
+        val spent = live.copy(airtimeSpent = true)
+        // Everyone we have heard is on a phone radio: the queue holds nothing anyone is waiting for.
+        assertEquals(LoraReach.Silent, loraRoomReachFor(spent, loraOnlyPeer = false))
+        // Somebody is out there, but the window has room — posts are not delayed yet.
+        assertEquals(LoraReach.Silent, loraRoomReachFor(live, loraOnlyPeer = true))
+        // No board, or one that is down: the header glyph is what speaks.
+        assertEquals(LoraReach.Silent, loraRoomReachFor(LoraFacts(LoraPlane.Down, airtimeSpent = true), true))
+        assertEquals(LoraReach.Silent, loraRoomReachFor(LoraFacts(airtimeSpent = true), loraOnlyPeer = true))
+    }
+
+    @Test
+    fun `LoRa-only is the board and nothing else`() {
+        assertTrue(isLoraOnly(boardOnly))
+        assertFalse(isLoraOnly(setOf(TransportKind.LoRa, TransportKind.Bluetooth)))
+        assertFalse(isLoraOnly(setOf(TransportKind.WifiAware)))
+        assertFalse(isLoraOnly(emptySet()))
+        assertFalse(isLoraOnly(null))
     }
 
     @Test

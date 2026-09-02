@@ -68,6 +68,7 @@ import org.junit.runner.RunWith
  * inner `blobState` combine — hashes + flagged + filtering) is stubbed, or the whole state stalls.
  */
 @RunWith(AndroidJUnit4::class)
+@Suppress("LargeClass") // cohesive single-SUT suite over one shared vm()/stubDm() harness, as MeshManagerTest
 class ChatViewModelTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val messages = mockk<MessageRepository>(relaxed = true)
@@ -710,6 +711,50 @@ class ChatViewModelTest {
             advanceUntilIdle()
             assertEquals(LoraReach.Silent, vm.state.value.loraReach)
             assertEquals(LoraCarry.Dm, vm.state.value.loraCarry)
+        }
+
+    @Test
+    fun theRoomSaysWhenLoraAirtimeIsSpentAndSomeoneIsOnlyOnTheBoard() =
+        runTest {
+            loraFactsFlow.value = LoraFacts(LoraPlane.Live, dms = true, airtimeSpent = true)
+            mesh.peerTransports.value = mapOf("ana" to setOf(TransportKind.LoRa))
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            advanceUntilIdle()
+
+            assertEquals(LoraReach.RoomSaturated, vm.state.value.loraReach)
+            assertEquals(LoraCarry.Room, vm.state.value.loraCarry)
+
+            // Bluetooth reaches her too, so the spent window delays nobody the room can name.
+            mesh.peerTransports.value = mapOf("ana" to setOf(TransportKind.LoRa, TransportKind.Bluetooth))
+            advanceUntilIdle()
+            assertEquals(LoraReach.Silent, vm.state.value.loraReach)
+
+            // She goes back behind the board, then the window frees up: the room stops complaining but the
+            // draft still rides LoRa.
+            mesh.peerTransports.value = mapOf("ana" to setOf(TransportKind.LoRa))
+            advanceUntilIdle()
+            assertEquals(LoraReach.RoomSaturated, vm.state.value.loraReach)
+            loraFactsFlow.value = LoraFacts(LoraPlane.Live, dms = true)
+            advanceUntilIdle()
+            assertEquals(LoraReach.Silent, vm.state.value.loraReach)
+            assertEquals(LoraCarry.Room, vm.state.value.loraCarry)
+        }
+
+    @Test
+    fun aDmIgnoresAnotherPeerSittingBehindTheBoard() =
+        runTest {
+            stubDm("ana")
+            loraFactsFlow.value = LoraFacts(LoraPlane.Live, dms = true, airtimeSpent = true)
+            // Bo is LoRa-only, which is what the *room* would speak about; this thread is Ana's, and
+            // Bluetooth carries her — the room's existential rule must not leak into a DM.
+            mesh.peerTransports.value =
+                mapOf("ana" to setOf(TransportKind.Bluetooth), "bo" to setOf(TransportKind.LoRa))
+            val vm = vm("ana")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            advanceUntilIdle()
+
+            assertEquals(LoraReach.Silent, vm.state.value.loraReach)
         }
 
     @Test

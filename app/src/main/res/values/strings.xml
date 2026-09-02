@@ -669,6 +669,10 @@
     <string name="chat_lora_saturated">Over LoRa only — airtime is used up, messages are delayed</string>
     <string name="chat_lora_saturated_title">LoRa airtime is used up</string>
     <string name="chat_lora_saturated_body">%1$s can only be reached over the LoRa radio, and the radio has used its share of the airwaves for now. New messages wait their turn and arrive over the next few minutes; delivery ticks may take longer still.</string>
+    <!-- The room's only LoRa notice: it is a mixed audience, so this names nobody and says what still works. -->
+    <string name="chat_lora_room_saturated">LoRa airtime is used up — posts are slow to reach distant people</string>
+    <string name="chat_lora_room_saturated_title">LoRa airtime is used up</string>
+    <string name="chat_lora_room_saturated_body">Some people here were last heard over the LoRa radio, and the radio has used its share of the airwaves for now. Everyone in Wi-Fi or Bluetooth range still gets your posts straight away; posts to the distant ones wait their turn and arrive over the next few minutes.</string>
     <string name="chat_lora_long_message">Long message — it may not reach people over LoRa</string>
 
     <!-- Message details ("Message info", from a message's long-press menu) -->

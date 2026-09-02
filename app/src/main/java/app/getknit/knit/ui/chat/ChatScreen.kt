@@ -951,13 +951,17 @@ internal fun ChatScreenContent(
             when (state.loraReach) {
                 LoraReach.LoraOnlyDmsOff -> R.string.chat_lora_only_dms_off_title to R.string.chat_lora_only_dms_off_body
                 LoraReach.LoraOnlySaturated -> R.string.chat_lora_saturated_title to R.string.chat_lora_saturated_body
+                LoraReach.RoomSaturated -> R.string.chat_lora_room_saturated_title to R.string.chat_lora_room_saturated_body
                 LoraReach.LoraOnly, LoraReach.Silent -> R.string.chat_lora_only_title to R.string.chat_lora_only_body
             }
+        // Every DM body names the peer; the room's is about a mixed audience and takes no argument, so it
+        // is resolved without one rather than formatted against a placeholder it does not carry.
+        val loraNamesPeer = state.loraReach != LoraReach.RoomSaturated
         AlertDialog(
             onDismissRequest = { showLoraInfo = false },
             icon = { Icon(Icons.Outlined.Sensors, contentDescription = null) },
             title = { Text(stringResource(loraTitle)) },
-            text = { Text(stringResource(loraBody, state.title)) },
+            text = { Text(if (loraNamesPeer) stringResource(loraBody, state.title) else stringResource(loraBody)) },
             confirmButton = {
                 TextButton(onClick = { showLoraInfo = false }) {
                     Text(stringResource(R.string.action_close))
@@ -1077,9 +1081,11 @@ private fun RelayNotice(
 }
 
 /**
- * The standing statement that this DM's peer is reachable over the LoRa board alone, pinned under the
- * header beside the relay notice. Renders nothing for [LoraReach.Silent]. The same `surfaceVariant` tint
- * as [RelayNotice], for the same reason: nothing has failed — the message still goes, at SMS pace.
+ * The standing statement that this DM's peer is reachable over the LoRa board alone — or, in the room,
+ * that the board's airtime window is spent while somebody is behind it. Pinned under the header beside the
+ * relay notice; renders nothing for [LoraReach.Silent]. The same `surfaceVariant` tint as [RelayNotice],
+ * for the same reason: nothing has failed — the message still goes, at SMS pace. No dismiss affordance,
+ * unlike [RelayNotice]: every state here clears itself once the radios or the window say so.
  */
 @Composable
 private fun LoraNotice(
@@ -1091,6 +1097,7 @@ private fun LoraNotice(
             LoraReach.LoraOnly -> R.string.chat_lora_only
             LoraReach.LoraOnlyDmsOff -> R.string.chat_lora_only_dms_off
             LoraReach.LoraOnlySaturated -> R.string.chat_lora_saturated
+            LoraReach.RoomSaturated -> R.string.chat_lora_room_saturated
             LoraReach.Silent -> return
         }
     Surface(
@@ -3238,6 +3245,18 @@ fun MessageInputPreview() =
 fun EmptyStatePreview() =
     KnitPreview {
         EmptyState()
+    }
+
+@Preview(showBackground = true)
+@Composable
+fun LoraNoticePreview() =
+    KnitPreview {
+        Column {
+            LoraNotice(reach = LoraReach.LoraOnly, onClick = {})
+            LoraNotice(reach = LoraReach.LoraOnlyDmsOff, onClick = {})
+            LoraNotice(reach = LoraReach.LoraOnlySaturated, onClick = {})
+            LoraNotice(reach = LoraReach.RoomSaturated, onClick = {})
+        }
     }
 
 @Preview(showBackground = true)

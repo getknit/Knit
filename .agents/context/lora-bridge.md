@@ -488,11 +488,24 @@ false are two encodings — both read as messagable); `Channel{ index=1, setting
   existence). `LoraStatus.heard` stays the author count and remains what `reachable`/routing use. The
   Profile row reads "On · <board> · connected / not connected".
 - **Chat.** `LoraNotice` (`chat_lora_notice`, `ui/chat/LoraReach.kt`) under the relay notice for a DM whose
-  peer only the board has heard (`peerTransports[peer] == {LoRa}`, plane live, not relay-covered), with a
+  peer only the board has heard (`isLoraOnly(peerTransports[peer])`, plane live, not relay-covered), with a
   DMs-off variant and (ADR 054) a **saturated** variant — `LoraFacts.airtimeSpent`, ≥ 90 % of the window's
   live budget while live — that says messages are delayed; the composer's "long message" hint (`chat_lora_size_hint`) when the draft exceeds
   `LoraSizeHint`'s budget for its `LoraCarry` form (room 400 B, DM 320 B, −260 B replying, −170 B with a
   photo; pinned in `CoordinationPlaneSizeBudgetTest`).
+  The **room** has its own rule, `loraRoomReachFor` → `LoraReach.RoomSaturated` (ADR 2026-09.ursc): the same spent
+  window, but the audience test is existential — `peerTransports.values.any(::isLoraOnly)`, *is there anyone
+  out there a full queue would delay* — because the room is addressed to nobody. It is the room's **only**
+  LoRa state; there is deliberately no `LoraOnly` counterpart (the room's audience is always a mix, so a
+  standing "some people are far" strip is permanent chrome saying nothing actionable), no `RelayReach` gate
+  (the room is never scope-eligible, `SPOOL_PROTOCOL` §4.4, so no better carrier can exist), no `facts.dms`
+  gate (the room rides whatever the DM switch says) and no dismissal (it clears itself as the rolling window
+  ages air back, so "never again" would hide it exactly when it matters). Its copy names nobody and says what
+  still works — everyone in phone-radio range gets the post at once.
+  **`LoraStatus` is republished on every accepted send** (`LoraMeshTransport.sendMessage`), not only on the
+  60-s linger sweep: a send is the only thing that spends the ledger, so without it the notice — and the
+  radio screen's `lora_airtime` percentage — trailed the fact by up to a minute. The pacer's 3-s floor bounds
+  the rate and `LoraStatusRepository` reduces the snapshot to a threshold, so no UI sees the churn.
 - **Battery (ADR 041).** The board's own `DeviceMetrics` — its `FromRadio.node_info` (the entry whose `num`
   is `my_info`'s) in the handshake, then the TELEMETRY_APP packet the firmware sends the phone about once a
   minute — land in `MeshtasticLink.battery` (`BoardBattery`: `percent` / `voltage` / `powered`, folded by
@@ -563,7 +576,10 @@ where no other Knit board is listening. Set the Meshtastic app's device to **Non
   `airtime.liveMs` stay flat, ✓✓ instant, B's board hears nothing. (2) A ↔ B text over LoRa: each ✓✓ lands on A
   within ~45 s or with B's reply; `loraTickDeferred`/`receiptsCoalesced` climb; a burst of three from A yields
   one tick from B. (3) A burst past the window: `airtime.liveMs` reaches `liveBudgetMs`, the chat notice
-  appears on A for B, `loraDroppedQueue == 0`, the queue drains within 15 min, ticks yield first.
+  appears on A for B **on the spending send, not a minute later** (the publish-on-send above), the **Nearby
+  room** on A carries its own `RoomSaturated` notice for as long as B is LoRa-only, `loraDroppedQueue == 0`,
+  the queue drains within 15 min, ticks yield first. Link B over BLE and the room notice goes quiet while
+  `airtime.liveMs` stays put — the room speaks about a delayed audience, not about the ledger alone.
   (4) `loraNak == 0` throughout, EU boards included.
 - Bridge (ADR 044), the four-device trial: pocket A = board-holder + one more phone, pocket B likewise, the
   two pockets out of BLE/NAN range of each other. `…debug.LORA` shows `role: ACTIVE` on both board-holders and

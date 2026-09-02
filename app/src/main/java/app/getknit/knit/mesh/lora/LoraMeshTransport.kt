@@ -71,8 +71,12 @@ import java.util.concurrent.atomic.AtomicLong
  * [clock] is monotonic (pacing, dedup, linger); [wallClock] is the epoch clock a frame's `sentAt` is stamped
  * in, read only by the freshness gate. Pure/Android-free — the
  * only `android.bluetooth.*` sits behind the [MeshtasticLink]/[MeshtasticGattDialer] seam.
+ *
+ * Large by suppression, as [MeshtasticSession] is: this is the plane's single owner. The pacer loop, the
+ * gossip loop, the linger sweep, the gateway election and the published status all read and write one set
+ * of mutable fields under one scope, so splitting it would mean a second owner of that state.
  */
-@Suppress("TooManyFunctions", "LongParameterList")
+@Suppress("TooManyFunctions", "LongParameterList", "LargeClass")
 internal class LoraMeshTransport(
     private val selfId: suspend () -> String,
     private val link: MeshtasticLink,
@@ -759,6 +763,11 @@ internal class LoraMeshTransport(
                 pace.onQueueStatus(result.queue.free)
                 pace.airtime.record(frame.bucket, message.size, clock())
                 frame.onPartSent()
+                // The ledger just moved, and a send is the only thing that spends it — so republish here
+                // rather than leave the chat's saturation notice and the radio screen's percentage waiting
+                // on the 60 s linger sweep. Cheap: the pacer's 3 s floor bounds how often this can run, and
+                // `LoraStatusRepository` reduces the snapshot to a threshold before any UI sees it.
+                publishStatus()
                 true
             }
 

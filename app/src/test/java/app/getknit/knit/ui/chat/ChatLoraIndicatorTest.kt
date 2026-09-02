@@ -17,8 +17,8 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The chat's two LoRa indicators — the pinned "LoRa only" notice and the composer's length hint — and the
- * cases where they must stay quiet. Sibling of [ChatRelayIndicatorTest].
+ * The chat's two LoRa indicators — the pinned reach notice and the composer's length hint — and the cases
+ * where they must stay quiet. Sibling of [ChatRelayIndicatorTest].
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -94,6 +94,19 @@ class ChatLoraIndicatorTest {
 
         compose.onNodeWithTag("chat_lora_notice").performClick()
         compose.onNodeWithText("LoRa airtime is used up").assertIsDisplayed()
+    }
+
+    @Test
+    fun theRoomSaysItsPostsAreSlowToDistantPeopleAndNamesNobody() {
+        render(conversationId = Conversations.NEARBY, loraReach = LoraReach.RoomSaturated, loraCarry = LoraCarry.Room)
+        compose.onNodeWithText("LoRa airtime is used up — posts are slow to reach distant people").assertIsDisplayed()
+
+        // The room's explanation is about a mixed audience: it speaks of what still works and, unlike every
+        // DM body, carries no peer name to format the thread title into.
+        compose.onNodeWithTag("chat_lora_notice").performClick()
+        compose.onNodeWithText("Some people here were last heard over the LoRa radio", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Everyone in Wi-Fi or Bluetooth range", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Ana", substring = true).assertDoesNotExist()
     }
 
     @Test

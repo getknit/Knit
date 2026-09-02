@@ -372,19 +372,35 @@ class ChatViewModel(
             )
         }
 
-    // The LoRa plane's facts + the radios this thread's peer is reachable over, folded first so the LoRa
-    // notice costs the mesh-status combine one arm, not two. Only this conversation's entry is watched, and
-    // de-duplicated, so another peer's sighting never rebuilds the screen.
+    // The LoRa plane's facts + whoever this thread's notice is about, folded first so the LoRa notice costs
+    // the mesh-status combine one arm, not two.
     private data class LoraThread(
         val facts: LoraFacts,
-        val peerKinds: Set<TransportKind>?,
+        val audience: LoraAudience,
     )
 
+    // Which peers the notice reasons over. A DM watches its own entry; the room, addressed to nobody,
+    // watches whether *anyone* is behind the board. One or the other, never both — and the map is reduced
+    // to the answer before `distinctUntilChanged`, so another peer's sighting never rebuilds the screen.
+    private data class LoraAudience(
+        val peerKinds: Set<TransportKind>? = null,
+        val roomLoraOnly: Boolean = false,
+    )
+
+    private val loraAudience: Flow<LoraAudience> =
+        meshManager.peerTransports
+            .map { transports ->
+                if (isRoom) {
+                    LoraAudience(roomLoraOnly = transports.values.any(::isLoraOnly))
+                } else {
+                    LoraAudience(peerKinds = transports[conversationId])
+                }
+            }.distinctUntilChanged()
+
     private val loraThread =
-        combine(
-            loraFacts,
-            meshManager.peerTransports.map { it[conversationId] }.distinctUntilChanged(),
-        ) { facts, kinds -> LoraThread(facts, kinds) }.distinctUntilChanged()
+        combine(loraFacts, loraAudience) { facts, audience ->
+            LoraThread(facts, audience)
+        }.distinctUntilChanged()
 
     // The relay plane's facts + whether the user has dismissed the room's notice, folded the same way and
     // for the same reason as [LoraThread]: the dismissal only ever changes what the notice says, so it
@@ -571,7 +587,17 @@ class ChatViewModel(
                 relayReach = noticeFor(conversationId, relay, mesh.relay.roomNoticeDismissed),
                 relayPlane = planeFor(relay),
                 loraPlane = mesh.lora.facts.plane,
-                loraReach = loraReachFor(conversationId, mesh.lora.facts, mesh.lora.peerKinds, reachFor(conversationId, relay)),
+                loraReach =
+                    if (isRoom) {
+                        loraRoomReachFor(mesh.lora.facts, mesh.lora.audience.roomLoraOnly)
+                    } else {
+                        loraReachFor(
+                            conversationId,
+                            mesh.lora.facts,
+                            mesh.lora.audience.peerKinds,
+                            reachFor(conversationId, relay),
+                        )
+                    },
                 loraCarry = loraCarryFor(conversationId, isGroup, mesh.lora.facts),
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState(isRoom = isRoom))

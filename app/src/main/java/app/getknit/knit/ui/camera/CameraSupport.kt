@@ -95,9 +95,8 @@ internal fun CameraGate(
                 )
             }
 
-            // The system permission dialog is up — leave the surface empty rather than flash a denial.
             else -> {
-                Unit
+                // The system permission dialog is up — leave the surface empty rather than flash a denial.
             }
         }
     }

@@ -315,7 +315,7 @@ internal fun ProfileDetailsScreenContent(
 
     if (showAvatarFullscreen && state.avatarHash != null) {
         FullscreenImageViewer(
-            model = BlobImage(state.avatarHash!!),
+            model = BlobImage(state.avatarHash),
             contentDescription = stringResource(R.string.chat_image_viewer_desc),
             title = state.displayName,
             onDismiss = { showAvatarFullscreen = false },

@@ -95,7 +95,7 @@ object Protocol {
     const val CAP_CRYPTO_V3 = 0x100L
 
     /** This build's advertised capability bitfield. */
-    val LOCAL_CAPABILITIES: Long =
+    const val LOCAL_CAPABILITIES: Long =
         CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT or
             CAP_INLINE_ACK or CAP_FRAME_TRANSCODE or CAP_CRYPTO_V3
 

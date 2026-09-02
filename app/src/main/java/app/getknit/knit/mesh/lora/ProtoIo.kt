@@ -198,16 +198,6 @@ internal class ProtoReader(
         return v.toUInt()
     }
 
-    fun readFixed64(): Long {
-        require(FIXED64_BYTES)
-        var v = 0L
-        for (i in 0 until FIXED64_BYTES) {
-            v = v or ((buf[pos + i].toLong() and BYTE_MASK.toLong()) shl (i * Byte.SIZE_BITS))
-        }
-        pos += FIXED64_BYTES
-        return v
-    }
-
     fun readFloat(): Float = Float.fromBits(readFixed32().toInt())
 
     fun readBytes(): ByteArray {

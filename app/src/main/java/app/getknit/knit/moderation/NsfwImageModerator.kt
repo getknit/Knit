@@ -3,6 +3,8 @@ package app.getknit.knit.moderation
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -75,7 +77,7 @@ class NsfwImageModerator(
     private fun loadAndProbe(): Interpreter? =
         runCatching {
             loadInterpreter()?.also {
-                runCatching { infer(it, Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)) }
+                runCatching { infer(it, createBitmap(1, 1)) }
             }
         }.getOrNull()
 
@@ -103,7 +105,7 @@ class NsfwImageModerator(
         val height = shape[INPUT_H]
         val width = shape[INPUT_W]
         val quantized = inputTensor.dataType() == DataType.UINT8
-        val scaled = Bitmap.createScaledBitmap(bitmap, width, height, true)
+        val scaled = bitmap.scale(width, height)
 
         val classCount = tflite.getOutputTensor(0).shape()[1]
         val output = Array(1) { FloatArray(classCount) }

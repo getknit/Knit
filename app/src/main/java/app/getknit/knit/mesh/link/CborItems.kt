@@ -101,22 +101,22 @@ internal object CborItems {
         arg: Long,
     ) {
         val mt = major shl MAJOR_SHIFT
-        when {
-            arg in 0..INFO_INLINE_MAX.toLong() -> {
+        when (arg) {
+            in 0..INFO_INLINE_MAX.toLong() -> {
                 out.write(mt or arg.toInt())
             }
 
-            arg in 0..MAX_ONE_BYTE -> {
+            in 0..MAX_ONE_BYTE -> {
                 out.write(mt or INFO_ONE_BYTE)
                 writeBigEndian(out, arg, Byte.SIZE_BYTES)
             }
 
-            arg in 0..MAX_TWO_BYTES -> {
+            in 0..MAX_TWO_BYTES -> {
                 out.write(mt or INFO_TWO_BYTES)
                 writeBigEndian(out, arg, Short.SIZE_BYTES)
             }
 
-            arg in 0..MAX_FOUR_BYTES -> {
+            in 0..MAX_FOUR_BYTES -> {
                 out.write(mt or INFO_FOUR_BYTES)
                 writeBigEndian(out, arg, Int.SIZE_BYTES)
             }

@@ -15,8 +15,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
 import android.util.Log
 import androidx.core.content.ContextCompat
 import app.getknit.knit.mesh.bluetooth.BleConnectArbiter
@@ -42,8 +40,14 @@ import java.nio.ByteOrder
  * to a Meshtastic board, discovers its service, negotiates the MTU, and hands back an [AndroidGattChannel].
  * Everything protocol-shaped runs pure above it (`mesh/lora/MeshtasticSession`). Mirrors the mesh BLE
  * plane's hard-won idioms: the adapter is a **provider** (re-fetched per dial, never cached, so an adapter
- * off→on cycle doesn't strand us), callbacks land on a dedicated [HandlerThread], and every GATT op carries
- * an explicit timeout with the `settled`-race watchdog so a callback that never comes can't wedge the actor.
+ * off→on cycle doesn't strand us), and every GATT op carries an explicit timeout with the `settled`-race
+ * watchdog so a callback that never comes can't wedge the actor.
+ *
+ * Callbacks land on the **main looper** — we call the four-arg `connectGatt`, which delivers on the
+ * caller's looper. A `HandlerThread` named `meshtastic-gatt` used to be started here and never passed to
+ * `connectGatt`, so it only leaked a thread; it is gone. Moving delivery onto a dedicated thread means the
+ * six-arg overload (also the non-deprecated one), and it re-times the MTU settle below, which was tuned
+ * against main-looper delivery — so it needs a board on the bench, not a compile.
  *
  * Device-verified only — there is no host GATT stack, so this class has no unit test; its logic lives behind
  * the pure session/codec, which do.
@@ -56,9 +60,6 @@ internal class MeshtasticGatt(
     private val appContext = context.applicationContext
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter? get() = bluetoothManager?.adapter // provider, not a cached handle
-
-    private val callbackThread = HandlerThread("meshtastic-gatt").apply { start() }
-    private val handler = Handler(callbackThread.looper)
 
     private val _adapterOn = MutableStateFlow(adapter?.isEnabled == true)
     override val adapterOn = _adapterOn.asStateFlow()
@@ -133,7 +134,7 @@ internal class MeshtasticGatt(
     }
 
     /** One open GATT connection; serializes ops through a Mutex and a single completable per op. */
-    private inner class AndroidGattChannel : GattChannel {
+    private class AndroidGattChannel : GattChannel {
         private val eventsChannel = Channel<GattEvent>(Channel.UNLIMITED)
         override val events = eventsChannel
 

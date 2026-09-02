@@ -206,7 +206,7 @@ class ProfileViewModel(
         viewModelScope.launch {
             val crop = computeAvatarCrop(source.width, source.height, diameter, scale, offset.x, offset.y)
             val oldHash = settings.ownAvatarHash.first()
-            val newHash = avatars.saveOwnAvatar(source, crop) ?: return@launch
+            val newHash = avatars.saveOwnAvatar(source, crop)
             settings.setOwnAvatarHash(newHash)
             settings.setAvatarUpdatedAt(System.currentTimeMillis()) // triggers a profile re-broadcast
             if (oldHash != newHash) blobs.deleteIfUnreferenced(oldHash)
@@ -235,7 +235,6 @@ class ProfileViewModel(
     }
 
     override fun onCleared() {
-        super.onCleared()
         _cropTarget.value = null
     }
 }

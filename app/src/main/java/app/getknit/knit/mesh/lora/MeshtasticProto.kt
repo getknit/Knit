@@ -396,10 +396,10 @@ internal object MeshtasticProto {
         }.getOrNull()
 
     private fun decodeMeshPacket(reader: ProtoReader): MeshPacket {
-        var from: UInt = 0u
-        var to: UInt = 0u
+        var from = 0u
+        var to = 0u
         var channel = 0
-        var id: UInt = 0u
+        var id = 0u
         var decoded: MeshData? = null
         var encrypted = false
         var rxSnr: Float? = null
@@ -461,7 +461,7 @@ internal object MeshtasticProto {
     private fun decodeData(reader: ProtoReader): MeshData {
         var portnum = 0
         var payload = ByteArray(0)
-        var requestId: UInt = 0u
+        var requestId = 0u
         while (reader.hasMore) {
             val tag = reader.readTag()
             when (tag ushr WireType.FIELD_SHIFT) {
@@ -475,7 +475,7 @@ internal object MeshtasticProto {
     }
 
     private fun decodeMyInfo(reader: ProtoReader): FromRadio.MyInfo {
-        var myNodeNum: UInt = 0u
+        var myNodeNum = 0u
         var pioEnv: String? = null
         while (reader.hasMore) {
             val tag = reader.readTag()
@@ -490,7 +490,7 @@ internal object MeshtasticProto {
 
     /** `NodeInfo { num, user, device_metrics }` — the board's own entry carries its name and its battery. */
     private fun decodeNodeInfo(reader: ProtoReader): FromRadio.NodeInfo {
-        var num: UInt = 0u
+        var num = 0u
         var metrics: DeviceMetrics? = null
         var owner: BoardOwner? = null
         while (reader.hasMore) {
@@ -524,7 +524,7 @@ internal object MeshtasticProto {
         var res = 0
         var free = 0
         var maxlen = 0
-        var meshPacketId: UInt = 0u
+        var meshPacketId = 0u
         while (reader.hasMore) {
             val tag = reader.readTag()
             when (tag ushr WireType.FIELD_SHIFT) {

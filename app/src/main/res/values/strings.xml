@@ -32,9 +32,6 @@
 
     <!-- Notification conversation titles (per channel) -->
     <string name="notif_title_nearby">Nearby</string>
-    <string name="notif_title_groups">Group messages</string>
-    <string name="notif_title_dms">Direct messages</string>
-    <string name="notif_title_mentions">Mentions</string>
     <string name="notif_self_name">You</string>
 
     <!-- Notification quick actions + group summary (Signal-style) -->
@@ -263,8 +260,6 @@
     <string name="contacts_new_message">New message</string>
     <string name="contacts_empty">No contacts yet.\nSay hi in Nearby, scan someone\'s code, or add them from a contact link.</string>
     <string name="contacts_start_chat">Start chat</string>
-    <string name="contacts_selected">Selected</string>
-    <string name="contacts_not_selected">Not selected</string>
     <string name="contacts_group_full">Groups can have up to %1$d people</string>
 
     <!-- Chat list -->

@@ -3,6 +3,7 @@ package app.getknit.knit.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.core.graphics.scale
 import app.getknit.knit.data.blob.BlobDao
 import app.getknit.knit.data.blob.BlobEntity
 import app.getknit.knit.ui.util.CropRect
@@ -39,16 +40,17 @@ class AvatarStore(
     suspend fun saveOwnAvatar(
         source: Bitmap,
         crop: CropRect,
-    ): String? =
+    ): String =
         withContext(Dispatchers.IO) {
             saveOwnAvatar(Bitmap.createBitmap(source, crop.left, crop.top, crop.width, crop.height))
         }
 
     /**
      * Center-crops [bitmap] to a square, scales to 256², encodes JPEG, and stores it in the `blobs`
-     * table. Returns the content hash (the caller persists it as the own-avatar hash), or null.
+     * table. Returns the content hash, which the caller persists as the own-avatar hash — always non-null;
+     * a crop rect the bitmap can't satisfy throws out of `createBitmap` instead.
      */
-    suspend fun saveOwnAvatar(bitmap: Bitmap): String? =
+    suspend fun saveOwnAvatar(bitmap: Bitmap): String =
         withContext(Dispatchers.IO) {
             val side = min(bitmap.width, bitmap.height)
             val square =
@@ -57,7 +59,7 @@ class AvatarStore(
                 } else {
                     Bitmap.createBitmap(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side)
                 }
-            val scaled = Bitmap.createScaledBitmap(square, AVATAR_SIZE, AVATAR_SIZE, true)
+            val scaled = square.scale(AVATAR_SIZE, AVATAR_SIZE)
             val bytes =
                 ByteArrayOutputStream()
                     .also { scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }

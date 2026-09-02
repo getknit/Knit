@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
+import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayInputStream
 import java.io.InputStream
@@ -127,5 +128,5 @@ internal fun downscale(
     val ratio = min(max.toFloat() / src.width, max.toFloat() / src.height)
     val w = (src.width * ratio).toInt().coerceAtLeast(1)
     val h = (src.height * ratio).toInt().coerceAtLeast(1)
-    return Bitmap.createScaledBitmap(src, w, h, true)
+    return src.scale(w, h)
 }

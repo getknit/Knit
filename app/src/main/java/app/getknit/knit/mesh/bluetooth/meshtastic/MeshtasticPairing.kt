@@ -4,31 +4,14 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.ParcelUuid
-import android.util.Log
 import androidx.core.content.ContextCompat
 import app.getknit.knit.mesh.lora.BoardDirectory
 import app.getknit.knit.mesh.lora.BoardFilter
 import app.getknit.knit.mesh.lora.BoardRef
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-
-/** A Meshtastic board found by a scan: its MAC [address], advertised [name], signal, and bond state. */
-internal data class MeshtasticCandidate(
-    val address: String,
-    val name: String,
-    val rssi: Int,
-    val bonded: Boolean,
-)
 
 /**
  * Lists the bonded devices for the settings picker, each with a verdict on whether it looks like a Meshtastic
@@ -58,59 +41,6 @@ internal class BondedBoardDirectory(
                 )
             }
         }.getOrDefault(emptyList())
-}
-
-/**
- * Scans for advertising Meshtastic boards (filtered on the service UUID) for the picker. A board stops
- * advertising once a client is connected (ESP32 is single-client), so a board already held by the
- * Meshtastic app won't appear — which is the correct signal to the user.
- */
-@SuppressLint("MissingPermission")
-internal class MeshtasticScanner(
-    context: Context,
-) {
-    private val adapter: BluetoothAdapter? =
-        context.applicationContext.getSystemService(BluetoothManager::class.java)?.adapter
-
-    fun scan(): Flow<MeshtasticCandidate> =
-        callbackFlow {
-            val scanner = adapter?.bluetoothLeScanner
-            if (scanner == null) {
-                close()
-                return@callbackFlow
-            }
-            val callback =
-                object : ScanCallback() {
-                    override fun onScanResult(
-                        callbackType: Int,
-                        result: ScanResult,
-                    ) {
-                        val device = result.device
-                        trySend(
-                            MeshtasticCandidate(
-                                address = device.address,
-                                name = device.name ?: result.scanRecord?.deviceName ?: device.address,
-                                rssi = result.rssi,
-                                bonded = device.bondState == BluetoothDevice.BOND_BONDED,
-                            ),
-                        )
-                    }
-
-                    override fun onScanFailed(errorCode: Int) {
-                        Log.w(TAG, "board scan failed: $errorCode")
-                        close()
-                    }
-                }
-            val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(MeshtasticUuids.SERVICE)).build()
-            val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-            runCatching { scanner.startScan(listOf(filter), settings, callback) }
-                .onFailure { close(it) }
-            awaitClose { runCatching { scanner.stopScan(callback) } }
-        }
-
-    private companion object {
-        const val TAG = "MeshtasticGatt"
-    }
 }
 
 /** The result of a [MeshtasticBonder.bond] attempt. */

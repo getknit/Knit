@@ -131,7 +131,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -167,6 +166,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -214,7 +214,6 @@ import app.getknit.knit.ui.voice.VoiceStopButton
 import app.getknit.knit.ui.voice.rememberMicGate
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -332,7 +331,7 @@ fun ChatScreen(
     LaunchedEffect(Unit) {
         shareInbox.consume()?.let { shared ->
             shared.text?.let { if (it.isNotEmpty()) inputState.setTextAndPlaceCursorAtEnd(it) }
-            shared.imageUri?.let { viewModel.attach(Uri.parse(it)) }
+            shared.imageUri?.let { viewModel.attach(it.toUri()) }
         }
     }
     // Debug trailer director: on the Nearby room, drive the REAL composer from scripted DemoComposer
@@ -601,7 +600,12 @@ internal fun ChatScreenContent(
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.primary,
                                     )
-                                    ConnectionStatusRow(state.neighborCount, state.transportHealth, state.relayPlane, state.loraPlane)
+                                    ConnectionStatusRow(
+                                        neighborCount = state.neighborCount,
+                                        health = state.transportHealth,
+                                        relay = state.relayPlane,
+                                        lora = state.loraPlane,
+                                    )
                                 }
                             }
                         }
@@ -628,7 +632,7 @@ internal fun ChatScreenContent(
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.primary,
                                         maxLines = 1,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
                                         text =
@@ -1221,7 +1225,11 @@ private fun MessageBubble(
     onVoicePlay: (hash: String, key: String?) -> Unit = { _, _ -> },
     onVoiceSeek: (hash: String, positionMs: Int) -> Unit = { _, _ -> },
 ) {
-    val maxBubbleWidth = (LocalConfiguration.current.screenWidthDp * 0.8f).dp
+    val maxBubbleWidth =
+        with(LocalDensity.current) {
+            LocalWindowInfo.current.containerSize.width
+                .toDp()
+        } * 0.8f
     val bubbleShape =
         if (row.mine) {
             RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomEnd = 4.dp, bottomStart = 16.dp)
@@ -2137,7 +2145,7 @@ private fun FullscreenImageViewer(
                         style = MaterialTheme.typography.titleSmall,
                         color = Color.White,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text =

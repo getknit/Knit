@@ -296,7 +296,7 @@ class MeshService : LifecycleService() {
 
     companion object {
         private const val TAG = "MeshService"
-        private val CHANNEL_ID = NotificationChannels.STATUS
+        private const val CHANNEL_ID = NotificationChannels.STATUS
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "app.getknit.knit.STOP_MESH"
         private const val ACTION_HEAL = "app.getknit.knit.HEAL_MESH"

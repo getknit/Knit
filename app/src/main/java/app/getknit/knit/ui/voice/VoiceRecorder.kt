@@ -48,9 +48,6 @@ class VoiceRecorder(
     private var sink: ByteArrayOutputStream? = null
     private var startedAt = 0L
 
-    /** True between a successful [start] and the [stop]/[cancel] that ends it. */
-    val isRecording: Boolean get() = recorder != null
-
     /** Milliseconds since [start], or 0 when not recording — the source of the composer's elapsed counter. */
     fun elapsedMs(): Long = if (startedAt == 0L) 0L else System.currentTimeMillis() - startedAt
 

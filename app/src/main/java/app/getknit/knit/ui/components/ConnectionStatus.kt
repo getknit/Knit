@@ -69,9 +69,9 @@ import kotlinx.coroutines.delay
 fun ConnectionStatusRow(
     neighborCount: Int,
     health: TransportHealth,
+    modifier: Modifier = Modifier,
     relay: RelayPlane = RelayPlane.Off,
     lora: LoraPlane = LoraPlane.Off,
-    modifier: Modifier = Modifier,
 ) {
     val plane = settled(relay, live = RelayPlane.Live, down = RelayPlane.Down, graceMs = RELAY_DOWN_GRACE_MS)
     val board = settled(lora, live = LoraPlane.Live, down = LoraPlane.Down, graceMs = LORA_DOWN_GRACE_MS)

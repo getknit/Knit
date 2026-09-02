@@ -117,7 +117,7 @@ internal object LinkFraming {
         if (tagByte == -1) return null // clean EOF at a record boundary
         val type = Type.fromTag(tagByte.toByte()) ?: throw IOException("unknown record type $tagByte")
         val len = ByteBuffer.wrap(readFully(input, LENGTH_BYTES)).int
-        if (len < 0 || len > MAX_PAYLOAD_BYTES) throw IOException("record length $len out of range")
+        if (len !in 0..MAX_PAYLOAD_BYTES) throw IOException("record length $len out of range")
         val payload = if (len == 0) EMPTY else readFully(input, len)
         return Message(type, payload)
     }

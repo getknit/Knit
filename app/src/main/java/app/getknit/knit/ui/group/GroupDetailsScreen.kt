@@ -256,7 +256,7 @@ internal fun GroupDetailsScreenContent(
 
     if (showPhotoFullscreen && state.photoHash != null) {
         FullscreenImageViewer(
-            model = BlobImage(state.photoHash!!),
+            model = BlobImage(state.photoHash),
             contentDescription = stringResource(R.string.chat_image_viewer_desc),
             title = state.title,
             onDismiss = { showPhotoFullscreen = false },

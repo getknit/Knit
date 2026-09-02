@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Movie
 import android.os.Build
 import android.util.Log
+import androidx.core.graphics.createBitmap
 import app.getknit.knit.data.downscale
 import java.io.ByteArrayOutputStream
 
@@ -134,7 +135,7 @@ object WebpTranscode {
     @Suppress("DEPRECATION") // Movie is the only built-in GIF frame sampler; still functional.
     private fun sampleFrames(movie: Movie, maxDim: Int, quality: Int, interval: Int, duration: Int): Frames? {
         // Movie needs a software canvas; one reusable buffer at the source size, drawn each step.
-        val frameBuffer = Bitmap.createBitmap(movie.width(), movie.height(), Bitmap.Config.ARGB_8888)
+        val frameBuffer = createBitmap(movie.width(), movie.height())
         val canvas = Canvas(frameBuffer)
         val webp = ArrayList<ByteArray>()
         val durations = ArrayList<Int>()

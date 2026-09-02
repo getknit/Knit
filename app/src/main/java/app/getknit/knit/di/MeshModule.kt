@@ -100,7 +100,7 @@ val meshModule =
                         if (BuildConfig.LORA_PLANE) add(get<LoraMeshTransport>())
                     }
                 CompositeMeshTransport(children, get(), get()) { msg ->
-                    android.util.Log.d("CompositeMeshTransport", msg)
+                    Log.d("CompositeMeshTransport", msg)
                 }
             }
         }
@@ -152,7 +152,7 @@ val meshModule =
         single<FarPeerFrameSource> { get<MeshManager>() }
         single<BridgeFrameSource> { get<MeshManager>() }
         single {
-            val settings = get<app.getknit.knit.data.settings.SettingsStore>()
+            val settings = get<SettingsStore>()
             LoraMeshTransport(
                 selfId = { get<app.getknit.knit.identity.Identity>().nodeId() },
                 link = get(),

@@ -136,7 +136,7 @@ object GroupRootPolicy {
         held: GroupRootState?,
     ): Boolean {
         if (gr.root.size != ROOT_BYTES) return false
-        if (gr.version < 1 || gr.version > MAX_ROOT_VERSION) return false
+        if (gr.version !in 1..MAX_ROOT_VERSION) return false
         val heldVersion = held?.takeIf { it.root != null }?.version ?: 0
         if (gr.version > heldVersion + MAX_ROOT_VERSION_JUMP) return false
         if (gr.minter !in foundingRoster) return false

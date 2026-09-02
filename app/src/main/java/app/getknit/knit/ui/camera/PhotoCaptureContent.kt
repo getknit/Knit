@@ -1,6 +1,5 @@
 package app.getknit.knit.ui.camera
 
-import androidx.annotation.StringRes
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException

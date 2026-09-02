@@ -102,10 +102,6 @@ internal enum class ProvisionMode {
      * deriving its slot from the primary's name again.
      */
     Restore,
-    ;
-
-    /** Whether this mode writes the channel table and the quieting, i.e. is one of the two setups. */
-    val isSetup: Boolean get() = this != Restore
 }
 
 /** The outcome of [MeshtasticLink.provisionChannel]. */

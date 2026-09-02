@@ -269,8 +269,8 @@ internal object FrameTranscoder {
     private const val MILLIS_BYTES = 6
 
     /** A clock rides as 6 raw bytes only when its canonical form is the 9-byte one (≥ 2^32) and it fits 48 bits. */
-    private val MILLIS_MIN = 1L shl 32
-    private val MILLIS_MAX = 1L shl (MILLIS_BYTES * Byte.SIZE_BITS)
+    private const val MILLIS_MIN = 1L shl 32
+    private const val MILLIS_MAX = 1L shl (MILLIS_BYTES * Byte.SIZE_BITS)
 
     /** The largest label any scope uses; a compact key past it cannot be this schema. */
     private const val MAX_LABEL = 23
@@ -391,7 +391,7 @@ internal object FrameTranscoder {
                     }
 
                     f.elideEmpty && mayElide && isEmpty(e) -> {
-                        Unit
+                        // Elided: an empty field the whole scope may drop, so nothing goes on the wire.
                     }
 
                     else -> {

@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Debug
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.graphics.createBitmap
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.crash.ProcessExitReasons
 import app.getknit.knit.data.AttachmentStore
@@ -290,8 +291,8 @@ class DebugBridgeReceiver :
                 }
             val json = result.toString()
             Log.i(TAG, json)
-            pending.setResultCode(0)
-            pending.setResultData(json)
+            pending.resultCode = 0
+            pending.resultData = json
             pending.finish()
         }
     }
@@ -468,7 +469,7 @@ class DebugBridgeReceiver :
         }
 
         val interval = (MILLIS_PER_SEC.toInt() / fps).coerceAtLeast(1)
-        val frameBuffer = Bitmap.createBitmap(movie.width(), movie.height(), Bitmap.Config.ARGB_8888)
+        val frameBuffer = createBitmap(movie.width(), movie.height())
         val canvas = Canvas(frameBuffer)
         var frames = 0
         var lossyBytes = 0L
@@ -1237,7 +1238,7 @@ class DebugBridgeReceiver :
             }
 
             else -> {
-                Unit
+                // NoDedicatedSlot / Failed — nothing to persist; the reply below carries the outcome.
             }
         }
         val index =

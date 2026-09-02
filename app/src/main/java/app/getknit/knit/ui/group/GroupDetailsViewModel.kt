@@ -183,7 +183,7 @@ class GroupDetailsViewModel(
         viewModelScope.launch {
             val group = groups.find(groupId) ?: return@launch
             val crop = computeAvatarCrop(source.width, source.height, diameter, scale, offset.x, offset.y)
-            val newHash = avatars.saveOwnAvatar(source, crop) ?: return@launch
+            val newHash = avatars.saveOwnAvatar(source, crop)
             val oldHash = group.photoHash
             val updated = group.copy(photoHash = newHash, photoUpdatedAt = System.currentTimeMillis())
             groups.upsert(updated)
@@ -214,7 +214,6 @@ class GroupDetailsViewModel(
     }
 
     override fun onCleared() {
-        super.onCleared()
         _groupPhotoCropTarget.value = null // drop the (large) pending crop bitmap
     }
 }

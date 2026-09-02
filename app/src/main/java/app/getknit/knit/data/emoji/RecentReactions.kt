@@ -14,7 +14,7 @@ object RecentReactions {
     val DEFAULTS: List<String> = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
 
     /** U+001F, ASCII unit separator. */
-    val SEPARATOR: Char = 0x1F.toChar()
+    const val SEPARATOR: Char = 0x1F.toChar()
 
     /** Newest-first recents from the stored string; null/blank → [DEFAULTS]. */
     fun decode(raw: String?): List<String> =

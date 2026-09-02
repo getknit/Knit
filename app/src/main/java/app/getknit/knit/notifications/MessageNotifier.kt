@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.IconCompat
 import app.getknit.knit.MainActivity
 import app.getknit.knit.R
@@ -517,7 +518,7 @@ class MessageNotifier(
         // CoralSecondaryContainerLight / CoralOnSecondaryContainerLight — the chat-list room glyph colors.
         val background = 0xFFE0E0EC.toInt()
         val logoTint = 0xFF181824.toInt()
-        val bitmap = Bitmap.createBitmap(AVATAR_PX, AVATAR_PX, Bitmap.Config.ARGB_8888)
+        val bitmap = createBitmap(AVATAR_PX, AVATAR_PX)
         val canvas = Canvas(bitmap)
         canvas.drawColor(background)
         ContextCompat.getDrawable(context, R.drawable.ic_knit_room)?.mutate()?.apply {
@@ -539,7 +540,7 @@ class MessageNotifier(
         name: String,
         key: String,
     ): Bitmap {
-        val bitmap = Bitmap.createBitmap(AVATAR_PX, AVATAR_PX, Bitmap.Config.ARGB_8888)
+        val bitmap = createBitmap(AVATAR_PX, AVATAR_PX)
         val canvas = Canvas(bitmap)
         canvas.drawColor(colorFor(key))
         val paint =

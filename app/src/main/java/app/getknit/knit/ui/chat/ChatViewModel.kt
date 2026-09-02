@@ -47,7 +47,6 @@ import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.b64d
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
-import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.moderation.ImageScreeningService
@@ -1086,7 +1085,6 @@ class ChatViewModel(
         recordingTicker?.cancel()
         recorder.cancel()
         voicePlayer.stop()
-        super.onCleared()
     }
 
     private companion object {

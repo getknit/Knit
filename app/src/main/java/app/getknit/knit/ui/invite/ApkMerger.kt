@@ -117,22 +117,16 @@ private fun buildUniversalApk(
         splitPaths.forEachIndexed { index, src ->
             src.copyTo(File(stage, "${index}_${src.name}"), overwrite = true)
         }
-        val bundle = ApkBundle()
-        try {
+        ApkBundle().use { bundle ->
             bundle.loadApkDirectory(stage, false)
-            val merged = bundle.mergeModules()
-            try {
+            bundle.mergeModules().use { merged ->
                 sanitizeForStandaloneInstall(merged)
                 // Keep native libs uncompressed so apksig can 16 KB-page-align them on signing.
                 merged.setExtractNativeLibs(false)
                 merged.refreshTable()
                 merged.refreshManifest()
                 merged.writeApk(out)
-            } finally {
-                merged.close()
             }
-        } finally {
-            bundle.close()
         }
     } finally {
         stage.deleteRecursively()

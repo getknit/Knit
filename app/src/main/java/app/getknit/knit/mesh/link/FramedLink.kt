@@ -175,13 +175,13 @@ class FramedLink(
                     }
 
                     LinkFraming.Type.KEEPALIVE -> {
-                        Unit
+                        // The record's arrival is the whole point; there is nothing in it to handle.
                     }
 
-                    // legacy record from an older peer; ignore
                     LinkFraming.Type.HELLO -> {
-                        Unit
-                    } // identity already consumed at accept; ignore any stray
+                        // Legacy record from an older peer. Identity was already consumed at accept, so
+                        // ignore any stray.
+                    }
                 }
             }
         } catch (e: IOException) {

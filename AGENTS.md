@@ -27,6 +27,9 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   artifacts under different keys, and F-Droid byte-compares its own rebuild against ours, so the release
   build must not depend on the build machine (no NDK on the APK path, no foojay JDK download, no Git LFS).
 - **When editing any Kotlin/Compose/data code:** obey `.agents/rules/coding.md`.
+- **When adding to `CHANGELOG.md`'s `## Unreleased`, or writing a fastlane changelog:** obey
+  `.agents/rules/changelog.md` — two sentences, about forty words, run through the `humanizer` skill.
+  A `PreToolUse` hook blocks the edit otherwise. Shipped sections are a record; never restyle them.
 - **When touching `mesh/`, `protocol/`, or `data/`:** obey `.agents/rules/mesh.md`, then READ the
   relevant reference — `.agents/context/mesh-transport.md` (radios / NAN / BLE),
   `.agents/context/wire-format.md` (CBOR wire), `.agents/context/store-and-forward.md` (custody /

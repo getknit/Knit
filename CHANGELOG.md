@@ -288,6 +288,9 @@ only if you want the build F-Droid distributes.
 This heading does not match the release-heading grammar, so a consumer skips it, the same way it
 skips `## Unreleased` above.
 
+New entries are held to `.agents/rules/changelog.md`: two sentences, about forty words, run through the
+`humanizer` skill. Sections below `## Unreleased` are a published record and are never restyled to it.
+
 This changelog follows the provisional changelog standard drafted at
 [whatsnew.fyi](https://whatsnew.fyi/product/knit) — YAML frontmatter, one `##` heading per release
 newest first, and [Keep a Changelog](https://keepachangelog.com)'s six categories. Releases before

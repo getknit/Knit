@@ -22,23 +22,25 @@ document:
 
 ### Added
 
-- React with any emoji. Long-press a message and tap the new "+" beside the quick reactions to open the
-  whole emoji set — browse it by group or search it by name — with skin tones, flags and family sequences
-  all included. The quick row now remembers what you actually use, newest first, instead of the same six
-  forever. Older phones show whatever you picked as soon as their font knows it, and a phone that cannot
-  draw an emoji never offers it in the first place.
+- React with any emoji. Long-press a message and tap the "+" beside the quick reactions to browse or
+  search the whole set, and the quick row starts remembering what you actually use instead of the same
+  six forever.
 
 ### Changed
 
-- Knit no longer feeds what is on screen to Android's content-capture service (the on-device "app content"
-  suggestions). An offline, end-to-end-encrypted messenger has no business streaming its screen text to
-  another process; it also made long lists smoother.
-- Chats now say what happened in them. A quiet, centered line marks a contact changing their name ("Sam
-  is now Sam Vimes") or their photo, someone renaming a group or changing its picture, and the group
-  being created — alongside the "left the chat" line that was already there. The lines are written by
-  your own phone from things it can already see, so they cost nothing on the air and nobody is told that
-  you saw them. They stay out of the way, too: no notification, no unread badge, and they never take over
-  a chat's preview or push it up your chat list.
+- Knit no longer feeds what is on screen to Android's content-capture service (the "app content"
+  suggestions). An end-to-end-encrypted messenger has no business handing its screen text to another
+  process, and long lists got smoother for it.
+- Chats now say what happened in them. A quiet centered line marks a contact changing their name ("Sam is
+  now Sam Vimes") or photo and a group being renamed or created, with no notification, no unread badge and
+  no bump up your chat list.
+
+### Fixed
+
+- Knit no longer gets stuck showing a blank screen. Opening it at the moment it was closing could leave it
+  drawing nothing, with no way out but force-stopping it; it now notices and rebuilds its own screen.
+- Phones that only relayed your messages no longer count as nearby. The online dot, chat list, group
+  picker and nearby count now show only what your own radios can currently see.
 
 ## [2.4.0](https://github.com/getknit/knit/releases/tag/v2.4.0) — 2026-08-31T05:12:27Z
 

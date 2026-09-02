@@ -230,3 +230,52 @@ verify:trivy:
     when: always
     paths: [trivy-report.json]
     expire_in: 1 week
+
+# Qodana — the IntelliJ inspection engine over the whole tree. Config (linter pin, profile, the
+# exclude list and why each entry is there) lives in qodana.yaml.
+#
+# MANUAL ON PURPOSE, and not because it is unimportant. The shared runner behind this pipeline is
+# 1 vCPU / 2 GB — the profile every other job here is tuned around (see the heap notes on .android).
+# Qodana is an IDE plus a full Gradle sync in one container and wants ~8 GB; it will be OOM-killed on
+# that runner, so wiring it into every merge request would only buy a red X on every pipeline. Start
+# it by hand when a bigger runner is available, or let the GitHub mirror's `qodana` job carry it —
+# that one runs on a 4 vCPU / 16 GB hosted runner and is the one that actually executes on each push.
+#
+# No `needs:` and no .android: the linter image brings its own JDK and Android SDK, and Qodana drives
+# its own Gradle sync inside the container. It only wants the sources.
+verify:qodana:
+  stage: verify
+  image:
+    name: jetbrains/qodana-jvm-android:2026.2   # keep in lockstep with qodana.yaml `image:`
+    entrypoint: [""]
+  when: manual
+  allow_failure: true
+  # The Community linter needs no licence, so this job runs with no secrets. QODANA_TOKEN is optional
+  # and only publishes the run to Qodana Cloud — set it as a masked CI/CD variable if you want the
+  # cloud report and hosted baselines. If the engine ever needs more heap than it sizes for itself,
+  # the supported knob is `--property` on the command below, not an env var.
+  variables:
+    # qodana.yaml's bootstrap installs compileSdk 37.1 + build-tools here (the image ships only
+    # android-33). Inside .qodana/cache so the `cache:` below carries it between runs instead of
+    # re-downloading ~160 MB every time.
+    ANDROID_SDK_ROOT: "${CI_PROJECT_DIR}/.qodana/cache/android-sdk"
+    ANDROID_HOME: "${CI_PROJECT_DIR}/.qodana/cache/android-sdk"
+  script:
+    # --baseline: report what is NEW against the committed qodana.sarif.json.
+    - qodana --save-report --baseline qodana.sarif.json --results-dir "$CI_PROJECT_DIR/.qodana/results" --cache-dir "$CI_PROJECT_DIR/.qodana/cache"
+  cache:
+    # ONLY the downloads. Never .qodana/cache/{idea,android,262} — that is the IDE's cached project
+    # state, and restoring it silently drops the Android facets: the run still exits 0 but every
+    # AndroidLint inspection finds nothing (measured: 38 findings -> 0, no warning). Caching the
+    # whole dir would make this job quietly analyse less than it reports.
+    - key: qodana-$CI_COMMIT_REF_SLUG
+      paths:
+        - .qodana/cache/android-sdk/
+        - .qodana/cache/jdk21/
+        - .qodana/cache/gradle/
+  artifacts:
+    when: always
+    paths:
+      - .qodana/results/report/
+      - .qodana/results/qodana.sarif.json
+    expire_in: 1 week

@@ -1,0 +1,162 @@
+# Qodana — the headless half of Android Studio's own inspection engine.
+#
+# WHY THIS EXISTS. `./gradlew lint`, detekt and ktlint between them do not run the IntelliJ inspection
+# engine, and that engine is the only thing that finds a *global* problem: "this class has no callers
+# anywhere", "this string resource is referenced by nothing". `scripts/ide-diagnostics.sh` reaches the
+# same engine but only ever one focused file at a time, so it structurally cannot answer those — see
+# that script's header for why the Studio-headless entry points (`bin/inspect.sh`) are a dead end on
+# this project. Qodana is the supported way to run the engine over the whole tree without an IDE.
+#
+# LINTER CHOICE. `qodana-jvm-android` is Qodana **Community** for Android: free, no licence, no
+# QODANA_TOKEN. `qodana-android` is the same engine on an Ultimate licence — do not switch to it
+# without one.
+#
+# `linter:` names the linter; `image:` pins the exact container. Keep them as two keys: putting the
+# image string in `linter:` still works but the CLI warns ("has image value, please use --image
+# param") — that form was deprecated in 2025.2. The pin is deliberate and `latest` is not acceptable
+# here, because the tag selects the inspection ENGINE and a silent bump changes the finding set
+# under us. Bumping it means re-running and re-triaging, so bump it on purpose.
+# ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+# │ AGP FORWARD-COMPAT WORKAROUND — load-bearing, do not remove.                                 │
+# │                                                                                              │
+# │ Qodana 2026.2's Android plugin refuses to sync anything past AGP 9.1.0:                      │
+# │   "The project is using an incompatible version (AGP 9.3.2) ... Latest supported is 9.1.0"   │
+# │ and this project is deliberately ahead of that (AGENTS.md: bleeding-edge toolchain). 2026.2  │
+# │ is the newest image there is — `latest` is byte-identical to it, `2026.2-eap` is OLDER, and  │
+# │ no 2026.3 image exists. So without the property below, the run cannot start at all.          │
+# │                                                                                              │
+# │ `gradle.ide.support.future.agp.versions` is the IntelliJ Android plugin's own escape hatch   │
+# │ (JetBrains KMT-2106 / IDEA-385007). It SUPPRESSES THE VERSION CHECK; it does not add AGP 9.3 │
+# │ support, and AGP promises no forward compatibility. Verified 2026-09-02: the scan completes  │
+# │ and its findings agree with Android Studio's own — but with one known blind spot below.      │
+# │                                                                                              │
+# │ KNOWN BLIND SPOT: @Preview is not recognised as an entry point, so all 115 @Preview          │
+# │ composables report as UnusedSymbol. The committed baseline absorbs them; a NEW unused symbol │
+# │ still surfaces. It errs toward over-reporting, never toward hiding — which is the safe       │
+# │ direction. Re-check this whenever the linter is bumped; it should disappear on real 9.3      │
+# │ support, and the property can then go.                                                       │
+# └──────────────────────────────────────────────────────────────────────────────────────────────┘
+version: "1.0"
+linter: qodana-jvm-android
+image: jetbrains/qodana-jvm-android:2026.2
+
+# See the banner above — without this the scan cannot start on AGP 9.3.2.
+properties:
+  gradle.ide.support.future.agp.versions: "true"
+
+# `qodana.recommended` over `qodana.starter`: starter drops the whole-project inspections that are the
+# entire reason to run this — unused declarations, unused resources, same-parameter-value. Those are
+# what a per-file editor pass can never see, so a profile without them buys nothing over the tools we
+# already run on every commit.
+profile:
+  name: qodana.recommended
+
+# The linter image ships only `platforms;android-33` and no build-tools, but this project builds
+# against compileSdk 37.1 — without the matching platform the Gradle sync fails and every Android API
+# resolves to nothing, so the run reports garbage rather than nothing. Install what the build needs
+# before analysis, into $ANDROID_SDK_ROOT, which the runner points at the mounted cache: /opt is owned
+# by root and Qodana runs as the calling user, and a cached SDK is downloaded once rather than per run.
+# Keep these two versions in lockstep with .gitlab-ci.yml's ANDROID_COMPILE_SDK / ANDROID_BUILD_TOOLS
+# and with app/build.gradle.kts `compileSdk` — `android-37` and `android-37.1` are different packages.
+#
+# It also installs a **JDK 21**, because the image ships 11, 17 and 25 and this project's toolchain is
+# pinned to 21. Gradle would normally fetch one itself; settings.gradle.kts deliberately omits the
+# foojay resolver so it cannot, and fails with "no matching toolchain" instead — that omission is a
+# reproducibility guarantee for F-Droid and must NOT be undone to make this job pass. Its own comment
+# names the correct remedy: the builder installs JDK 21. That is what this does, handing Gradle the
+# path via a property so no build file changes. Unpinned `latest/21/ga` on purpose: this JDK only ever
+# compiles the model Qodana inspects, never an artifact that ships, so it is not a reproducibility input.
+# ANDROID_SDK_ROOT is defaulted, not assumed: scripts/qodana.sh points it at the mounted cache, but a
+# CI job that just runs the image has it unset, and an unguarded "$ANDROID_SDK_ROOT" would `mkdir -p ""`.
+bootstrap: >-
+  SDK="${ANDROID_SDK_ROOT:-/opt/android-sdk}";
+  mkdir -p "$SDK" &&
+  cp -rn /opt/android-sdk/cmdline-tools /opt/android-sdk/licenses "$SDK"/ 2>/dev/null || true;
+  yes | "$SDK"/cmdline-tools/tools/bin/sdkmanager --sdk_root="$SDK"
+  "platforms;android-37.1" "build-tools;36.0.0" > /dev/null;
+  JDK="${QODANA_JDK21:-/data/cache/jdk21}";
+  if [ ! -x "$JDK/bin/java" ]; then mkdir -p "$JDK" &&
+  curl -sSL "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"
+  | tar xz -C "$JDK" --strip-components=1; fi;
+  GH="${GRADLE_USER_HOME:-$HOME/.gradle}"; mkdir -p "$GH" &&
+  printf 'org.gradle.java.installations.paths=%s\n' "$JDK" > "$GH/gradle.properties"
+
+
+# Everything below is a finding class this project has already triaged as noise or as a deliberate
+# choice, dropped here rather than re-argued on every run. A one-off export of the default profile
+# returned ~11k problems, of which ~60 were real; the rest is what these entries remove.
+exclude:
+  # --- prose, not code -------------------------------------------------------------------------
+  # 9411 of the 11k. Knit's KDoc is dense, domain-heavy prose (NAN, NDP, PSK, Meshtastic, CBOR); a
+  # dictionary that flags all of it is a dictionary nobody will read past.
+  - name: SpellCheckingInspection
+  # Grammar/style on comments and Markdown. Same argument, plus it rewrites deliberate terseness.
+  - name: GrazieInspection
+  - name: GrazieStyle
+  # Reflows every Markdown table in docs/ and .agents/, which are hand-aligned for diff legibility.
+  - name: MarkdownIncorrectTableFormatting
+  - name: MarkdownIncorrectlyNumberedListItem
+  # Relative links out of .github/PULL_REQUEST_TEMPLATE.md resolve from the repo root when GitHub
+  # renders the template into a PR body, not from the file's own directory — the IDE assumes the
+  # latter and calls every one broken. Directory links (`docs/`) trip the same check.
+  - name: MarkdownUnresolvedFileReference
+
+  # --- Python that is not a Python project ------------------------------------------------------
+  # scripts/*.py and the vendored skills are plain stdlib CLI helpers with no interpreter configured,
+  # so the engine cannot resolve `len`, `open` or `json` and reports each use. 216 problems, zero real.
+  - name: PyUnresolvedReferencesInspection
+  - name: PyPep8NamingInspection
+  - name: PyTypeHintsInspection
+  - name: PyClassHasNoInitInspection
+  - name: PyStringConversionWithoutDunderMethodInspection
+
+  # --- fallout of the AGP forward-compat gap (see banner) ------------------------------------
+  # Every @Composable is PascalCase by convention, which this rule reads as a naming violation:
+  # 264 hits, 100% of them Compose. ktlint already permits it via .editorconfig's
+  # `ktlint_function_naming_ignore_when_annotated_with`, which Qodana does not read.
+  - name: FunctionName
+  # 122 hits, overwhelmingly `[SomeTest]` links from a main-source KDoc to its test class. The test
+  # source set is not in the analysis scope, so those can never resolve here.
+  - name: KDocUnresolvedReference
+
+  # --- deliberate architecture ------------------------------------------------------------------
+  # BuildConfig flags are per-variant compile-time constants. `BuildConfig.LORA_PLANE && enabled` is
+  # not "always false" — it is false in *this* variant, which is the point of the flag.
+  - name: SimplifyBooleanWithConstants
+  - name: KotlinConstantConditions
+  # Koin's androidContext() is the application context. Lint cannot see that and assumes an Activity.
+  - name: AndroidLintStaticFieldLeak
+  # `suspend` on a mesh/spool function documents "runs inside the session coroutine" even where the
+  # body has no suspension point today; dropping it would let non-coroutine code call it.
+  - name: RedundantSuspendModifier
+  # Wants every Long milliseconds constant rewritten as kotlin.time.Duration. 50 hits across the wire
+  # and radio code, where the units are fixed by the protocol, not by our taste.
+  - name: ConvertLongToDuration
+  # Room entities and wire DTOs hold ByteArray by necessity; they are never compared by value.
+  - name: ArrayInDataClass
+  # Compound status strings ("%1$d nearby · %2$d linked") are not plural candidates in English.
+  - name: AndroidLintPluralsCandidate
+  # Dependency pins are load-bearing for F-Droid's byte-for-byte rebuild — see
+  # .agents/context/distribution.md. Version currency is a deliberate decision, not a lint finding.
+  - name: AndroidLintNewerVersionAvailable
+  - name: AndroidLintGradleDependency
+  - name: AndroidLintAndroidGradlePluginVersion
+
+  # --- generated and vendored trees --------------------------------------------------------------
+  # `name: All` disables every inspection under these paths.
+  - name: All
+    paths:
+      - build
+      - app/build
+      - baselineprofile/build
+      # Vendored agent skills, mirrored under .claude/ as symlinks: upstream's files, not ours.
+      - .agents/skills
+      - .claude/skills
+      - .private
+
+# Advisory, exactly like detekt and ktlint in this repo's pipelines: the run reports, it does not
+# gate. `any` is set high enough that only a collapse trips it — the point is the report artifact and
+# the trend, not a number to game. Tighten once a baseline exists (`--baseline qodana.sarif.json`).
+failureConditions:
+  severityThresholds:
+    any: 9999

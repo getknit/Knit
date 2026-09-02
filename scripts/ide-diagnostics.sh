@@ -32,7 +32,10 @@
 #   │ is getTools() at :564. Verified still broken on Quail 2 (2026.1.2). No Studio update fixes it. │
 #   │                                                                                                │
 #   │ So: don't rebuild the project model — reuse the one your running Studio already synced.        │
-#   │ For whole-project / CI coverage this is the wrong tool; use Qodana (`qodana-android`).         │
+#   │ For whole-project / CI coverage this is the wrong tool: run `scripts/qodana.sh`, which drives  │
+#   │ the same engine in a container that syncs Gradle itself. This script cannot see a GLOBAL       │
+#   │ finding at all — "no caller anywhere", "resource referenced by nothing" — because it only ever │
+#   │ looks at one focused file. Those are Qodana's whole reason to exist here.                      │
 #   └───────────────────────────────────────────────────────────────────────────────────────────────┘
 #
 # Usage:

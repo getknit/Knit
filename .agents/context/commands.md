@@ -22,16 +22,31 @@ python3 scripts/adr.py new "<title>" --topics a,b  # scaffold an ADR (mints a co
 python3 scripts/adr.py index                      # regenerate .agents/memory/decisions.md (--check to verify, as CI does)
 bash scripts/ide-diagnostics.sh --list          # changed .kt/.kts/.java files — what to iterate for IDE inspections
 bash scripts/ide-diagnostics.sh <file>          # ...focus one in the RUNNING Studio, then read it via getDiagnostics
+bash scripts/qodana.sh                          # the SAME engine over the whole tree, headless in Docker (~8 GB, slow)
+bash scripts/qodana.sh --baseline               # ...accept today's findings as qodana.sarif.json, so later runs show only new ones
 # Accessibility (ATF) suite — same checks as the Play pre-launch report; needs API 34+ (@SdkSuppress skips below):
 ./gradlew :app:pixel8api34DebugAndroidTest -PseedDemo=true -Pandroid.testInstrumentationRunnerArguments.package=app.getknit.knit.a11y  # headless emulator
 ```
 
 - **JDK 21** is required (the Gradle daemon toolchain is pinned to 21).
-- `ide-diagnostics.sh` is the ONLY way to see the Studio editor's own inspections (e.g. "Unused import
-  directive") — they are not Android Lint, ktlint, or detekt findings. It drives the Studio you already
-  have open, one file at a time, because the IDE bridge only answers for the *focused* editor. Running the
-  inspection engine headlessly does **not** work on this project (no Gradle sync → no project model); the
-  script header explains why in full. For whole-project/CI coverage use Qodana, not this.
+- The IntelliJ inspection engine is a **third** analyzer, disjoint from Android Lint, ktlint and detekt
+  (e.g. "Unused import directive" is only its). Two ways in, and the difference is not convenience:
+  - `ide-diagnostics.sh` — one **focused** file in the Studio you already have open, read back via
+    `getDiagnostics`, scoped to files changed vs HEAD. Fast, but it can never report a **global** finding
+    ("this class has no callers", "this resource is referenced by nothing") because it only ever sees one
+    file. Studio's own headless entry point does not work here (no Gradle sync → no project model); the
+    script header explains why, and says not to rebuild it.
+  - `qodana.sh` — the same engine over the **whole tree** in a container that syncs Gradle itself, so the
+    global findings do land (228 accepted at the 2026-09-02 baseline, `qodana.sarif.json`; a run reports
+    only what is NEW against it). `--baseline` re-adopts the current result. Two traps, both already
+    handled and both worth knowing before you touch the config:
+    - Qodana 2026.2 refuses AGP > 9.1.0 and this project is on 9.3.2. `qodana.yaml` sets
+      `gradle.ide.support.future.agp.versions` to suppress that check — load-bearing, and its banner
+      explains the one blind spot it leaves (`@Preview` reads as unused; the baseline absorbs it).
+    - **Never cache the IDE's project state** (`.qodana/cache/{idea,android,262}`). Restoring it drops
+      the Android facets and every AndroidLint inspection silently reports nothing — 38 findings to 0,
+      exit code still 0. The script purges those dirs each run and both CI jobs cache only the
+      downloads. Measured, not theoretical.
 - `koverHtmlReportDebug` / `koverXmlReportDebug` are the per-*variant* tasks; the un-suffixed
   `koverHtmlReport` aggregates all variants. CI scrapes the % from `koverLogDebug`.
 - The seeded UI suite must be built with `-PseedDemo=true` for **both** the app and test APKs — see

@@ -51,3 +51,8 @@ app/release/*
 # Bytecode cache from `scripts/*.py` — `scripts/adr.py` is importable (a one-shot script
 # or a test can `from adr import ...`), and importing it writes one of these.
 scripts/__pycache__/
+
+# Qodana scan output (report HTML + SARIF) and its multi-GB engine cache. The BASELINE,
+# qodana.sarif.json at the repo root, is deliberately NOT ignored — it is committed so a run reports
+# only what is new.
+.qodana/

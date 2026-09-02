@@ -10,7 +10,9 @@ name: CI
 # checkModerationModels task hard-fails if one ever arrives as a pointer stub.
 #
 # ACTION PINS: every JS action here is held at a major that runs on Node 24 — GitHub's runners force
-# Node 20 actions onto 24 and warn about it, and the Node 20 runtime is going away. gradle/actions is
+# Node 20 actions onto 24 and warn about it, and the Node 20 runtime is going away. JetBrains/qodana-action
+# is pinned to an exact patch rather than a major because the tag also selects the inspection ENGINE, and a
+# silent engine bump changes the finding set; keep it in step with qodana.yaml's `linter:`. gradle/actions is
 # deliberately kept at v5, the last MIT release: v6 moves caching into `gradle-actions-caching`, a
 # proprietary component governed by Gradle's Terms of Use rather than the MIT licence, and it loads
 # whenever caching is on (it is, by default). Don't "upgrade" that one.
@@ -19,6 +21,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch: # manual trigger; the qodana job below runs only on this
 
 permissions:
   contents: read
@@ -67,6 +70,52 @@ jobs:
         run: ./gradlew detekt --stacktrace --console=plain
       - name: ktlint
         run: ./gradlew ktlintCheck --stacktrace --console=plain
+
+  qodana:
+    name: Qodana inspections (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true # advisory, like detekt/ktlint above
+    # The IntelliJ inspection engine over the whole tree — the only thing here that finds a *global*
+    # problem ("this class has no callers", "this resource is referenced by nothing"). Android Lint,
+    # detekt and ktlint are different engines and do not overlap with it; scripts/ide-diagnostics.sh
+    # reaches the same engine but one focused file at a time, so it cannot see across the project.
+    # The linter pin, profile and exclude list live in qodana.yaml.
+    #
+    # This is the job that actually runs on every push: hosted runners are 4 vCPU / 16 GB, whereas
+    # the internal GitLab runner is 1 vCPU / 2 GB and would OOM, so verify:qodana there is manual.
+    permissions:
+      contents: read
+      pull-requests: write # post-pr-comment
+      checks: write # use-annotations
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # Qodana reads history to attribute findings to commits
+      - uses: JetBrains/qodana-action@v2026.2.1
+        with:
+          # pr-mode analyses ONLY the files a PR touched, which silently disables exactly the
+          # whole-project inspections this job exists for — an unused class stops looking unused once
+          # you stop looking at its callers. Full scan every time.
+          pr-mode: false
+          # The action caches its whole cache-dir, and restoring the IDE's project state from it
+          # silently drops the Android facets — the run exits 0 with every AndroidLint inspection
+          # reporting nothing (measured: 38 -> 0, no warning). Correct-but-slower beats
+          # quietly-wrong, so the cache is off; the bootstrap re-fetches the SDK and JDK each run.
+          use-caches: false
+          upload-result: true
+          # --baseline holds the committed qodana.sarif.json, so the run reports what is NEW rather
+          # than re-reporting the accepted backlog (which includes the @Preview blind spot the
+          # AGP forward-compat property leaves behind — see qodana.yaml's banner).
+          args: --save-report --baseline qodana.sarif.json
+        env:
+          # qodana.yaml's bootstrap installs compileSdk 37.1 + build-tools here — the linter image
+          # ships only android-33, and without the matching platform every Android API resolves to
+          # nothing, so the run reports garbage rather than reporting nothing.
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/qodana/caches/android-sdk
+          ANDROID_HOME: ${{ runner.temp }}/qodana/caches/android-sdk
+          # Optional: unset is fine. The Community linter qodana.yaml pins needs no licence; a token
+          # only publishes the run to Qodana Cloud for trend history and baselines.
+          QODANA_TOKEN: ${{ secrets.QODANA_TOKEN }}
 
   adr-index:
     name: ADR router is in sync

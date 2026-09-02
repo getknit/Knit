@@ -183,6 +183,7 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.relay.AttachmentRelay
 import app.getknit.knit.data.relay.RelayReach
+import app.getknit.knit.data.relay.dismissable
 import app.getknit.knit.demo.DemoComposeCommand
 import app.getknit.knit.demo.DemoComposer
 import app.getknit.knit.identity.PeerLabel
@@ -432,6 +433,7 @@ fun ChatScreen(
             }
         },
         onSaveAttachment = viewModel::saveAttachment,
+        onDismissRelayNotice = viewModel::dismissRelayNotice,
         voiceRecording = voiceRecording,
         voicePlayback = voicePlayback,
         onStartVoice = { locked -> viewModel.startVoiceRecording(locked) },
@@ -501,6 +503,9 @@ internal fun ChatScreenContent(
     onUnblock: (nodeId: String) -> Unit,
     onCopy: (text: String) -> Unit,
     onSaveAttachment: (hash: String, key: String?, mime: String?) -> Unit,
+    // Closes the room's relay notice for good. Defaulted so previews and the content tests that never
+    // render a dismissable notice need not name it.
+    onDismissRelayNotice: () -> Unit = {},
     // Voice notes. `voiceRecording` is non-null only while the mic is live, and replaces the whole input row
     // while it is; `voicePlayback` is the app-wide "which note is sounding" state each bubble matches its own
     // hash against. All defaulted so the previews and the content-level tests need not name them.
@@ -773,7 +778,12 @@ internal fun ChatScreenContent(
             // than jumping a notice's height in one frame — and it needs no retained copy of a notice's text
             // to draw while it collapses, which is the whole reason each notice can keep its early return.
             Column(modifier = Modifier.animateContentSize(KnitMotion.spatial())) {
-                RelayNotice(reach = state.relayReach, onClick = { showRelayInfo = true })
+                RelayNotice(
+                    reach = state.relayReach,
+                    onClick = { showRelayInfo = true },
+                    // Only the room's notice may be closed; a pending thread's clears itself.
+                    onDismiss = onDismissRelayNotice.takeIf { dismissable(state.relayReach) },
+                )
                 LoraNotice(reach = state.loraReach, onClick = { showLoraInfo = true })
             }
             // weight(1f), not fillMaxSize(): the notice above is an unweighted sibling, so the list must
@@ -1002,11 +1012,15 @@ internal fun ChatScreenContent(
  * relay outage is transient and heals itself, so neither earns a permanent line of chrome. Tinted
  * `surfaceVariant` rather than `errorContainer` on purpose: nothing here has failed. The message is
  * delivered by radio exactly as it always was; this only says the Internet shortcut is not available.
+ *
+ * [onDismiss], when non-null, renders a close button — it is null for every reach but the room's, whose
+ * notice is the one that would otherwise never retire itself. See `dismissable`.
  */
 @Composable
 private fun RelayNotice(
     reach: RelayReach,
     onClick: () -> Unit,
+    onDismiss: (() -> Unit)?,
 ) {
     val label =
         when (reach) {
@@ -1020,20 +1034,44 @@ private fun RelayNotice(
         modifier = Modifier.fillMaxWidth().testTag("chat_relay_notice"),
     ) {
         Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onClick, role = Role.Button)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            // The close button is a sibling of the clickable, not inside it: the row's tap opens the
+            // explanation, and a dismiss that also fired it would flash the dialog it just closed.
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(
-                imageVector = Icons.Filled.CloudOff,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(text = stringResource(label), style = MaterialTheme.typography.bodySmall)
+            Row(
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .clickable(onClick = onClick, role = Role.Button)
+                        .padding(
+                            start = 16.dp,
+                            top = 8.dp,
+                            bottom = 8.dp,
+                            end = if (onDismiss != null) 8.dp else 16.dp,
+                        ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.CloudOff,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(text = stringResource(label), style = MaterialTheme.typography.bodySmall)
+            }
+            if (onDismiss != null) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.testTag("chat_relay_notice_dismiss"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.chat_relay_notice_dismiss),
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
         }
     }
 }

@@ -13,6 +13,7 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.relay.AttachmentRelay
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.ui.theme.KnitTheme
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -53,6 +54,7 @@ class ChatRelayIndicatorTest {
         rows: List<ChatRow> = emptyList(),
         reach: RelayReach = RelayReach.Silent,
         staged: AttachmentRelay = AttachmentRelay.Silent,
+        onDismissRelayNotice: () -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
@@ -88,6 +90,7 @@ class ChatRelayIndicatorTest {
                     onUnblock = {},
                     onCopy = {},
                     onSaveAttachment = { _, _, _ -> },
+                    onDismissRelayNotice = onDismissRelayNotice,
                 )
             }
         }
@@ -124,6 +127,32 @@ class ChatRelayIndicatorTest {
         render(reach = RelayReach.Room)
         compose.onNodeWithTag("chat_relay_notice").performClick()
         compose.onNodeWithText("Nearby stays local").assertIsDisplayed()
+    }
+
+    @Test
+    fun theRoomsNoticeCanBeClosed() {
+        var dismissed = 0
+        render(reach = RelayReach.Room, onDismissRelayNotice = { dismissed++ })
+        compose.onNodeWithTag("chat_relay_notice_dismiss").performClick()
+        assertEquals(1, dismissed)
+    }
+
+    @Test
+    fun closingTheNoticeDoesNotAlsoOpenTheExplanation() {
+        // The close button sits beside the row's clickable, not inside it: a dismiss that also fired the
+        // row would flash the dialog it is closing the notice to get rid of.
+        render(reach = RelayReach.Room)
+        compose.onNodeWithTag("chat_relay_notice_dismiss").performClick()
+        compose.onNodeWithText("Nearby stays local").assertDoesNotExist()
+    }
+
+    @Test
+    fun anUncoveredThreadsNoticeOffersNoCloseButton() {
+        // Pending clears itself once a scope lands, so there is nothing to dismiss — and the flag behind
+        // the button is device-wide, so offering it here would hide the room's notice from another screen.
+        render(reach = RelayReach.Pending)
+        compose.onNodeWithTag("chat_relay_notice").assertIsDisplayed()
+        compose.onNodeWithTag("chat_relay_notice_dismiss").assertDoesNotExist()
     }
 
     @Test

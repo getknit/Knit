@@ -650,6 +650,7 @@
     <string name="chat_relay_room_body">The Nearby room is carried only by Wi-Fi and Bluetooth, by design — it is a public, unencrypted room, so it is never uploaded to a relay.</string>
     <string name="chat_relay_pending_title">Not covered yet</string>
     <string name="chat_relay_pending_body">This conversation does not have a relay channel yet. It usually appears on its own once both sides have exchanged encryption keys. Until then, messages travel by Wi-Fi and Bluetooth.</string>
+    <string name="chat_relay_notice_dismiss">Dismiss</string>
     <string name="chat_relay_nearby_only">Nearby only</string>
     <string name="chat_relay_nearby_only_desc">Attachment will not be sent over the Internet</string>
     <string name="chat_relay_too_large_title">Too large for your relays</string>

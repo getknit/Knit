@@ -69,6 +69,29 @@ class RelayReachTest {
     }
 
     @Test
+    fun `dismissing the room notice silences it for good`() {
+        assertEquals(RelayReach.Room, noticeFor(Conversations.NEARBY, covered, roomNoticeDismissed = false))
+        assertEquals(RelayReach.Silent, noticeFor(Conversations.NEARBY, covered, roomNoticeDismissed = true))
+    }
+
+    @Test
+    fun `the dismissal is the room's alone, never a pending thread's`() {
+        // One device-wide flag serves every thread, so the rule has to be keyed on the reach and not just
+        // on the flag: a dismissed room must leave an uncovered DM's notice — which clears itself once a
+        // scope lands — exactly where it was.
+        assertEquals(RelayReach.Pending, noticeFor("peer-z", covered, roomNoticeDismissed = true))
+        assertEquals(RelayReach.Covered, noticeFor("peer-a", covered, roomNoticeDismissed = true))
+    }
+
+    @Test
+    fun `only the room offers a close button`() {
+        assertEquals(true, dismissable(RelayReach.Room))
+        assertEquals(false, dismissable(RelayReach.Pending))
+        assertEquals(false, dismissable(RelayReach.Covered))
+        assertEquals(false, dismissable(RelayReach.Silent))
+    }
+
+    @Test
     fun `the header plane is off whenever the user has nothing armed`() {
         assertEquals(RelayPlane.Off, planeFor(RelayFacts()))
         assertEquals(RelayPlane.Off, planeFor(covered.copy(enabled = false)))

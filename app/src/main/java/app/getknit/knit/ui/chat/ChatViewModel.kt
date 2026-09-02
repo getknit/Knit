@@ -32,6 +32,7 @@ import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.relay.RelayPlane
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.data.relay.attachmentReach
+import app.getknit.knit.data.relay.noticeFor
 import app.getknit.knit.data.relay.planeFor
 import app.getknit.knit.data.relay.reachFor
 import app.getknit.knit.data.settings.SettingsStore
@@ -191,7 +192,8 @@ data class ChatUiState(
     val typingPeers: List<TypingPeer> = emptyList(),
     // Whether the Internet-relay plane covers this thread. Only [RelayReach.Room] and
     // [RelayReach.Pending] render anything — coverage is the happy path, and an outage is transient and
-    // stays quiet. See [reachFor].
+    // stays quiet. A room whose notice the user has dismissed reads [RelayReach.Silent] here, so this is
+    // what to *show*, not what is true of the plane. See [noticeFor].
     val relayReach: RelayReach = RelayReach.Silent,
     // The Internet plane's whole-device state, for the connection header. Coarser than [relayReach] and
     // about a different thing: whether the plane is up at all, not whether it covers this thread.
@@ -384,13 +386,27 @@ class ChatViewModel(
             meshManager.peerTransports.map { it[conversationId] }.distinctUntilChanged(),
         ) { facts, kinds -> LoraThread(facts, kinds) }.distinctUntilChanged()
 
+    // The relay plane's facts + whether the user has dismissed the room's notice, folded the same way and
+    // for the same reason as [LoraThread]: the dismissal only ever changes what the notice says, so it
+    // belongs beside the facts that notice reads rather than as another arm of the status combine.
+    private data class RelayThread(
+        val facts: RelayFacts,
+        val roomNoticeDismissed: Boolean,
+    )
+
+    private val relayThread =
+        combine(
+            relayFacts,
+            settings.relayRoomNoticeDismissed,
+        ) { facts, dismissed -> RelayThread(facts, dismissed) }.distinctUntilChanged()
+
     // Neighbor count + radio health + the "who's typing" map + Internet-relay reach + the LoRa thread folded
     // into one source so the main state combine stays within its five-flow arity.
     private data class MeshStatus(
         val neighborCount: Int,
         val transportHealth: TransportHealth,
         val typing: Map<String, Set<String>>,
-        val relay: RelayFacts,
+        val relay: RelayThread,
         val lora: LoraThread,
     )
 
@@ -399,7 +415,7 @@ class ChatViewModel(
             meshManager.neighborCount,
             meshManager.transportHealth,
             meshManager.typing,
-            relayFacts,
+            relayThread,
             loraThread,
         ) { count, health, typing, relay, lora -> MeshStatus(count, health, typing, relay, lora) }
 
@@ -414,7 +430,7 @@ class ChatViewModel(
             val count = mesh.neighborCount
             val health = mesh.transportHealth
             val typingMap = mesh.typing
-            val relay = mesh.relay
+            val relay = mesh.relay.facts
             val msgs = bundle.messages
             val reacts = bundle.reactions
             val blocked = bundle.blocked
@@ -552,7 +568,7 @@ class ChatViewModel(
                 isGroup = isGroup,
                 memberCount = members.size,
                 typingPeers = typingPeers,
-                relayReach = reachFor(conversationId, relay),
+                relayReach = noticeFor(conversationId, relay, mesh.relay.roomNoticeDismissed),
                 relayPlane = planeFor(relay),
                 loraPlane = mesh.lora.facts.plane,
                 loraReach = loraReachFor(conversationId, mesh.lora.facts, mesh.lora.peerKinds, reachFor(conversationId, relay)),
@@ -738,6 +754,15 @@ class ChatViewModel(
             // cancel the write. Blocking from the Nearby room leaves the room open.
             if (!isRoom) _closeChat.tryEmit(Unit)
         }
+    }
+
+    /**
+     * Dismisses the room's "never sent over the Internet" notice, for good. Reachable only from that notice's
+     * close button — the room is the one thread whose notice offers one (see `dismissable`) — and it stays
+     * dismissed across restarts, because the fact it stated is permanent and repeating it is a nag.
+     */
+    fun dismissRelayNotice() {
+        viewModelScope.launch { settings.dismissRelayRoomNotice() }
     }
 
     /** Unblocks [nodeId], restoring their (never-deleted) message history. */

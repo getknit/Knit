@@ -215,6 +215,19 @@ class SettingsStore(
     val spoolConsented: Flow<Boolean> = dataStore.data.map { it[KEY_SPOOL_CONSENTED] ?: false }
 
     /**
+     * Whether the user has dismissed the Nearby room's "never sent over the Internet" notice. Sticky by
+     * design: the notice states a permanent structural fact (the room is not scope-eligible, spec §4.4),
+     * so it is the one relay notice that will never retire itself — a dismissal that came back on the next
+     * launch would just be a nag. One device-wide flag rather than a per-conversation one because only the
+     * room ever reads [app.getknit.knit.data.relay.RelayReach.Room].
+     *
+     * Deliberately one-way ([dismissRelayRoomNotice] never clears it): the fact it stated is still true and
+     * a tap on the header's cloud glyph still explains the plane, so nothing is lost by never re-arming.
+     */
+    val relayRoomNoticeDismissed: Flow<Boolean> =
+        dataStore.data.map { it[KEY_RELAY_ROOM_NOTICE_DISMISSED] ?: false }
+
+    /**
      * Whether the LoRa (Meshtastic-over-BLE) plane may run — **default off**, and gated behind
      * `BuildConfig.LORA_PLANE` the same way [spoolEnabled] is gated behind the Internet-plane flag, so a
      * shipped build reads false no matter what is stored until the feature is introduced. With it off, or
@@ -489,6 +502,9 @@ class SettingsStore(
             it[KEY_SPOOL_DISABLED] = (it[KEY_SPOOL_DISABLED] ?: emptySet()) - url
         }
 
+    /** Hides the room's relay notice for good. See [relayRoomNoticeDismissed]; there is no un-dismiss. */
+    suspend fun dismissRelayRoomNotice() = dataStore.edit { it[KEY_RELAY_ROOM_NOTICE_DISMISSED] = true }
+
     /** Parks or un-parks one configured relay. See [disabledSpoolUrls]; the plane's own switch is [setSpoolEnabled]. */
     suspend fun setSpoolUrlEnabled(
         url: String,
@@ -567,6 +583,7 @@ class SettingsStore(
         val KEY_SPOOL_DISABLED = stringSetPreferencesKey("spool_urls_disabled")
         val KEY_SPOOL_SEEDED = booleanPreferencesKey("spool_defaults_seeded")
         val KEY_SPOOL_CONSENTED = booleanPreferencesKey("spool_consented")
+        val KEY_RELAY_ROOM_NOTICE_DISMISSED = booleanPreferencesKey("relay_room_notice_dismissed")
         val KEY_LORA_ENABLED = booleanPreferencesKey("lora_enabled")
         val KEY_LORA_DM_ENABLED = booleanPreferencesKey("lora_dm_enabled")
         val KEY_LORA_BRIDGE_ENABLED = booleanPreferencesKey("lora_bridge_enabled")

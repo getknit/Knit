@@ -121,6 +121,33 @@ fun reachFor(
     }
 
 /**
+ * The notice to render for [conversationId]: [reachFor], with the user's standing dismissal folded in.
+ *
+ * Only [RelayReach.Room] is dismissable, and only because it is the one notice that never retires itself.
+ * The room's exclusion is structural and permanent, so without this the line is chrome the user reads
+ * once and then carries forever. [RelayReach.Pending] is deliberately left alone: it clears on its own the
+ * moment a scope appears — usually within a round or two of key exchange — and hiding it would suppress
+ * the one signal that says a thread is still becoming eligible.
+ *
+ * Folded in here rather than at the call site so that "what the notice says" has exactly one definition,
+ * and so a dismissed room reads as [RelayReach.Silent] — the same "nothing true to say" the rest of the
+ * chrome already understands.
+ */
+fun noticeFor(
+    conversationId: String,
+    facts: RelayFacts,
+    roomNoticeDismissed: Boolean,
+): RelayReach {
+    val reach = reachFor(conversationId, facts)
+    return if (reach == RelayReach.Room && roomNoticeDismissed) RelayReach.Silent else reach
+}
+
+/**
+ * Whether the notice for [reach] offers a close button. See [noticeFor] for why only the room does.
+ */
+fun dismissable(reach: RelayReach): Boolean = reach == RelayReach.Room
+
+/**
  * Whether an attachment of [sizeBytes] can cross the plane for [conversationId].
  *
  * Two compositions worth stating, because getting either wrong produces a marker users learn to

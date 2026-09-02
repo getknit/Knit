@@ -21,6 +21,7 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.relay.RelayFacts
+import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
@@ -98,6 +99,7 @@ class ChatViewModelTest {
     private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
     private val activeSpoolUrlsFlow = MutableStateFlow(emptySet<String>())
     private val relayFactsFlow = MutableStateFlow(RelayFacts())
+    private val relayRoomNoticeDismissedFlow = MutableStateFlow(false)
     private val loraFactsFlow = MutableStateFlow(LoraFacts())
     private val deliveredCountsFlow = MutableStateFlow(emptyMap<String, Int>())
 
@@ -122,6 +124,7 @@ class ChatViewModelTest {
         every { settings.spoolEnabled } returns spoolEnabledFlow
         every { settings.spoolUrls } returns spoolUrlsFlow
         every { settings.activeSpoolUrls } returns activeSpoolUrlsFlow
+        every { settings.relayRoomNoticeDismissed } returns relayRoomNoticeDismissedFlow
         every { receipts.observeDeliveredCounts(any(), any()) } returns deliveredCountsFlow
     }
 
@@ -727,6 +730,47 @@ class ChatViewModelTest {
             assertEquals(LoraPlane.Down, vm.state.value.loraPlane)
             assertEquals(LoraReach.Silent, vm.state.value.loraReach)
             assertEquals(LoraCarry.None, vm.state.value.loraCarry)
+        }
+
+    @Test
+    fun theRoomsRelayNoticeGoesQuietOnceDismissedAndStaysThatWay() =
+        runTest {
+            // Live plane, room open: the structural "never over the Internet" notice is up.
+            relayFactsFlow.value = RelayFacts(enabled = true, configured = 1, active = 1, connected = 1)
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            advanceUntilIdle()
+            assertEquals(RelayReach.Room, vm.state.value.relayReach)
+
+            vm.dismissRelayNotice()
+            advanceUntilIdle()
+            coVerify(exactly = 1) { settings.dismissRelayRoomNotice() }
+
+            // The write is what makes it stick; the mock's flow is what the VM reads back.
+            relayRoomNoticeDismissedFlow.value = true
+            advanceUntilIdle()
+            assertEquals(RelayReach.Silent, vm.state.value.relayReach)
+
+            // Sticky across a relaunch: a fresh ViewModel over the same stored flag stays quiet.
+            val relaunched = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { relaunched.state.collect {} }
+            advanceUntilIdle()
+            assertEquals(RelayReach.Silent, relaunched.state.value.relayReach)
+        }
+
+    @Test
+    fun aDismissedRoomNoticeDoesNotSilenceAnUncoveredDm() =
+        runTest {
+            // The flag is device-wide, so the one thing it must not do is hide the *other* notice — a
+            // pending thread's line clears itself and carries different information.
+            stubDm("ana")
+            relayRoomNoticeDismissedFlow.value = true
+            relayFactsFlow.value = RelayFacts(enabled = true, configured = 1, active = 1, connected = 1)
+            val vm = vm("ana")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            advanceUntilIdle()
+
+            assertEquals(RelayReach.Pending, vm.state.value.relayReach)
         }
 
     private companion object {

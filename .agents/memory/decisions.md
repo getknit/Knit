@@ -18,6 +18,7 @@ worktrees all read the same "next number" and all took it. Cite whichever form a
 carries; never renumber an old one.
 
 71 decisions.
+70 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -92,3 +93,4 @@ carries; never renumber an old one.
 | [2026-09.mhs5](decisions/2026-09-mhs5-a-lora-packet-is-padded-past-the-firmware-s-signature-cliff.md) | A LoRa packet is padded past the firmware's signature cliff | lora, airtime, link |
 | [2026-09.v66c](decisions/2026-09-v66c-reactions-are-an-open-emoji-set-with-a-receive-side-length-cap.md) | Reactions are an open emoji set with a receive-side length cap | wire, ui, limits |
 | [2026-09.zu5t](decisions/2026-09-zu5t-content-capture-is-off.md) | Content capture is off | privacy, ui, performance |
+| [2026-09.un9n](decisions/2026-09-un9n-a-never-drawn-window-is-recovered-by-recreating-it.md) | A never-drawn window is recovered by recreating it | ui, android, resilience, back |

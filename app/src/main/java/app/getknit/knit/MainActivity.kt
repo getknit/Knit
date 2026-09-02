@@ -3,19 +3,28 @@ package app.getknit.knit
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
+import android.view.View
 import android.view.contentcapture.ContentCaptureManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.core.content.IntentCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import app.getknit.knit.ui.KnitApp
 import app.getknit.knit.ui.RouteInbox
+import app.getknit.knit.ui.WindowWedgePolicy
 import app.getknit.knit.ui.addcontact.ContactCardInbox
 import app.getknit.knit.ui.addcontact.contactLinkFrom
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.SharedContent
 import app.getknit.knit.ui.theme.KnitTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import androidx.compose.ui.contentcapture.ContentCaptureManager as ComposeContentCaptureManager
 
@@ -40,6 +49,7 @@ class MainActivity : ComponentActivity() {
         // ~2 ms per frame across a 120-cell emoji grid fling, ~260 ms per fling), and only its flag stops that.
         getSystemService(ContentCaptureManager::class.java)?.isContentCaptureEnabled = false
         ComposeContentCaptureManager.isEnabled = false
+        watchForUndrawnWindow()
         // A cold-start share: stage the payload before composition so KnitApp opens the picker.
         handleShareIntent(intent)
         // A cold-start notification tap: stage its deep-link route so KnitApp navigates to that thread.
@@ -59,6 +69,55 @@ class MainActivity : ComponentActivity() {
         setContent {
             KnitTheme {
                 KnitApp(startRoute = startRoute)
+            }
+        }
+    }
+
+    /**
+     * Recover from a window the platform never makes visible (ADR 2026-09.un9n).
+     *
+     * Observed on a Pixel 7 (Android 17, `CP2A.260705.006`) after a launcher tap landed ~100 ms into a
+     * back-to-home teardown, which made AMS open a *second* task for this `singleTask` Activity
+     * (`Add Task{#12257} to hidden list because adding Task{#12260}`). The replacement Activity then held
+     * input focus and ran normally — back callbacks registered and unregistered, our own Compose popups
+     * drew — while `ViewRootImpl` reported `!mAppVisible` and therefore drew the main window **not once in
+     * 94 seconds**. All the user sees is `windowBackground`, so a live, fully interactive app reads as
+     * frozen on a blank screen, and reopening from the launcher cannot help: `singleTask` re-resumes the
+     * very same window. Nothing an app does causes this and nothing short of a new window clears it.
+     *
+     * So: poll only while RESUMED (the loop is cancelled at ON_PAUSE), and hand the three observations to
+     * [WindowWedgePolicy], which owns the grace period, the cooldown and the per-process ceiling. The
+     * ceiling and the last-recreate stamp live in the companion **on purpose** — they must outlive the
+     * Activity they are protecting, or every recreate would reset its own loop guard.
+     */
+    private fun watchForUndrawnWindow() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                var wedgedSince = 0L
+                while (true) {
+                    delay(WEDGE_POLL_MS)
+                    val decision =
+                        WindowWedgePolicy.decide(
+                            resumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                            focused = hasWindowFocus(),
+                            windowVisible = window.decorView.windowVisibility == View.VISIBLE,
+                            recreatable = !isFinishing && !isChangingConfigurations,
+                            now = SystemClock.elapsedRealtime(),
+                            wedgedSince = wedgedSince,
+                            lastRecreateAt = lastWedgeRecreateAt,
+                            recreates = wedgeRecreates,
+                            graceMs = WEDGE_GRACE_MS,
+                            cooldownMs = WEDGE_COOLDOWN_MS,
+                            maxRecreates = MAX_WEDGE_RECREATES,
+                        )
+                    wedgedSince = decision.nextWedgedSince
+                    if (decision.action != WindowWedgePolicy.Action.Recreate) continue
+                    lastWedgeRecreateAt = SystemClock.elapsedRealtime()
+                    wedgeRecreates++
+                    Log.e(TAG, "window resumed+focused but not visible for ${WEDGE_GRACE_MS}ms — recreating (#$wedgeRecreates)")
+                    recreate()
+                    return@repeatOnLifecycle
+                }
             }
         }
     }
@@ -106,5 +165,23 @@ class MainActivity : ComponentActivity() {
         /** Deep-link route extra set by [app.getknit.knit.notifications.MessageNotifier] on a notification tap. */
         const val EXTRA_ROUTE = "app.getknit.knit.NOTIF_ROUTE"
         private const val EXTRA_DEMO_ROUTE = "demo_route"
+
+        private const val TAG = "MainActivity"
+
+        /** How often [watchForUndrawnWindow] samples, and for how long the wedge must hold before it acts. */
+        private const val WEDGE_POLL_MS = 500L
+        private const val WEDGE_GRACE_MS = 2_500L
+
+        /**
+         * Loop guards for [watchForUndrawnWindow]'s `recreate()`, **process-scoped rather than per-Activity**:
+         * the thing they protect against is the replacement window wedging too, so an Activity field would
+         * reset the guard on the very recreate it is supposed to be counting. A wedge that outlives three
+         * attempts is not one we can clear, and flickering at the user forever is worse than a blank screen.
+         */
+        @Volatile private var lastWedgeRecreateAt = 0L
+
+        @Volatile private var wedgeRecreates = 0
+        private const val WEDGE_COOLDOWN_MS = 60_000L
+        private const val MAX_WEDGE_RECREATES = 3
     }
 }

@@ -62,10 +62,19 @@
     <!-- Restart the mesh foreground service after a device reboot (see .mesh.BootReceiver). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- enableOnBackInvokedCallback is declared rather than inherited: the platform defaults it to true only
+         for apps targeting 35+, and only on a framework that knows that rule, so an undeclared app runs the
+         predictive back dispatcher on Android 15+ and the legacy onBackPressed path on 13/14 — two back
+         implementations split by OS version, of which we only ever tested one. Measured (ADR 2026-09.un9n):
+         on Android 14 without this, navigating in and out of a chat logs no OnBackInvokedCallback churn at
+         all; with it, the same navigation registers and unregisters one per destination exactly as a Pixel
+         on 17 does. Compose's BackHandler and Navigation's own handler both ride the dispatcher either way,
+         and we override no onBackPressed. -->
     <application
         android:name=".KnitApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

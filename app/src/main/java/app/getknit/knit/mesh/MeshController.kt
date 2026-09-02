@@ -22,11 +22,30 @@ import kotlinx.coroutines.flow.flowOf
  */
 @Suppress("TooManyFunctions") // the app's whole mesh surface behind one seam; splitting it would only scatter it
 interface MeshController {
-    /** Number of nearby peers for the UI status header — the smoothed reachable set. */
+    /** Number of nearby peers for the UI status header — the smoothed **short-range** reachable set. */
     val neighborCount: StateFlow<Int>
 
-    /** Nearby peers for the contact picker (message someone nearby) — the smoothed reachable set. */
+    /**
+     * Nearby peers — everything in the app that says *nearby*, *online* or *connected*. The smoothed
+     * reachable set restricted to the **short-range** planes (BLE/NAN), because only those sight the peer's
+     * *own* radio. A long-range plane's sighting is not proximity and not even necessarily the peer: LoRa
+     * keys presence on the frame **author**, and a gateway puts other people's frames on air, so a peer
+     * with no board at all can be "reachable over LoRa" (ADR 044). Those live in [reachable] instead.
+     */
     val neighbors: StateFlow<Set<Peer>>
+
+    /**
+     * Every peer we can currently reach over *any* plane — [neighbors] plus the long-range ones. Strictly a
+     * superset. Only the Diagnostics screen reads it, to separate a direct connection from relay reach;
+     * anything asking "is this peer here" wants [neighbors]. Defaulted for the fakes.
+     */
+    val reachable: StateFlow<Set<Peer>> get() = neighbors
+
+    /**
+     * The [TransportKind]s that count as short-range, so the UI can tell a proximity tag from a relay one
+     * without restating [MeshTransport.shortRange]. Defaulted for the fakes.
+     */
+    val shortRangeKinds: Set<TransportKind> get() = TransportKind.entries.toSet()
 
     /** Radio health for the Diagnostics screen (Healthy vs Degraded). */
     val transportHealth: StateFlow<TransportHealth>

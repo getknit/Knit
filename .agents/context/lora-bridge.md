@@ -57,11 +57,26 @@ chunked at 233 and every one came back `TOO_LARGE`. Inbound mirrors `WifiAwareTr
 `_inbound.tryEmit(InboundFrame(wire, env, fromNodeId = env.senderId))`, so the router's dedup / verify /
 custody / relay all run unchanged.
 
+> **`reachable` here is *reach*, never *nearby*, and only fresh frames feed it** (ADR 2026-09.2ajk).
+> The set is keyed on the frame **author**, and a gateway puts other people's frames on air, so a peer
+> with no board of its own is routinely in it. Nothing above the composite may read it as proximity:
+> `MeshController.neighbors` (the notification count, the Contacts online dot, Diagnostics' *Directly
+> connected*) is `CompositeMeshTransport.shortRangeReachable`; the full union is `MeshController.reachable`
+> and only Diagnostics' *Reachable via relay* reads it. Writes are gated on
+> `mesh/FramePresence.kt`'s `isPresenceEvidence` (shared with the Internet plane, which needed the same
+> rule) — 15 min for everything except `profile`, which gets 13 h (the
+> 12 h `PROFILE_REPUBLISH_MS` cadence plus slack) — because the ADR 044 backfill, the ADR 039 re-offer
+> and `onDeliver`'s re-fan of a frame the **Internet plane** just pulled off a spool all put old frames on
+> air, and taking those as presence showed a phone switched off for days as a live neighbour. It cannot
+> reuse `isFresh` (which returns true for every non-chat type), and `profile` cannot simply be excluded:
+> a board that comes up beacons its profile first, and that first hearing is what fires `reofferTo`. The
+> gate wraps **only** `noteReachable` — decode, dedup, delivery, custody and relay all still run.
+
 ## The layers
 
 ```
 LoraMeshTransport (pure)      fastFanout/longRangeFanout/fastSend · LoraFramePolicy (+ isFresh) · LoraFrameCodec ·
-                              LoraPacePolicy (class shedding + LoraAirtime budget) · reachable(45min linger) ·
+                              LoraPacePolicy (class shedding + LoraAirtime budget) · reachable(isPresenceEvidence, 45min linger) ·
                               beacon + reofferTo on first hearing · LoraGatewayPolicy/LoraGossipPolicy/LoraCtl (the bridge)
   └─ MeshtasticLink (seam)    state / packets / outcomes / queue / rxQuality · suspend send()
        └─ MeshtasticSession   pure actor: want_config handshake · drain-until-empty on FromNum · 180s heartbeat ·
@@ -533,7 +548,8 @@ where no other Knit board is listening. Set the Meshtastic app's device to **Non
 - Broadcast: `…debug.SEND --es conv nearby --es text …` on A → appears on B within ~5–10 s; A's tick flips
   ✓✓ (sealed tick over LoRa); a reaction crosses. Move B out of BLE/NAN range and repeat. Counters:
   `loraSent/loraReceived/loraReassembled` climb, `loraNak == 0`, `loraDroppedQueue == 0` at chat pace,
-  `loraTooBig` only for long posts. Diagnostics tags a LoRa-reachable node `LoRa`.
+  `loraTooBig` only for long posts. Diagnostics lists a LoRa-reachable node under **Reachable via relay**
+  tagged `LoRa`, never under *Directly connected* (ADR 2026-09.2ajk).
 - DM (ADR 039): `…debug.SEND --es conv <peerId> --es text …` on A → appears on B within ~10 s; A's tick
   flips ✓✓ (the sealed receipt crossed back); `loraDmSent`/`loraDmReceived` climb on both, `loraTooBig == 0`.
   Reply from B (turnaround epoch) and a DM reaction cross; a 500-char DM counts `loraTooBig` and lands later

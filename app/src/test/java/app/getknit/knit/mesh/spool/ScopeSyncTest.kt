@@ -3,6 +3,7 @@ package app.getknit.knit.mesh.spool
 import app.getknit.knit.mesh.CarriedFrame
 import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshMetrics
+import app.getknit.knit.mesh.PRESENCE_FRESH_MS
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireEnvelope
@@ -16,6 +17,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -81,6 +83,10 @@ class ScopeSyncTest {
         // (spec §3.5), both read live so a test can move a peer between them mid-run.
         roots: () -> List<ScopeRoots> = { listOf(ScopeRoots(peer, pairwiseRoot)) },
         pairs: () -> List<PairScopeRoots> = { emptyList() },
+        // This member's own wall clock. Only the per-scope presence stamp reads it against a frame's
+        // `sentAt`, so running one member late is how a test makes an arriving frame look like a backlog
+        // pull without moving the fixture's `now` under every other assertion.
+        clock: () -> Long = { now },
     ): Member {
         val metrics = MeshMetrics()
         val delivered = mutableListOf<RelayEnvelope>()
@@ -109,7 +115,7 @@ class ScopeSyncTest {
                 onAttachmentObtained = { obtained.add(it) },
                 deferAttachment = deferAttachment,
                 metrics = metrics,
-                clock = { now },
+                clock = clock,
                 jitter = { 0L },
             )
         return Member(custody, sync, metrics, delivered, blobs, obtained)
@@ -206,6 +212,79 @@ class ScopeSyncTest {
             assertTrue("the bridged frame lands in the receiver's custody", receiver.custody.has("m1"))
             assertEquals(1, sender.metrics.snapshot().spoolPushed)
             assertEquals(1, receiver.metrics.snapshot().spoolBridged)
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    /**
+     * A scope is derived from the pairwise ratchet root, so it is subscribed and converged whether or not
+     * its peer has been online this month — which is why nothing else on [ScopeStatus] can be read as
+     * "this peer is reachable". [ScopeStatus.peerSeenAt] is the only field that says otherwise, and it is
+     * set only by that peer's own recent traffic (ADR 2026-09.2ajk).
+     */
+    @Test
+    fun `a scope reports its peer seen only once that peer has pushed something recent`() =
+        runTest {
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            val receiver = member(spool, bob, alice)
+            receiver.sync.start(backgroundScope)
+            pump()
+
+            assertNull(
+                "converged and connected, but alice has never spoken here",
+                receiver.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single()
+                    .peerSeenAt,
+            )
+
+            sender.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            sender.sync.start(backgroundScope)
+            pump()
+
+            assertEquals(listOf("m1"), receiver.delivered.map { it.id })
+            assertEquals(
+                "alice's own fresh frame is what makes the scope a live path",
+                now,
+                receiver.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single()
+                    .peerSeenAt,
+            )
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `a backlog pull does not make its author present`() =
+        runTest {
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            // A spool holds blobs for 48 h and a client pulls whatever it lacks whenever it next connects,
+            // so a scope yields old frames as a matter of course. Bob comes back long after alice wrote.
+            val late = now + PRESENCE_FRESH_MS + 1
+            val receiver = member(spool, bob, alice, clock = { late })
+            sender.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump()
+
+            assertEquals("the frame still bridges — presence is never a delivery gate", listOf("m1"), receiver.delivered.map { it.id })
+            assertNull(
+                "but a frame alice wrote before she left does not put her back on the plane",
+                receiver.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single()
+                    .peerSeenAt,
+            )
             sender.sync.stop()
             receiver.sync.stop()
         }

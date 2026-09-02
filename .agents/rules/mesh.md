@@ -91,6 +91,14 @@ free). Two invariants that are easy to break:
   window is the whole bound on spool-side linkability. Intro-store writes stay outside the ratchet
   mutex (they run post-commit, in `InboundPipeline`'s `onPeerFrameOpened`/`onProfilePinned` hooks); if one
   ever moves into the ratchet commit it goes through `SessionTransactor`.
+- **A scope's convergence state says nothing about its peer** (`ScopeStatus.peerSeenAt`, ADR
+  2026-09.2ajk). A scope is derived from the pairwise ratchet root, so it stays subscribed, connected and
+  `converged` while its peer sits switched off for a month — every field on `ScopeStatus` but this one is
+  a statement about the **spool**. Anything that wants to say a peer is *there* reads `peerSeenAt`, which
+  `notePeerPresence` stamps only for a bridged frame whose author is the scope's own `peerId` and which
+  passes `mesh/FramePresence.kt`'s `isPresenceEvidence` — the spool's 48 h retention means a client pulls
+  old frames as a matter of course, so without the age rule one backlog pull resurrects its author. It is
+  presence bookkeeping and **never** a delivery gate: a frame that fails it still bridges.
 - **Group-root minting is damped; group-root adoption is not** (`GroupRootPolicy`, spec §3.2). Several
   members minting version 1 at once is normal and self-healing — `(version, minter)` collapses the
   lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping

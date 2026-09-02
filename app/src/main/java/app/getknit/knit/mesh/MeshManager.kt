@@ -320,12 +320,10 @@ class MeshManager(
      */
     private val attachmentDefer =
         AttachmentDeferPolicy(
-            // shortRangeReachable, not reachable: a LoRa-only sighting can't carry the bytes, so it must not
-            // defer a spool upload (H5). Falls back to reachable on a LoRa-less (all-short-range) build.
-            reachable = {
-                val presence = (transport as? CompositeMeshTransport)?.shortRangeReachable ?: transport.reachable
-                presence.value.mapTo(mutableSetOf()) { peer -> peer.nodeId }
-            },
+            // The short-range set, not the full reach: a LoRa-only sighting can't carry the bytes, so it must
+            // not defer a spool upload (H5). [nearbyPeers] is the one definition of that set — a lambda, so
+            // reading the property here is safe however late this field is initialized.
+            reachable = { nearbyPeers.value.mapTo(mutableSetOf()) { peer -> peer.nodeId } },
             ackedBySender = { aHash -> messages.attachmentAcked(aHash, identity.nodeId()) },
             custodyTtlMs = ForwardRepository.DEFAULT_TTL_MS,
             clock = clock,
@@ -379,17 +377,32 @@ class MeshManager(
     private val sentProfileVersions = ConcurrentHashMap<String, Long>()
 
     /**
-     * Number of nearby peers for the UI status header — the smoothed [MeshTransport.reachable] set (seen
-     * over the coordination plane), not the ≤1 live data-path link, so the header doesn't blink as the
-     * cue-driven transport rotates through ephemeral syncs.
+     * Nearby peers — the smoothed [MeshTransport.reachable] set (seen over the coordination plane), not the
+     * ≤1 live data-path link, so the UI doesn't blink as the cue-driven transport rotates through ephemeral
+     * syncs. Restricted to the **short-range** children
+     * ([CompositeMeshTransport.shortRangeReachable]), so *nearby* means a radio saw this peer's own radio;
+     * a LoRa sighting is keyed on the frame author and a gateway carries other people's frames, so it says
+     * nothing about proximity and belongs in [reachable]. Falls back to the whole set for a non-composite
+     * transport (demo/fakes), exactly as the attachment-deferral presence hook does.
      */
+    private val nearbyPeers: StateFlow<Set<Peer>>
+        get() = (transport as? CompositeMeshTransport)?.shortRangeReachable ?: transport.reachable
+
+    /** Number of nearby peers for the UI status header. */
     override val neighborCount: StateFlow<Int> =
-        transport.reachable
+        nearbyPeers
             .map { it.size }
             .stateIn(scope, SharingStarted.Eagerly, 0)
 
-    /** Nearby peers for the contact picker (message someone nearby) — the smoothed [MeshTransport.reachable] set. */
-    override val neighbors: StateFlow<Set<Peer>> get() = transport.reachable
+    /** Nearby peers for the contact picker (message someone nearby) — see [nearbyPeers]. */
+    override val neighbors: StateFlow<Set<Peer>> get() = nearbyPeers
+
+    /** Every peer reachable over any plane, long-range included — a superset of [neighbors]. */
+    override val reachable: StateFlow<Set<Peer>> get() = transport.reachable
+
+    /** The short-range planes, so Diagnostics can tag a direct radio apart from a relay path. */
+    override val shortRangeKinds: Set<TransportKind> =
+        (transport as? CompositeMeshTransport)?.shortRangeKinds ?: setOf(transport.kind)
 
     /** Radio health for the Diagnostics screen (Healthy vs Degraded — e.g. radios seized by Quick Share). */
     override val transportHealth: StateFlow<TransportHealth> get() = transport.health

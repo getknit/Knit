@@ -73,10 +73,20 @@ class CompositeMeshTransport(
         }
 
     /**
-     * The merged [reachable] set restricted to **short-range** children (BLE/NAN) — used where a sighting
-     * must mean physical proximity, i.e. [app.getknit.knit.mesh.spool.AttachmentDeferPolicy]: a LoRa-only
-     * sighting can't carry an image and must not defer its upload. Falls back to the full [reachable] when
-     * every child is short-range (the common two-radio case), so nothing changes for a LoRa-less build.
+     * The [TransportKind]s of the short-range children — read off [MeshTransport.shortRange] rather than
+     * restated, so a consumer telling a proximity plane from a long-range one can never drift from the flag
+     * the transports themselves declare. Presentation only (the Diagnostics screen's radio tags); nothing
+     * routes on it.
+     */
+    val shortRangeKinds: Set<TransportKind> = children.filter { it.shortRange }.mapTo(mutableSetOf()) { it.kind }
+
+    /**
+     * The merged [reachable] set restricted to **short-range** children (BLE/NAN) — the set that means the
+     * peer's *own* radio was seen, so it is both "physically near" and "directly connected". Used by
+     * [app.getknit.knit.mesh.spool.AttachmentDeferPolicy] (a LoRa-only sighting can't carry an image and must
+     * not defer its upload) and by everything in the app that says *nearby* / *online*
+     * ([MeshController.neighbors]). Falls back to the full [reachable] when every child is short-range (the
+     * common two-radio case), so nothing changes for a LoRa-less build.
      */
     val shortRangeReachable: StateFlow<Set<Peer>> =
         run {
@@ -140,10 +150,15 @@ class CompositeMeshTransport(
         }
 
     /**
-     * nodeId → the set of radios it's currently reachable over, so the Diagnostics screen can tag a connected
-     * node BLE / NAN / both. Keyed off each child's [reachable] (not [neighbors]) to match the "directly
-     * connected" classification, which reads the smoothed [reachable] set, and to avoid Wi-Fi Aware's ≤1
-     * flapping live-link set.
+     * nodeId → the set of planes it's currently reachable over, so the Diagnostics screen can tag a node
+     * BLE / NAN / LoRa. Keyed off each child's [reachable] (not [neighbors]) to match the reach
+     * classification, which reads the smoothed [reachable] set, and to avoid Wi-Fi Aware's ≤1 flapping
+     * live-link set.
+     *
+     * A **long-range** kind here names the plane a frame arrived over, never proximity and never the peer's
+     * own hardware: a LoRa entry means somebody's board put that author's frame on air, which may be a
+     * gateway relaying for a peer with no board at all (ADR 044). [shortRangeKinds] is how a consumer tells
+     * the two apart — the Diagnostics screen shows long-range kinds only under *reachable via relay*.
      */
     val peerTransports: StateFlow<Map<String, Set<TransportKind>>> =
         if (children.isEmpty()) {

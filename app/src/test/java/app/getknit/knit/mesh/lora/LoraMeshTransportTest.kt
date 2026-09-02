@@ -796,6 +796,84 @@ class LoraMeshTransportTest {
             a.transport.stop()
         }
 
+    /**
+     * The bug this guards: presence here is keyed on the frame **author**, and a gateway routinely puts other
+     * people's frames on air — the ADR 044 backfill, this ADR 039 re-offer, and `onDeliver`'s re-fan of
+     * anything first-seen, *including what the Internet plane just pulled off a spool*. A phone switched off
+     * for days therefore showed up as a live neighbour on every listener for the whole 45-minute linger.
+     */
+    @Test
+    fun aReofferedDmCrossesButDoesNotPutItsAuthorOnTheAir() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val carried = frame(FrameType.CHAT, "carol", recipientId = "bob", body = "sent long before bob came up")
+            val a = rig(air, 1u, "alice", backgroundScope, farFrames = { listOf(carried) }) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            // Carol's DM is now well past the fan-out's freshness window; only the re-offer would still carry it.
+            advanceTimeBy(30 * 60_000)
+            runCurrent()
+
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            b.transport.start() // bob beacons; alice hears him for the first time and re-offers carol's DM
+            advanceTimeBy(4_000)
+            runCurrent()
+
+            assertTrue("bob still receives the re-offered DM", b.received.any { it.envelope.id == idOf(carried) })
+            assertFalse(
+                "but carol is not on the air — alice carried that frame for her",
+                b.transport.reachable.value
+                    .any { it.nodeId == "carol" },
+            )
+            assertTrue(
+                "alice, whose own beacon bob heard, is",
+                b.transport.reachable.value
+                    .any { it.nodeId == "alice" },
+            )
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    @Test
+    fun aProfileCountsUntilItsAuthorStopsRepublishingIt() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+
+            // A profile's sentAt is a publish stamp refreshed every 12 h, so an idle node's beacon is old by
+            // design and must keep counting — it is what triggers the ADR 039 re-offer on first hearing.
+            advanceTimeBy(12 * 60 * 60_000L)
+            runCurrent()
+            a.transport.fastFanout(profile("carol"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertTrue(
+                "a 12-hour-old beacon still means carol is there",
+                b.transport.reachable.value
+                    .any { it.nodeId == "carol" },
+            )
+
+            // Dave stopped republishing a day ago, but his profile is still in somebody's custody and still
+            // gets re-fanned. The frame must cross; dave must not come back to life.
+            advanceTimeBy(14 * 60 * 60_000L)
+            runCurrent()
+            a.transport.fastFanout(profile("dave"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertTrue("the profile still crosses — the key bootstrap is untouched", b.received.any { it.envelope.senderId == "dave" })
+            assertFalse(
+                "but a node that stopped republishing is not a neighbour",
+                b.transport.reachable.value
+                    .any { it.nodeId == "dave" },
+            )
+            a.transport.stop()
+            b.transport.stop()
+        }
+
     @Test
     fun theReachableLingerExpiresAPeer() =
         runTest {

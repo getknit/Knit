@@ -71,8 +71,9 @@ import org.koin.androidx.compose.koinViewModel
 import java.io.File
 
 /**
- * Read-only mesh diagnostics: this device's identity, the live mesh metrics, directly-connected
- * nodes, and nodes reachable only via relay. Reached from the chat-list overflow menu.
+ * Read-only mesh diagnostics: this device's identity, the live mesh metrics, and the known nodes split by
+ * how strong the evidence for reaching them is — directly connected, reachable through a relay, or merely
+ * known (see [Reach]). Reached from the chat-list overflow menu.
  */
 @Composable
 fun DiagnosticsScreen(
@@ -237,6 +238,19 @@ internal fun DiagnosticsScreenContent(
                 item { EmptyLine(stringResource(R.string.diagnostics_none_relay)) }
             } else {
                 items(state.relayNodes, key = { it.nodeId }) { NodeRow(it, now) }
+            }
+
+            // Everyone else we hold a profile for. Capped: this is the peer table, and listing all of it was
+            // exactly what made the old "reachable via relay" section meaningless.
+            if (state.knownTotal > 0) {
+                item {
+                    SectionHeader(stringResource(R.string.diagnostics_known_nodes, state.knownTotal))
+                }
+                items(state.knownNodes, key = { it.nodeId }) { NodeRow(it, now) }
+                val hidden = state.knownTotal - state.knownNodes.size
+                if (hidden > 0) {
+                    item { EmptyLine(stringResource(R.string.diagnostics_known_more, hidden)) }
+                }
             }
         }
     }
@@ -516,8 +530,16 @@ private fun TransportRow(status: TransportStatus) {
             TransportTag(stringResource(R.string.diagnostics_transport_audio))
             Spacer(Modifier.width(8.dp))
         }
+        // A long-range plane has no links by design and its count is *authors heard*, not people nearby —
+        // a gateway relays for peers whose own radio is nowhere near. Saying "nearby · linked" there read
+        // as two facts that were both false. (The board count itself is on the LoRa settings screen.)
         Text(
-            text = stringResource(R.string.diagnostics_transport_counts, status.nearby, status.linked),
+            text =
+                if (status.kind == TransportKind.LoRa) {
+                    stringResource(R.string.diagnostics_transport_heard, status.nearby)
+                } else {
+                    stringResource(R.string.diagnostics_transport_counts, status.nearby, status.linked)
+                },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -535,20 +557,33 @@ private fun transportName(kind: TransportKind): String =
         },
     )
 
-/** BLE / NAN / BLE·NAN for a connected node, or null when it isn't reachable over a tagged radio. */
+/**
+ * The planes on a node's row — `BLE·NAN` for a directly-connected node, `LoRa` / `Relay` for one reached
+ * through something else — or null when the row has nothing to claim. The caller has already narrowed
+ * [transports] to the kinds its section may show (see [NodeInfo.transports]); [viaSpool] is the Internet
+ * plane, which is deliberately not a transport at all (ADR 019) and so has no [TransportKind].
+ */
 @Composable
-private fun transportTag(transports: Set<TransportKind>): String? {
+private fun transportTag(
+    transports: Set<TransportKind>,
+    viaSpool: Boolean = false,
+): String? {
     val ble = stringResource(R.string.diagnostics_tag_ble)
     val nan = stringResource(R.string.diagnostics_tag_nan)
     val lora = stringResource(R.string.diagnostics_tag_lora)
+    val spool = stringResource(R.string.diagnostics_tag_spool)
     val parts =
         buildList {
             if (TransportKind.Bluetooth in transports) add(ble)
             if (TransportKind.WifiAware in transports) add(nan)
             if (TransportKind.LoRa in transports) add(lora)
+            if (viaSpool) add(spool)
         }
     return parts.joinToString("·").ifEmpty { null }
 }
+
+/** How faded the relay dot is against the filled direct one — present, but weaker evidence. */
+private const val RELAY_DOT_ALPHA = 0.45f
 
 @Composable
 private fun TransportTag(label: String) {
@@ -574,9 +609,14 @@ private fun NodeRow(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Filled tertiary dot = live direct neighbor; muted dot = known only via relay.
+        // Three strengths of evidence, three dots: filled = a radio saw this peer itself; faded = something
+        // carried its traffic for us; muted = we only hold its profile.
         val dotColor =
-            if (node.direct) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
+            when (node.reach) {
+                Reach.Direct -> MaterialTheme.colorScheme.tertiary
+                Reach.Relay -> MaterialTheme.colorScheme.tertiary.copy(alpha = RELAY_DOT_ALPHA)
+                Reach.Known -> MaterialTheme.colorScheme.outline
+            }
         Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(dotColor))
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -592,7 +632,7 @@ private fun NodeRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        val tag = transportTag(node.transports)
+        val tag = transportTag(node.transports, node.viaSpool)
         val age = node.profileUpdatedAt?.let { compactTimeAgo(it, now) }
         tag?.let { TransportTag(it) }
         if (tag != null && age != null) Spacer(Modifier.width(8.dp))
@@ -825,7 +865,7 @@ fun NodeRowDirectPreview() =
                 NodeInfo(
                     nodeId = "8f3a2b1c9d4e",
                     displayName = "Ada Lovelace",
-                    direct = true,
+                    reach = Reach.Direct,
                     profileUpdatedAt = PREVIEW_NOW - 3 * 60_000L,
                     transports = setOf(TransportKind.Bluetooth, TransportKind.WifiAware),
                 ),
@@ -842,8 +882,9 @@ fun NodeRowRelayPreview() =
                 NodeInfo(
                     nodeId = "a1b2c3d4e5f6",
                     displayName = "Grace Hopper",
-                    direct = false,
+                    reach = Reach.Relay,
                     profileUpdatedAt = null,
+                    transports = setOf(TransportKind.LoRa),
                 ),
             now = PREVIEW_NOW,
         )
@@ -892,14 +933,14 @@ fun DiagnosticsScreenPopulatedPreview() =
                             NodeInfo(
                                 nodeId = "a1b2c3d4e5f6",
                                 displayName = "Grace Hopper",
-                                direct = true,
+                                reach = Reach.Direct,
                                 profileUpdatedAt = PREVIEW_NOW - 3 * 60_000L,
                                 transports = setOf(TransportKind.Bluetooth, TransportKind.WifiAware),
                             ),
                             NodeInfo(
                                 nodeId = "b2c3d4e5f6a1",
                                 displayName = "Edsger Dijkstra",
-                                direct = true,
+                                reach = Reach.Direct,
                                 profileUpdatedAt = PREVIEW_NOW - 20 * 60_000L,
                                 transports = setOf(TransportKind.Bluetooth),
                             ),
@@ -909,8 +950,9 @@ fun DiagnosticsScreenPopulatedPreview() =
                             NodeInfo(
                                 nodeId = "c3d4e5f6a1b2",
                                 displayName = "Radia Perlman",
-                                direct = false,
+                                reach = Reach.Relay,
                                 profileUpdatedAt = null,
+                                transports = setOf(TransportKind.LoRa),
                             ),
                         ),
                     metrics =

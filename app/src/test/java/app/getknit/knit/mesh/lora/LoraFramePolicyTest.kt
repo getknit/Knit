@@ -13,7 +13,16 @@ class LoraFramePolicyTest {
         type: String,
         recipientId: String? = null,
         group: GroupInfo? = null,
-    ) = RelayEnvelope(type = type, id = "id", senderId = "alice", recipientId = recipientId, group = group, payload = ByteArray(0))
+        sentAt: Long = 0L,
+    ) = RelayEnvelope(
+        type = type,
+        id = "id",
+        senderId = "alice",
+        sentAt = sentAt,
+        recipientId = recipientId,
+        group = group,
+        payload = ByteArray(0),
+    )
 
     private fun wire(relay: Boolean = true) = WireEnvelope(relay = relay, sig = ByteArray(64), signed = ByteArray(0))
 

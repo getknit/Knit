@@ -17,8 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-71 decisions.
-70 decisions.
+73 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -89,8 +88,9 @@ carries; never renumber an old one.
 | [065](decisions/065-room-3-arrives-as-a-package-move.md) | Room 3 arrives as a package move, and takes SQLCipher's driver with it | data, room, build |
 | [066](decisions/066-a-status-notice-is-derived.md) | A status notice is derived, never carried — and it is furniture, not a message | ui, data, wire |
 | [067](decisions/067-a-dedicated-lora-frequency-is-a-debug-only-second-bargain.md) | A dedicated LoRa frequency is a debug-only second bargain, and it is the *politeness* ceiling it lifts | lora, airtime, debug |
+| [2026-09.2ajk](decisions/2026-09-2ajk-lora-reach-is-relay-reach.md) | LoRa reach is relay reach, and a custody re-serve is not presence | lora, mesh, ui |
 | [2026-09.emd7](decisions/2026-09-emd7-a-knit-board-tells-the-mesh-it-is-unmonitored.md) | A Knit board tells the mesh it is unmonitored | lora, meshtastic, provisioning |
 | [2026-09.mhs5](decisions/2026-09-mhs5-a-lora-packet-is-padded-past-the-firmware-s-signature-cliff.md) | A LoRa packet is padded past the firmware's signature cliff | lora, airtime, link |
+| [2026-09.un9n](decisions/2026-09-un9n-a-never-drawn-window-is-recovered-by-recreating-it.md) | A never-drawn window is recovered by recreating it | ui, android, resilience, back |
 | [2026-09.v66c](decisions/2026-09-v66c-reactions-are-an-open-emoji-set-with-a-receive-side-length-cap.md) | Reactions are an open emoji set with a receive-side length cap | wire, ui, limits |
 | [2026-09.zu5t](decisions/2026-09-zu5t-content-capture-is-off.md) | Content capture is off | privacy, ui, performance |
-| [2026-09.un9n](decisions/2026-09-un9n-a-never-drawn-window-is-recovered-by-recreating-it.md) | A never-drawn window is recovered by recreating it | ui, android, resilience, back |

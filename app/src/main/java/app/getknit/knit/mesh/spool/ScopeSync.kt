@@ -5,6 +5,7 @@ import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.crypto.scope.SpoolPow
+import app.getknit.knit.mesh.isPresenceEvidence
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.CoroutineScope
@@ -75,6 +76,12 @@ interface SpoolSocket : SpoolLink {
  * blobs the spool holds that our custody never will (§9.6). Counting them keeps `localCount ==
  * spoolCount` meaning "converged" once the aged band is accounted for, which is what the soak oracle and
  * the debug bridge read.
+ *
+ * [peerSeenAt] is the one field here that describes the **peer** rather than the spool, and the only
+ * honest basis for saying this scope is a live path to anyone: everything else above is true of a scope
+ * whose peer has not opened the app in a month, because a scope is derived from the pairwise ratchet root
+ * and stays subscribed and converged regardless. Null until this peer has put a *recent* frame of its own
+ * into the scope (ADR 2026-09.2ajk).
  */
 class ScopeStatus(
     val scopeHex: String,
@@ -85,6 +92,7 @@ class ScopeStatus(
     val invalidCount: Int,
     val retiring: Boolean,
     val accountedCount: Int = 0,
+    val peerSeenAt: Long? = null,
 )
 
 /**
@@ -259,6 +267,13 @@ class ScopeSync(
         private val stamps = ConcurrentHashMap<String, PowStamp>()
         private val invalidAttachments = ConcurrentHashMap<String, LinkedHashSet<String>>()
 
+        // scopeHex → when this scope's own peer last put something recent into it (see [notePeerPresence]).
+        // The ONLY thing on this plane that says anything about the peer rather than about the spool, and the
+        // reason it exists: a scope is derived from the pairwise ratchet root, so it is subscribed and
+        // converged whether or not its peer has been online this month. Survives a reconnect — losing the
+        // socket is our event, not theirs — and is diagnostics-only; nothing routes on it.
+        private val peerSeenAt = ConcurrentHashMap<String, Long>()
+
         // Partially-received attachments, keyed "scopeHex|aHash". In memory by design (§9.5): the
         // plane persists nothing, and the spool's bitmap makes a restarted download cheap to resume.
         private val assemblies = ConcurrentHashMap<String, ScopeAttachments.Assembly>()
@@ -315,6 +330,7 @@ class ScopeSync(
                             invalidCount = invalid[scope.idHex]?.size ?: 0,
                             retiring = scope.retiring,
                             accountedCount = accountedFor(scope.idHex).size,
+                            peerSeenAt = peerSeenAt[scope.idHex],
                         )
                     },
             )
@@ -828,6 +844,7 @@ class ScopeSync(
             metrics.onSpoolPulled()
             deliver(opened.wire, opened.env, SPOOL_SOURCE_PREFIX + url)
             metrics.onSpoolBridged()
+            notePeerPresence(scope, opened.env)
             // §9.6. Delivery is done and it was worth doing — but if custody did not keep the frame, no
             // future round can ever fold this blob into `local`, so re-pulling it can only repeat this
             // work. Asking the store rather than re-deriving the rule is deliberate: "will custody hold
@@ -835,6 +852,28 @@ class ScopeSync(
             // second copy of a convergence-critical TTL rule here is exactly how the two drift apart.
             if (!store.has(opened.env.id) && account(scope.idHex, idHex, blobId)) metrics.onSpoolAccounted()
             return true
+        }
+
+        /**
+         * Records that [scope]'s own peer was recently on this plane, if [env] is evidence of that.
+         *
+         * Two conditions, and both matter. The frame must be authored by the peer the scope is *of* — our
+         * own frames and (in a group scope) any other member's say nothing about this one. And it must pass
+         * [isPresenceEvidence], because a spool holds blobs for 48 h and a client pulls whatever it lacks
+         * whenever it next connects, so a scope yields old frames as a matter of course; without the age
+         * rule, one backlog pull would mark a peer present that has not opened the app in a week.
+         *
+         * The stamp is *our* clock at the moment we accepted it, not the frame's `sentAt`, so a single
+         * linger reads correctly downstream — the same shape as `LoraMeshTransport.lastHeardAt`.
+         */
+        private fun notePeerPresence(
+            scope: Scope,
+            env: RelayEnvelope,
+        ) {
+            val peer = scope.peerId ?: return
+            if (env.senderId != peer) return
+            val now = clock()
+            if (isPresenceEvidence(env, now)) peerSeenAt[scope.idHex] = now
         }
 
         private fun quarantine(

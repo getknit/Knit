@@ -381,7 +381,9 @@
     <string name="diagnostics_directly_connected">Directly connected (%1$d)</string>
     <string name="diagnostics_via_relay">Reachable via relay (%1$d)</string>
     <string name="diagnostics_none_direct">No direct connections</string>
-    <string name="diagnostics_none_relay">No relay-only nodes</string>
+    <string name="diagnostics_none_relay">Nothing reachable via relay</string>
+    <string name="diagnostics_known_nodes">Known, not reachable (%1$d)</string>
+    <string name="diagnostics_known_more">…and %1$d more</string>
     <string name="diagnostics_profile_age">Profile %1$s</string>
     <string name="diagnostics_metric_originated">Originated</string>
     <string name="diagnostics_metric_delivered">Delivered</string>
@@ -444,9 +446,11 @@
     <string name="diagnostics_transport_other">Other</string>
     <string name="diagnostics_transport_lora">LoRa</string>
     <string name="diagnostics_transport_counts">%1$d nearby · %2$d linked</string>
+    <string name="diagnostics_transport_heard">%1$d heard</string>
     <string name="diagnostics_tag_ble">BLE</string>
     <string name="diagnostics_tag_nan">NAN</string>
     <string name="diagnostics_tag_lora">LoRa</string>
+    <string name="diagnostics_tag_spool">Relay</string>
     <string name="diagnostics_transport_audio">audio</string>
 
     <!-- Crash log — a manual, opt-in report the user reads and hands over themselves. Reached from

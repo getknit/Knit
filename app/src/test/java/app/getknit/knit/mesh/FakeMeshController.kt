@@ -4,6 +4,7 @@ import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.spool.SpoolStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -18,6 +19,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 class FakeMeshController : MeshController {
     override val neighborCount = MutableStateFlow(0)
     override val neighbors = MutableStateFlow<Set<Peer>>(emptySet())
+
+    /**
+     * The full reach set (long-range planes included) — a superset of [neighbors] in production, but its own
+     * flow here so a test can put a peer on LoRa without claiming a radio ever saw it.
+     */
+    override val reachable = MutableStateFlow<Set<Peer>>(emptySet())
+
+    /** The proximity planes, as a two-radio phone reports them; a test may narrow or widen it. */
+    override var shortRangeKinds: Set<TransportKind> = setOf(TransportKind.Bluetooth, TransportKind.WifiAware)
     override val transportHealth = MutableStateFlow(TransportHealth.Healthy)
     override val transportStatuses = MutableStateFlow<List<TransportStatus>>(emptyList())
     override val peerTransports = MutableStateFlow<Map<String, Set<TransportKind>>>(emptyMap())
@@ -47,6 +57,11 @@ class FakeMeshController : MeshController {
 
     /** When false, [sendChat] records the call but returns false (simulates the moderator flagging the text). */
     var sendChatResult = true
+
+    /** What [spoolStatus] answers — the Internet plane, as Diagnostics and the relay screen read it. */
+    var spools: List<SpoolStatus> = emptyList()
+
+    override fun spoolStatus(): List<SpoolStatus> = spools
 
     override fun start() {
         startCount++

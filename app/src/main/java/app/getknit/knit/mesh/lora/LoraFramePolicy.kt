@@ -83,7 +83,12 @@ internal object LoraFramePolicy {
         maxAgeMs: Long = FRESH_MS,
     ): Boolean = (env.type != FrameType.CHAT && env.type != FrameType.REACTION) || now - env.sentAt <= maxAgeMs
 
-    /** How old a chat/reaction may be and still ride the fan-out path: past the 10-min SeenSet, with skew slack. */
+    /**
+     * How old a chat/reaction may be and still ride the fan-out path: past the 10-min SeenSet, with skew slack.
+     * `mesh/FramePresence.kt`'s [app.getknit.knit.mesh.PRESENCE_FRESH_MS] is the same number for the same
+     * reason and stays separate on purpose — that one answers "does this prove its author is there", which
+     * [isFresh] gets wrong for every non-chat type by design.
+     */
     const val FRESH_MS = 15 * 60_000L
 
     /** The Nearby room: a chat or reaction with no DM recipient and no group. */

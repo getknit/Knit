@@ -12,6 +12,7 @@ import app.getknit.knit.mesh.SeenSet
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
+import app.getknit.knit.mesh.isPresenceEvidence
 import app.getknit.knit.mesh.link.FastFrameCodec
 import app.getknit.knit.mesh.link.FragReassembler
 import app.getknit.knit.mesh.protocol.FrameType
@@ -50,7 +51,12 @@ import java.util.concurrent.atomic.AtomicLong
  *   carries sealed DM-form chat (ADR 039); this plane is the only one it exists for.
  * - inbound packets are decoded/reassembled and injected into [inbound] exactly like the Wi-Fi Aware fast
  *   plane's `emitFastWire`, so the router's dedup/verify/custody/relay all run unchanged.
- * - [shortRange] is false: a LoRa sighting doesn't imply proximity, so siblings ignore its `reachable` set.
+ * - [shortRange] is false: a LoRa sighting doesn't imply proximity, so siblings ignore its `reachable` set
+ *   and nothing above the composite may read it as *nearby* (`MeshController.neighbors` is the short-range
+ *   set for exactly this reason). [reachable] here is keyed on the frame **author**, and a gateway puts
+ *   other people's frames on air, so a peer with no board of its own can be reachable over this plane.
+ *   Only a frame that passes [app.getknit.knit.mesh.isPresenceEvidence] counts — a custody re-serve says
+ *   where a frame has been, not where its author is. The Internet plane keys presence off the same rule.
  *
  * On first hearing a peer the transport also re-offers the carried DM-form frames addressed to it
  * ([reofferTo]) — the plane's only backfill, since custody's digest sync needs a data path.
@@ -133,6 +139,9 @@ internal class LoraMeshTransport(
     // NOTE these are frame **authors**, not radios: a frame is authored by one node and may be put on air by
     // another's board, relayed or backfilled out of its custody. That is the right key for `reachable` (who
     // can I reach through this mesh) and the wrong one for "how many radios can I hear" — see boardsHeardAt.
+    // Only frames that pass `mesh/FramePresence.kt`'s isPresenceEvidence write here: a re-serve proves where a
+    // frame has been, not where its author is, and taking it as presence made powered-off phones look live.
+    // Also the reason nothing above this plane may read `reachable` as *nearby* — that is the short-range set.
     private val lastHeardAt = ConcurrentHashMap<String, Long>()
 
     // Meshtastic node numbers we have heard transmit on our channel: one entry per **radio**, which is what
@@ -806,7 +815,10 @@ internal class LoraMeshTransport(
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return
         if (env.senderId == selfIdCached) return // our own frame echoed back over the mesh
         sigSeen.add(dedupKey(wire, env)) // so the composite's relay re-fanout doesn't bounce it back over LoRa
-        noteReachable(Peer(env.senderId))
+        // Presence, and ONLY presence, is gated on the frame's age: a backfill, a re-offer or a re-fan of
+        // something a spool just handed a gateway says where a *frame* has been, not where its author is.
+        // Everything below runs either way — this path must never become a propagation black hole.
+        if (isPresenceEvidence(env, wallClock())) noteReachable(Peer(env.senderId))
         metrics.onLoraReceived()
         if (fragmented) metrics.onLoraReassembled()
         if (LoraFramePolicy.isDmForm(env)) metrics.onLoraDmReceived()

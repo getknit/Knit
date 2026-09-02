@@ -97,6 +97,27 @@ peer off (`CONNECT_BACKOFF_MS`) so a different sync-wanted peer gets the slot ne
 set** (coordination-plane sightings, lingered `REACHABLE_LINGER_MS`) so it doesn't blink as ephemeral
 syncs come and go.
 
+## Three sets, and only one of them means *nearby*
+
+`MeshTransport.neighbors` is live links; `MeshTransport.reachable` is sightings. Above the composite the
+split is different and easy to get backwards (ADR 2026-09.2ajk):
+
+- **`MeshController.neighbors` = `CompositeMeshTransport.shortRangeReachable`** — the merged `reachable`
+  set restricted to children whose `MeshTransport.shortRange` is true. This is what every *nearby* /
+  *online* / *connected* surface reads: the foreground notification count, the chat-list status row, the
+  Contacts online dot, Profile Details, the group member picker, and Diagnostics' *Directly connected*.
+  Only a short-range plane sights the peer's **own** radio.
+- **`MeshController.reachable`** — the full union, long-range planes included. A superset, read only by
+  Diagnostics' *Reachable via relay*. A LoRa entry names the plane a frame arrived over, not proximity
+  and not the peer's hardware: LoRa keys presence on the frame *author*, and a gateway carries other
+  people's frames, so a phone with no board at all appears here (`context/lora-bridge.md`).
+- **`MeshController.shortRangeKinds`** — which `TransportKind`s count as short-range, read off
+  `MeshTransport.shortRange` rather than restated, so a UI telling a proximity tag from a relay one
+  cannot drift from what the transports declare.
+
+Adding a plane is where this bites: give it `shortRange = false` unless a sighting really does mean the
+peer is in radio range, or every *nearby* surface in the app inherits the claim.
+
 ## Wi-Fi Aware availability flaps, and may be absent entirely
 
 `WifiAwareManager.isAvailable()` goes false when Wi-Fi is off or Wi-Fi Direct / SoftAP / hotspot seizes

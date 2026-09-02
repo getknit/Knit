@@ -677,6 +677,21 @@ class CompositeMeshTransportTest {
         }
 
     @Test
+    fun shortRangeKindsNamesTheProximityPlanes() =
+        runTest(UnconfinedTestDispatcher()) {
+            val bt = FakeChild(kind = TransportKind.Bluetooth)
+            val nan = FakeChild(hasFastPlane = true, kind = TransportKind.WifiAware)
+            val lora = FakeChild(hasFastPlane = true, kind = TransportKind.LoRa, shortRange = false)
+            val composite = CompositeMeshTransport(listOf(bt, nan, lora), backgroundScope)
+            // Read off each child's own `shortRange`, never restated, so a UI telling "this peer's radio was
+            // seen" from "somebody carried its frames" can't drift from what the transports declare.
+            assertEquals(
+                setOf(TransportKind.Bluetooth, TransportKind.WifiAware),
+                composite.shortRangeKinds,
+            )
+        }
+
+    @Test
     fun statusesReportPerChildKindHealthAndCounts() =
         runTest(UnconfinedTestDispatcher()) {
             val bt = FakeChild(kind = TransportKind.Bluetooth)

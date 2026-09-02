@@ -1065,7 +1065,13 @@ class DebugBridgeReceiver :
                         .put("accounted", scope.accountedCount)
                         // A retiring scope is drained, never refilled, so local > spool for its whole
                         // drain window — expected, not divergence.
-                        .put("retiring", scope.retiring),
+                        .put("retiring", scope.retiring)
+                        // Millis since this scope's own peer last put a recent frame into it, or -1 if it
+                        // never has. The ONLY field here that says anything about the peer: everything
+                        // above is equally true of a scope whose peer has been switched off for weeks,
+                        // because a scope is derived from the pairwise root and stays subscribed and
+                        // converged regardless (ADR 2026-09.2ajk).
+                        .put("peerSeenAgoMs", scope.peerSeenAt?.let { System.currentTimeMillis() - it } ?: -1L),
                 )
             }
             spools.put(

@@ -82,6 +82,16 @@ Golden byte vectors pin every field number; malformed input decodes to null, nev
 - Bonding required in PIN modes; the V4's OLED shows a random 6-digit PIN. MTU 512 requested (gate ≥ 263 so
   the worst-case 259-B `ToRadio{packet}` is one write). ESP32 = **one BLE client** — the Meshtastic app must
   be disconnected from the board. Board **Wi-Fi must be off** (it disables the board's Bluetooth).
+- **The Exchange MTU must not race the bonding handshake** (verified 2026-09-01, Heltec V4 / 2.8 alpha
+  `2.8.0.7239fe8`). A bonded board starts SMP the moment the ACL is up, and `connectGatt`'s
+  `STATE_CONNECTED` reaches us *before* the link is encrypted — so an MTU request sent on that callback
+  lands mid-handshake and the board answers too late to be heard: the app sees the default 23 with a
+  non-success status (`onConfigureMTU(…, 23, 6)`), and the real response shows up in the stack log as
+  `ATT - Ignore wrong response. Receives (03)`. `MeshtasticGatt` therefore waits `SETTLE_MS` before the
+  first exchange and retries, and `onMtuChanged` trusts the reported size over the status (the stack
+  reports the bearer's current MTU either way). This is not board-specific and not Knit-specific — the
+  Meshtastic app loses the same race; BlueZ wins it only because it touches no ATT until the link is
+  encrypted, which is the fastest way to tell a phone-side stall from a real board fault.
 - Handshake: write `ToRadio{want_config_id=N}`, drain FromRadio until `config_complete_id=N` (no MeshPacket
   before that); then FromNum notify → drain until empty. `ToRadio{heartbeat}` every 180 s keeps the phone
   API alive; the node answers `queueStatus{free,maxlen,mesh_packet_id}` (also after each packet) — flow

@@ -28,6 +28,7 @@ import app.getknit.knit.mesh.lora.GattResult
 import app.getknit.knit.mesh.lora.MeshtasticGattDialer
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -118,7 +119,7 @@ internal class MeshtasticGatt(
     }
 
     private suspend fun finishSetup(channel: AndroidGattChannel): DialResult {
-        val mtu = channel.negotiateMtu(REQUEST_MTU, MTU_TIMEOUT_MS)
+        val mtu = channel.negotiateMtu()
         if (mtu < MIN_MTU) {
             channel.close()
             return DialResult.Failed(status = mtu, phase = "mtu")
@@ -175,12 +176,15 @@ internal class MeshtasticGatt(
                     }
                 }
 
+                // The size is trusted here, not the status: the stack reports the bearer's *current* ATT
+                // MTU either way, so a refused exchange on a link some other GATT client already negotiated
+                // still carries the real number. [negotiateMtu] decides whether what came back is usable.
                 override fun onMtuChanged(
                     g: BluetoothGatt,
                     mtu: Int,
                     status: Int,
                 ) {
-                    mtuResult?.complete(if (status == BluetoothGatt.GATT_SUCCESS) mtu else -1)
+                    mtuResult?.complete(mtu)
                 }
 
                 override fun onServicesDiscovered(
@@ -299,7 +303,30 @@ internal class MeshtasticGatt(
             return withTimeoutOrNull(timeoutMs) { d.await() } ?: false
         }
 
-        suspend fun negotiateMtu(
+        /**
+         * Negotiates the ATT MTU, letting the link settle first and retrying a refused exchange rather than
+         * failing the whole dial on one.
+         *
+         * A bonded board starts its SMP handshake the moment the ACL is up, and `STATE_CONNECTED` reaches us
+         * *before* the link is encrypted — so an Exchange MTU sent the instant we are called lands mid-
+         * handshake. Against a 2.8 alpha board that lost the race every time: the board answered late, the
+         * stack had stopped listening (`ATT - Ignore wrong response. Receives (03)`), and the app saw the
+         * default 23 with a non-success status. BlueZ negotiates 517 on the same board because it does not
+         * touch ATT until the link is encrypted. [SETTLE_MS] buys that same ordering, and the retries cover a
+         * board slower than one settle.
+         */
+        suspend fun negotiateMtu(): Int {
+            var last = -1
+            repeat(MTU_ATTEMPTS) { attempt ->
+                delay(if (attempt == 0) SETTLE_MS else MTU_RETRY_MS)
+                last = requestMtuOnce(REQUEST_MTU, MTU_TIMEOUT_MS)
+                if (last >= MIN_MTU) return last
+                Log.d(TAG, "mtu exchange refused (got $last), attempt ${attempt + 1}/$MTU_ATTEMPTS")
+            }
+            return last
+        }
+
+        private suspend fun requestMtuOnce(
             mtu: Int,
             timeoutMs: Long,
         ): Int {
@@ -406,6 +433,13 @@ internal class MeshtasticGatt(
         const val ARBITER_TAG = "lora-dial"
         const val CONNECT_TIMEOUT_MS = 30_000L
         const val MTU_TIMEOUT_MS = 10_000L
+
+        // The Exchange MTU must not race the SMP handshake a bonded board starts at ACL-up; see
+        // AndroidGattChannel.negotiateMtu. Measured on a Heltec V4 / 2.8 alpha: encryption completes ~200 ms
+        // after STATE_CONNECTED reaches us, so the settle clears it with room to spare.
+        const val SETTLE_MS = 750L
+        const val MTU_RETRY_MS = 1_000L
+        const val MTU_ATTEMPTS = 3
         const val DISCOVER_TIMEOUT_MS = 10_000L
         const val REQUEST_MTU = 512
 

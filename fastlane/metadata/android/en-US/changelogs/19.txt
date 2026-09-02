@@ -1,0 +1,8 @@
+This is 2.5.0-alpha.0 with one thing changed: the LoRa bridge is switched on.
+
+Pair a Meshtastic board over Bluetooth from the radios screen and the Nearby room and your direct
+messages start riding LoRa too, well past the range of the radios in a phone. Group chats do not.
+Nothing happens until you turn it on.
+
+That is what this build is for. The LoRa side has never had a long run on real hardware, so expect it
+to be rough, and nothing on F-Droid carries it.

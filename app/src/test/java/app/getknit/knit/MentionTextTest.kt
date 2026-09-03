@@ -59,10 +59,11 @@ class MentionTextTest {
 
     // --- filterCandidates ---
 
+    // Aliases pinned so a query never happens to match a derived one (the picker matches alias text too).
     private val candidates =
         listOf(
-            MentionCandidate("n1", "Joyful Ferret", null),
-            MentionCandidate("n2", "Coral", null),
+            MentionCandidate("n1", "Joyful Ferret", null, alias = "SoftlyMossyLark"),
+            MentionCandidate("n2", "Coral", null, alias = "GentlyPolarNewt"),
         )
 
     @Test
@@ -120,6 +121,24 @@ class MentionTextTest {
         assertEquals(listOf("a2"), filterCandidates(twins, "cozy").map { it.nodeId })
         // An unsuffixed candidate's alias matches too — the picker always shows it.
         assertEquals(listOf("b"), filterCandidates(twins, "sharp").map { it.nodeId })
+    }
+
+    @Test
+    fun aQueryMatchesAnAliasWithItsSpacesRemoved() {
+        // An alias grown past one token carries spaces (PeerLabels), and a query never can.
+        val grown =
+            listOf(
+                MentionCandidate(
+                    "a1",
+                    "Alice (ReallyJoyfulFerret QuietlyBoldCedar)",
+                    null,
+                    alias = "ReallyJoyfulFerret QuietlyBoldCedar",
+                    discriminator = "ReallyJoyfulFerret QuietlyBoldCedar",
+                ),
+                MentionCandidate("b", "Bob", null, alias = "SharplyKeenOnyx"),
+            )
+        assertEquals(listOf("a1"), filterCandidates(grown, "ferretquietly").map { it.nodeId })
+        assertEquals(listOf("a1"), filterCandidates(grown, "quietly").map { it.nodeId })
     }
 
     @Test

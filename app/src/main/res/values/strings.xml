@@ -318,7 +318,6 @@
     <string name="profile_status_label">Status</string>
     <string name="profile_node_id">Node ID: %1$s</string>
     <string name="profile_alias">Alias: %1$s</string>
-    <string name="profile_alias_hint">Your alias is %1$s. It appears after your name when someone nearby uses the same name.</string>
     <string name="battery_allowed">Background battery use: allowed</string>
     <string name="battery_restricted">Background battery use: restricted — the mesh may drop when idle</string>
     <string name="battery_allow_button">Allow background battery use</string>

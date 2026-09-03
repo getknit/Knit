@@ -8,7 +8,6 @@ import app.getknit.knit.identity.displayNameFor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
 
@@ -79,22 +78,31 @@ class PeerLabelsTest {
     }
 
     @Test
-    fun aBlankNamedPeerFallsBackToTheShortIdWhenSomeoneChoosesItsAlias() {
+    fun aBlankNamedPeerGrowsAContinuationWhenSomeoneChoosesItsAlias() {
         val impostor = Alias.aliasFor("a")
         val idx = index("a" to "", "b" to impostor)
-        assertEquals(NodeId.shortForm("a"), idx.labelFor("a").discriminator)
+        val a = idx.labelFor("a")
+        // The rendered name already is the first token, so the discriminator is the token after it.
+        assertEquals(Alias.tokens("a", 2)[1], a.discriminator)
+        assertEquals(Alias.phrase("a", 2), a.alias)
+        assertEquals("$impostor (${Alias.tokens("a", 2)[1]})", a.text)
         assertEquals(Alias.aliasFor("b"), idx.labelFor("b").discriminator)
-        assertNotEquals(idx.labelFor("a").text, idx.labelFor("b").text)
+        assertNotEquals(a.text, idx.labelFor("b").text)
     }
 
     @Test
-    fun equalAliasesAppendTheShortIdSoLabelsStayDistinct() {
-        val (x, y) = firstAliasCollision()
-        val idx = index(x to "Alice", y to "Alice")
-        val lx = idx.labelFor(x)
-        val ly = idx.labelFor(y)
-        assertEquals("${Alias.aliasFor(x)} ${NodeId.shortForm(x)}", lx.discriminator)
-        assertEquals("${Alias.aliasFor(y)} ${NodeId.shortForm(y)}", ly.discriminator)
+    fun aGroundAliasMatchMakesBothLabelsGrowToTwoTokens() {
+        // 24 bits is what a ground keypair buys; the labels answer with 48, and the growth is the tell.
+        assertEquals(GROUND_X, NodeId.derive("alias-scan-58901"))
+        assertEquals(GROUND_Y, NodeId.derive("alias-scan-110752"))
+        assertEquals(Alias.aliasFor(GROUND_X), Alias.aliasFor(GROUND_Y))
+        assertNotEquals(Alias.tokens(GROUND_X, 2)[1], Alias.tokens(GROUND_Y, 2)[1])
+        val idx = index(GROUND_X to "Alice", GROUND_Y to "Alice")
+        val lx = idx.labelFor(GROUND_X)
+        val ly = idx.labelFor(GROUND_Y)
+        assertEquals(Alias.phrase(GROUND_X, 2), lx.discriminator)
+        assertEquals(Alias.phrase(GROUND_Y, 2), ly.discriminator)
+        assertEquals(lx.discriminator, lx.alias) // what the person would quote
         assertNotEquals(lx.text, ly.text)
     }
 
@@ -103,14 +111,48 @@ class PeerLabelsTest {
         val idx = index("a" to "Alice", "b" to "Alice", "c" to "Alice (${Alias.aliasFor("a")})")
         val texts = listOf("a", "b", "c").map { idx.labelFor(it).text }
         assertEquals(3, texts.toSet().size)
-        assertTrue(idx.labelFor("c").text.endsWith("(${NodeId.shortForm("c")})"))
+        assertEquals(Alias.phrase("a", 2), idx.labelFor("a").discriminator) // grew past the chosen name
+        assertEquals(Alias.aliasFor("b"), idx.labelFor("b").discriminator) // untouched
+        assertEquals(Alias.aliasFor("c"), idx.labelFor("c").discriminator) // caught by the text pass alone
+    }
+
+    @Test
+    fun anOutsideIdGrowsUntilItReadsApartFromTheUniverse() {
+        val idx = index(GROUND_X to "Alice", "b" to "Alice")
+        assertEquals(Alias.aliasFor(GROUND_X), idx.labelFor(GROUND_X).discriminator)
+        // A sender not yet in the universe whose alias matches a member's grows one token further.
+        val outsider = idx.labelFor(GROUND_Y, "Alice")
+        assertEquals(Alias.phrase(GROUND_Y, 2), outsider.discriminator)
+        assertNotEquals(idx.labelFor(GROUND_X).text, outsider.text)
+        // The member is not retroactively grown by a lookup — the index is a snapshot.
+        assertEquals(Alias.aliasFor(GROUND_X), idx.labelFor(GROUND_X).discriminator)
+    }
+
+    @Test
+    fun aMemberAskedUnderADifferentNameResolvesAgainstTheSnapshot() {
+        // The contact-card preview asks for a known id under the card's name (ContactImporter).
+        val idx = index("a" to "Alice", "b" to "Bob")
+        assertEquals(Alias.aliasFor("a"), idx.labelFor("a", "Bob").discriminator)
+        assertNull(idx.labelFor("a", "Carol").discriminator)
+        assertNull(idx.labelFor("a").discriminator)
+    }
+
+    @Test
+    fun twoBlankNamedPeersWithOneAliasReadApartByTheirContinuations() {
+        val idx = index(GROUND_X to "", GROUND_Y to "")
+        val lx = idx.labelFor(GROUND_X)
+        assertEquals(Alias.aliasFor(GROUND_X), lx.name)
+        assertEquals(Alias.tokens(GROUND_X, 2)[1], lx.discriminator)
+        assertEquals(Alias.phrase(GROUND_X, 2), lx.alias)
+        assertNotEquals(lx.text, idx.labelFor(GROUND_Y).text)
     }
 
     @Test
     fun everyLabelInAUniverseIsDistinct() {
         val rng = Random(7)
         val pool = listOf("Alice", "alice", "Bob", "Sam", "SAM", "Dani", "Theo", "Priya", "Jonas W.", "Lena F.", "")
-        val peers = (0 until 500).map { NodeId.derive("peer-$it") to pool[rng.nextInt(pool.size)] }
+        // 2,000 peers: the sweep cap, so the largest universe an index is ever built over.
+        val peers = (0 until 2_000).map { NodeId.derive("peer-$it") to pool[rng.nextInt(pool.size)] }
         val idx = PeerLabels.index(peers, NodeId.derive("me") to "Alice")
         val texts = (peers.map { it.first } + NodeId.derive("me")).map { idx.labelFor(it).text }
         assertEquals(texts.size, texts.toSet().size)
@@ -122,16 +164,15 @@ class PeerLabelsTest {
         assertEquals("Alice", PeerLabelIndex.EMPTY.labelFor("a", "Alice").text)
     }
 
-    /** Two distinct ids sharing an alias — a ~15-bit space, so a scan finds a birthday pair quickly. */
-    private fun firstAliasCollision(): Pair<String, String> {
-        val seen = HashMap<String, String>()
-        for (i in 0 until 100_000) {
-            val id = NodeId.derive("alias-scan-$i")
-            val prior = seen.put(Alias.aliasFor(id), id)
-            if (prior != null && NodeId.shortForm(prior) != NodeId.shortForm(id)) return prior to id
-        }
-        error("no alias collision found")
-    }
-
     private fun PeerLabelIndex.storedNameOf(id: String): String? = labelFor(id).let { if (it.name == Alias.aliasFor(id)) null else it.name }
+
+    private companion object {
+        /**
+         * Two real node ids whose alias digests (`SHA-256("knit-alias-v2:" + id)`) share their first four
+         * bytes, found by a birthday scan over `NodeId.derive("alias-scan-$i")`: the same first token, a
+         * different second one — what a keypair ground to match an alias looks like.
+         */
+        const val GROUND_X = "jiuqkhusaqt3u25svz7rbvvwje"
+        const val GROUND_Y = "p3ve2zdqk6ecz5dfofpywoobxa"
+    }
 }

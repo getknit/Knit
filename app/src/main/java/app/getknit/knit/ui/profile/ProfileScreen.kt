@@ -60,6 +60,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -85,6 +88,7 @@ internal data class ProfileFormState(
     val status: String,
     val nodeId: String,
     val alias: String,
+    val aliasMore: String = "",
     val avatarHash: String?,
     val contentFilteringEnabled: Boolean,
     val openToChat: Boolean = false,
@@ -104,6 +108,7 @@ fun ProfileScreen(
     val status by viewModel.status.collectAsStateWithLifecycle()
     val nodeId by viewModel.nodeId.collectAsStateWithLifecycle()
     val alias by viewModel.alias.collectAsStateWithLifecycle()
+    val aliasMore by viewModel.aliasMore.collectAsStateWithLifecycle()
     val avatarHash by viewModel.avatarHash.collectAsStateWithLifecycle()
     val cropTarget by viewModel.cropTarget.collectAsStateWithLifecycle()
     val contentFilteringEnabled by viewModel.contentFilteringEnabled.collectAsStateWithLifecycle()
@@ -140,6 +145,7 @@ fun ProfileScreen(
                 status = status,
                 nodeId = nodeId,
                 alias = alias,
+                aliasMore = aliasMore,
                 avatarHash = avatarHash,
                 contentFilteringEnabled = contentFilteringEnabled,
                 openToChat = openToChat,
@@ -249,10 +255,7 @@ internal fun ProfileScreenContent(
                         // The alias is what tells two same-named people apart (ADR 058), so it stays
                         // visible after a name is typed — the placeholder alone vanishes then.
                         if (form.alias.isNotEmpty()) {
-                            Text(
-                                text = stringResource(R.string.profile_alias_hint, form.alias),
-                                modifier = Modifier.testTag("profile_alias"),
-                            )
+                            AliasLine(form.alias, form.aliasMore, Modifier.testTag("profile_alias"))
                         }
                         CharCounter(form.name.length, TextLimits.DISPLAY_NAME)
                     }
@@ -345,6 +348,34 @@ private fun BoxScope.RemovePhotoButton(onClick: () -> Unit) {
             modifier = Modifier.size(18.dp),
         )
     }
+}
+
+/**
+ * `Alias: **SmartlyBrightSparrow** ElegantlyCheeryPlover` on one line: the alias bold, since it is what
+ * tells two same-named people apart (ADR 058) and usually all the owner needs to know; the token after it
+ * in the supporting text's own muted colour, for the day a label grows past the alias on someone else's
+ * phone (ADR 2026-09.wuqj). One `Text`, one semantics node.
+ */
+@Composable
+private fun AliasLine(
+    alias: String,
+    aliasMore: String,
+    modifier: Modifier = Modifier,
+) {
+    val line = stringResource(R.string.profile_alias, alias)
+    val emphasis = MaterialTheme.colorScheme.onSurface
+    val annotated =
+        remember(line, alias, aliasMore, emphasis) {
+            buildAnnotatedString {
+                append(line)
+                val start = line.indexOf(alias)
+                if (start >= 0) {
+                    addStyle(SpanStyle(fontWeight = FontWeight.Bold, color = emphasis), start, start + alias.length)
+                }
+                if (aliasMore.isNotEmpty()) append(" $aliasMore")
+            }
+        }
+    Text(text = annotated, modifier = modifier)
 }
 
 /** Right-aligned "used / limit" counter shown beneath a capped single-line field. */
@@ -620,7 +651,8 @@ fun ProfileScreenPreview() =
                     name = "Ada Lovelace",
                     status = "Hiking this weekend",
                     nodeId = "8f3a2b1c9d4e",
-                    alias = "Rustling Rabbit",
+                    alias = "GentlyRustlingRabbit",
+                    aliasMore = "QuietlyBoldCedar",
                     avatarHash = null,
                     contentFilteringEnabled = true,
                     openToChat = true,
@@ -654,7 +686,8 @@ fun ProfileScreenNewUserPreview() =
                     name = "",
                     status = "",
                     nodeId = "8f3a2b1c9d4e",
-                    alias = "Rustling Rabbit",
+                    alias = "GentlyRustlingRabbit",
+                    aliasMore = "QuietlyBoldCedar",
                     avatarHash = null,
                     contentFilteringEnabled = true,
                     relay = RelaySummary(),

@@ -162,8 +162,10 @@ hooks if that ever changes.
   more often than `ANDROID_ID`, which only softens an already-soft block deterrent), `SafetyNumber`
   (sorted `id|bundle` pair → SHA-256 → 8×5 digits), blob addresses (lowercase-hex SHA-256 of
   ciphertext), `FrameId` (16 random bytes, base64url, no padding), and the **`Alias`
-  display-name derivation (FNV-1a over nodeId into word tables) — if the word lists aren't ported
-  byte-identically, the two platforms show different names for the same peer.**
+  display-name derivation (`SHA-256("knit-alias-v2:" + nodeId)`, each byte an index into one of three
+  256-entry word lists in `AliasWords.kt`, three bytes per token; `AliasTest` pins the lists' fingerprint
+  and golden vectors) — if the word lists aren't ported byte-identically, the two platforms show different
+  names for the same peer.**
 - **AEAD header binding** is a plain string: `"$id|$senderId|$sentAt|$thread"` — portable, but the
   `thread` value's derivation (recipient id for DMs, group id for groups) must be in the spec.
 

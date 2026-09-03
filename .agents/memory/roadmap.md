@@ -229,12 +229,15 @@ doc). **Don't start a deferred item without explicit direction.**
   `maxScopes` pressure); a chat-thread intro notice (the profile status line covers it; the pair scope
   already reads as relay-covered).
 
-- **Same-name disambiguation follow-ups** (ADR 058 shipped the `Name (Alias)` label, 2026-08-28): an
+- **Same-name disambiguation follow-ups** (ADR 058 shipped the `Name (Alias)` label, 2026-08-28; ADR
+  2026-09.wuqj made the alias a 24-bit digest token that grows when matched, 2026-09-03): an
   **impersonation warning** when a non-contact adopts a contact's or your own name (the label makes it
-  visible; nothing yet says so); a **node-id-derived avatar hue** in-app (`ui/components/Avatar` is one fixed
-  tint — the notification hue already keys on the identity); **last-seen pruning** of the collision
-  universe (a stranger seen once can suffix a contact indefinitely — needs a `lastSeen` column); and
-  resolving `ReplyRef.authorId` through the directory instead of rendering the sender's snapshot.
+  visible; nothing yet says so); **tinting the tokens past the first** in `PeerNameText`, so a label that
+  grew because an alias was matched looks different from one that merely carries its alias; a
+  **node-id-derived avatar hue** in-app (`ui/components/Avatar` is one fixed tint — the notification hue
+  already keys on the identity); **last-seen pruning** of the collision universe (a stranger seen once can
+  suffix a contact indefinitely — needs a `lastSeen` column); and resolving `ReplyRef.authorId` through the
+  directory instead of rendering the sender's snapshot.
 
 - **Audio and file moderation** — voice notes (ADR 034) and arbitrary files (ADR 2026-09.qq2r) ship
   **unscreened**: no on-device model classifies speech, nothing at all classifies a PDF or an archive, and

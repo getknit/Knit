@@ -172,7 +172,7 @@ data class KnownSecrets(
      * hundred lines would otherwise mean tens of thousands of compiles.
      *
      * Longest-first so `Anna` wins over `Ann`; word-boundary guarded because a peer named `Bob` must not
-     * mangle `Bobcat`, which is a real entry in `Alias.NOUNS`; and names shorter than [MIN_NAME_CHARS]
+     * mangle `Bobcat`, which is a real entry in `ALIAS_NOUNS`; and names shorter than [MIN_NAME_CHARS]
      * are dropped because a two-letter name would shred ordinary machine text.
      */
     internal val pattern: Regex? =

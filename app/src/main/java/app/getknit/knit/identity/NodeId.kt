@@ -33,7 +33,7 @@ object NodeId {
     /** RFC4648 base32 alphabet, lowercased. */
     const val ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
 
-    /** Length of [shortForm] — 6 base32 chars, ~30 bits: enough to tell two peers apart, never to address one. */
+    /** Length of [shortForm] — 6 base32 chars, ~30 bits: enough to tell two peers apart by eye, never to address one. */
     const val SHORT_LENGTH = 6
 
     /**
@@ -71,8 +71,8 @@ object NodeId {
     fun fromBytes(id: ByteArray): String = base32Encode(id)
 
     /**
-     * A short, human-quotable prefix of [nodeId] ([SHORT_LENGTH] chars) for disambiguating two peers whose
-     * names and aliases both coincide (see `PeerLabels`). Display only — never an address or a trust input.
+     * A short, human-quotable prefix of [nodeId] ([SHORT_LENGTH] chars). Display only — never an address or
+     * a trust input, and no longer part of a peer's label: `PeerLabels` grows the alias phrase instead.
      */
     fun shortForm(nodeId: String): String = nodeId.take(SHORT_LENGTH)
 

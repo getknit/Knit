@@ -5,19 +5,29 @@ import java.util.Locale
 
 /**
  * Collision-aware display labels: the answer to "which Alice?" when two identities render to the same
- * name (ADR 058).
+ * name (ADR 058; the growth rule below is ADR 2026-09.wuqj).
  *
  * A display name is free text and the mesh has no authority that could make it unique, so the label a
  * peer is shown under is `name` alone in the common case and `name (discriminator)` whenever another
  * identity the device knows renders to the same [NameKey]. The discriminator is the peer's [Alias] — a
  * deterministic function of the node id that every device derives identically with no exchange, and the
- * same word pair the owner sees as their own placeholder — so two people can tell each other apart by
- * quoting it ("I'm the Alice with JoyfulFerret"). Where the alias cannot disambiguate (the rendered name
- * *is* the alias, or two same-named peers' aliases coincide), a short prefix of the node id
- * ([NodeId.shortForm]) steps in, so every label in a [PeerLabelIndex] is distinct by construction.
+ * same token the owner sees as their own placeholder — so two people can tell each other apart by quoting
+ * it ("I'm the Alice with ReallyJoyfulFerret").
  *
- * This is disambiguation, **not** anti-impersonation: the alias carries ~15 bits and a matching keypair can
- * be ground in seconds. Trust stays with `verified` and the safety number.
+ * **Labels grow instead of capping out.** Every identity in an index consumes some prefix of its alias
+ * phrase ([Alias.phrase]): nothing when its name is unique, one token when another identity shares the
+ * name, and one more token each round its rendered text still coincides with another's — a name *chosen*
+ * to read like someone's label, or an alias ground to match one. A blank-named peer, whose rendered name
+ * already *is* the first token, grows a continuation instead (`ReallyJoyfulFerret (QuietlyBoldCedar)`).
+ * Distinct ids have distinct digests, so any two separate within the ten tokens the digest carries:
+ * every label in a [PeerLabelIndex] is distinct by construction, and only a SHA-256 collision reaches the
+ * guard that stops the loop.
+ *
+ * This is collision-*evident*, **not** anti-impersonation. A token is 24 bits, so a keypair whose alias
+ * matches a target's is minutes of grinding — but the match can only make *both* labels grow to two tokens
+ * (48 bits, weeks on a GPU) and then three (72 bits, out of reach), never coincide; the growth is the tell.
+ * A plain adoption of a contact's name, with no grinding, still shows two Alices with different aliases and
+ * nothing says which is real. Trust stays with `verified` and the safety number.
  *
  * Pure Kotlin, no Android dependencies, unit-tested on the JVM (`PeerLabelsTest`, `NameKeyTest`).
  */
@@ -27,8 +37,9 @@ object PeerLabels {
      * [self] — keyed by node id (a seeded self row and [self] collapse to one entry; a peer never collides
      * with itself). [peers] pairs a node id with its stored, possibly blank, profile name.
      *
-     * Pass 1 groups the universe by [NameKey]; pass 2 groups the resulting label texts, so a residual text
-     * collision (equal aliases, or a name *chosen* to read like another peer's label) is caught too.
+     * Pass 1 groups the universe by [NameKey] and gives every member of a shared name one token. The
+     * rounds that follow group the rendered texts and give every member of a shared text one more token,
+     * until all texts are distinct.
      */
     fun index(
         peers: Iterable<Pair<String, String>>,
@@ -37,23 +48,67 @@ object PeerLabels {
         val stored = LinkedHashMap<String, String>()
         for ((id, name) in peers) stored[id] = name
         if (self != null) stored[self.first] = self.second
+        val phrases = HashMap<String, List<String>>()
+        val names = HashMap<String, String>()
         val idsByKey = HashMap<String, MutableSet<String>>()
-        for ((id, name) in stored) {
-            idsByKey.getOrPut(NameKey.of(displayNameFor(name, id))) { LinkedHashSet() }.add(id)
+        for ((id, storedName) in stored) {
+            phrases[id] = Alias.tokens(id)
+            val name = storedName.takeIf { it.isNotBlank() } ?: phrases.getValue(id).first()
+            names[id] = name
+            idsByKey.getOrPut(NameKey.of(name)) { LinkedHashSet() }.add(id)
         }
-        val provisional = PeerLabelIndex(stored, idsByKey, emptyMap())
+        val consumed = HashMap<String, Int>()
+        for (group in idsByKey.values) {
+            if (group.size > 1) for (id in group) consumed[id] = tokensInName(stored[id]) + 1
+        }
+        val texts = HashMap<String, String>()
+
+        fun render(id: String) {
+            val k = consumed[id] ?: tokensInName(stored[id])
+            texts[id] = PeerLabel.text(names.getValue(id), discriminatorOf(phrases.getValue(id), stored[id], k))
+        }
+        for (id in stored.keys) render(id)
+        growUntilDistinct(texts, consumed, stored, ::render)
         val idsByText = HashMap<String, MutableSet<String>>()
-        for ((id, name) in stored) {
-            idsByText.getOrPut(provisional.firstPassText(id, name)) { LinkedHashSet() }.add(id)
+        for ((id, text) in texts) idsByText.getOrPut(text) { LinkedHashSet() }.add(id)
+        return PeerLabelIndex(stored, idsByKey, idsByText, consumed, phrases)
+    }
+
+    /** Each round, every id whose text another id shares consumes one more token; bounded by the digest. */
+    private fun growUntilDistinct(
+        texts: MutableMap<String, String>,
+        consumed: MutableMap<String, Int>,
+        stored: Map<String, String>,
+        render: (String) -> Unit,
+    ) {
+        for (round in 0 until Alias.MAX_TOKENS) {
+            val colliding =
+                texts.entries
+                    .groupBy({ it.value }, { it.key })
+                    .values
+                    .filter { it.size > 1 }
+                    .flatten()
+            if (colliding.isEmpty()) return
+            var grew = false
+            for (id in colliding) {
+                val k = consumed[id] ?: tokensInName(stored[id])
+                if (k < Alias.MAX_TOKENS) {
+                    consumed[id] = k + 1
+                    render(id)
+                    grew = true
+                }
+            }
+            // Nothing left to grow: two ids share every token, i.e. a SHA-256 collision.
+            if (!grew) return
         }
-        return provisional.copy(idsByText = idsByText)
     }
 }
 
 /**
  * The name to show for a person plus, when another known identity renders to the same name, the
- * [discriminator] that tells them apart. [name] is exactly [displayNameFor]'s answer; [alias] is always
- * the peer's [Alias] (shown outright on precision surfaces such as the mention picker and a profile).
+ * [discriminator] that tells them apart. [name] is exactly [displayNameFor]'s answer; [alias] is what the
+ * person would quote — their [Alias], grown by the tokens the index needed — and is shown outright on
+ * precision surfaces such as the mention picker and a profile.
  */
 data class PeerLabel(
     val nodeId: String,
@@ -74,14 +129,16 @@ data class PeerLabel(
 }
 
 /**
- * A snapshot of the universe's name collisions (see [PeerLabels.index]). [labelFor] is O(1) and also
- * answers for a node id *outside* the universe (a sender whose profile has not been pinned yet): it is
- * discriminated exactly when a known identity renders to the same name.
+ * A snapshot of the universe's name collisions (see [PeerLabels.index]). [labelFor] is O(1) for a member
+ * and also answers for a node id *outside* the universe (a sender whose profile has not been pinned yet):
+ * it grows exactly as far as it must to read apart from every member, and never changes a member.
  */
 data class PeerLabelIndex(
     private val storedNames: Map<String, String>,
     private val idsByKey: Map<String, Set<String>>,
     private val idsByText: Map<String, Set<String>>,
+    private val consumed: Map<String, Int>,
+    private val phrases: Map<String, List<String>>,
 ) {
     /** The label for [nodeId] given its stored profile name (defaults to the universe's own record of it). */
     fun labelFor(
@@ -89,43 +146,57 @@ data class PeerLabelIndex(
         storedName: String? = storedNames[nodeId],
     ): PeerLabel {
         val name = displayNameFor(storedName, nodeId)
-        val first = firstPass(nodeId, storedName, name)
-        val short = NodeId.shortForm(nodeId)
-        val residual = (idsByText[PeerLabel.text(name, first)].orEmpty() - nodeId).isNotEmpty()
-        val discriminator =
-            when {
-                !residual || first == short -> first
-                else -> listOfNotNull(first, short).joinToString(" ")
-            }
-        return PeerLabel(nodeId = nodeId, name = name, alias = Alias.aliasFor(nodeId), discriminator = discriminator)
+        val words = phrases[nodeId] ?: Alias.tokens(nodeId)
+        val k =
+            consumed[nodeId]?.takeIf { storedName == storedNames[nodeId] }
+                ?: resolve(nodeId, name, words, storedName)
+        return PeerLabel(
+            nodeId = nodeId,
+            name = name,
+            alias = words.take(maxOf(k, 1)).joinToString(" "),
+            discriminator = discriminatorOf(words, storedName, k),
+        )
     }
 
-    internal fun firstPassText(
+    /**
+     * The tokens an id needs against the snapshot — an outside id, or a member asked about under a name
+     * other than its stored one (the contact-card preview): one when a member shares the [NameKey], then
+     * one more while a member's final text still matches.
+     */
+    private fun resolve(
         nodeId: String,
-        storedName: String?,
-    ): String {
-        val name = displayNameFor(storedName, nodeId)
-        return PeerLabel.text(name, firstPass(nodeId, storedName, name))
-    }
-
-    /** Pass 1: the alias when another identity shares the [NameKey]; the short id when the name is the alias. */
-    private fun firstPass(
-        nodeId: String,
-        storedName: String?,
         name: String,
-    ): String? {
-        val others = idsByKey[NameKey.of(name)].orEmpty() - nodeId
-        return when {
-            others.isEmpty() -> null
-            storedName.isNullOrBlank() -> NodeId.shortForm(nodeId)
-            else -> Alias.aliasFor(nodeId)
-        }
+        words: List<String>,
+        storedName: String?,
+    ): Int {
+        var k = tokensInName(storedName)
+        if ((idsByKey[NameKey.of(name)].orEmpty() - nodeId).isNotEmpty()) k++
+        while (k < Alias.MAX_TOKENS && collides(nodeId, PeerLabel.text(name, discriminatorOf(words, storedName, k)))) k++
+        return k
     }
+
+    private fun collides(
+        nodeId: String,
+        text: String,
+    ): Boolean = (idsByText[text].orEmpty() - nodeId).isNotEmpty()
 
     companion object {
         /** An index over nothing: every label is undiscriminated. */
-        val EMPTY = PeerLabelIndex(emptyMap(), emptyMap(), emptyMap())
+        val EMPTY = PeerLabelIndex(emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyMap())
     }
+}
+
+/** Tokens the rendered name already spends: one when it *is* the alias (a blank profile), else none. */
+private fun tokensInName(storedName: String?): Int = if (storedName.isNullOrBlank()) 1 else 0
+
+/** The tokens after those in the name, up to [consumed]; null when the label spends none beyond the name. */
+private fun discriminatorOf(
+    words: List<String>,
+    storedName: String?,
+    consumed: Int,
+): String? {
+    val from = tokensInName(storedName)
+    return if (consumed <= from) null else words.subList(from, consumed).joinToString(" ")
 }
 
 /**

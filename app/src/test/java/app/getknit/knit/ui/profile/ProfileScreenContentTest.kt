@@ -39,6 +39,7 @@ class ProfileScreenContentTest {
         status = "Hiking",
         nodeId = "node-abc",
         alias = "Cool Fox",
+        aliasMore = "Warm Owl",
         avatarHash = null,
         contentFilteringEnabled = true,
         openToChat = openToChat,
@@ -89,6 +90,18 @@ class ProfileScreenContentTest {
         val hint = compose.onNodeWithTag("profile_alias", useUnmergedTree = true)
         hint.performScrollTo().assertIsDisplayed()
         hint.assertTextContains("Cool Fox", substring = true)
+    }
+
+    /**
+     * The owner's continuation sits beside the alias, muted: a label grows on the other person's phone, so
+     * this is where they read what to say.
+     */
+    @Test
+    fun theAliasLineCarriesTheContinuation() {
+        render(isDirty = false)
+        val line = compose.onNodeWithTag("profile_alias", useUnmergedTree = true)
+        line.performScrollTo().assertIsDisplayed()
+        line.assertTextContains("Warm Owl", substring = true)
     }
 
     /** The open-to-chat row is one toggle target (the row owns its switch) and reports the flipped value. */

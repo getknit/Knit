@@ -140,7 +140,7 @@ class DemoSeeder(
         const val JONAS = "jonasw88"
         const val LENA = "lenaf042"
 
-        /** The second "Jonas W." of the hiking cast — its first six chars differ from [JONAS] so even the short-id fallback reads apart. */
+        /** The second "Jonas W." of the hiking cast: the seeded same-name collision (ADR 058). */
         const val JONAS_TWO = "jonas2w9"
 
         /** The stranger whose unanswered DM is the seeded message request. */

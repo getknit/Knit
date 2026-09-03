@@ -79,7 +79,8 @@ class CrashReports(
     /**
      * Every name this device could recognise: stored peer names, the generated alias each peer is shown
      * under when it has no stored name (`displayNameFor` falls back to it, so on screen the alias *is*
-     * the contact name), and our own.
+     * the contact name), and our own. A label that grew past the alias to read apart from a look-alike
+     * (`PeerLabels`) carries further tokens this pass does not know; accepted, they name nobody on their own.
      *
      * Returns `null` — not an empty set — when the database or DataStore cannot be read, so [footer] can
      * say the name pass did not run rather than silently claiming a guarantee it did not deliver.

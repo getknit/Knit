@@ -504,7 +504,7 @@ that budget is a purely local knob that can differ per node without breaking cue
   builds the candidate list from the thread's senders ∪ the group roster (so @-mentions work in a fresh
   group before anyone has spoken).
 - **Same-named people** (ADR 058) — the token the picker inserts is the candidate's collision-aware label
-  (`PeerLabel.text`): `@Alice` normally, `@Alice (JoyfulFerret)` when the sender knows two Alices, and
+  (`PeerLabel.text`): `@Alice` normally, `@Alice (ReallyJoyfulFerret)` when the sender knows two Alices, and
   `Mention.name` carries that exact text so the receiver (and every older build) still locates the span.
   The picker row always shows the alias beside the name.
 - **Storage** — `object MentionStore` (in `MessageEntity.kt`, its own lenient `Json`) encodes
@@ -579,18 +579,22 @@ that budget is a purely local knob that can differ per node without breaking cue
   `data/crypto/IdentityKeyStore` **outside** the DB (so the id is stable for the
   life of that keypair; an app-data wipe that drops `identity.key` mints a new identity); its public
   bundle is exposed via `Identity.publicKeyBundle()` and advertised in `ProfileContent.pubKey` (§14).
-- **`Alias`** maps any node id to a deterministic PascalCase "AdjectiveNoun" (e.g. `EnlightenedZebra`)
-  via an FNV-1a hash over word lists — every device derives the same friendly name for a peer with no
-  exchange. `displayNameFor(storedName, nodeId)` returns the non-blank profile name else the alias,
-  so a peer is never shown as a raw id.
-- **`PeerLabels`** (ADR 058) — names are not unique, so a list surface resolves through
-  `PeerLabelIndex.labelFor` instead: over the universe of every cached peer ∪ our own name, grouped by
-  `NameKey` (NFKC, format chars stripped, lower-cased, whitespace collapsed), a peer whose name another
-  identity shares is labelled `Name (Alias)`; a blank-named peer, or a residual text collision, falls back to
-  the six-char `NodeId.shortForm`, so labels are distinct by construction. `PeerRepository.observeDirectory()`
-  emits the table with its index; `labelIndex()` is the suspend snapshot (notifications, card preview).
-  Disambiguation only — the ~15-bit alias is grindable; `verified` and the safety number remain the trust
-  mechanism.
+- **`Alias`** (ADR 2026-09.wuqj) maps any node id to a deterministic PascalCase "AdverbAdjectiveNoun"
+  token (e.g. `ReallyJoyfulFerret`): `SHA-256("knit-alias-v2:" + nodeId)`, each byte a whole index into
+  one of three frozen 256-entry lists (`AliasWords.kt`, pinned by a fingerprint test), three bytes to a
+  token and ten tokens in the digest — every device derives the same friendly name for a peer with no
+  exchange. `displayNameFor(storedName, nodeId)` returns the non-blank profile name else the alias, so a
+  peer is never shown as a raw id.
+- **`PeerLabels`** (ADR 058, growth rule ADR 2026-09.wuqj) — names are not unique, so a list surface
+  resolves through `PeerLabelIndex.labelFor` instead: over the universe of every cached peer ∪ our own name,
+  grouped by `NameKey` (NFKC, format chars stripped, lower-cased, whitespace collapsed), a peer whose name
+  another identity shares is labelled `Name (Alias)`; a label that still reads like another's (a blank-named
+  peer whose alias someone chose as a name, a name chosen to look like a label, an alias ground to match)
+  grows by the next token of the phrase, round by round, so labels are distinct by construction.
+  `PeerRepository.observeDirectory()` emits the table with its index; `labelIndex()` is the suspend snapshot
+  (notifications, card preview). Collision-evident, not anti-impersonation — a 24-bit token is minutes of
+  grinding, but a match can only make both labels longer, never equal; `verified` and the safety number
+  remain the trust mechanism.
 - **Profile broadcasting** (`MeshManager`):
   - On a **new neighbor**, push the current profile frame and (only if needed — §8) the avatar file.
   - On a **profile change** (name/status/avatar, observed via a combined settings flow, `.drop(1)` to

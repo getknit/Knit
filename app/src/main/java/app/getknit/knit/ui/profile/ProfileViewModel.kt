@@ -68,6 +68,13 @@ class ProfileViewModel(
      */
     val alias = MutableStateFlow("")
 
+    /**
+     * The token that follows [alias] in this device's phrase. A label grows past the alias only on the
+     * *other* person's device — where an alias ground to match ours would be — so the owner must be able
+     * to read their continuation here, or they cannot answer "which one are you?".
+     */
+    val aliasMore = MutableStateFlow("")
+
     // Editable text is held locally and updated synchronously on each keystroke; nothing is persisted
     // until the user taps Save (see [save]). Binding the field directly to the DataStore flow would
     // lag a keystroke behind and reset the field (you could only type one character), and persisting
@@ -135,6 +142,7 @@ class ProfileViewModel(
             val id = identity.nodeId()
             nodeId.value = id
             alias.value = Alias.aliasFor(id)
+            aliasMore.value = Alias.tokens(id, OWNER_TOKENS).last()
             val name = normalizeSingleLine(settings.displayName.first()).take(TextLimits.DISPLAY_NAME)
             val status = normalizeSingleLine(settings.status.first()).take(TextLimits.STATUS)
             _displayName.value = name
@@ -251,3 +259,6 @@ class ProfileViewModel(
         _cropTarget.value = null
     }
 }
+
+/** Tokens of the owner's phrase the Profile screen reads: the alias plus the one continuation it shows. */
+private const val OWNER_TOKENS = 2

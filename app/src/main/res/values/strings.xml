@@ -103,6 +103,24 @@
     <string name="chat_attachment_preview_desc">Attachment preview</string>
     <string name="chat_remove_attachment">Remove attachment</string>
 
+    <!-- File attachments -->
+    <string name="chat_attach_file">Send a file</string>
+    <string name="chat_file_attachment_desc">File attachment</string>
+    <string name="chat_file_loading">Waiting for the file</string>
+    <string name="chat_file_unnamed">File</string>
+    <string name="chat_file_save">Save</string>
+    <string name="chat_file_saved">File saved</string>
+    <string name="chat_file_save_failed">Couldn\'t save that file</string>
+    <string name="chat_file_too_large">That file is over 8 MB, and files are sent as-is</string>
+    <string name="chat_file_package_refused">Knit doesn\'t send app packages</string>
+    <string name="chat_file_unscreened">Knit can\'t check what\'s inside a file</string>
+    <string name="chat_file_flagged">May contain sensitive content</string>
+    <string name="chat_file_risky_title">Save this file?</string>
+    <string name="chat_file_risky_body">Knit can\'t look inside %1$s. Open it only if you trust who sent it.</string>
+    <string name="chat_file_risky_confirm">Save anyway</string>
+    <string name="chat_share_needs_chat">Open a direct message or group chat to send a file</string>
+    <string name="chat_file_peer_too_old">They need a newer version of Knit to receive files</string>
+
     <!-- Voice notes -->
     <string name="chat_voice_record">Hold to record a voice message</string>
     <string name="chat_voice_record_start">Record a voice message</string>
@@ -271,6 +289,8 @@
     <string name="chat_list_hint_add_contact">Add a contact</string>
     <string name="chat_list_preview_photo">📷 Photo</string>
     <string name="chat_list_preview_voice">🎤 Voice message</string>
+    <string name="chat_list_preview_file">📎 %1$s</string>
+    <string name="chat_attachment_with_size">%1$s · %2$s</string>
     <string name="chat_list_preview_with_sender">%1$s: %2$s</string>
     <plurals name="chat_list_unread_count">
         <item quantity="one">%d unread message</item>
@@ -681,8 +701,6 @@
          when a DM we sent reached them. Labelled in words because the line above them is a bare timestamp. -->
     <string name="message_details_arrived_at">Arrived %1$s</string>
     <string name="message_details_delivered_at">Delivered %1$s</string>
-    <string name="message_details_attachment">📷 Photo</string>
-    <string name="message_details_voice">🎤 Voice message</string>
     <string name="message_details_hidden_body">Message hidden by content filtering</string>
     <string name="message_details_no_reactions">No one has reacted to this message yet</string>
     <string name="message_details_filter_all">All %1$d</string>

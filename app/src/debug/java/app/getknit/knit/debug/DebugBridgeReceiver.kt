@@ -364,8 +364,8 @@ class DebugBridgeReceiver :
                     result.ingested
                 }
 
-                AttachmentStore.IngestResult.Failed -> {
-                    return reply("error", "ingest failed (decode error or over the size cap): $path")
+                is AttachmentStore.IngestResult.Failed -> {
+                    return reply("error", "ingest failed (${result.reason}): $path")
                 }
             }
         val sent =

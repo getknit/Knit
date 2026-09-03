@@ -92,9 +92,13 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- System share sheet: receive text or a single image from another app (ACTION_SEND).
-                 The grant ride-along on EXTRA_STREAM lets us read the image via ContentResolver with
-                 no storage permission. singleTask re-delivers shares to onNewIntent when running. -->
+            <!-- System share sheet: receive text, an image, or any other single file from another app
+                 (ACTION_SEND). The grant ride-along on EXTRA_STREAM lets us read the stream via
+                 ContentResolver with no storage permission. singleTask re-delivers shares to onNewIntent
+                 when running. */* was added with arbitrary-file attachments (ADR 2026-09.qq2r) — it is the
+                 same inbound-READ exposure the image filter already carried, not the inbound-WRITABLE
+                 FileProvider path ADR 029 declined; a shared file is only sendable in a DM or group, which
+                 MainActivity.handleShareIntent and ChatScreen enforce between them. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
 
@@ -102,6 +106,7 @@
 
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="image/*" />
+                <data android:mimeType="*/*" />
             </intent-filter>
             <!-- Contact links (docs/CONTACT_CARD.md): https://getknit.app/c#<card> — the card rides the
                  fragment, which never reaches the server. autoVerify needs getknit.app to publish

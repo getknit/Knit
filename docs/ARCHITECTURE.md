@@ -353,7 +353,9 @@ class WrappedKey(to, @ByteString wk)                               // content ke
   the cleartext `body`/`mentions` are blank, while `attachmentHash` carries the *ciphertext*
   hash so a blind carrier can still custody the image (§7, §14). `attachmentMime` stays null on a sealed
   frame (ADR 035) — custody addresses bytes by hash, so the type rides only inside the seal and a carrier
-  never learns a photo from a voice note. `ProfileContent.pubKey` carries the
+  never learns a photo from a voice note. A file's **name and size** ride inside the seal for the same
+  reason and never got a cleartext counterpart: a filename is a louder signal than the type ADR 035 removed
+  (ADR 2026-09.qq2r). `ProfileContent.pubKey` carries the
   sender's public-key bundle. See §14.
 - Avatars and attachments travel as **file payloads** (`incomingFiles`), not inside frames (too large for
   the flood); `ProfileContent.avatarHash` / `ChatContent.attachmentHash` let a peer detect changes and pull
@@ -421,14 +423,26 @@ always-present Nearby room plus one row per DM thread; the contacts picker start
 
 ## 7. Attachments & content-addressed blob exchange (`data/AttachmentStore.kt`, `mesh/BlobExchange.kt`)
 
-Images are **content-addressed** and pulled on demand, so the (large) bytes don't ride the flood.
+Attachments — images, voice notes and arbitrary files — are **content-addressed** and pulled on demand, so
+the (large) bytes don't ride the flood. Everything below the ingest seam is content-type-blind: it moves
+opaque SHA-256-addressed bytes with a MIME string beside them, which is why voice notes (ADR 034) and files
+(ADR 2026-09.qq2r) each shipped as two ends and no middle.
 
 - **`AttachmentStore`** — `ingest(uri)` returns `IngestResult.Success(Ingested(hash, mime), flagged)`
-  or `IngestResult.Failed`: GIFs are transcoded to animated WebP (`data/webp/WebpTranscode`, animation
+  or `IngestResult.Failed(reason)`: GIFs are transcoded to animated WebP (`data/webp/WebpTranscode`, animation
   preserved); other images are EXIF-oriented, downscaled to `MAX_DIMENSION = 1280`, and re-encoded
-  JPEG q85; inputs are rejected if empty or `> MAX_BYTES` (8 MiB). The **SHA-256** of the stored bytes
+  JPEG q85; inputs are rejected if empty or `> MAX_BYTES` (8 MiB). `ingestVoice(bytes)` and `ingestFile(uri)`
+  share the tail and skip the head — nothing to decode or re-compress, and no classifier that could read
+  them — with one deliberate exception: `ingestFile` sniffs the bytes' own signature and hands anything that
+  is really an image back to `ingest`, so a mislabelled JPEG cannot use the MIME-keyed screening skip as a
+  way past the classifier (`docs/CONTENT_MODERATION.md` §7). A file also carries its **name** and plaintext
+  **size** on the `Ingested`, the two facts a file bubble cannot read off the bytes; both are written to the
+  row and sealed into `MessageContent` by `MeshManager.sendChat`, never onto the cleartext frame. The
+  **SHA-256** of the stored bytes
   is the hash, and the bytes live in the encrypted `blobs` table, not as files — only in-flight
-  transfers touch the disk, through the `blobtx` cache dir. `MeshBlobStore.saveIncoming(hash, mime,
+  transfers touch the disk, through the `blobtx` cache dir. A received file leaves only through the storage
+  picker (`ChatViewModel.saveAttachmentTo` streams the decrypted bytes into the destination the user names);
+  there is no "open with", because that would need a plaintext copy ADR 029 refuses to make. `MeshBlobStore.saveIncoming(hash, mime,
   srcPath)` ingests a received file and **re-verifies** that the bytes hash to the peer-supplied
   address before storing it, since a holder must not be able to serve arbitrary bytes under someone
   else's content address.
@@ -511,6 +525,9 @@ that budget is a purely local knob that can differ per node without breaking cue
     null on our own sends and on every row older than DB v7, never rewritten by a custody re-serve),
     `mentions` (JSON, default `"[]"`), `attachmentHash?`, `attachmentMime?`,
     `attachmentKey?` (base64 AES key for an E2E attachment; null for plaintext/broadcast attachments),
+    `attachmentName?` / `attachmentSize?` (an arbitrary **file**'s own name and declared byte count, both
+    off the seal — null on images and voice notes, which describe themselves; the name is what selects the
+    file bubble, and the size is a pre-arrival label the stored blob's length supersedes),
     `moderation` (on-device content verdict), `pendingKey` (composed before the recipient's key was
     known; not yet flooded — §14), `kind` (normal vs. a member-left system row). DAO exposes
     `observeAll()` and the conversation-scoped `observeForConversation(id)` (both `ORDER BY sentAt ASC`),
@@ -519,8 +536,9 @@ that budget is a purely local knob that can differ per node without breaking cue
     `verified` (out-of-band key confirmation, see §14), `deviceTag?` (key-independent block-list
     continuity), `protoVersion?` / `capabilities?` (advertised, diagnostic), `updatedAt`.
   - `reactions`: composite PK `(messageId, reactorNodeId)`, `emoji?`, `updatedAt` (see §6).
-  - `blobs`: `hash` (PK, SHA-256), `mime`, `bytes` — content-addressed image bytes (avatars +
-    attachments); E2E-attachment bytes are stored as **ciphertext**, addressed by their ciphertext hash.
+  - `blobs`: `hash` (PK, SHA-256), `mime`, `bytes` — content-addressed attachment bytes (avatars, images,
+    voice notes, arbitrary files); E2E-attachment bytes are stored as **ciphertext**, addressed by their
+    ciphertext hash.
   - `blob_verdicts`: `hash` (PK), `flagged`, `score` — the on-device NSFW image verdict cached by content
     hash, so identical bytes are scanned once across send/receive (`docs/CONTENT_MODERATION.md`).
   - `groups`: `groupId` (PK), `name`, `members` (JSON roster), `createdBy`, `createdAt`, `nameUpdatedAt`,
@@ -536,8 +554,8 @@ that budget is a purely local knob that can differ per node without breaking cue
   advertising/discovery toggles, `avatarUpdatedAt`, and a last-read watermark driving unread badges.
   **Generates and persists the node id** on first read (`getOrCreateNodeId`, transaction-guarded
   against races; §10).
-- **`AttachmentStore`** (§7) — ingests images into the content-addressed, encrypted `blobs` table
-  (keyed by SHA-256). For E2E DM/group attachments the bytes are encrypted first and keyed by their
+- **`AttachmentStore`** (§7) — ingests images, voice notes and arbitrary files into the content-addressed,
+  encrypted `blobs` table (keyed by SHA-256). For E2E DM/group attachments the bytes are encrypted first and keyed by their
   ciphertext hash (§14); broadcast-room attachments are stored plaintext-in-the-encrypted-DB.
 - **`AvatarStore`**: own avatar picked → center-cropped square → 256² JPEG q90, stored in the
   encrypted `blobs` table (peer avatars likewise, pulled over the mesh). `ownAvatarHash()` is a

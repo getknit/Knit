@@ -31,6 +31,7 @@ import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
+import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.directoryOf
@@ -591,8 +592,9 @@ class ChatViewModelTest {
         runTest {
             val jpeg = byteArrayOf(7, 8, 9)
             val uri = Uri.parse("content://images/3")
-            coEvery { attachments.ingest(jpeg, "image/jpeg") } returns AttachmentStore.IngestResult.Failed
-            coEvery { attachments.ingest(uri) } returns AttachmentStore.IngestResult.Failed
+            coEvery { attachments.ingest(jpeg, "image/jpeg") } returns
+                AttachmentStore.IngestResult.Failed(AttachmentStore.IngestResult.Reason.Unreadable)
+            coEvery { attachments.ingest(uri) } returns AttachmentStore.IngestResult.Failed(AttachmentStore.IngestResult.Reason.Unreadable)
             val vm = vm()
             val events = mutableListOf<Int>()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
@@ -858,4 +860,180 @@ class ChatViewModelTest {
     private companion object {
         const val GROUP = "g-trailhead"
     }
+
+    /**
+     * The composer's file item (ADR 2026-09.qq2r). The room is the only thing that hides it: nothing on the
+     * device can screen a file, and the room floods unencrypted to everyone in range.
+     *
+     * The recipient's `CAP_FILES` bit deliberately does **not** hide it. That bit arrives only in a profile
+     * frame from a peer already running a build that has it, so gating visibility on it made the feature
+     * invisible with nothing to explain why — on a device pair mid-rollout, the item simply never appeared.
+     * It is enforced in [ChatViewModel.attachFile] instead, where it can say so.
+     */
+    @Test
+    fun onlyTheRoomHidesTheFileItem() =
+        runTest {
+            val room = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { room.state.collect {} }
+            peersFlow.value = listOf(peer("bob", "Bob", capabilities = Protocol.LOCAL_CAPABILITIES))
+            advanceUntilIdle()
+            assertFalse(room.state.value.canSendFile)
+
+            // Offered toward a peer whose capabilities we have not learned yet — the case the old gate hid.
+            stubDm("bob")
+            val dm = vm("bob")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { dm.state.collect {} }
+            peersFlow.value = listOf(peer("bob", "Bob", capabilities = null))
+            advanceUntilIdle()
+            assertTrue(dm.state.value.canSendFile)
+        }
+
+    /** One member on an old build is one person who cannot read the message, so the group send is refused. */
+    @Test
+    fun aGroupRefusesAFileUntilEveryOtherMemberCanReadOne() =
+        runTest {
+            val uri = Uri.parse("content://docs/report")
+            coEvery { attachments.ingestFile(uri) } returns
+                AttachmentStore.IngestResult.Success(
+                    AttachmentStore.Ingested("h", "application/pdf", name = "r.pdf", sizeBytes = 10),
+                    flagged = false,
+                )
+            coEvery { groups.find(GROUP) } returns group(GROUP, members = listOf("me", "sam", "priya"))
+            coEvery { peers.find("sam") } returns peer("sam", "Sam", capabilities = Protocol.LOCAL_CAPABILITIES)
+            coEvery { peers.find("priya") } returns peer("priya", "Priya", capabilities = Protocol.CAP_E2E)
+
+            val vm = vm(GROUP)
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+            vm.attachFile(uri)
+            advanceUntilIdle()
+            assertEquals(listOf(R.string.chat_file_peer_too_old), events)
+            assertNull(vm.pendingAttachment.value)
+
+            coEvery { peers.find("priya") } returns peer("priya", "Priya", capabilities = Protocol.LOCAL_CAPABILITIES)
+            vm.attachFile(uri)
+            advanceUntilIdle()
+            assertEquals("our own missing bit must not count against the group", "r.pdf", vm.pendingAttachment.value?.name)
+        }
+
+    /**
+     * The share sheet drains into the chat on its first composition, before the state combine has read a
+     * peer row — so the gate has to be the ViewModel's, reading the repositories, not a check against the
+     * rendered `canSendFile`. Without this the first shared file to a perfectly capable peer is refused.
+     */
+    @Test
+    fun aSharedFileIsRefusedByTheRoomAndByAnOldPeerButNotByAnUnsettledState() =
+        runTest {
+            val uri = Uri.parse("content://docs/report")
+            coEvery { attachments.ingestFile(uri) } returns
+                AttachmentStore.IngestResult.Success(
+                    AttachmentStore.Ingested("h", "application/pdf", name = "r.pdf", sizeBytes = 10),
+                    flagged = false,
+                )
+            coEvery { peers.find("bob") } returns peer("bob", "Bob", capabilities = Protocol.LOCAL_CAPABILITIES)
+            coEvery { peers.find("old") } returns peer("old", "Old", capabilities = Protocol.CAP_E2E)
+
+            val room = vm()
+            val roomEvents = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { room.events.collect { roomEvents += it } }
+            room.attachFile(uri)
+            advanceUntilIdle()
+            assertEquals(listOf(R.string.chat_share_needs_chat), roomEvents)
+            assertNull(room.pendingAttachment.value)
+
+            stubDm("old")
+            val stale = vm("old")
+            val staleEvents = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { stale.events.collect { staleEvents += it } }
+            stale.attachFile(uri)
+            advanceUntilIdle()
+            assertEquals(listOf(R.string.chat_file_peer_too_old), staleEvents)
+
+            // Nobody has collected this one's state, so `canSendFile` is still its default false — and the
+            // file is staged anyway, which is the whole point.
+            stubDm("bob")
+            val fresh = vm("bob")
+            assertFalse(fresh.state.value.canSendFile)
+            fresh.attachFile(uri)
+            advanceUntilIdle()
+            assertEquals("r.pdf", fresh.pendingAttachment.value?.name)
+        }
+
+    /**
+     * A failed *pick* can stay silent — the picture is still in the picker (ADR 029) — but a file cannot.
+     * An over-cap file is refused permanently and there is nothing to shrink, and a refused app package is a
+     * decision rather than an accident; silence would read as the app doing nothing at all.
+     */
+    @Test
+    fun eachFileRefusalSaysWhy() =
+        runTest {
+            val tooBig = Uri.parse("content://docs/big")
+            val apk = Uri.parse("content://docs/app")
+            coEvery { attachments.ingestFile(tooBig) } returns
+                AttachmentStore.IngestResult.Failed(AttachmentStore.IngestResult.Reason.TooLarge)
+            coEvery { attachments.ingestFile(apk) } returns
+                AttachmentStore.IngestResult.Failed(AttachmentStore.IngestResult.Reason.Installable)
+            coEvery { peers.find("bob") } returns peer("bob", "Bob", capabilities = Protocol.LOCAL_CAPABILITIES)
+            stubDm("bob")
+            val vm = vm("bob")
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+
+            vm.attachFile(tooBig)
+            advanceUntilIdle()
+            vm.attachFile(apk)
+            advanceUntilIdle()
+
+            assertEquals(listOf(R.string.chat_file_too_large, R.string.chat_file_package_refused), events)
+            assertNull(vm.pendingAttachment.value)
+        }
+
+    @Test
+    fun anIngestedFileStagesWithItsNameAndSize() =
+        runTest {
+            val uri = Uri.parse("content://docs/report")
+            val ingested =
+                AttachmentStore.Ingested(
+                    hash = "filehash",
+                    mime = "application/pdf",
+                    name = "report.pdf",
+                    sizeBytes = 1_400_000,
+                )
+            coEvery { attachments.ingestFile(uri) } returns AttachmentStore.IngestResult.Success(ingested, flagged = false)
+            coEvery { peers.find("bob") } returns peer("bob", "Bob", capabilities = Protocol.LOCAL_CAPABILITIES)
+            stubDm("bob")
+            val vm = vm("bob")
+
+            vm.attachFile(uri)
+            advanceUntilIdle()
+
+            assertEquals(ingested, vm.pendingAttachment.value)
+        }
+
+    @Test
+    fun aFileRowCarriesTheNameThatSelectsTheFileBubble() =
+        runTest {
+            stubDm("bob")
+            val vm = vm("bob")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "bob", body = "", id = "f1", sentAt = 100, conversationId = "bob")
+                        .copy(
+                            attachmentHash = "filehash",
+                            attachmentMime = "application/pdf",
+                            attachmentName = "report.pdf",
+                            attachmentSize = 1_400_000L,
+                        ),
+                )
+            sizesFlow.value = mapOf("filehash" to 1_398_101)
+            advanceUntilIdle()
+
+            val row =
+                vm.state.value.rows
+                    .single()
+            assertEquals("report.pdf", row.attachmentName)
+            assertEquals(1_400_000L, row.attachmentSize)
+            assertEquals("the measured length supersedes the declared one once we hold the bytes", 1_398_101, row.attachmentBytes)
+        }
 }

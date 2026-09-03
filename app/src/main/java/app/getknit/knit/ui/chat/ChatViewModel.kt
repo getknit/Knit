@@ -27,6 +27,7 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.message.replyRef
+import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.relay.AttachmentRelay
 import app.getknit.knit.data.relay.RelayFacts
@@ -48,11 +49,13 @@ import app.getknit.knit.mesh.crypto.b64d
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.voice.VoicePlayer
 import app.getknit.knit.ui.voice.VoiceRecorder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -72,6 +75,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class ChatRow(
     val id: String,
@@ -112,6 +116,13 @@ data class ChatRow(
     // True when on-device screening flagged the attachment as explicit; the bubble blurs it behind a
     // tap-to-view. Only meaningful when [attachmentHash] is non-null.
     val attachmentFlagged: Boolean = false,
+    // An arbitrary-file attachment's name and the byte count its sender declared (ADR 2026-09.qq2r). Both
+    // null for an image or a voice note; a non-null [attachmentName] is what selects the file bubble.
+    // [attachmentSize] is what the bubble shows until the bytes land — after that [attachmentBytes] is.
+    val attachmentName: String? = null,
+    val attachmentSize: Long? = null,
+    // The stored blob's own length once it is here, which supersedes the sender's declared size.
+    val attachmentBytes: Int? = null,
     // Whether this attachment can cross the Internet-relay plane. Anything but [AttachmentRelay.Silent]
     // or [AttachmentRelay.Relayable] marks the bubble "nearby only" — a statement about *reach*, never
     // about delivery, which the ✓/✓✓ tick keeps to itself. Set only for our own sends; see the mapping
@@ -204,8 +215,30 @@ data class ChatUiState(
     val loraReach: LoraReach = LoraReach.Silent,
     // Whether (and in which form) a draft here rides LoRa — sizes the composer's length hint. See [loraCarryFor].
     val loraCarry: LoraCarry = LoraCarry.None,
+    // Whether the composer shows its attach-a-file button (ADR 2026-09.qq2r) — everywhere except the
+    // Nearby room, which
+    // takes the refusal voice notes take: nothing on the device can screen a file, and the room floods
+    // unencrypted to everyone in range.
+    //
+    // Deliberately NOT also gated on the recipient advertising [Protocol.CAP_FILES]. That bit only arrives
+    // in a profile frame from a peer already running a build that has it, so hiding the item until then
+    // made the whole feature invisible with no way to tell why — including on a fresh pair of devices where
+    // one side has updated. The capability is enforced where it can explain itself instead, in
+    // [ChatViewModel.attachFile].
+    val canSendFile: Boolean = false,
 )
 
+/**
+ * The chat thread's state and every action a bubble or the composer can take.
+ *
+ * `LargeClass` is suppressed because this class *is* one screen's surface: a single 5-way state combine
+ * feeds one `ChatUiState`, and every action below mutates state that combine reads. What could leave has —
+ * the row/quote labels, the file gate and the ingest-failure mapping are pure top-level functions in
+ * `AttachmentLabels.kt`, and the reply snippet lives in `ReplyFormatting.kt`. What is left needs the same
+ * repositories, the same `viewModelScope` and the same one-shot event channel; splitting it would mean two
+ * owners of one screen's state, which is the shape `MeshtasticSession` avoids for the same reason.
+ */
+@Suppress("LargeClass")
 class ChatViewModel(
     private val conversationId: String,
     private val messages: MessageRepository,
@@ -515,6 +548,9 @@ class ChatViewModel(
                         voiceDurationMs = m.voiceDurationMs,
                         voicePeaks = m.voicePeaks,
                         attachmentReady = heldBytes != null,
+                        attachmentName = m.attachmentName,
+                        attachmentSize = m.attachmentSize,
+                        attachmentBytes = heldBytes,
                         attachmentFlagged = hideSensitive && m.attachmentHash != null && m.attachmentHash in flaggedHashes,
                         // Outbound reach only: a received attachment has already arrived, so telling its
                         // reader it is "nearby only" would describe a journey that is over. Unknown size
@@ -591,6 +627,7 @@ class ChatViewModel(
                         isRoom -> null
                         else -> group?.photoHash ?: peersByNode[conversationId]?.avatarHash
                     },
+                canSendFile = !isRoom,
                 isBlocked = !isRoom && !isGroup && conversationId in blocked,
                 verified = !isRoom && !isGroup && peersByNode[conversationId]?.verified == true,
                 isGroup = isGroup,
@@ -835,6 +872,45 @@ class ChatViewModel(
     }
 
     /**
+     * Ingests a picked **file** of any type and stages it. Unlike [attach] every failure speaks up: a file
+     * refused for its size cannot be shrunk the way a photo is, and one refused for being an app package is
+     * a decision rather than an accident, so silence would read as the app doing nothing.
+     */
+    fun attachFile(uri: Uri) {
+        viewModelScope.launch {
+            refusalForFile()?.let {
+                _events.tryEmit(it)
+                return@launch
+            }
+            stage(attachments.ingestFile(uri), notifyFailure = true)
+        }
+    }
+
+    /**
+     * Why this thread cannot take a file, or null when it can.
+     *
+     * The composer already hides the "File" item where [ChatUiState.canSendFile] is false, so for a picked
+     * file this only re-states a decision the UI made. The share sheet is why it exists: a file arriving
+     * from another app is drained on the chat's first composition, before the state combine has read a
+     * single peer row, so a check against the rendered state would refuse every capable peer exactly once —
+     * and refuse it with the wrong reason. Reading the repositories directly has no such window, and
+     * [isRoom] is settled at construction.
+     *
+     * Returns a string resource, or null. Not `@StringRes`-annotated: a nullable `Int?` boxes, and the
+     * annotation only applies to a primitive.
+     */
+    private suspend fun refusalForFile(): Int? {
+        if (isRoom) return R.string.chat_share_needs_chat
+        val members = groups.find(conversationId)?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+        val me = identity.nodeId()
+        val audience = if (members.isEmpty()) listOf(conversationId) else members.filter { it != me }
+        val capable =
+            audience.isNotEmpty() &&
+                audience.all { (peers.find(it)?.capabilities ?: 0L) and Protocol.CAP_FILES != 0L }
+        return if (capable) null else R.string.chat_file_peer_too_old
+    }
+
+    /**
      * Ingests a photo just taken with the in-app camera ([app.getknit.knit.ui.camera.PhotoCapture]) and
      * stages it exactly like a picked one. The bytes arrive in memory and are never written to disk.
      *
@@ -873,8 +949,8 @@ class ChatViewModel(
                 }
             }
 
-            AttachmentStore.IngestResult.Failed -> {
-                if (notifyFailure) _events.tryEmit(R.string.chat_image_capture_failed)
+            is AttachmentStore.IngestResult.Failed -> {
+                if (notifyFailure) _events.tryEmit(ingestFailureMessage(result.reason))
             }
         }
     }
@@ -962,7 +1038,7 @@ class ChatViewModel(
                     _pendingAttachment.value = result.ingested
                 }
 
-                AttachmentStore.IngestResult.Failed -> {
+                is AttachmentStore.IngestResult.Failed -> {
                     _events.tryEmit(R.string.chat_voice_record_failed)
                 }
             }
@@ -1038,6 +1114,36 @@ class ChatViewModel(
             val type = mime ?: blobs.mimeFor(hash)
             val ok = bytes != null && type != null && gallerySaver.saveToPictures(bytes, hash, type)
             _events.tryEmit(if (ok) R.string.chat_image_saved else R.string.chat_image_save_failed)
+        }
+    }
+
+    /**
+     * Writes a received **file** attachment to the document [dest] the user just picked, decrypting it on the
+     * way exactly as [saveAttachment] does.
+     *
+     * Saving is deliberately the only exit a file has. Knit does not hand one to another app to *open*: that
+     * would need a content provider serving decrypted bytes, and ADR 029's invariant — attachment plaintext
+     * lives in the encrypted blob store and nowhere else — is worth more than the convenience. Through the
+     * storage picker the bytes go straight from the blob into the stream the user chose, still never landing
+     * in our own storage; and an app package the recipient saves still has to clear the platform's own
+     * unknown-sources gate before anything can install it.
+     */
+    fun saveAttachmentTo(
+        hash: String,
+        key: String?,
+        dest: Uri,
+    ) {
+        viewModelScope.launch {
+            val ok =
+                withContext(Dispatchers.IO) {
+                    val raw = blobs.bytes(hash)
+                    val bytes = if (key != null && raw != null) AttachmentCrypto.open(raw, b64d(key)) else raw
+                    bytes != null &&
+                        runCatching {
+                            context.contentResolver.openOutputStream(dest)?.use { it.write(bytes) } != null
+                        }.getOrDefault(false)
+                }
+            _events.tryEmit(if (ok) R.string.chat_file_saved else R.string.chat_file_save_failed)
         }
     }
 

@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.net.Uri
 import android.os.Build
 import android.text.format.DateUtils
+import android.text.format.Formatter
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -71,6 +72,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudOff
@@ -175,6 +177,7 @@ import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AttachmentStore
+import app.getknit.knit.data.FileTypes
 import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.emoji.EmojiCatalogLoader
 import app.getknit.knit.data.emoji.RecentReactions
@@ -281,6 +284,31 @@ fun ChatScreen(
             uri?.let(viewModel::attach)
         }
 
+    // The storage picker, for everything that is not a photo. Also permission-free: the grant rides the
+    // returned Uri, so Knit reads the bytes without ever holding storage access of its own.
+    val filePicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri?.let(viewModel::attachFile)
+        }
+
+    // Where a received file goes: the user names the destination and Knit streams the decrypted bytes into
+    // it. There is no "open" counterpart, deliberately — handing another app a readable copy would mean
+    // either a plaintext staging file or a provider serving decrypted bytes, and ADR 029's invariant (an
+    // attachment's plaintext lives in the encrypted blob store and nowhere else) is worth more than the
+    // convenience. Saving keeps the user in charge of the one copy that leaves.
+    var savingFile by remember { mutableStateOf<PendingSave?>(null) }
+    var riskyFile by remember { mutableStateOf<PendingSave?>(null) }
+    val fileSaver =
+        rememberLauncherForActivityResult(CreateNamedDocument()) { uri ->
+            val pending = savingFile
+            savingFile = null
+            if (uri != null && pending != null) viewModel.saveAttachmentTo(pending.hash, pending.key, uri)
+        }
+    val startSave: (PendingSave) -> Unit = { pending ->
+        savingFile = pending
+        fileSaver.launch(pending)
+    }
+
     // Suppress message notifications while the chat is on screen, and clear any active one. The NavHost
     // back-stack entry is this composable's LifecycleOwner, so navigating away pauses (and popping
     // disposes) the screen — both paths re-enable notifications so messages arriving elsewhere notify.
@@ -313,6 +341,7 @@ fun ChatScreen(
     LaunchedEffect(Unit) {
         viewModel.events.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }
+
     // Clear the input only once a message is accepted and sent (not when it's blocked for abuse).
     LaunchedEffect(Unit) {
         viewModel.clearInput.collect {
@@ -332,6 +361,10 @@ fun ChatScreen(
         shareInbox.consume()?.let { shared ->
             shared.text?.let { if (it.isNotEmpty()) inputState.setTextAndPlaceCursorAtEnd(it) }
             shared.imageUri?.let { viewModel.attach(it.toUri()) }
+            // A shared *file* lands only where one can be sent — and the refusal is the ViewModel's, not
+            // ours: this runs on first composition, before the state combine has read a peer row, so a
+            // check against `state.canSendFile` here would refuse every capable peer exactly once.
+            shared.fileUri?.let { viewModel.attachFile(it.toUri()) }
         }
     }
     // Debug trailer director: on the Nearby room, drive the REAL composer from scripted DemoComposer
@@ -408,6 +441,13 @@ fun ChatScreen(
             )
         },
         onCameraClick = { capturing = true },
+        onFileClick = { filePicker.launch(arrayOf(ANY_MIME)) },
+        onSaveFile = { hash, key, name, mime ->
+            val pending = PendingSave(hash, key, name, mime)
+            // Nothing on the device can look inside an archive or an executable, so the recipient is told
+            // that before they save one rather than after. Everything else saves straight away.
+            if (FileTypes.isRisky(mime, name)) riskyFile = pending else startSave(pending)
+        },
         onClearAttachment = viewModel::clearAttachment,
         onReceiveImage = viewModel::attach,
         onTyping = viewModel::onUserTyping,
@@ -463,6 +503,40 @@ fun ChatScreen(
             },
         )
     }
+
+    // Nothing on the device can classify an archive or an executable, so a save of one says so first. This
+    // is the honest complement to the fact that Knit never offers to *open* a file it cannot screen: the
+    // bytes still leave only where the user sends them, and an app package still meets the platform's own
+    // unknown-sources gate afterwards. See docs/CONTENT_MODERATION.md §7.
+    riskyFile?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { riskyFile = null },
+            title = { Text(stringResource(R.string.chat_file_risky_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.chat_file_risky_body,
+                        pending.name ?: stringResource(R.string.chat_file_unnamed),
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        riskyFile = null
+                        startSave(pending)
+                    },
+                ) {
+                    Text(stringResource(R.string.chat_file_risky_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { riskyFile = null }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -485,9 +559,11 @@ internal fun ChatScreenContent(
     onOpenMessageDetails: (messageId: String) -> Unit = {},
     onSend: () -> Unit,
     onAttachClick: () -> Unit,
-    // Long-pressing the attach affordance; opens the in-app camera. Defaulted so previews and the
-    // existing content tests don't all have to name it.
+    // Long-pressing the attach affordance opens the in-app camera (ADR 029, unchanged); the paperclip in
+    // the field opens the file picker. Defaulted so previews and the content tests need no extra wiring.
     onCameraClick: () -> Unit = {},
+    onFileClick: () -> Unit = {},
+    onSaveFile: (hash: String, key: String?, name: String?, mime: String?) -> Unit = { _, _, _, _ -> },
     onClearAttachment: () -> Unit,
     onReceiveImage: (Uri) -> Unit,
     onTyping: () -> Unit,
@@ -542,6 +618,7 @@ internal fun ChatScreenContent(
     // Hoisted because the reply snippet is built inside a plain (non-composable) lambda; see
     // buildReplySnippet for why a voice note's quote label rides the snippet rather than the wire.
     val voiceQuoteLabel = stringResource(R.string.chat_reply_voice)
+    val fileQuoteLabel = stringResource(R.string.chat_list_preview_file)
 
     // The thread is rendered bottom-anchored (the LazyColumn below uses reverseLayout), so it opens
     // already resting on the newest message — no initial scroll, no visible glide through history — and
@@ -754,6 +831,10 @@ internal fun ChatScreenContent(
                 onMentionAdded = onMentionAdded,
                 onAttachClick = onAttachClick,
                 onCameraClick = onCameraClick,
+                // Files are DM/group only, for the reason voice notes are: nothing on the device can screen
+                // one, and the room floods unencrypted to everyone in range. See docs/CONTENT_MODERATION.md §7.
+                fileEnabled = state.canSendFile,
+                onFileClick = onFileClick,
                 onClearAttachment = onClearAttachment,
                 onReceiveImage = onReceiveImage,
                 onSend = onSend,
@@ -852,6 +933,7 @@ internal fun ChatScreenContent(
                                 imageRatios = imageRatios,
                                 highlighted = row.id == highlightedMessageId,
                                 onImageClick = { fullscreenImage = it },
+                                onSaveFile = onSaveFile,
                                 onOpenProfile = onOpenProfile,
                                 onReact = onReact,
                                 quickReactions = quickReactions,
@@ -866,9 +948,19 @@ internal fun ChatScreenContent(
                                                 buildReplySnippet(
                                                     msg.body,
                                                     msg.moderationFlagged,
-                                                    voiceLabel =
-                                                        voiceQuoteLabel.takeIf {
-                                                            VoiceAudio.isVoice(msg.attachmentMime)
+                                                    attachmentLabel =
+                                                        when {
+                                                            msg.attachmentName != null -> {
+                                                                fileQuoteLabel.format(msg.attachmentName)
+                                                            }
+
+                                                            VoiceAudio.isVoice(msg.attachmentMime) -> {
+                                                                voiceQuoteLabel
+                                                            }
+
+                                                            else -> {
+                                                                null
+                                                            }
                                                         },
                                                 ),
                                             hasAttachment = msg.attachmentHash != null,
@@ -1203,6 +1295,9 @@ private fun MessageBubble(
     // True to briefly highlight this bubble after a quote-tap scrolled to it; defaulted for previews.
     highlighted: Boolean = false,
     onImageClick: (FullscreenImage) -> Unit,
+    // Saving a file attachment through the storage picker; defaulted so the @Preview call sites and the
+    // content tests need no extra wiring.
+    onSaveFile: (hash: String, key: String?, name: String?, mime: String?) -> Unit = { _, _, _, _ -> },
     onOpenProfile: (nodeId: String) -> Unit,
     onReact: (messageId: String, emoji: String) -> Unit,
     // The long-press menu's quick-reaction row and its "+" (opens the full picker); defaulted for previews.
@@ -1335,6 +1430,28 @@ private fun MessageBubble(
                                     onSeek = { fraction ->
                                         val total = row.voiceDurationMs ?: 0
                                         if (total > 0) onVoiceSeek(row.attachmentHash, (fraction * total).toInt())
+                                    },
+                                    onLongClick = { showPicker = true },
+                                )
+                            } else if (row.attachmentName != null) {
+                                // A named attachment is a file: nothing here decodes, so the bubble names it
+                                // and offers to save it (ADR 2026-09.qq2r). The name is what selects this
+                                // arm, not the mime — an image sent under a wrong type still belongs in the
+                                // image arm, where it is screened and blurred.
+                                FileAttachmentBubble(
+                                    name = row.attachmentName,
+                                    mime = row.attachmentMime,
+                                    declaredSize = row.attachmentSize,
+                                    heldBytes = row.attachmentBytes,
+                                    ready = row.attachmentReady,
+                                    flagged = row.attachmentFlagged,
+                                    onSave = {
+                                        onSaveFile(
+                                            row.attachmentHash,
+                                            row.attachmentKey,
+                                            row.attachmentName,
+                                            row.attachmentMime,
+                                        )
                                     },
                                     onLongClick = { showPicker = true },
                                 )
@@ -2350,6 +2467,11 @@ private fun MessageInput(
     onMentionAdded: (Mention) -> Unit,
     onAttachClick: () -> Unit,
     onCameraClick: () -> Unit = {},
+    // Whether the long-press menu offers "Send a file" (ADR 2026-09.qq2r). Off in the room only, where the
+    // long press stays the direct route to the camera it has always been. A recipient whose build predates
+    // files is refused at the pick instead, by ChatViewModel.attachFile, so the refusal can say so.
+    fileEnabled: Boolean = false,
+    onFileClick: () -> Unit = {},
     onClearAttachment: () -> Unit,
     onReceiveImage: (Uri) -> Unit,
     onSend: () -> Unit,
@@ -2515,7 +2637,7 @@ private fun MessageInput(
                     )
                 } else {
                     AttachmentPreview(
-                        image = BlobImage(pendingAttachment.hash, pendingAttachment.mime),
+                        attachment = pendingAttachment,
                         relay = stagedAttachmentRelay,
                         onClear = onClearAttachment,
                     )
@@ -2550,6 +2672,10 @@ private fun MessageInput(
             val showMic =
                 voiceEnabled &&
                     if (voiceRecording != null) !voiceRecording.locked else !canSend && !showSending
+            // The paperclip keeps the mic's rule: offered while the composer is idle, gone once there is
+            // something to send. That matches how attaching already works here — the trailing button is
+            // Attach only until you type — so a file is picked first and captioned after, like a photo.
+            val showFile = fileEnabled && voiceRecording == null && !canSend && !showSending
             Row(verticalAlignment = Alignment.Bottom) {
                 // The field container holds the text field *and* the mic, the way Signal does: sharing the
                 // field's background makes the mic read as part of it rather than as a third button
@@ -2593,9 +2719,9 @@ private fun MessageInput(
                                     .weight(1f)
                                     .padding(
                                         start = 16.dp,
-                                        // The mic carries 12dp of its own inset around the icon, so the text
-                                        // only has to clear it rather than keep the full edge margin.
-                                        end = if (showMic) 4.dp else 16.dp,
+                                        // The inline buttons carry 12dp of their own inset around the icon,
+                                        // so the text only has to clear them rather than keep the full margin.
+                                        end = if (showMic || showFile) 4.dp else 16.dp,
                                         top = 12.dp,
                                         bottom = 12.dp,
                                     ),
@@ -2640,6 +2766,13 @@ private fun MessageInput(
                             onCancel = onCancelVoice,
                             recording = voiceRecording != null,
                         )
+                    }
+                    // Outboard of the mic, so the paperclip sits next to the send button it feeds rather
+                    // than next to the text. It also keeps the mic where it has always been relative to the
+                    // field, which matters more than it sounds: the mic owns a hold gesture, and muscle
+                    // memory for a press-and-hold is positional.
+                    if (showFile) {
+                        AttachFileButton(onClick = onFileClick)
                     }
                 }
                 Spacer(Modifier.width(8.dp))
@@ -2768,6 +2901,37 @@ private fun MessageInput(
                 }
             }
         }
+    }
+}
+
+/**
+ * The attach-a-file button, inline in the composer field beside the mic (ADR 2026-09.qq2r).
+ *
+ * A control of its own rather than another gesture: the trailing button already spends its tap on
+ * send-or-attach and its long-press on the camera (ADR 029), and a menu hung off that long press hid the
+ * whole feature behind a gesture with no visible affordance. Styled exactly like [MicButton] at rest — a
+ * transparent disc inset inside a full 48dp touch target — so the two read as a pair belonging to the
+ * field rather than as buttons competing with send.
+ */
+@Composable
+private fun AttachFileButton(onClick: () -> Unit) {
+    Box(
+        modifier =
+            Modifier
+                .size(48.dp)
+                .testTag("chat_attach_file")
+                .clip(CircleShape)
+                // The label rides the icon's contentDescription, not an onClickLabel: with both, TalkBack
+                // reads the name and then the same words again as the action.
+                .clickable(onClick = onClick, role = Role.Button),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Filled.AttachFile,
+            contentDescription = stringResource(R.string.chat_attach_file),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp),
+        )
     }
 }
 
@@ -2982,7 +3146,7 @@ private fun ReplyPreview(
  */
 @Composable
 private fun AttachmentPreview(
-    image: BlobImage,
+    attachment: AttachmentStore.Ingested,
     relay: AttachmentRelay,
     onClear: () -> Unit,
 ) {
@@ -2994,12 +3158,19 @@ private fun AttachmentPreview(
         }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Box {
-            AsyncImage(
-                model = image,
-                contentDescription = stringResource(R.string.chat_attachment_preview_desc),
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
-            )
+            // A named attachment is a file, and there is nothing to thumbnail: handing its bytes to the
+            // image loader drew a blank 72dp square with only the ✕ on it, which read as a broken attachment
+            // rather than a staged one. It gets the same icon/name/size tile the sent bubble will draw.
+            if (attachment.name != null) {
+                StagedFileTile(attachment)
+            } else {
+                AsyncImage(
+                    model = BlobImage(attachment.hash, attachment.mime),
+                    contentDescription = stringResource(R.string.chat_attachment_preview_desc),
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
+                )
+            }
             // 48dp touch target (a11y) with the small visible badge kept flush in the corner.
             Box(
                 modifier =
@@ -3029,6 +3200,49 @@ private fun AttachmentPreview(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("chat_relay_staged_caption"),
+            )
+        }
+    }
+}
+
+/**
+ * The staged tile for a file: the icon, name and size the bubble will show once it is sent, so what is on
+ * screen before the send matches what lands after it. Sized to leave the clear badge its corner.
+ */
+@Composable
+private fun StagedFileTile(attachment: AttachmentStore.Ingested) {
+    val context = LocalContext.current
+    val size = Formatter.formatShortFileSize(context, attachment.sizeBytes.toLong())
+    val name = attachment.name.orEmpty().ifBlank { stringResource(R.string.chat_file_unnamed) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier =
+            Modifier
+                .heightIn(min = 72.dp)
+                .widthIn(max = 260.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                // The trailing inset is the clear badge's: it floats in this tile's top-right corner, and
+                // without the room it would sit on top of a long filename.
+                .padding(start = 12.dp, end = 44.dp, top = 12.dp, bottom = 12.dp)
+                .clearAndSetSemantics { contentDescription = "$name, $size" },
+    ) {
+        Icon(
+            fileIconFor(attachment.mime, attachment.name),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(modifier = Modifier.padding(start = 10.dp)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = size,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

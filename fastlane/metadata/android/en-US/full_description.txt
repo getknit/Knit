@@ -33,7 +33,7 @@ FEATURES
 • Image sharing, including GIFs
 • Typing and delivery indicators, unread badges
 • Store-and-forward — messages wait and deliver when someone returns to range
-• Voice notes in direct and group chats
+• Voice notes and files of any type in direct and group chats
 • Add a contact from a link when you're too far apart to scan a code
 • Optional Internet relays, off until you turn them on (see below)
 • Share the Knit app itself to a nearby phone, offline, with no app store

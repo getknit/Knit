@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.crypto
 
+import app.getknit.knit.mesh.protocol.AttachmentName
 import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ProfilePayload
@@ -37,6 +38,17 @@ data class MessageContent(
     val attachmentHash: String? = null,
     val attachmentMime: String? = null,
     val attachmentKey: String? = null,
+    // An arbitrary-file attachment's own name and byte count (additive; ADR 2026-09.qq2r). Both null for an image
+    // or a voice note, whose bubbles describe themselves. Sealed rather than cleartext for ADR 035's
+    // reason — a name is a far louder signal to a blind carrier than the mime that decision removed — and
+    // spent as wire at all only because a name is the one thing about a file that is NOT a function of
+    // bytes both ends hold, so `docs/WIRE_COMPAT.md`'s derive-don't-carry rule cannot reach it.
+    //
+    // [attachmentName] is normalized through [app.getknit.knit.mesh.protocol.AttachmentName] on decode, and
+    // [attachmentSize] is a label the bubble draws before the bytes arrive — never an allocation bound
+    // (docs/SPOOL_PROTOCOL.md C-4.5-8). Once the blob lands its stored length is the authority.
+    val attachmentName: String? = null,
+    val attachmentSize: Long? = null,
     // Quoted-reply reference for an encrypted DM/group, carried here (inside the ciphertext) so the
     // quoted author + snippet stay private — never on the cleartext [ChatContent.replyTo] for these.
     // Relies, like every field here, on cryptoCbor's `encodeDefaults = false` to stay off the wire when
@@ -67,6 +79,14 @@ data class MessageContent(
 
     /** Whether this build understands this content schema version. */
     fun isSupported(): Boolean = v <= MAX_SUPPORTED
+
+    /**
+     * This content with every open sender-supplied string brought inside its own rules — today just
+     * [attachmentName]. Applied by **both** decoders ([decode] and [MessageContentV2.decode]) so the
+     * repair happens once, at the boundary, and no call site downstream has to remember it.
+     */
+    internal fun normalized(): MessageContent =
+        if (attachmentName == null) this else copy(attachmentName = AttachmentName.sanitize(attachmentName))
 
     companion object {
         /** Current plaintext-content schema version this build originates. */
@@ -110,6 +130,7 @@ data class MessageContent(
         const val CTL_PROFILE = 8
 
         @OptIn(ExperimentalSerializationApi::class)
-        fun decode(bytes: ByteArray): MessageContent? = runCatching { cryptoCbor.decodeFromByteArray<MessageContent>(bytes) }.getOrNull()
+        fun decode(bytes: ByteArray): MessageContent? =
+            runCatching { cryptoCbor.decodeFromByteArray<MessageContent>(bytes) }.getOrNull()?.normalized()
     }
 }

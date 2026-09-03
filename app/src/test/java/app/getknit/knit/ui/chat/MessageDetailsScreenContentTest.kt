@@ -2,6 +2,7 @@ package app.getknit.knit.ui.chat
 
 import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -239,4 +240,71 @@ class MessageDetailsScreenContentTest {
                 ),
             filters = listOf(ReactionFilter("👍", 3), ReactionFilter("❤️", 1)),
         )
+
+    /**
+     * The body line used to read "📷 Photo" for *every* attachment, including a voice note and a file.
+     * One label shared with the chat list now, so a file is named and sized in both places.
+     */
+    @Test
+    fun `an attachment-only message is named by what it actually is`() {
+        val base =
+            MessageDetailsUiState(
+                messageId = "m1",
+                hasAttachment = true,
+                senderName = "Sam Rivera",
+                sentAt = 1_700_000_000_000L,
+            )
+
+        render(base.copy(attachmentMime = "image/jpeg"))
+        compose.onNodeWithTag("message_details_body").assertTextEquals("📷 Photo")
+    }
+
+    @Test
+    fun `a voice note says so rather than calling itself a photo`() {
+        render(
+            MessageDetailsUiState(
+                messageId = "m1",
+                hasAttachment = true,
+                attachmentMime = "audio/aac",
+                senderName = "Sam Rivera",
+                sentAt = 1_700_000_000_000L,
+            ),
+        )
+
+        compose.onNodeWithTag("message_details_body").assertTextEquals("🎤 Voice message")
+    }
+
+    @Test
+    fun `a file is named and sized`() {
+        render(
+            MessageDetailsUiState(
+                messageId = "m1",
+                hasAttachment = true,
+                attachmentMime = "application/pdf",
+                attachmentName = "quarterly-report.pdf",
+                attachmentSize = 1_400_000L,
+                senderName = "Sam Rivera",
+                sentAt = 1_700_000_000_000L,
+            ),
+        )
+
+        compose.onNodeWithTag("message_details_body").assertTextContains("quarterly-report.pdf", substring = true)
+        compose.onNodeWithTag("message_details_body").assertTextContains("MB", substring = true)
+    }
+
+    /** A non-image with no name is a shape no shipped build sends, but it must not read as a photo. */
+    @Test
+    fun `an unnamed non-image still reads as a file`() {
+        render(
+            MessageDetailsUiState(
+                messageId = "m1",
+                hasAttachment = true,
+                attachmentMime = "application/octet-stream",
+                senderName = "Sam Rivera",
+                sentAt = 1_700_000_000_000L,
+            ),
+        )
+
+        compose.onNodeWithTag("message_details_body").assertTextEquals("📎 File")
+    }
 }

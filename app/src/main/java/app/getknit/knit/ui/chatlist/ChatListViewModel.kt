@@ -28,6 +28,7 @@ import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.chat.DeliveryStatus
+import app.getknit.knit.ui.chat.attachmentPreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -363,13 +364,7 @@ class ChatListViewModel(
                 }
 
                 message.attachmentHash != null -> {
-                    context.getString(
-                        if (VoiceAudio.isVoice(message.attachmentMime)) {
-                            R.string.chat_list_preview_voice
-                        } else {
-                            R.string.chat_list_preview_photo
-                        },
-                    )
+                    attachmentPreview(context, message)
                 }
 
                 else -> {

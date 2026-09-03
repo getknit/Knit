@@ -670,6 +670,11 @@ class MeshManager(
                 attachmentHash = sealedAttachment?.hash,
                 attachmentMime = attachment?.mime,
                 attachmentKey = sealedAttachment?.key,
+                // A file's name and its plaintext length — the two facts a file bubble needs and cannot
+                // read off the bytes. Null for an image or a voice note, whose bubbles describe themselves,
+                // so an ordinary photo frame is byte-for-byte what it was before ADR 2026-09.qq2r.
+                attachmentName = attachment?.name,
+                attachmentSize = attachment?.takeIf { it.name != null }?.sizeBytes?.toLong(),
                 replyTo = replyTo,
             )
         val envelope = sealEnvelopeFor(id, me, sentAt, recipientId, group, content, inlineAcks)
@@ -699,6 +704,10 @@ class MeshManager(
                 // bytes when the blob lands (InboundPipeline.onObtained) — neither value is on the wire.
                 voiceDurationMs = attachment?.voice?.durationMs,
                 voicePeaks = attachment?.voice?.peaks,
+                // A file's name/size come off the sealed content on the receiving side and off the staged
+                // ingest here, and are written against the same ciphertext hash for the same reason.
+                attachmentName = attachment?.name,
+                attachmentSize = attachment?.takeIf { it.name != null }?.sizeBytes?.toLong(),
                 pendingKey = envelope == null && group == null,
             ).withReply(replyTo),
         )

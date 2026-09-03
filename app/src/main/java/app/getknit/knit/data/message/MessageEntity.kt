@@ -59,6 +59,14 @@ import kotlinx.serialization.json.Json
  * same loading placeholder an image does until they do. Base64 rather than a `BLOB` column so this stays a
  * plain `data class`: a [ByteArray] property would give it a reference-identity `equals`.
  *
+ * [attachmentName]/[attachmentSize] describe an arbitrary-**file** attachment (ADR 2026-09.qq2r): the name
+ * the sender gave it and how many bytes it claimed. Unlike the voice columns these do cross the wire, sealed
+ * on [app.getknit.knit.mesh.crypto.MessageContent] — a name is the one thing about a file that is not a
+ * function of bytes both ends hold, so it cannot be derived the way a waveform is. Null on images and voice
+ * notes, whose bubbles describe themselves. [attachmentSize] is what the bubble says *before* the blob
+ * arrives; once it has, the stored blob's own length is the authority and this is never used to size an
+ * allocation.
+ *
  * [moderation] records an on-device content-moderation verdict for the [body] ([MODERATION_NONE] or
  * [MODERATION_TEXT_FLAGGED]). A flagged inbound message is still stored, but the UI collapses it behind
  * a tap-to-reveal rather than dropping it (so a false positive never loses content).
@@ -111,6 +119,8 @@ data class MessageEntity(
     val replyToHasAttachment: Boolean = false,
     val voiceDurationMs: Int? = null,
     val voicePeaks: String? = null,
+    val attachmentName: String? = null,
+    val attachmentSize: Long? = null,
     val moderation: Int = MODERATION_NONE,
     val pendingKey: Boolean = false,
     val kind: Int = KIND_NORMAL,

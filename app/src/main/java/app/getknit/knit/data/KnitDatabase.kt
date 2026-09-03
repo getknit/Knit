@@ -70,7 +70,12 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
     //     message-details screen can say when it got here and not only when its author says they sent it.
     //     Local observation, no wire change; null on every message we authored and on every pre-upgrade row
     //     (deliberately un-backfilled); migrated by KnitMigrations.MIGRATION_6_7.
-    version = 7,
+    // v8: two `messages` columns describing an arbitrary-FILE attachment — `attachmentName` and
+    //     `attachmentSize` (ADR 2026-09.qq2r). Unlike v5's voice pair these do come off the wire, sealed on
+    //     MessageContent, because a filename is the one thing about a file that is not a function of bytes
+    //     both ends already hold; null on every existing row, which is correct (every older attachment is an
+    //     image or a voice note and describes itself); migrated by KnitMigrations.MIGRATION_7_8.
+    version = 8,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without

@@ -68,6 +68,8 @@ internal object MessageContentV2 {
             attachmentHash = content.attachmentHash?.let(::hashBytes),
             attachmentMime = content.attachmentMime,
             attachmentKey = content.attachmentKey?.let(::keyBytes),
+            attachmentName = content.attachmentName,
+            attachmentSize = content.attachmentSize,
             replyTo = content.replyTo?.let(::replyRefOf),
             ctl = content.ctl,
             ack = content.ack?.let(::frameIdBytes),
@@ -112,6 +114,8 @@ internal object MessageContentV2 {
                 attachmentHash = w.attachmentHash?.let(CanonicalText::hashText),
                 attachmentMime = w.attachmentMime,
                 attachmentKey = w.attachmentKey?.let(::b64),
+                attachmentName = w.attachmentName,
+                attachmentSize = w.attachmentSize,
                 replyTo =
                     w.replyTo?.let {
                         ReplyRef(
@@ -136,7 +140,7 @@ internal object MessageContentV2 {
                         )
                     },
             )
-        }.getOrNull()
+        }.getOrNull()?.normalized()
 
     private fun nodeIdText(bytes: ByteArray): String {
         require(bytes.size == NodeId.BYTES) { "a node id is ${NodeId.BYTES} bytes, got ${bytes.size}" }
@@ -144,11 +148,12 @@ internal object MessageContentV2 {
     }
 
     /**
-     * The top-level layout. Labels are append-only. **12 and 13 are reserved** for the two additive
+     * The top-level layout. Labels are append-only. **12 and 13 stay reserved** for the two additive
      * follow-ons — `12 = pad`, a length-hiding byte string a reader discards, and `13 = gk`, the group-key
      * payload with raw 32-byte seeds (44 B each as base64 today) — both readable by this build already,
      * since `ignoreUnknownKeys` skips a label it does not model: a new label is additive, a new *form* (the
-     * group form) is a new envelope version. Never recycle a label.
+     * group form) is a new envelope version. `14`/`15` are the file attachment's name and byte count (ADR
+     * 2026-09.qq2r), which took the next free labels rather than the reserved pair. Never recycle a label.
      */
     @Serializable
     @Suppress("MagicNumber") // the CBOR labels are the layout itself, pinned by GoldenVectorTest
@@ -177,6 +182,10 @@ internal object MessageContentV2 {
         val rp: ReactionV2? = null,
         @CborLabel(11)
         val pr: ProfileV2? = null,
+        @CborLabel(14)
+        val attachmentName: String? = null,
+        @CborLabel(15)
+        val attachmentSize: Long? = null,
     )
 
     @Serializable

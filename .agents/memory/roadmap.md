@@ -232,17 +232,41 @@ doc). **Don't start a deferred item without explicit direction.**
   universe (a stranger seen once can suffix a contact indefinitely — needs a `lastSeen` column); and
   resolving `ReplyRef.authorId` through the directory instead of rendering the sender's snapshot.
 
-- **Audio moderation** — voice notes (ADR 034) ship **unscreened**: no on-device model classifies speech
-  and the app has no cloud option, so `MODERATION_NONE` is the honest verdict and both screening hooks skip
-  audio by MIME. Mitigated rather than solved: the mic is not offered in the Nearby room (the one surface
-  that floods unencrypted to strangers), and block-sender plus the ADR 009 request gate are the remedies.
+- **Audio and file moderation** — voice notes (ADR 034) and arbitrary files (ADR 2026-09.qq2r) ship
+  **unscreened**: no on-device model classifies speech, nothing at all classifies a PDF or an archive, and
+  the app has no cloud option, so `MODERATION_NONE` is the honest verdict and the screening hooks skip both
+  by MIME. Mitigated rather than solved: neither is offered in the Nearby room (the one surface
+  that floods unencrypted to strangers), app packages are refused on send and archives/executables are
+  confirmed before saving, and block-sender plus the ADR 009 request gate are the remedies. The MIME-keyed
+  skip itself is no longer a way past the classifier — `ingestFile` sniffs the bytes' own signature and
+  routes a real image back through the image pipeline, and the receive side screens every keyed
+  attachment's decrypted plaintext MIME-blind.
   If a small on-device speech classifier ever becomes practical, the hook point already exists —
   `InboundPipeline.onObtained` decrypts a landed attachment and is where the waveform derivation runs, so a
   verdict would cache under the same content hash the image path uses and the bubble's tap-to-reveal
   collapse would need no new UI. Gap recorded in `docs/CONTENT_MODERATION.md` §7.
 
-- **Voice notes in the Nearby room** — deliberately not built, for the reason above. Reversing it is one
-  flag (`MessageInput`'s `voiceEnabled`), and should not be reversed without an answer to "what screens it".
+- **Voice notes and files in the Nearby room** — deliberately not built, for the reason above. Reversing it
+  is one flag each (`MessageInput`'s `voiceEnabled` / `fileEnabled`), and neither should be reversed without
+  an answer to "what screens it". The room is the *only* thing that hides the file item: gating its
+  visibility on the recipient's `CAP_FILES` was tried and reverted, because the bit arrives with the peer's
+  next profile frame and until then the feature was indistinguishable from unbuilt (ADR 2026-09.qq2r).
+  Capability belongs on the send, where it can explain itself. Two other things now rest on the room carrying only images:
+  `MeshBlobStore.saveIncoming`'s screening skip, and `docs/NEXT_WIRE_BREAK.md`'s first parked item.
+
+- **File attachment previews** — files ship with a typed icon, a name and a size, no thumbnail
+  (ADR 2026-09.qq2r). The two cheap wins were left on the table deliberately: **video/audio poster frames**
+  need only `MediaMetadataRetriever` over the existing `ByteArrayMediaSource` (already in the tree from the
+  voice-note work — no disk, no new dependency), while a **PDF first page** needs `PdfRenderer`, which
+  demands a *seekable* file descriptor and so needs `StorageManager.openProxyFileDescriptor` to stay off
+  disk under ADR 029. `FileAttachmentBubble` is the one place to change; the row shape already reserves the
+  slot.
+
+- **Opening a received file in another app** — not built. It needs a content provider whose `openFile`
+  serves decrypted bytes (the same proxy-descriptor machinery a PDF preview wants), because ADR 029's
+  invariant forbids the plaintext staging file the obvious `FileProvider` route would need. Saving through
+  the storage picker is the only exit today. **Before building it:** the provider must never expose an
+  install-capable grant for a package, or the platform's unknown-sources gate stops being the last word.
 
 - **Startup profile (`app/src/main/startup-prof.txt`)** — the baseline profile landed (ADR 048) but the
   startup-profile half did not. It reorders dex so startup code sits together, which is a real additional

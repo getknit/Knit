@@ -97,6 +97,34 @@ class MeshBlobStoreTest {
         }
 
     @Test
+    fun `a sealed file skips the classifier here, and is screened after it is decrypted`() =
+        runTest {
+            // The skip generalized from audio to every sealed non-image (ADR 2026-09.qq2r). The reason is the
+            // same and it is not "files are unscreenable": what is stored here is *ciphertext*, which no image
+            // decoder can read, so the call would buy a failed decode and a meaningless cached verdict. The
+            // real screen for this blob happens in InboundPipeline.onObtained, on the decrypted plaintext and
+            // blind to the mime — which is what catches an image mislabelled as a file.
+            row(mime = "application/pdf", key = "YmFzZTY0LWtleQ==")
+
+            store().saveIncoming(hash, "application/pdf", staged().absolutePath)
+
+            coVerify(exactly = 0) { imageScreening.screenImage(any(), any()) }
+        }
+
+    @Test
+    fun `a key-less blob claiming a file type is screened anyway`() =
+        runTest {
+            // Both halves of the test matter. Without the key requirement, an author could mark their own
+            // room attachment application/pdf — the room's mime rides in the clear, straight into the row —
+            // and switch screening off for it. The room offers no file picker, so this costs nothing real.
+            row(mime = "application/pdf", key = null)
+
+            store().saveIncoming(hash, "application/pdf", staged().absolutePath)
+
+            coVerify(exactly = 1) { imageScreening.screenImage(hash, bytes) }
+        }
+
+    @Test
     fun `the stored mime is our own row's, not the serving peer's claim`() =
         runTest {
             row(mime = "image/webp", key = "YmFzZTY0LWtleQ==")

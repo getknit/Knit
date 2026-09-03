@@ -6,14 +6,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 
 /**
- * Text and/or image handed to Knit from another app's share sheet (an `ACTION_SEND` intent). The
- * image is kept as the [String] form of its `content://` URI — re-parsing that string with
+ * Text, an image, and/or an arbitrary file handed to Knit from another app's share sheet (an `ACTION_SEND`
+ * intent). Each stream is kept as the [String] form of its `content://` URI — re-parsing that string with
  * `Uri.parse` preserves the temporary read grant (the grant is keyed to the (uid, uri) pair, not a
  * particular `Uri` instance), and keeping it a plain string makes [ShareInbox] JVM-unit-testable.
+ *
+ * [imageUri] and [fileUri] are kept apart rather than folded into one field because they land in different
+ * places: an image can be attached anywhere, while a file is only offered in DMs and groups (ADR
+ * 2026-09.qq2r), so the destination has to be able to tell them apart and say so if it cannot take one.
  */
 data class SharedContent(
     val text: String?,
     val imageUri: String?,
+    val fileUri: String? = null,
 )
 
 /**
@@ -29,7 +34,7 @@ class ShareInbox {
 
     /** Stage a payload from the share sheet. Fully-empty payloads are ignored. */
     fun offer(content: SharedContent) {
-        if (content.text.isNullOrBlank() && content.imageUri == null) return
+        if (content.text.isNullOrBlank() && content.imageUri == null && content.fileUri == null) return
         _pending.value = content
     }
 

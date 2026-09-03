@@ -265,6 +265,29 @@ class GoldenVectorTest {
                         pr = ProfilePayload(name = "Ann", status = "hiking", avatarHash = hex(bytes(32, 7)), version = 1700L),
                     ),
                 ),
+            // Arbitrary-file attachments (ADR 2026-09.qq2r): the sealed name/size, in both plaintext layouts.
+            // Every fixture above stays byte-identical — the two fields are additive and absent unless set,
+            // which is what makes an image or a voice note's frame the same bytes it was before files existed.
+            "messageContentFile" to
+                MessageContent(
+                    body = "",
+                    attachmentHash = hex(bytes(32, 4)),
+                    attachmentMime = "application/pdf",
+                    attachmentKey = b64(bytes(32, 5)),
+                    attachmentName = "report.pdf",
+                    attachmentSize = 1_400_000L,
+                ).encode(),
+            "messageContentV2File" to
+                compact(
+                    MessageContent(
+                        body = "",
+                        attachmentHash = hex(bytes(32, 4)),
+                        attachmentMime = "application/pdf",
+                        attachmentKey = b64(bytes(32, 5)),
+                        attachmentName = "report.pdf",
+                        attachmentSize = 1_400_000L,
+                    ),
+                ),
         )
 
     private fun compact(content: MessageContent): ByteArray =
@@ -418,6 +441,16 @@ class GoldenVectorTest {
                     "989fa6adb4bbc2c9d0d7de06a50150060d141b222930373e454c535a61686f0250030a11181f262d343b424950575e656c0363416e6e" +
                     "046773656520796f7505f50ba40163416e6e026668696b696e67035820070e151c232a31383f464d545b626970777e858c939aa1a8af" +
                     "b6bdc4cbd2d9e0041906a4",
+                "messageContentFile" to
+                    "a664626f6479606e6174746163686d656e744861736878403034306231323139323032373265333533633433346135313538" +
+                    "35663636366437343762383238393930393739656135616362336261633163386366643664646e6174746163686d656e744d" +
+                    "696d656f6170706c69636174696f6e2f7064666d6174746163686d656e744b6579782c425177544769456f4c7a5939524574" +
+                    "535757426e626e5638673471526d4a2b6d7262533777736e513139343d6e6174746163686d656e744e616d656a7265706f72" +
+                    "742e7064666e6174746163686d656e7453697a651a00155cc0",
+                "messageContentV2File" to
+                    "a5035820040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dd046f6170706c69636174696f6e2f" +
+                    "706466055820050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7de0e6a7265706f72742e706466" +
+                    "0f1a00155cc0",
             )
 
         const val BUNDLE_ENCODED =

@@ -24,6 +24,7 @@ moderation/            TextModerator / ImageModerator interfaces + Verdict types
   WordList               loads assets/moderation/profanity_en.txt
 di/ModerationModule.kt   Koin: binds TextModerator + ImageModerator
 data/BlobRepository.kt   image-moderation hub: send/receive screening + per-hash verdict cache
+data/FileTypes.kt        what bytes ACTUALLY are (§7): the image-signature sniff, apk/archive refusals
 data/blob/BlobVerdictEntity.kt   `blob_verdicts` table (NSFW verdict cached by content hash)
 assets/moderation/       profanity_en.txt, nsfw.tflite (LFS), README.md
 ```
@@ -85,8 +86,9 @@ including why not LiteRT 2.x.)
 identical bytes are scanned once across send/receive):
 
 - **Outbound (context-dependent):** `AttachmentStore.ingest()` always stores the image and reports a
-  flag via `BlobRepository.isImageExplicit(bitmap)`; `ChatViewModel.attach()` then decides by
-  conversation:
+  flag via `BlobRepository.isImageExplicit(bitmap)` — reached from the photo picker, the keyboard, the
+  camera, and from `ingestFile` whenever a picked file's bytes turn out to carry an image signature (§7);
+  `ChatViewModel.attach()` then decides by conversation:
   - **DMs / groups — warn-and-confirm (allowed but discouraged):** a flagged image is **not staged
     until the user confirms** a "send anyway?" dialog (`confirmAttachment` → `confirmFlaggedAttachment()`;
     declining GCs the blob).
@@ -191,44 +193,66 @@ the packfile keeps clones fast. `.tflite` is also kept uncompressed in the APK
   images are shown and a flagged avatar is adopted. Flipping the toggle while a chat is open reveals/hides
   already-received text and images reactively.
 
-## 7. Audio is not screened
+## 7. Audio and files are not screened
 
-**Voice notes ship unscreened.** No on-device model classifies speech, and the app has no cloud
-moderation option — the same constraint stated at the top of this document. So a voice note is stored with
-`MessageEntity.moderation = MODERATION_NONE`, and both screening hooks skip it explicitly by MIME
-(`VoiceAudio.isVoice`; `AttachmentStore.ingestVoice` bypasses the image pipeline entirely and never
-reaches `ImageScreeningService`). The gate is deliberate rather than incidental: `NsfwImageModerator`
+**Voice notes and arbitrary files ship unscreened.** No on-device model classifies speech, nothing at all
+classifies a PDF or a spreadsheet, and the app has no cloud moderation option — the same constraint stated
+at the top of this document. So both are stored with `MessageEntity.moderation = MODERATION_NONE`, and the
+screening hooks skip them explicitly by MIME (`VoiceAudio.isVoice` for audio; anything non-`image/*` for a
+file — `AttachmentStore.ingestVoice` and `ingestFile` bypass the image pipeline entirely and never reach
+`ImageScreeningService`). The gate is deliberate rather than incidental: `NsfwImageModerator`
 would have failed open on undecodable audio bytes anyway, but relying on that would have left a wasted
 decode and a meaningless cached verdict in `blob_verdicts`, and would have read as screening that works.
 
-**The receive-side skip reads local state only, and only for a *sealed* voice note.**
+**One thing files *closed* rather than opened.** Skipping by MIME means a MIME is a way past the classifier,
+and a picker that reports `application/octet-stream` for a JPEG would have been one. So `ingestFile` reads
+the bytes' own signature (`FileTypes.imageMimeOf`) and hands anything that is really an image back to the
+image pipeline — downscaled, re-encoded and screened — whatever it was called. A wrong guess costs nothing:
+a failed decode falls through to storing the file as-is. And on the receive side nothing had to change,
+because `InboundPipeline.onObtained` → `screenEncryptedAttachment` already decrypts and screens **every**
+keyed attachment MIME-blind: an image mislabelled as a file still lands with a cached verdict, and the file
+bubble draws a "may contain sensitive content" line rather than a blur, there being no image to blur.
+
+**The receive-side skip reads local state only, and only for a *sealed non-image*.**
 `MeshBlobStore.saveIncoming` asks `messages.attachmentMimeForHash(hash)` and
 `messages.attachmentKeyForHash(hash)`, never the `LinkFraming.FileHeaderWire.mime` the serving peer wrote
 — that header is unauthenticated and `BlobExchange.onRequest` serves a blob to any neighbour that asks, so
 gating on it let a hostile server switch screening off for its own blob (knit/knit-next#30). Both halves
 matter. The mime alone would not be enough: a Nearby-room attachment is not re-sealed, so *its*
 `attachmentMime` rides in the clear and lands in the row verbatim, which would merely move the spoof from
-any neighbour to the message's author. Requiring a key costs nothing legitimate — the mic is not offered
-in the room (below), so a room attachment is never a voice note — and it states the real reason for the
-skip: a sealed attachment's stored bytes are ciphertext the image decoder cannot read either way. A blob
-with **no** row (a pulled avatar, a group photo, a relayed blob) reads as `null`, `isVoice(null)` is
-false, and it is screened — the safe default, and the only screen those blobs get.
+any neighbour to the message's author. Requiring a key costs nothing legitimate — neither the mic nor the
+file picker is offered in the room (below), so a room attachment is always an image — and it states the
+real reason for the skip: a sealed attachment's stored bytes are ciphertext the image decoder cannot read
+either way, which is why the real screen for one happens after decryption in `InboundPipeline.onObtained`.
+A blob with **no** row (a pulled avatar, a group photo, a relayed blob) reads as `null`, is therefore not
+an image by this test, and is screened — the safe default, and the only screen those blobs get.
 
 What protects a recipient instead:
 
-- **Voice notes are not offered in the Nearby room.** The composer's mic button appears only in DMs and
-  groups (`MessageInput`'s `voiceEnabled`, off when `ChatUiState.isRoom`). The room is the one surface that
+- **Neither is offered in the Nearby room.** The composer's mic and paperclip buttons appear only in
+  DMs and groups (`MessageInput`'s `voiceEnabled` and `fileEnabled`, both off when `ChatUiState.isRoom` —
+  and the room is the *only* thing that hides either).
+  The room is the one surface that
   floods unencrypted to strangers in range, and it is where this document's own threat model is weakest —
-  it is also where the image classifier *hard-blocks* rather than merely confirming. Unscreenable audio
-  broadcast to everyone nearby is the combination worth refusing, so it is refused.
+  it is also where the image classifier *hard-blocks* rather than merely confirming. Unscreenable content
+  broadcast to everyone nearby is the combination worth refusing, so it is refused. That refusal is load
+  bearing twice over: the receive-side skip above and `docs/NEXT_WIRE_BREAK.md`'s first parked item both
+  assume a room attachment is an image.
+- **App packages are never sent, and archives ask before they are saved.** `FileTypes.isInstallable`
+  refuses an `.apk` at ingest — a mesh that moves app packages between strangers is a sideloading channel —
+  and `FileTypes.isRisky` puts a confirmation in front of saving an archive or an executable, saying plainly
+  that Knit cannot look inside it. Knit never offers to *open* a received file (there is no install intent
+  and no content provider serving decrypted bytes, per ADR 029), so the platform's own unknown-sources gate
+  still stands between a saved package and anything running.
 - **Block-sender.** The existing long-press → block flow is unchanged and is the real remedy, consistent
   with the "receiver-side control is the actual protection" framing above.
 - **The Message Requests gate.** A stranger's first DM — voice note or not — is held behind the request
   gate and raises no notification (ADR 009), so an unsolicited voice note from an unknown node cannot
   interrupt.
 
-This is a gap, recorded as one. If a small on-device speech classifier ever becomes practical, the hook
-point already exists: `InboundPipeline.onObtained` decrypts a landed attachment and is where the waveform
+This is a gap, recorded as one, and files widen it: an archive can hold anything and no classifier of any
+kind exists for one. If a small on-device speech classifier ever becomes practical, the hook point already
+exists: `InboundPipeline.onObtained` decrypts a landed attachment and is where the waveform
 derivation runs today, so a verdict could be cached under the same content hash the image path uses, and
 the bubble's tap-to-reveal collapse would need no new UI. Tracked in `.agents/memory/roadmap.md`.
 

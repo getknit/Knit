@@ -195,7 +195,32 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v8 — arbitrary-file attachments (ADR 2026-09.qq2r): `messages.attachmentName` and
+     * `messages.attachmentSize`, the two facts a file bubble needs that an image bubble reads off the pixels.
+     * Both are null for every existing row, which is the right answer — every attachment that predates this
+     * version is an image or a voice note, and both describe themselves. Unlike the voice columns
+     * MIGRATION_4_5 added, these two do arrive off the wire (sealed on `MessageContent`), so a row written by
+     * an older build simply has nothing to put in them. Additive only; the SQL must stay byte-equivalent to
+     * what Room generates for `app/schemas/**/8.json`.
+     */
+    val MIGRATION_7_8 =
+        object : Migration(7, 8) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentName` TEXT DEFAULT NULL")
+                connection.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentSize` INTEGER DEFAULT NULL")
+            }
+        }
+
     /** All migrations, applied by Room in order. */
     val ALL: Array<Migration> =
-        arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+        arrayOf(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+            MIGRATION_4_5,
+            MIGRATION_5_6,
+            MIGRATION_6_7,
+            MIGRATION_7_8,
+        )
 }

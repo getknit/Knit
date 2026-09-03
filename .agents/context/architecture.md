@@ -14,8 +14,8 @@ compileSdk 37.1 (minSdk 29 is the shared data-path floor: BLE L2CAP CoC and the 
 no ICM, `maxSdkVersion=32`) on 29–32; BLE uses the split `BLUETOOTH_*` perms on 31+ and legacy
 `BLUETOOTH`/`BLUETOOTH_ADMIN` on 29–30 — a device with only one of the two radios still meshes over that
 one). It surfaces a "Nearby" broadcast room plus 1:1 DMs and group chats, with profiles, emoji reactions,
-@-mentions, content-addressed image attachments, store-and-forward custody, and on-device content
-moderation.
+@-mentions, content-addressed attachments (images, voice notes and arbitrary files), store-and-forward
+custody, and on-device content moderation.
 
 ## Architecture in one screen
 

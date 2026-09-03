@@ -646,6 +646,53 @@ class MeshManagerTest {
             val row = rig.saved.single()
             assertNull(row.voiceDurationMs)
             assertNull(row.voicePeaks)
+            assertNull("nor is it a file", row.attachmentName)
+            assertNull(row.attachmentSize)
+        }
+
+    @Test
+    fun aFilesNameAndSizeAreSealedAndLandOnTheCiphertextRow() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The same trap the voice test pins, for the two facts a file cannot derive: the name and size are
+            // known at ingest against the *plaintext* hash, while the row records the *ciphertext* one. And
+            // the half that is unique to files: both must be inside the seal. A cleartext filename would tell
+            // every relay and spool what the message is about, which is a louder signal than the mime ADR 035
+            // deliberately removed.
+            val rig = Rig(backgroundScope)
+            rig.pin(rig.bob)
+            val plainHash = "plain-file-hash"
+            coEvery { rig.blobs.bytes(plainHash) } returns "%PDF-1.7 bytes".toByteArray()
+
+            val ok =
+                rig.manager.sendChat(
+                    "",
+                    attachment =
+                        AttachmentStore.Ingested(
+                            hash = plainHash,
+                            mime = "application/pdf",
+                            name = "quarterly-report.pdf",
+                            sizeBytes = 1_400_000,
+                        ),
+                    recipientId = rig.bob.nodeId,
+                )
+            advanceUntilIdle()
+
+            assertTrue(ok)
+            val row = rig.saved.single()
+            val frame = rig.sentChatFrames().single()
+            val content = WireCodec.decodePayload<ChatContent>(frame.payload)!!
+
+            assertEquals("the row is addressed by the ciphertext hash", content.attachmentHash, row.attachmentHash)
+            assertNotEquals(plainHash, row.attachmentHash)
+            assertEquals("and the name landed on that row anyway", "quarterly-report.pdf", row.attachmentName)
+            assertEquals(1_400_000L, row.attachmentSize)
+
+            val header = MessageCrypto.header(frame.id, rig.me.nodeId, frame.sentAt, rig.bob.nodeId)
+            val opened = rig.bob.crypto.open(content.enc!!, header, rig.bob.nodeId)!!
+            assertEquals("the recipient reads the name from inside the seal", "quarterly-report.pdf", opened.attachmentName)
+            assertEquals(1_400_000L, opened.attachmentSize)
+            assertEquals("application/pdf", opened.attachmentMime)
+            assertNull("and a carrier learns neither the name nor the type", content.attachmentMime)
         }
 
     @Test

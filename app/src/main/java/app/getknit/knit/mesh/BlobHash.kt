@@ -18,3 +18,25 @@ fun isValidBlobHash(s: String): Boolean = BLOB_HASH_REGEX.matches(s)
 
 /** Lowercase-hex SHA-256 of [bytes] — the canonical content address used across the mesh blob layer. */
 fun sha256Hex(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+/**
+ * The extension a blob's short-lived transfer file gets, from its [mime].
+ *
+ * Cosmetic — the file is named `<hash>.<ext>` on the way out and `attach-<hash>.<ext>` on the way in, and
+ * both ends derive it independently from the mime rather than reading a name off the wire. It lives here
+ * because it used to live in *two* places (`MeshBlobStore` for the send side, `FramedLink` for the receive
+ * side) as identical `when` blocks that had to be extended together; arbitrary files gave that duplication
+ * a third arm to get wrong, so it became one function instead.
+ *
+ * `jpg` stays the fallback for an unknown image-ish type — it is the universal default across the blob layer
+ * (`ScopeSync.FALLBACK_MIME`, `MeshManager.AVATAR_MIME`) — but anything that is plainly not media now lands
+ * on `bin` rather than being called a photo.
+ */
+fun transferExtForMime(mime: String): String =
+    when (val lower = mime.lowercase()) {
+        "image/gif" -> "gif"
+        "image/png" -> "png"
+        "image/webp" -> "webp"
+        "audio/aac" -> "aac"
+        else -> if (lower.startsWith("image/")) "jpg" else "bin"
+    }

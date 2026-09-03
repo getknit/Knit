@@ -94,10 +94,23 @@ object Protocol {
      */
     const val CAP_CRYPTO_V3 = 0x100L
 
+    /**
+     * Arbitrary-file attachments: this build understands
+     * [app.getknit.knit.mesh.crypto.MessageContent.attachmentName]/`attachmentSize` and renders a
+     * non-image, non-audio attachment as a named file rather than handing it to the image loader.
+     *
+     * A send-time input like [CAP_RATCHET] — the composer offers "File" only toward a pinned profile
+     * carrying this bit (every member's, for a group). Without it the two new fields are dropped by
+     * `ignoreUnknownKeys` and the recipient gets an attachment it cannot name or open, which is worse
+     * than not offering the send. Deliberately *not* a privacy control: those must never be gated on a
+     * peer's own unauthenticated claim (`.agents/memory/roadmap.md`, the `FileHeaderWire.mime` entry).
+     */
+    const val CAP_FILES = 0x200L
+
     /** This build's advertised capability bitfield. */
     const val LOCAL_CAPABILITIES: Long =
         CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT or
-            CAP_INLINE_ACK or CAP_FRAME_TRANSCODE or CAP_CRYPTO_V3
+            CAP_INLINE_ACK or CAP_FRAME_TRANSCODE or CAP_CRYPTO_V3 or CAP_FILES
 
     private const val SEP = '|'
 

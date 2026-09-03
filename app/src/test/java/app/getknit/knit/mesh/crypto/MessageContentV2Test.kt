@@ -132,4 +132,46 @@ class MessageContentV2Test {
         val unknownLabel = byteArrayOf(0xA2.toByte(), 0x01, 0x62, 'h'.code.toByte(), 'i'.code.toByte(), 0x18, 0x63, 0x01)
         assertEquals("hi", checkNotNull(MessageContentV2.decode(unknownLabel)).body)
     }
+
+    @Test
+    fun aFileAttachmentRoundTripsItsNameAndSize() {
+        val file =
+            MessageContent(
+                body = "",
+                attachmentHash = hash,
+                attachmentMime = "application/pdf",
+                attachmentKey = key,
+                attachmentName = "report.pdf",
+                attachmentSize = 1_400_000L,
+            )
+        val back = roundTrip(file)
+        assertEquals("report.pdf", back.attachmentName)
+        assertEquals(1_400_000L, back.attachmentSize)
+        assertEquals("application/pdf", back.attachmentMime)
+    }
+
+    /** The two file labels are additive: an image's compact bytes must not move because they exist. */
+    @Test
+    fun anImageAttachmentCarriesNeitherLabel() {
+        val image = MessageContent(body = "", attachmentHash = hash, attachmentMime = "image/jpeg", attachmentKey = key)
+        val bytes = checkNotNull(MessageContentV2.encodeOrNull(image))
+        // map(3): hash, mime, key — labels 14/15 absent, so no byte of an image frame changed.
+        assertEquals(0xA3, bytes[0].toInt() and 0xFF)
+        val back = roundTrip(image)
+        assertNull(back.attachmentName)
+        assertNull(back.attachmentSize)
+    }
+
+    /** A name is normalized on the way out of the codec, not trusted from whoever encoded it. */
+    @Test
+    fun aHostileNameIsRepairedOnDecode() {
+        val hostile =
+            MessageContent(
+                body = "",
+                attachmentHash = hash,
+                attachmentKey = key,
+                attachmentName = "../../etc/passwd",
+            )
+        assertEquals("....etcpasswd", roundTrip(hostile).attachmentName)
+    }
 }

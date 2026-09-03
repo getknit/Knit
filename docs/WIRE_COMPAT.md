@@ -425,6 +425,41 @@ after it shipped. No field, no `type`, no ctl, no capability bit, no DB change (
 was already cleartext; a sealed reaction's size now varies by up to 61 B with the emoji (229 B → 261 B for
 the longest sequence, two LoRa packets instead of one), a weak hint that a reaction is a sequence.
 
+**Counter-precedent — the first feature since ADR 035 that *does* spend a field, and why (arbitrary files,
+ADR 2026-09.qq2r).** Two entries above say the expected wire change turned out to be unnecessary. This one
+says when it isn't, so the rule reads as a rule rather than as "never add a field". A file attachment is an
+ordinary attachment with an arbitrary MIME — that half is free, exactly as ADR 034's audio MIME was — but it
+also needs a **name**, and a name is not a pure function of bytes both ends hold. `%PDF-1.7…` does not say
+`quarterly-report.pdf`. Derive-don't-carry has nothing to derive from, so `MessageContent.attachmentName` and
+`attachmentSize` were spent, at compact labels **14** and **15** (12/13 stay reserved for `pad`/`gk`).
+
+Both are nullable and omitted while null, so every prior `GoldenVectorTest` fixture is byte-identical — an
+image or a voice note frame did not move, which is the executable half of "additive". `ScopeVectorTest` and
+`SpoolRecordsTest` are untouched: the spool plane addresses attachments by hash and has never carried a type
+at all.
+
+Three constraints came with them, all worth keeping:
+
+- **Sealed only.** `ChatContent` is unchanged. A filename is a *louder* signal to a blind carrier than the
+  MIME ADR 035 deliberately removed — it is frequently the subject of the message — so it never rides
+  cleartext. This is also what keeps `docs/NEXT_WIRE_BREAK.md`'s first parked item true: files are not
+  offered in the Nearby room, so "a room attachment is an image" still holds.
+- **Normalized at the decode boundary, not downstream.** `attachmentName` is open sender-supplied text that
+  is drawn, notified and used as a default filename, so both decoders run `AttachmentName.sanitize` — path
+  separators and every control *and Unicode-format* character out (the format category is where the bidi
+  overrides live), capped, truncated through the stem so the extension survives.
+- **`attachmentSize` is a label, never a bound.** It is what the bubble shows before the bytes land; the
+  stored blob's own length supersedes it the moment there is one, and nothing allocates on it
+  (`docs/SPOOL_PROTOCOL.md` C-4.5-8).
+
+The send is gated on a new capability bit, `CAP_FILES` — a send-time input like `CAP_RATCHET`, because a
+build without it drops both fields as unknown keys and renders an attachment it can neither name nor save.
+Gate the *send*, not the affordance: hiding the composer's file item on the same bit made the feature
+invisible for the whole rollout window, since the bit only arrives with the peer's next profile frame.
+Capability-gating is legitimate *here* and forbidden for the `FileHeaderWire.mime` privacy fix for opposite
+reasons: a peer that lies about `CAP_FILES` only breaks its own rendering, while a carrier that lies about a
+privacy bit turns off someone else's protection.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + every branch that
 tests the version (`InboundPipeline.decryptAndDeliver`, `MeshManager`'s inline-ack give-back,

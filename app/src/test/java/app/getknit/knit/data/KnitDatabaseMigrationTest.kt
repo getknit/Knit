@@ -258,4 +258,43 @@ class KnitDatabaseMigrationTest {
                 }
             }
         }
+
+    @Test
+    fun `migrate 7 to 8 keeps messages and leaves their file columns null`() =
+        runTest {
+            // Every attachment that predates v8 is an image or a voice note, and both describe themselves —
+            // so null is not a gap here, it is the correct answer, and it is what selects the image bubble
+            // for those rows. Two rows to pin it: one plain message and one with an image attachment.
+            helper.createDatabase(7).use { c ->
+                c.execSQL(
+                    "INSERT INTO messages (id, senderId, recipientId, conversationId, body, sentAt, received, " +
+                        "receivedVia, mentions, replyToHasAttachment, moderation, pendingKey, kind) " +
+                        "VALUES ('m1','bob','me','bob','hello',1,0,1,'[]',0,0,0,0)",
+                )
+                c.execSQL(
+                    "INSERT INTO messages (id, senderId, recipientId, conversationId, body, sentAt, received, " +
+                        "receivedVia, mentions, attachmentHash, attachmentMime, replyToHasAttachment, moderation, " +
+                        "pendingKey, kind) " +
+                        "VALUES ('m2','bob','me','bob','',2,0,1,'[]','abc','image/jpeg',0,0,0,0)",
+                )
+            }
+            helper.runMigrationsAndValidate(8, listOf(KnitMigrations.MIGRATION_7_8)).use { c ->
+                c.prepare("SELECT id, attachmentName, attachmentSize FROM messages ORDER BY sentAt ASC").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("m1", s.getText(0))
+                    assertTrue(s.isNull(1))
+                    assertTrue(s.isNull(2))
+                    assertTrue(s.step())
+                    assertEquals("m2", s.getText(0))
+                    assertTrue(s.isNull(1))
+                    assertTrue(s.isNull(2))
+                }
+                c.execSQL("UPDATE messages SET attachmentName = 'report.pdf', attachmentSize = 1400 WHERE id = 'm1'")
+                c.prepare("SELECT attachmentName, attachmentSize FROM messages WHERE id = 'm1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("report.pdf", s.getText(0))
+                    assertEquals(1400L, s.getLong(1))
+                }
+            }
+        }
 }

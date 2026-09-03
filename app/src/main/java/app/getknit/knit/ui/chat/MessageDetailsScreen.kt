@@ -183,12 +183,13 @@ private fun MessageSummary(state: MessageDetailsUiState) {
                     }
 
                     state.hasAttachment -> {
-                        stringResource(
-                            if (state.isVoiceNote) {
-                                R.string.message_details_voice
-                            } else {
-                                R.string.message_details_attachment
-                            },
+                        // Every attachment used to read "📷 Photo" here, including voice notes and files.
+                        // One label shared with the chat list, so a file is named and sized in both places.
+                        attachmentLabel(
+                            LocalContext.current,
+                            state.attachmentMime,
+                            state.attachmentName,
+                            state.attachmentSize,
                         )
                     }
 

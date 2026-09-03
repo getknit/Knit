@@ -22,6 +22,9 @@ document:
 
 ### Added
 
+- Send any kind of file in a direct message or group chat, under the same 8 MB limit photos already
+  have. A received file shows its name and size, and saves wherever you point Android's file picker;
+  the Nearby room stays photos only.
 - React with any emoji. Long-press a message and tap the "+" beside the quick reactions to browse or
   search the whole set, and the quick row starts remembering what you actually use instead of the same
   six forever.

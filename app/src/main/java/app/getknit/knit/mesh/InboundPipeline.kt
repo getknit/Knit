@@ -671,7 +671,7 @@ class InboundPipeline(
                         Log.w(TAG, "drop encrypted chat ${env.id}: ${it.message}")
                         null
                     } ?: return
-                deliverChat(env, plaintextContent(content, plain), me, conversationId, plane, plain.attachmentKey)
+                deliverChat(env, plaintextContent(content, plain), me, conversationId, plane, plain)
             }
         }
     }
@@ -763,7 +763,7 @@ class InboundPipeline(
             me,
             conversationId,
             plane,
-            plain.attachmentKey,
+            plain,
             persist = persistWithInlineAcks(env, plain, plane, commit),
         )
     }
@@ -1227,7 +1227,7 @@ class InboundPipeline(
             me,
             conversationId,
             plane,
-            plain.attachmentKey,
+            plain,
             persist = { row -> commit { messages.save(row) } },
         )
     }
@@ -2003,7 +2003,12 @@ class InboundPipeline(
         // first-write-wins: the row keeps the plane it first arrived on, like markReceived keeps the first
         // receipt's.
         plane: DeliveryPlane,
-        attachmentKey: String? = null,
+        // The decrypted content this delivery came from, or null for a cleartext room post. Three facts on a
+        // sealed attachment live only in here and have no cleartext counterpart: its decryption key, and — for
+        // an arbitrary file — its name and byte count (ADR 2026-09.qq2r). Passed whole rather than unpacked
+        // into a row of loose nullable parameters, and read only for those three: [content] stays the shape
+        // the row is built from, so the plaintext and cleartext paths keep one body.
+        sealed: MessageContent? = null,
         // How the built row is persisted. The default inserts only if the row is absent: a re-served frame is
         // the same signed bytes, so it can never carry anything new, while a blind upsert would rewrite the
         // arrival plane, wipe the voice-note metadata setVoiceMeta added after the insert, and — for one of
@@ -2044,7 +2049,9 @@ class InboundPipeline(
                 mentions = MentionStore.encode(content.mentions),
                 attachmentHash = hash,
                 attachmentMime = content.attachmentMime,
-                attachmentKey = attachmentKey,
+                attachmentKey = sealed?.attachmentKey,
+                attachmentName = sealed?.attachmentName,
+                attachmentSize = sealed?.attachmentSize,
                 moderation =
                     if (
                         classifyText(content.body, "incoming", conversationId == Conversations.NEARBY)
@@ -2061,7 +2068,7 @@ class InboundPipeline(
         // otherwise it's screened on arrival ([screenObtainedAttachment]) once the key has been stored.
         if (hash != null) {
             if (blobStore.has(hash)) {
-                screenEncryptedAttachment(hash, attachmentKey)
+                screenEncryptedAttachment(hash, sealed?.attachmentKey)
             } else {
                 blobExchange.want(hash)
                 // Arm the fast plane toward the author — the guaranteed holder — so the pull can ride a NAN
@@ -2081,9 +2088,9 @@ class InboundPipeline(
         if (isNew) {
             if (isAccepted(conversationId, me)) {
                 if (env.senderId != me && content.mentions.mention(me)) {
-                    notifyMention(env, content, conversationId)
+                    notifyMention(env, content, conversationId, sealed?.attachmentName)
                 } else {
-                    notifyIncoming(env, content, conversationId)
+                    notifyIncoming(env, content, conversationId, sealed?.attachmentName)
                 }
             } else if (env.senderId != me) {
                 // A stranger's first DM/group: no per-message alert — just refresh the coalesced
@@ -2230,6 +2237,7 @@ class InboundPipeline(
         env: RelayEnvelope,
         content: ChatContent,
         conversationId: String,
+        fileName: String?,
     ) {
         val me = identity.nodeId()
         val peer = peers.find(env.senderId)
@@ -2238,7 +2246,7 @@ class InboundPipeline(
         val senderLabel = labels.labelFor(env.senderId, peer?.name)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
         // Attachment-only messages have a blank body; show a placeholder so they still notify.
-        val body = content.body.ifBlank { attachmentPreview(content) }
+        val body = content.body.ifBlank { attachmentPreview(content, fileName) }
         val incoming =
             incomingNotification(
                 senderId = env.senderId,
@@ -2257,12 +2265,21 @@ class InboundPipeline(
     /**
      * Notification stand-in for a message whose only content is an attachment, so it still says something
      * useful on the lock screen. Literal strings rather than resources because this layer holds no
-     * `Context` (it is deliberately Android-light, `rules/mesh.md`); they mirror `chat_list_preview_photo`
-     * and `chat_list_preview_voice` and should be changed together with them.
+     * `Context` (it is deliberately Android-light, `rules/mesh.md`); they mirror `chat_list_preview_photo`,
+     * `chat_list_preview_voice` and `chat_list_preview_file` and should be changed together with them.
+     *
+     * A [fileName] wins over the mime because it is the more specific fact and the only one a *file* has:
+     * an arbitrary file's mime is whatever its sender's provider called it, and "📎 application/zip" would be
+     * a worse lock-screen line than the name the sender actually chose. Already normalized on decode
+     * ([app.getknit.knit.mesh.protocol.AttachmentName]), so it is safe to draw.
      */
-    private fun attachmentPreview(content: ChatContent): String =
+    private fun attachmentPreview(
+        content: ChatContent,
+        fileName: String?,
+    ): String =
         when {
             content.attachmentHash == null -> content.body
+            fileName != null -> "📎 $fileName"
             VoiceAudio.isVoice(content.attachmentMime) -> "🎤 Voice message"
             else -> "📷 Photo"
         }
@@ -2272,6 +2289,7 @@ class InboundPipeline(
         env: RelayEnvelope,
         content: ChatContent,
         conversationId: String,
+        fileName: String?,
     ) {
         val me = identity.nodeId()
         val peer = peers.find(env.senderId)
@@ -2279,7 +2297,7 @@ class InboundPipeline(
         val labels = peers.labelIndex()
         val senderLabel = labels.labelFor(env.senderId, peer?.name)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
-        val body = content.body.ifBlank { attachmentPreview(content) }
+        val body = content.body.ifBlank { attachmentPreview(content, fileName) }
         val incoming =
             mentionNotification(
                 senderId = env.senderId,

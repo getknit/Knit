@@ -10,6 +10,7 @@ import app.getknit.knit.mesh.ReceivedDigest
 import app.getknit.knit.mesh.ReceivedFile
 import app.getknit.knit.mesh.isValidBlobHash
 import app.getknit.knit.mesh.protocol.WireCodec
+import app.getknit.knit.mesh.transferExtForMime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -430,7 +431,7 @@ class FramedLink(
                 }
 
                 FileKind.ATTACHMENT -> {
-                    File(cacheDir, "attach-${meta.key}.${extForMime(meta.mime)}")
+                    File(cacheDir, "attach-${meta.key}.${transferExtForMime(meta.mime)}")
                 }
             }
         val cacheRoot = cacheDir.canonicalPath + File.separator
@@ -450,17 +451,6 @@ class FramedLink(
             log("Failed saving ${meta.kind} from $nodeId: ${it.message}")
         }
     }
-
-    // Names the incoming staging file only, so it is cosmetic — but MeshBlobStore keeps an identical copy
-    // for the send side, and the two must be extended together or a blob round-trips under two names.
-    private fun extForMime(mime: String): String =
-        when (mime.lowercase()) {
-            "image/gif" -> "gif"
-            "image/png" -> "png"
-            "image/webp" -> "webp"
-            "audio/aac" -> "aac"
-            else -> "jpg"
-        }
 
     private sealed interface Outbound {
         class Frame(

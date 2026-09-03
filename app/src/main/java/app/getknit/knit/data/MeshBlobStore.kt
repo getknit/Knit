@@ -4,6 +4,7 @@ import android.util.Log
 import app.getknit.knit.mesh.BlobStore
 import app.getknit.knit.mesh.isValidBlobHash
 import app.getknit.knit.mesh.sha256Hex
+import app.getknit.knit.mesh.transferExtForMime
 import app.getknit.knit.moderation.ImageScreeningService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -37,7 +38,7 @@ class MeshBlobStore(
             if (!isValidBlobHash(hash)) return@withContext null
             val bytes = blobs.bytes(hash) ?: return@withContext null
             val mime = blobs.mimeFor(hash) ?: "image/jpeg"
-            val dest = File(ensureDir(), "$hash.${extForMime(mime)}")
+            val dest = File(ensureDir(), "$hash.${transferExtForMime(mime)}")
             if (!dest.exists()) {
                 runCatching { dest.writeBytes(bytes) }.getOrElse { return@withContext null }
             }
@@ -77,14 +78,24 @@ class MeshBlobStore(
             blobs.insert(hash, localMime ?: mime, bytes)
             // Screen the received image on-device and cache the verdict by hash (the UI blurs flagged
             // attachments). Stored regardless, so a false positive never drops content. The one skip is a
-            // voice note we know is E2E: no on-device model can classify speech, and its stored bytes are
-            // ciphertext the image decoder can't read anyway, so handing it over buys a failed decode and
-            // nothing else (docs/CONTENT_MODERATION.md). A **key-less** blob is plaintext — a pulled avatar,
-            // a group photo, or a Nearby-room attachment whose mime rides in the clear and is therefore the
-            // author's own claim — and is always screened, whatever it calls itself. This is the sole screen
-            // those three get: their adoption/blur gates read only the cached verdict.
-            val isSealedVoice = VoiceAudio.isVoice(localMime) && messages.attachmentKeyForHash(hash) != null
-            if (!isSealedVoice) imageScreening.screenImage(hash, bytes)
+            // **sealed non-image** — a voice note, or an arbitrary file (ADR 2026-09.qq2r): its stored bytes
+            // here are ciphertext the image decoder cannot read at all, so handing them over buys a failed
+            // decode and a meaningless cached verdict, and nothing else (docs/CONTENT_MODERATION.md §7).
+            // Skipping is not a decision to leave those unscreened — `InboundPipeline.onObtained` decrypts
+            // every keyed attachment and screens the plaintext, MIME-blind, which is what catches an image
+            // mislabelled as a file.
+            //
+            // Both halves of the test matter, and neither is redundant (knit/knit-next#30). The mime is read
+            // from **our own row**, never the serving peer's `FileHeaderWire` — `BlobExchange.onRequest`
+            // serves a blob to any neighbour that asks, so that header is the asker's choice. Requiring a
+            // key on top of it is what keeps the row's own mime trustworthy: a Nearby-room attachment is not
+            // re-sealed, so *its* mime rides in the clear and lands in the row verbatim, which would move
+            // the spoof from any neighbour to the message's author. That costs nothing legitimate only
+            // because the room offers neither the mic nor the file picker, so a room attachment is always an
+            // image. A **key-less** blob — a pulled avatar, a group photo, a relayed blob with no row at all
+            // — is always screened, whatever it calls itself; this is the sole screen those get.
+            val isSealedOpaque = !isImage(localMime) && messages.attachmentKeyForHash(hash) != null
+            if (!isSealedOpaque) imageScreening.screenImage(hash, bytes)
             src.delete() // drop the plaintext staging copy now that the bytes are encrypted
             fileFor(hash)
         }
@@ -96,17 +107,12 @@ class MeshBlobStore(
 
     private fun ensureDir(): File = transferDir.apply { if (!exists()) mkdirs() }
 
-    // Only names the short-lived transfer temp file, so it is cosmetic — but FramedLink keeps an identical
-    // copy for the receive side, and the two must be extended together or a blob round-trips under two
-    // different names.
-    private fun extForMime(mime: String): String =
-        when (mime.lowercase()) {
-            "image/gif" -> "gif"
-            "image/png" -> "png"
-            "image/webp" -> "webp"
-            "audio/aac" -> "aac"
-            else -> "jpg"
-        }
+    /**
+     * Whether [mime] names something the NSFW classifier could plausibly decode. A **null** mime — no row
+     * names this hash — is deliberately not an image and yet is still screened: the caller pairs this with
+     * the key test, and a row-less blob has no key either, so it falls to the safe side.
+     */
+    private fun isImage(mime: String?): Boolean = mime != null && mime.startsWith("image/")
 
     private companion object {
         const val TAG = "MeshBlobStore"

@@ -111,7 +111,11 @@ class FrameTranscoderTest {
                     pubKey = bundle,
                     deviceTag = hex(bytes(8, 8)),
                     protoVersion = Protocol.VERSION,
-                    capabilities = Protocol.LOCAL_CAPABILITIES,
+                    // A pinned literal, not Protocol.LOCAL_CAPABILITIES: the vectors below freeze the
+                    // transcoder's *layout*, and capability bits are append-only, so reading the live
+                    // bitfield made every new bit look like a layout change and rewrite a frozen vector.
+                    // The value is the bitfield as of the transcoder's own release; it never needs updating.
+                    capabilities = PINNED_CAPABILITIES,
                     prekey = PrekeyInfo(id = 1, pub = bytes(32, 5), sig = bytes(64, 6)),
                     version = SENT_AT,
                 ),
@@ -457,6 +461,9 @@ class FrameTranscoderTest {
 
     private companion object {
         const val SENT_AT = 1_755_700_000_000L
+
+        /** The advertised capability bitfield when the 0x05 transcoder shipped — see the profile fixture. */
+        const val PINNED_CAPABILITIES = 0x1FFL
 
         /** Transcoded bytes of six fixtures — schema 1, frozen. */
         val GOLDEN =

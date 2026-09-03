@@ -17,6 +17,7 @@ import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.ui.chat.attachmentPreview
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -202,13 +203,7 @@ class MessageRequestsViewModel(
                 }
 
                 message.attachmentHash != null -> {
-                    context.getString(
-                        if (VoiceAudio.isVoice(message.attachmentMime)) {
-                            R.string.chat_list_preview_voice
-                        } else {
-                            R.string.chat_list_preview_photo
-                        },
-                    )
+                    attachmentPreview(context, message)
                 }
 
                 else -> {

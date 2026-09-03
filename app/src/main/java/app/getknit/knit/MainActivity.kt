@@ -151,14 +151,19 @@ class MainActivity : ComponentActivity() {
         // A shared text that IS a contact link is an import, not a message draft — the Android-idiomatic
         // route for a link on 12+, where an unverified https link opens in the browser rather than here.
         if (contactLinkFrom(intent.action, null, text) != null) return
-        // EXTRA_STREAM is only meaningful (and read-granted) for the image/* filter we declare.
-        val imageUri =
-            if (intent.type?.startsWith("image/") == true) {
-                IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)?.toString()
-            } else {
-                null
-            }
-        shareInbox.offer(SharedContent(text = text, imageUri = imageUri))
+        // EXTRA_STREAM is read-granted for any stream our filters accept, which since ADR 2026-09.qq2r is
+        // any type at all. The split is by *destination*, not by grant: an image can be attached in any
+        // thread, while a file is offered only in DMs and groups, so the two ride separate fields and the
+        // chat screen says so when it cannot take one.
+        val stream = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)?.toString()
+        val isImage = intent.type?.startsWith("image/") == true
+        shareInbox.offer(
+            SharedContent(
+                text = text,
+                imageUri = stream?.takeIf { isImage },
+                fileUri = stream?.takeIf { !isImage },
+            ),
+        )
     }
 
     companion object {

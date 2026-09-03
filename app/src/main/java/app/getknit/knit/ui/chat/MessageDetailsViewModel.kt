@@ -8,7 +8,6 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
-import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
@@ -83,8 +82,12 @@ data class MessageDetailsUiState(
     val vanished: Boolean = false,
     val body: String = "",
     val hasAttachment: Boolean = false,
-    // True when that attachment is a voice note, so the body line names it as one rather than as a photo.
-    val isVoiceNote: Boolean = false,
+    // The attachment's MIME and (for a file) the name and byte count the sender gave it, so the body line
+    // can name it rather than calling every attachment a photo. Held as the raw fields rather than a
+    // rendered string because the screen has the `Context` and this class deliberately does not.
+    val attachmentMime: String? = null,
+    val attachmentName: String? = null,
+    val attachmentSize: Long? = null,
     val moderationFlagged: Boolean = false,
     val mine: Boolean = false,
     val senderName: String = "",
@@ -204,7 +207,9 @@ class MessageDetailsViewModel(
                         messageId = messageId,
                         body = message.body,
                         hasAttachment = message.attachmentHash != null,
-                        isVoiceNote = VoiceAudio.isVoice(message.attachmentMime),
+                        attachmentMime = message.attachmentMime,
+                        attachmentName = message.attachmentName,
+                        attachmentSize = message.attachmentSize,
                         moderationFlagged = hideSensitive && message.moderation == MessageEntity.MODERATION_TEXT_FLAGGED,
                         mine = message.senderId == me,
                         senderName = directory.label(message.senderId).text,

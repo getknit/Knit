@@ -54,6 +54,7 @@ fun peer(
     pubKey: String? = null,
     verified: Boolean = false,
     updatedAt: Long = 0L,
+    capabilities: Long? = null,
 ): PeerEntity =
     PeerEntity(
         nodeId = nodeId,
@@ -62,6 +63,7 @@ fun peer(
         pubKey = pubKey,
         verified = verified,
         updatedAt = updatedAt,
+        capabilities = capabilities,
     )
 
 fun group(

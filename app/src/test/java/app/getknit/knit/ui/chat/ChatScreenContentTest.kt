@@ -2,16 +2,21 @@ package app.getknit.knit.ui.chat
 
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,18 +36,21 @@ class ChatScreenContentTest {
     private var attaches = 0
     private var cameras = 0
     private var cancelledReply = 0
+    private var files = 0
 
     private fun content(
         input: String,
         replyingTo: ReplyRef? = null,
+        state: ChatUiState = ChatUiState(isRoom = true, myNodeId = "me"),
+        pendingAttachment: AttachmentStore.Ingested? = null,
     ): @androidx.compose.runtime.Composable () -> Unit =
         {
             KnitTheme {
                 ChatScreenContent(
                     conversationId = Conversations.NEARBY,
-                    state = ChatUiState(isRoom = true, myNodeId = "me"),
+                    state = state,
                     inputState = TextFieldState(input),
-                    pendingAttachment = null,
+                    pendingAttachment = pendingAttachment,
                     replyingTo = replyingTo,
                     now = 1_700_000_000_000L,
                     onBack = {},
@@ -51,6 +59,7 @@ class ChatScreenContentTest {
                     onSend = { sends++ },
                     onAttachClick = { attaches++ },
                     onCameraClick = { cameras++ },
+                    onFileClick = { files++ },
                     onClearAttachment = {},
                     onReceiveImage = {},
                     onTyping = {},
@@ -112,6 +121,78 @@ class ChatScreenContentTest {
 
         assertEquals(0, cameras)
         assertEquals(1, sends)
+    }
+
+    /**
+     * The file picker is its own control in the field beside the mic, not a menu behind the trailing
+     * button's long press. The first cut hid it behind that gesture and it was unfindable; worse, it was
+     * also gated on the peer's advertised capability, so it was frequently not there at all.
+     */
+    @Test
+    fun theAttachFileButtonIsOfferedOutsideTheRoomAndOpensThePicker() {
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = false, myNodeId = "me", canSendFile = true)))
+
+        compose.onNodeWithTag("chat_attach_file").performClick()
+
+        assertEquals(1, files)
+        assertEquals(0, cameras)
+        assertEquals(0, attaches)
+    }
+
+    /**
+     * The floor the ATF suite (and Play's pre-launch report) enforces: a 48x48dp touch target. The two
+     * inline buttons sit flush against each other with no spacer, so this size *is* the spacing — the gap
+     * a reader sees between the paperclip and the mic is the 12dp inset a 24dp glyph needs inside a 48dp
+     * target, not padding that could be trimmed. Shrink the box and the a11y suite fails.
+     */
+    @Test
+    fun theAttachFileButtonKeepsAFullTouchTarget() {
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = false, myNodeId = "me", canSendFile = true)))
+
+        val bounds = compose.onNodeWithTag("chat_attach_file").getUnclippedBoundsInRoot()
+        assertTrue("width ${bounds.right - bounds.left} < 48dp", (bounds.right - bounds.left) >= 48.dp)
+        assertTrue("height ${bounds.bottom - bounds.top} < 48dp", (bounds.bottom - bounds.top) >= 48.dp)
+    }
+
+    @Test
+    fun theRoomOffersNoAttachFileButton() {
+        compose.setContent(content(input = ""))
+
+        compose.onNodeWithTag("chat_attach_file").assertDoesNotExist()
+    }
+
+    /** The long press keeps the camera it has always had — the file picker did not take that gesture. */
+    @Test
+    fun theAttachFileButtonDoesNotDisplaceTheCameraLongPress() {
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = false, myNodeId = "me", canSendFile = true)))
+
+        compose.onNodeWithTag("chat_send").performTouchInput { longClick() }
+
+        assertEquals(1, cameras)
+        assertEquals(0, files)
+    }
+
+    /**
+     * A staged file has nothing to thumbnail, and handing its bytes to the image loader drew a blank
+     * square with only the ✕ on it — it read as broken rather than staged.
+     */
+    @Test
+    fun aStagedFileShowsItsNameAndSizeRatherThanAnEmptyThumbnail() {
+        compose.setContent(
+            content(
+                input = "",
+                state = ChatUiState(isRoom = false, myNodeId = "me", canSendFile = true),
+                pendingAttachment =
+                    AttachmentStore.Ingested(
+                        hash = "h",
+                        mime = "application/pdf",
+                        name = "quarterly-report.pdf",
+                        sizeBytes = 1_400_000,
+                    ),
+            ),
+        )
+
+        compose.onNodeWithText("quarterly-report.pdf", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test

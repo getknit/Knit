@@ -23,22 +23,23 @@ fun quoteAuthorLabel(
  * or when [body] is blank (an attachment-only original — the quote shows a "photo" placeholder instead),
  * else the body flattened to a single line and capped at [cap] characters.
  *
- * [voiceLabel] is the one exception, and the reason this takes a label rather than deciding for itself. A
- * quoted **voice note** must not read as "📷 Photo", but [ReplyRef] carries no MIME — only `hasAttachment` —
- * so a recipient cannot tell the two apart from the wire. Rather than spend an additive wire field on a
- * cosmetic label, the sender writes the label into the snippet, which is already a free-text string whose
- * documented job is to describe the quoted message. The cost, stated: a cross-locale quote shows the label
- * in the *sender's* language. If that ever matters, the fix is a nullable `ReplyRef.attachmentMime`, legal
+ * [attachmentLabel] is the one exception, and the reason this takes a label rather than deciding for itself.
+ * A quoted **voice note** or **file** must not read as "📷 Photo", but [ReplyRef] carries no MIME and no name
+ * — only `hasAttachment` — so a recipient cannot tell them apart from the wire. Rather than spend an additive
+ * wire field on a cosmetic label, the sender writes the label into the snippet, which is already a free-text
+ * string whose documented job is to describe the quoted message. The cost, stated: a cross-locale quote shows
+ * the label in the *sender's* language, and a quoted file's name crosses in the snippet even though the file
+ * itself may never be fetched. If either ever matters, the fix is a nullable `ReplyRef.attachmentMime`, legal
  * under `docs/WIRE_COMPAT.md` rule 1.
  */
 fun buildReplySnippet(
     body: String,
     flagged: Boolean,
-    voiceLabel: String? = null,
+    attachmentLabel: String? = null,
     cap: Int = REPLY_SNIPPET_MAX,
 ): String =
     when {
         flagged -> ""
-        body.isBlank() && voiceLabel != null -> voiceLabel
+        body.isBlank() && attachmentLabel != null -> attachmentLabel.take(cap)
         else -> normalizeSingleLine(body).take(cap)
     }

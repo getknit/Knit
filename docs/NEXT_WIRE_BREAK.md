@@ -44,7 +44,7 @@ Current values, for the diff you will write:
 | Wi-Fi Aware service name | `WifiAwareTransport.SERVICE_NAME` | `_knitmesh1._tcp` |
 | BLE service UUID | `BleConstants.SERVICE_UUID` | `0xFE30` |
 | Protocol version | `Protocol.VERSION` | `1` |
-| DB version | `KnitDatabase` `version` | `6` (migrate forward, never wipe) |
+| DB version | `KnitDatabase` `version` | `8` (migrate forward, never wipe) |
 
 Plus, every time: regenerate `GoldenVectorTest` fixtures; check whether `ScopeVectorTest` /
 `SpoolRecordsTest` move (and if so, regenerate `knit-spool`'s in the same commit); update
@@ -79,6 +79,14 @@ room (ADR 034), so a room attachment is an image, and `image/jpeg` is already th
 `ScopeSync.FALLBACK_MIME`, `MeshBlobStore.fileFor` and `AVATAR_MIME`. Removing the field also retires the
 one fingerprint ADR 035 introduced — `attachmentHash` present with `attachmentMime` absent currently marks
 a patched build.
+
+**Still true after arbitrary files (ADR 2026-09.qq2r), and deliberately so.** Files widened the type set the
+app can send, which is exactly the change that could have invalidated "a room attachment is an image" — so
+they are not offered in the room, for the same reason voice notes are not (nothing on the device screens
+one, and the room floods unencrypted to strangers). The composer's file item is off whenever
+`ChatUiState.isRoom`, the same one-flag shape as `voiceEnabled`. If that is ever reversed, this item's
+justification goes with it — and so does `MeshBlobStore.saveIncoming`'s screening skip, which relies on the
+identical assumption.
 
 **Watch out.** `MessageContent.attachmentMime` (inside the ciphertext) is a *different* field and stays —
 it is where the real value has lived since ADR 035. Do not let a mechanical rename or a broad grep take

@@ -27,7 +27,6 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.message.replyRef
-import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.relay.AttachmentRelay
 import app.getknit.knit.data.relay.RelayFacts

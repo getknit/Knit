@@ -1,7 +1,6 @@
 package app.getknit.knit.ui.chat
 
 import android.text.format.Formatter
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,7 +51,6 @@ import app.getknit.knit.data.FileTypes
  * It means the recipient's own decoder read these bytes as an explicit image despite the type the file
  * claims, which is worth saying before they save it under whatever name the sender chose.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FileAttachmentBubble(
     name: String?,

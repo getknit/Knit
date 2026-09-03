@@ -8,7 +8,6 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
-import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind

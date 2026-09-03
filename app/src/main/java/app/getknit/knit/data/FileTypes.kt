@@ -81,10 +81,7 @@ object FileTypes {
     private fun ByteArray.matchesAt(
         prefix: ByteArray,
         offset: Int,
-    ): Boolean {
-        if (size < offset + prefix.size) return false
-        return prefix.indices.all { this[offset + it] == prefix[it] }
-    }
+    ): Boolean = size >= offset + prefix.size && prefix.indices.all { this[offset + it] == prefix[it] }
 
     private fun ascii(text: String): ByteArray = text.toByteArray(Charsets.US_ASCII)
 

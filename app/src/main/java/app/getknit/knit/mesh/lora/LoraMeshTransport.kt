@@ -633,11 +633,12 @@ internal class LoraMeshTransport(
     }
 
     /**
-     * Serves a far gateway the frames its OFFER shows it is missing. Bounded four ways, deliberately: the
-     * per-publisher hourly cap below, the per-sighting [BACKFILL_LIMIT], the sig dedup (a frame already on
-     * the air this window is skipped), and — the one that actually matters — the BRIDGE airtime budget in
-     * [LoraAirtime]. Without the first, a node that re-offers an empty set could walk us through our whole
-     * custody set on the air; without the last, a busy bridge would crowd out live chat.
+     * Serves a far gateway the frames its OFFER shows it is missing. Bounded three ways, deliberately: the
+     * per-publisher hourly cap below, the per-sighting [BACKFILL_LIMIT], and — the one that actually
+     * matters — the BRIDGE airtime budget in [LoraAirtime]. Without the first, a node that re-offers an
+     * empty set could walk us through our whole custody set on the air; without the last, a busy bridge
+     * would crowd out live chat. The sig dedup is deliberately **not** a fourth: see [serveOne]. What it
+     * cost us was the repair, what it saved is at most a duplicate frame the receiver's SeenSet drops.
      */
     private suspend fun serveBackfill(offer: LoraCtl.Offer) {
         if (currentConfig?.bridge != true || !mayTransmit()) return
@@ -671,11 +672,17 @@ internal class LoraMeshTransport(
     }
 
     /**
-     * Enqueues one backfilled frame; false when it can't ride (too big, or already on the air this window).
+     * Enqueues one backfilled frame; false when it can't ride (too big, or a link already covers it).
      *
-     * Deliberately **not** gated on [profileSeen]: this is the digest-driven repair path, so a far gateway
-     * that says it lacks a profile must be served one even though the fan-out has stopped re-offering it to
-     * the horizon at large (ADR 057). `LoraFramePolicy.backfillRank` already serves profiles first.
+     * Deliberately gated by **neither** dedup set. This is the digest-driven repair path: the offer is
+     * positive evidence that the far gateway lacks this exact frame, which outranks either set's guess that
+     * we need not send it. [profileSeen] was exempted first (ADR 057) because the fan-out stops re-offering
+     * a publish and a far pocket cannot ask for one — this plane refuses `keyreq`. [sigSeen] is exempt for
+     * the same reason (ADR 2026-09.y8pu): it records that we *transmitted*, and on a plane with no acks that
+     * is not evidence anyone *heard* — a fan-out into an empty sky spends the slot exactly as a heard one
+     * does, and for the ten minutes after it the repair path skipped the frame it was there to repair.
+     * Still **recorded**, so a live fan-out inside the window doesn't duplicate what the bridge just queued.
+     * `LoraFramePolicy.backfillRank` already serves profiles first.
      */
     private fun serveOne(wire: WireEnvelope): Boolean {
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return false
@@ -685,10 +692,7 @@ internal class LoraMeshTransport(
         }
         val label = "bridge:${env.id}"
         val parts = encodeOrNull(wire, label) ?: return false
-        if (!sigSeen.add(dedupKey(wire, env))) {
-            metrics.onLoraSuppressed()
-            return false
-        }
+        sigSeen.add(dedupKey(wire, env)) // recorded for the fan-out's benefit, never consulted here — see the kdoc
         // Its natural class, so a room post still cannot evict a DM in the queue, but the BRIDGE bucket, so
         // every byte of it is metered as the backfill it is.
         enqueue(parts, label, classOf(env, FanoutHint.CONTENT), AirBucket.BRIDGE)

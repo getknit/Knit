@@ -94,7 +94,11 @@ doc). **Don't start a deferred item without explicit direction.**
   closes the **multi-board-per-clique** deferral above, an airtime governor reading the board's region and
   modem preset, and digest-driven backfill of what a far gateway's offer shows it lacks — behind
   `SettingsStore.loraBridgeEnabled` (default on). Live traffic already crossed before this and was not
-  rebuilt. **Still owed:** the **four-device two-pocket trial** in `context/lora-bridge.md`. **Airtime shaping
+  rebuilt. **Still owed:** the **four-device two-pocket trial** in `context/lora-bridge.md`. **The backfill
+  no longer suppresses itself** (2026-09-02, ADR 2026-09.y8pu): `serveOne` consulted the same 10-min `sigSeen`
+  set the fan-out spends, so a frame fanned out of range was skipped by the one path that could repair it —
+  field-observed as a Nearby-room post that never arrived after the boards came back into range. Still owed:
+  the two-board confirmation on hardware. **Airtime shaping
   SHIPPED** (2026-08-27, ADR 054): the recipient gate (a DM-form frame to a linked peer or to self never rides
   the board), a 15-min budget window at the same 5 %, a `TICK` class that sheds first and never spends a
   window's tail, coalesced DM receipts (`DmAckCoalescer`, ≤ 45 s hold, one tick per burst) piggybacked on a

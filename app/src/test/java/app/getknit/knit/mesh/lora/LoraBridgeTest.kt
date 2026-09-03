@@ -301,9 +301,8 @@ class LoraBridgeTest {
 
             // A far pocket comes up afterwards, having never heard it — and cannot ask for it, since this
             // plane refuses `keyreq`. Its offer names what it holds, and the repair path must still answer.
-            // Past SIG_TTL_MS, the separate 10-minute gate the fan-out already consumed for this signature.
-            advanceTimeBy(LoraMeshTransport.SIG_TTL_MS + 60_000)
-            runCurrent()
+            // Deliberately inside SIG_TTL_MS as well: since ADR 2026-09.y8pu neither dedup set gates the
+            // repair, so this needs no wait to skip past the signature the unheard fan-out already recorded.
             val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
             b.transport.start()
             runCurrent()
@@ -313,6 +312,48 @@ class LoraBridgeTest {
             runCurrent()
 
             assertTrue("the backfill still repairs a profile a far pocket lacks", b.received.any { it.envelope.id == idOf(carol) })
+        }
+
+    /**
+     * The field failure this exists for (ADR 2026-09.y8pu, Pixel 9 / Pixel 7, 2026-09-02): a Nearby-room post
+     * sent while the only other board was out of LoRa range, still undelivered after coming back into range.
+     *
+     * The fan-out put it on the air to an empty sky and recorded its signature in [LoraMeshTransport.sigSeen]
+     * exactly as a heard transmission would — this plane has no acks, so the two are indistinguishable there.
+     * For the ten minutes that followed, the one path that could repair it skipped it. A far gateway's offer
+     * is positive evidence the frame did not arrive, so it now outranks that record.
+     */
+    @Test
+    fun aRoomPostFannedOutToAnEmptySkyIsStillBackfilledInsideTheDedupWindow() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            // Pocket A is one phone with a board and no BLE/NAN links at all — so every publisher it hears
+            // is a far gateway, and it is ACTIVE with no rival to stand down for.
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+
+            val room = frame("alice", body = "posted while out of range", sentAt = testScheduler.currentTime)
+            a.custody.held += room
+            a.transport.fastFanout(room)
+            advanceTimeBy(5_000)
+            runCurrent()
+
+            // Back in LoRa range a couple of minutes later — well inside the 10-minute signature window that
+            // the fan-out nobody heard has already spent.
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            b.transport.start()
+            runCurrent()
+            advanceTimeBy(toFirstOffer)
+            runCurrent()
+            advanceTimeBy(30_000)
+            runCurrent()
+
+            assertTrue(
+                "the room post is inside SIG_TTL_MS of its own unheard fan-out",
+                testScheduler.currentTime < LoraMeshTransport.SIG_TTL_MS,
+            )
+            assertTrue("the backfill still carries it across", b.received.any { it.envelope.id == idOf(room) })
         }
 
     @Test

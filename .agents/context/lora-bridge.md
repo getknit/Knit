@@ -200,9 +200,21 @@ prefixes (`StoreDigest.hash64` truncated), never fragmented, one packet. `LoraGo
 equality** (a superset has not said what we needed to say). On a far gateway's OFFER: `BridgeFrameSource`
 (`MeshManager` over `ForwardStore.liveFrames`, already TTL- and quota-bounded, so no extra age gate) returns
 what the prefixes don't name, ranked profile → DM → room newest-first; ≤ 4 per offer, ≤ 12 per publisher per
-hour, sig-deduped, and hard-bounded by the BRIDGE budget. Frames are re-wrapped verbatim like any custody
+hour, and hard-bounded by the BRIDGE budget. Frames are re-wrapped verbatim like any custody
 re-serve — no wire change, no custody rule touched. `SettingsStore.loraBridgeEnabled` (default **on**, the
 "Bridge distant groups" switch) gates offering and serving together.
+
+> **`serveOne` consults neither dedup set** (ADR 2026-09.y8pu, and ADR 057 for `profileSeen` before it). An
+> OFFER is positive evidence the far gateway lacks this exact frame, which outranks either set's guess that
+> we need not send it. `sigSeen` in particular records that we *transmitted*, and on a plane with no acks
+> that is not evidence anyone *heard*: a fan-out into an empty sky spends the slot exactly as a heard one
+> does, and for the ten minutes after it the repair path used to skip the frame it was there to repair — the
+> field failure was a Nearby-room post sent out of LoRa range and never delivered on return (2026-09-02).
+> `serveOne` still **records** the signature, so a live fan-out inside the window doesn't duplicate what the
+> bridge just queued; the asymmetry is the point, since a fan-out is speculative and a backfill was asked
+> for. `reofferOne` keeps its refusal on purpose — a first hearing proves nothing about what the peer holds,
+> so without the dedup it would re-send on every 45-min linger. Regression:
+> `LoraBridgeTest.aRoomPostFannedOutToAnEmptySkyIsStillBackfilledInsideTheDedupWindow`.
 
 **Multi-hop is Meshtastic's job.** A frame injected at a far gateway can't be re-transmitted (sig dedup) and a
 second board there is PASSIVE, so a third pocket is reached by the board's own 3-hop flood, not by a second
@@ -216,7 +228,7 @@ new on republish) with `PROFILE_REFAN_MS` = 12 h = `MeshManager.PROFILE_REPUBLIS
 before `sigSeen` and after `encodeOrNull` — a held profile must leave the signature slot free for the backfill,
 and an unencodable frame must not consume a window it never rode. `serveOne` is deliberately **not** gated:
 the digest-driven backfill is what repairs a genuinely lost profile now (this plane refuses `keyreq`, so a far
-pocket cannot ask). Our own `sendSelfProfile` beacon is not gated either — its 5-min floor and 60-s
+pocket cannot ask) — the reasoning ADR 2026-09.y8pu later extended to `sigSeen`. Our own `sendSelfProfile` beacon is not gated either — its 5-min floor and 60-s
 first-hearing gap are event-driven, and "a new listener appeared" is exactly when re-sending is the point.
 Counter: `loraProfileRefanSkipped`.
 

@@ -51,6 +51,8 @@ data class ProfileDetailsUiState(
     val myQrPayload: String? = null,
     // Where a contact-card intro with this peer stands (null when none is pending or recently confirmed).
     val intro: IntroState? = null,
+    // The peer's declared "open to chat" flag, as their latest profile carried it; shown only when set.
+    val openToChat: Boolean = false,
 )
 
 /**
@@ -118,6 +120,7 @@ class ProfileDetailsViewModel(
                 safetyNumber = safety,
                 myQrPayload = myId?.let { VerifyPayload.encode(it.nodeId, it.bundle) },
                 intro = intro,
+                openToChat = peer?.openToChat == true,
             )
         }.stateIn(
             viewModelScope,

@@ -73,12 +73,14 @@ data class DemoMsg(
 )
 
 /** A peer contact. [verified] pins a (fake) key + out-of-band confirmation so the DM header shows the
- *  verified badge. The avatar is loaded from `demo/avatars/<theme>/<nodeId>.jpg`. */
+ *  verified badge; [openToChat] is the profile flag the Profile Details badge renders. The avatar is loaded
+ *  from `demo/avatars/<theme>/<nodeId>.jpg`. */
 data class DemoPeer(
     val slot: Slot,
     val name: String,
     val status: String,
     val verified: Boolean = false,
+    val openToChat: Boolean = false,
 )
 
 /**
@@ -141,7 +143,7 @@ private val HIKING_SCENARIO =
         meStatus = "On the trail 🥾",
         peers =
             listOf(
-                DemoPeer(Slot.SAM, "Sam Rivera", "Trail mix enthusiast"),
+                DemoPeer(Slot.SAM, "Sam Rivera", "Trail mix enthusiast", openToChat = true),
                 DemoPeer(Slot.DANI, "Dani Cho", "Summit or bust", verified = true),
                 DemoPeer(Slot.THEO, "Theo Blake", "Mostly lost"),
                 DemoPeer(Slot.PRIYA, "Priya N.", "Golden hour chaser 🌅"),
@@ -305,7 +307,7 @@ private val FESTIVAL_SCENARIO =
         meStatus = "Deep playa till sunrise ✨",
         peers =
             listOf(
-                DemoPeer(Slot.SAM, "Kai Brooks", "Art car captain 🚐"),
+                DemoPeer(Slot.SAM, "Kai Brooks", "Art car captain 🚐", openToChat = true),
                 DemoPeer(Slot.DANI, "Luna Reyes", "Find me at sunrise 🌅", verified = true),
                 DemoPeer(Slot.THEO, "Echo Tanaka", "Sound camp till dawn 🔊"),
                 DemoPeer(Slot.PRIYA, "Sage Moreno", "Camp hydration officer 💧"),

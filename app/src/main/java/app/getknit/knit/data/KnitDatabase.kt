@@ -75,7 +75,11 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
     //     MessageContent, because a filename is the one thing about a file that is not a function of bytes
     //     both ends already hold; null on every existing row, which is correct (every older attachment is an
     //     image or a voice note and describes itself); migrated by KnitMigrations.MIGRATION_7_8.
-    version = 8,
+    // v9: one `peers.openToChat` column — the peer's declared "open to chat" availability as its latest profile
+    //     carried it (`ProfileContent.openToChat`, and the sealed `ProfilePayload.openToChat`). Off the wire,
+    //     under the presentation LWW watermark; 0 on every existing row, which is correct (nobody has asserted
+    //     it, and the wire elides the flag while off); migrated by KnitMigrations.MIGRATION_8_9.
+    version = 9,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without

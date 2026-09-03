@@ -62,7 +62,11 @@ crash/         CrashHandler (uncaught-exception capture, installed pre-Koin) · 
                5 reports) · CrashRedactor (two-phase) · CrashReports (reader) · CrashIssueUrl (GitHub prefill)
                · ProcessExitReasons (the native crashes CrashHandler can't see, from the platform's own
                exit records — API 30+)
-notifications/ Notifier + MessageNotifier (per-context channels: nearby, groups, DMs, mentions)
+notifications/ Notifier + MessageNotifier (per-context channels: nearby, groups, DMs, mentions; plus the
+               standalone "open to chat nearby" cue on its own channel)
+presence/      OpenToChatPolicy (pure: the cue's batching, per-person and hourly cooldowns) + OpenToChatWatch
+               (the collector MeshManager starts per session: own flag × short-range neighbors × peer rows
+               carrying the flag × block list → one Notifier cue)
 di/            Koin modules: appModule, meshModule, moderationModule, uiModule
 ```
 

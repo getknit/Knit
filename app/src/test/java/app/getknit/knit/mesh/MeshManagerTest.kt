@@ -231,6 +231,9 @@ class MeshManagerTest {
          */
         val avatarUpdatedAt = MutableStateFlow(0L)
 
+        /** The own open-to-chat flag, the fourth input of the profile watcher's combine. */
+        val openToChat = MutableStateFlow(false)
+
         // Hoisted so a test can pre-shape group-ratchet state (e.g. a stale outbox ack) around the
         // manager's own send/flush paths — same instance the manager is wired with below.
         val groupRatchet = GroupRatchetSessions(store = GroupRatchetRepository(db.groupRatchetDao()))
@@ -291,6 +294,10 @@ class MeshManagerTest {
             coEvery { settings.displayName } returns displayName
             coEvery { settings.status } returns MutableStateFlow("")
             coEvery { settings.avatarUpdatedAt } returns avatarUpdatedAt
+            coEvery { settings.openToChat } returns openToChat
+            // start() also reads the open-to-chat cue's persisted state once, with .first().
+            coEvery { settings.openToChatNamed } returns MutableStateFlow(emptySet())
+            coEvery { settings.openToChatLastPostAt } returns MutableStateFlow(0L)
             coEvery { settings.ownAvatarHash } returns MutableStateFlow(null)
             // 0 keeps broadcastSealedProfile's early return in play: the sealed CTL_PROFILE half is a
             // separate carrier with its own test surface, and this case is about the cleartext frame id.
@@ -1461,6 +1468,29 @@ class MeshManagerTest {
                 "the row a late joiner is re-served carries the edited name",
                 "Alex",
                 WireCodec.decodePayload<ProfileContent>(custodied.last().payload)?.name,
+            )
+        }
+
+    @Test
+    fun switchingOpenToChatOnRepublishesAProfileCarryingTheFlag() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            val publishedAt = MutableStateFlow(0L)
+            rig.stubProfileState(publishedAt)
+
+            rig.manager.start()
+            rig.await(1) { rig.custodiedProfiles().size } // the startup custody seed, flag off
+            assertFalse(WireCodec.decodePayload<ProfileContent>(rig.custodiedProfiles().single().payload)!!.openToChat)
+
+            rig.awaitProfileWatcher()
+            rig.clockNow = rig.now + 26_000
+            rig.openToChat.value = true // the switch on the Settings screen: a profile edit like a rename
+            rig.await(1) { rig.floodedProfiles().size }
+
+            val flooded = rig.floodedProfiles().single()
+            assertTrue(
+                "the flip publishes a fresh profile carrying the flag",
+                WireCodec.decodePayload<ProfileContent>(flooded.payload)!!.openToChat,
             )
         }
 }

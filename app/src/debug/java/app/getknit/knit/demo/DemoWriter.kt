@@ -75,6 +75,7 @@ class DemoWriter(
                     pubKey = if (p.verified) "demo" else null,
                     verified = p.verified,
                     updatedAt = now,
+                    openToChat = p.openToChat,
                 ),
             )
         }

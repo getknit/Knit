@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -242,6 +243,29 @@ internal fun ProfileDetailsScreenContent(
                 )
             }
 
+            // Their declared availability: an icon + label when set, nothing at all otherwise (the
+            // verified-badge shape). Shown whether or not they are online — it is what they declared.
+            if (state.openToChat) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.testTag("profile_details_open_to_chat"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ChatBubbleOutline,
+                        // Decorative: the label beside it carries the meaning.
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.profile_details_open_to_chat),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            }
+
             // A contact added from a link: where the intro handshake stands (docs/CONTACT_CARD.md).
             state.intro?.let { intro ->
                 Text(
@@ -340,6 +364,7 @@ fun ProfileDetailsScreenOnlineVerifiedPreview() =
                     verified = true,
                     safetyNumber = "12345 67890 12345 67890 12345 67890",
                     myQrPayload = "knit:verify:ada",
+                    openToChat = true,
                 ),
             snackbarHostState = remember { SnackbarHostState() },
             onBack = {},

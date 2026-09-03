@@ -5,6 +5,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -32,8 +33,9 @@ class ProfileDetailsScreenContentTest {
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
-    private fun state() =
+    private fun state(openToChat: Boolean = false) =
         ProfileDetailsUiState(
+            openToChat = openToChat,
             nodeId = "8f3a2b1c9d4e",
             displayName = "Ada Lovelace",
             status = "Hiking this weekend",
@@ -46,11 +48,14 @@ class ProfileDetailsScreenContentTest {
             myQrPayload = null,
         )
 
-    private fun setContent(onMessage: (String) -> Unit = {}) {
+    private fun setContent(
+        onMessage: (String) -> Unit = {},
+        openToChat: Boolean = false,
+    ) {
         compose.setContent {
             KnitTheme {
                 ProfileDetailsScreenContent(
-                    state = state(),
+                    state = state(openToChat),
                     snackbarHostState = SnackbarHostState(),
                     onBack = {},
                     onMessage = onMessage,
@@ -78,6 +83,20 @@ class ProfileDetailsScreenContentTest {
         setContent()
         val alias = Alias.aliasFor("8f3a2b1c9d4e")
         compose.onNodeWithText(context.getString(R.string.profile_alias, alias)).performScrollTo().assertIsDisplayed()
+    }
+
+    /** The badge is their declared flag: shown when set, absent (not merely hidden) otherwise. */
+    @Test
+    fun theOpenToChatBadgeShowsOnlyWhenSet() {
+        setContent(openToChat = true)
+        compose.onNodeWithTag("profile_details_open_to_chat").assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.profile_details_open_to_chat)).assertIsDisplayed()
+    }
+
+    @Test
+    fun noBadgeWhenNotOpenToChat() {
+        setContent()
+        compose.onNodeWithTag("profile_details_open_to_chat").assertDoesNotExist()
     }
 
     @Test

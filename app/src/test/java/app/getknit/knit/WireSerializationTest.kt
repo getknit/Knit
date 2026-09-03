@@ -11,6 +11,7 @@ import app.getknit.knit.mesh.protocol.GroupRatchetHeader
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
+import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.RatchetHeader
 import app.getknit.knit.mesh.protocol.RatchetInit
 import app.getknit.knit.mesh.protocol.ReactionContent
@@ -255,6 +256,32 @@ class WireSerializationTest {
         assertEquals(4, requireNotNull(header.init).pkid)
         assertEquals(999L, requireNotNull(header.init).at)
         assertArrayEquals(init.eph, requireNotNull(header.init).eph)
+    }
+
+    /** The [ProfileContent] shape as every build before the open-to-chat flag compiled it (the fields that matter here). */
+    @Serializable
+    private class ProfileContentPreFlagShape(
+        val name: String,
+        val status: String,
+        val version: Long? = null,
+    )
+
+    @Test
+    fun aPreFlagDecoderIgnoresOpenToChatAndAbsenceReadsFalse() {
+        val flagged = WireCodec.encodePayload(ProfileContent(name = "A", status = "", openToChat = true))
+        assertEquals("A", requireNotNull(WireCodec.decodePayload<ProfileContentPreFlagShape>(flagged)).name)
+        assertTrue(requireNotNull(WireCodec.decodePayload<ProfileContent>(flagged)).openToChat)
+        // Off is elided, so a profile that never set it is byte-identical to one that set it false — and an
+        // older peer's profile (no key at all) reads false.
+        val unflagged = WireCodec.encodePayload(ProfileContent(name = "A", status = ""))
+        assertArrayEquals(unflagged, WireCodec.encodePayload(ProfileContent(name = "A", status = "", openToChat = false)))
+        assertFalse(requireNotNull(WireCodec.decodePayload<ProfileContent>(unflagged)).openToChat)
+        // The sealed payload follows the same rule.
+        val sealedOn = WireCodec.encodePayload(ProfilePayload(name = "A", status = "", version = 5L, openToChat = true))
+        val sealedOff = WireCodec.encodePayload(ProfilePayload(name = "A", status = "", version = 5L))
+        assertTrue(requireNotNull(WireCodec.decodePayload<ProfilePayload>(sealedOn)).openToChat)
+        assertFalse(requireNotNull(WireCodec.decodePayload<ProfilePayload>(sealedOff)).openToChat)
+        assertEquals(sealedOff.size + "openToChat".length + 2, sealedOn.size)
     }
 
     /** The pre-ratchet [EncEnvelope] shape, exactly as a v1-era build compiled it. */

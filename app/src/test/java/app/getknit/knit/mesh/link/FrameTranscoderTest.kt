@@ -328,8 +328,19 @@ class FrameTranscoderTest {
         val name: String,
         val status: String,
         val pubKey: String? = null,
-        val extra: Boolean = true,
+        val extra: Boolean = false,
     )
+
+    /** The open-to-chat flag is outside the frozen label map: it rides as its text key plus a CBOR boolean, exact on rebuild. */
+    @Test
+    fun anOpenToChatProfileRidesAsTextKeyPlusBooleanAndRebuildsExact() {
+        val content = ProfileContent(name = "A", status = "S", pubKey = bundle, version = SENT_AT, openToChat = true)
+        val signed = envelope(FrameType.PROFILE, WireCodec.encodePayload(content))
+        val compact = checkNotNull(FrameTranscoder.transcode(signed))
+        assertArrayEquals(signed, FrameTranscoder.rebuild(compact))
+        assertTrue("the flag travels as text key + `f5`", contains(compact, tstr("openToChat") + byteArrayOf(0xF5.toByte())))
+        assertTrue("the pubKey still went raw beside it", compact.size < signed.size - 40)
+    }
 
     @Test
     fun unknownKeysRideAsTextAndSwitchElisionOff() {
@@ -373,7 +384,7 @@ class FrameTranscoderTest {
         )
         assertTrue("…and its empty keys (label 4, [])", contains(compact, byteArrayOf(0x04, 0x80.toByte())))
 
-        val futureProfile = WireCodec.cbor.encodeToByteArray(ProfileContentX(name = "A", status = "S", pubKey = bundle))
+        val futureProfile = WireCodec.cbor.encodeToByteArray(ProfileContentX(name = "A", status = "S", pubKey = bundle, extra = true))
         val profileSigned = envelope(FrameType.PROFILE, futureProfile)
         val profileCompact = checkNotNull(FrameTranscoder.transcode(profileSigned))
         assertArrayEquals(profileSigned, FrameTranscoder.rebuild(profileCompact))

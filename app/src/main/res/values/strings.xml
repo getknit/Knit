@@ -20,6 +20,21 @@
     <string name="channel_alerts_name">Connection &amp; alerts</string>
     <string name="channel_alerts_desc">Mesh connection changes and errors</string>
 
+    <!-- Open to chat (App group): the nudge when someone nearby declares the same flag as you -->
+    <string name="channel_open_to_chat_name">Open to chat</string>
+    <string name="channel_open_to_chat_desc">Nudges when someone nearby is open to chat while you are too</string>
+    <string name="notif_open_to_chat_title_one">%1$s is nearby and open to chat</string>
+    <plurals name="notif_open_to_chat_title">
+        <item quantity="one">%d person nearby is open to chat</item>
+        <item quantity="other">%d people nearby are open to chat</item>
+    </plurals>
+    <string name="notif_open_to_chat_body_one">Say hi in the Nearby room</string>
+    <string name="notif_open_to_chat_names_two">%1$s and %2$s</string>
+    <plurals name="notif_open_to_chat_names_more">
+        <item quantity="one">%1$s and %2$d other</item>
+        <item quantity="other">%1$s and %2$d others</item>
+    </plurals>
+
     <!-- Message channels (Messages group) -->
     <string name="channel_nearby_name">Nearby</string>
     <string name="channel_nearby_desc">Messages in the public Nearby room</string>
@@ -311,6 +326,8 @@
     <string name="profile_avatar_crop_desc">Adjust profile photo</string>
     <string name="profile_change_photo_desc">Change profile photo</string>
     <string name="profile_remove_photo_desc">Remove profile photo</string>
+    <string name="settings_open_to_chat_title">Open to chat</string>
+    <string name="settings_open_to_chat_subtitle">Let people nearby know you\'re up for a conversation. You\'ll both get a nudge when you\'re near each other.</string>
     <string name="settings_content_filtering_title">Content filtering</string>
     <string name="settings_content_filtering_subtitle">Hide explicit images and abusive messages you receive from others</string>
 
@@ -319,6 +336,7 @@
     <string name="profile_details_message">Message</string>
     <string name="profile_details_online">Online</string>
     <string name="profile_details_offline">Offline</string>
+    <string name="profile_details_open_to_chat">Open to chat</string>
     <string name="profile_details_view_photo">View photo</string>
 
     <!-- Encryption indicator in the chat header -->

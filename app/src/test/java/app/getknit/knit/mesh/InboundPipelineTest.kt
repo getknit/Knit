@@ -441,6 +441,7 @@ class InboundPipelineTest {
             avatarHash: String? = null,
             sentAt: Long = 6L,
             name: String = "Peer",
+            openToChat: Boolean = false,
         ): RelayEnvelope =
             RelayEnvelope(
                 type = FrameType.PROFILE,
@@ -449,7 +450,13 @@ class InboundPipelineTest {
                 sentAt = sentAt,
                 payload =
                     WireCodec.encodePayload(
-                        ProfileContent(name = name, status = "", pubKey = author.bundle.encoded, avatarHash = avatarHash),
+                        ProfileContent(
+                            name = name,
+                            status = "",
+                            pubKey = author.bundle.encoded,
+                            avatarHash = avatarHash,
+                            openToChat = openToChat,
+                        ),
                     ),
             )
 
@@ -3076,6 +3083,95 @@ class InboundPipelineTest {
             rig.deliver(bob, rig.profileWithPrekey(bob, sentAt = 70L, prekey = null, version = null, name = "Legacy"))
             assertEquals("Legacy", rig.peerMap[bob.nodeId]?.name)
             assertEquals(70L, rig.peerMap[bob.nodeId]?.updatedAt)
+        }
+
+    // --- the open-to-chat profile flag (rides both profile paths under the presentation watermark) ---
+
+    @Test
+    fun theOpenToChatFlagArrivesWithTheCleartextProfileAndLeavesByOmission() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.deliver(alice, rig.profile(alice, sentAt = 10L, openToChat = true))
+            assertTrue(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+            // A newer profile without the key is the peer switching it off: absence reads false.
+            rig.deliver(alice, rig.profile(alice, sentAt = 11L))
+            assertFalse(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+            // A re-served older copy cannot switch it back on.
+            rig.deliver(alice, rig.profile(alice, sentAt = 10L, openToChat = true))
+            assertFalse(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+        }
+
+    @Test
+    fun theSealedProfileCarriesTheFlagAndAStaleOneCannotRevertIt() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 10L, prekey = null, version = 10L))
+            assertFalse(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+            val author = V2Author(alice, rig)
+            rig.deliver(
+                alice,
+                author.dm(
+                    "ctl-otc-1",
+                    "",
+                    ctl = MessageContent.CTL_PROFILE,
+                    pr = ProfilePayload(name = "Ann", status = "", version = 20L, openToChat = true),
+                ),
+            )
+            assertTrue(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+            assertEquals(20L, rig.peerMap[alice.nodeId]?.updatedAt)
+            // An older sealed update is ignored whole, flag included.
+            rig.deliver(
+                alice,
+                author.dm("ctl-otc-2", "", ctl = MessageContent.CTL_PROFILE, pr = ProfilePayload(name = "Ann", status = "", version = 15L)),
+            )
+            assertTrue(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+            // A newer one that omits it switches it off — the sealed path copies the whole presentation set.
+            rig.deliver(
+                alice,
+                author.dm("ctl-otc-3", "", ctl = MessageContent.CTL_PROFILE, pr = ProfilePayload(name = "Ann", status = "", version = 30L)),
+            )
+            assertFalse(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+        }
+
+    @Test
+    fun aPrekeyOnlyAdmissionOfAnOlderProfileDoesNotRegressTheFlag() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 10L, prekey = null, version = 10L))
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm(
+                    "ctl-otc-4",
+                    "",
+                    ctl = MessageContent.CTL_PROFILE,
+                    pr = ProfilePayload(name = "Ann", status = "", version = 100L, openToChat = true),
+                ),
+            )
+            assertTrue(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+            // Older on the presentation clock, newer on the prekey clock (the ADR 022 race): admitted for its
+            // prekey only, so the flag — a presentation field — must not move.
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = 50L, prekey = signedPrekey(alice), version = 50L))
+            assertTrue("the stale half must not revert the flag", checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+        }
+
+    @Test
+    fun anOpenToChatFlipProducesNoStatusNotice() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, name = "Peer", updatedAt = 1L)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
+            val profile = rig.profile(alice, name = "Peer", sentAt = 99L, openToChat = true)
+            rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
+            assertTrue(checkNotNull(rig.peerMap[alice.nodeId]).openToChat)
+            assertTrue("a flag flip is not a rename or a new photo", rig.msgMap.values.none { it.isStatusNotice })
         }
 
     @Test

@@ -326,6 +326,9 @@ class CoordinationPlaneSizeBudgetTest {
                             capabilities = Protocol.LOCAL_CAPABILITIES,
                             prekey = PrekeyInfo(id = SPK_ID, pub = spk.pub, sig = spkSig),
                             version = SENT_AT,
+                            // The largest profile is one with every flag set: the open-to-chat key rides
+                            // only while true, so the budget is measured with it.
+                            openToChat = true,
                         ),
                     ),
             ),
@@ -788,6 +791,7 @@ class CoordinationPlaneSizeBudgetTest {
                 status = "s".repeat(TextLimits.STATUS),
                 avatarHash = "ab".repeat(32),
                 version = 1_756_100_000_000L,
+                openToChat = true,
             )
         val intro = alice.sign(sealer.dm(FrameId.new(), body = "", ctl = MessageContent.CTL_PROFILE, pr = payload))
         report("intro-ctl-profile-init", intro, alice)

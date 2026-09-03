@@ -38,6 +38,11 @@ object NotificationChannels {
     const val STATUS = "knit_mesh" // ongoing foreground notification; id kept stable
     const val ALERTS = "knit_alerts"
 
+    // The "someone nearby is open to chat" cue (presence/OpenToChatWatch). Its own channel rather than
+    // [ALERTS] so the user can mute the nudge without muting connection alerts — and because [ALERTS] is LOW
+    // (silent) and a channel's importance is immutable once created.
+    const val OPEN_TO_CHAT = "knit_open_to_chat"
+
     private const val GROUP_MESSAGES = "knit_grp_messages"
     private const val GROUP_APP = "knit_grp_app"
 
@@ -149,6 +154,16 @@ object NotificationChannels {
                 NotificationManagerCompat.IMPORTANCE_LOW,
                 R.string.channel_alerts_name,
                 R.string.channel_alerts_desc,
+            ),
+        )
+        manager.createNotificationChannel(
+            channel(
+                context,
+                OPEN_TO_CHAT,
+                GROUP_APP,
+                NotificationManagerCompat.IMPORTANCE_DEFAULT,
+                R.string.channel_open_to_chat_name,
+                R.string.channel_open_to_chat_desc,
             ),
         )
 

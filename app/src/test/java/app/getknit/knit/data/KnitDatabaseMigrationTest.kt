@@ -44,9 +44,9 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v7) creates and opens from the exported JSON`() =
+    fun `the current schema (v9) creates and opens from the exported JSON`() =
         runTest {
-            val version = 7 // KnitDatabase @Database(version = 7) — bump alongside the DB (its retention is CLASS,
+            val version = 9 // KnitDatabase @Database(version = 9) — bump alongside the DB (its retention is CLASS,
             // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
             helper.createDatabase(version).close()
         }
@@ -294,6 +294,28 @@ class KnitDatabaseMigrationTest {
                     assertTrue(s.step())
                     assertEquals("report.pdf", s.getText(0))
                     assertEquals(1400L, s.getLong(1))
+                }
+            }
+        }
+
+    @Test
+    fun `migrate 8 to 9 keeps peers and reads their open-to-chat flag as off`() =
+        runTest {
+            // Nobody has asserted the flag on a pre-v9 row, and the wire elides it while off, so 0 is the
+            // correct value for every existing peer — no backfill, and the next profile frame sets it.
+            helper.createDatabase(8).use { c ->
+                c.execSQL("INSERT INTO peers (nodeId, name, status, verified, updatedAt) VALUES ('n1','Ann','around',1,7)")
+            }
+            helper.runMigrationsAndValidate(9, listOf(KnitMigrations.MIGRATION_8_9)).use { c ->
+                c.prepare("SELECT name, openToChat FROM peers WHERE nodeId = 'n1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("Ann", s.getText(0))
+                    assertEquals(0L, s.getLong(1))
+                }
+                c.execSQL("UPDATE peers SET openToChat = 1 WHERE nodeId = 'n1'")
+                c.prepare("SELECT openToChat FROM peers WHERE nodeId = 'n1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals(1L, s.getLong(0))
                 }
             }
         }

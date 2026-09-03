@@ -460,6 +460,30 @@ Capability-gating is legitimate *here* and forbidden for the `FileHeaderWire.mim
 reasons: a peer that lies about `CAP_FILES` only breaks its own rendering, while a carrier that lies about a
 privacy bit turns off someone else's protection.
 
+**Precedent — the seventh additive `ProfileContent` change, and the first field that must ride *both* profile
+paths (the "open to chat" flag, 2026-09-03).** `ProfileContent.openToChat: Boolean = false`,
+`ProfilePayload.openToChat: Boolean = false`, and `ProfileV2` label **5**. Rule 1 by the *defaulted* route rather
+than the nullable one, on purpose: `encodeDefaults = false` elides the key while false, so a profile that never
+set it is byte-identical to one before the field existed (every existing golden vector stayed put; three new
+ones — `profileContentOpenToChat`, `profilePayloadOpenToChat`, `messageContentV2ProfileOpenToChat` — were
+added), an older peer's profile reads false, and a flip back to off propagates by *omission* — the same shape as
+a newer profile carrying no `prekey` clearing the pin. A nullable tri-state would have bought nothing the
+receiver does not coerce to false anyway, and a sender emitting an explicit `false` would have cost 12 B on every
+profile from every new build forever. Not derivable (the ADR 066 rule inverted — nothing on either end can
+compute someone's willingness), so it is carried.
+
+What this precedent adds to the rules: **a presentation field goes on `ProfileContent`, `ProfilePayload` and
+`ProfileV2` together.** The sealed `CTL_PROFILE` path (ADR 020) copies the whole presentation set under a newer
+version, so a field carried by the cleartext frame alone would be silently reverted by the next sealed update;
+and a v3 peer decodes the compact mirror, so a label left out of `ProfileV2` reads false there. The transcoder
+(ADR 060) needed nothing: its schema-1 label map is frozen, and the flag rides as its text key plus `f5` (12 B,
+only while true — `FrameTranscoderTest.anOpenToChatProfileRidesAsTextKeyPlusBooleanAndRebuildsExact`), which
+`CoordinationPlaneSizeBudgetTest` now measures on its max-size profile and intro fixtures. No capability bit, no
+ctl value, no `EncEnvelope.v` / `MessageContent.v` bump, no discovery marker. The DB bumps (v8 → v9, one
+`peers.openToChat` column) — local only, with a tested `KnitMigrations` entry. *Metadata cost:* the cleartext
+profile frame discloses the flag to a carrier exactly as it already discloses the status text beside it; the
+sealed path hides an update from carriers for ratchet-capable peers, as for every other presentation field.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + every branch that
 tests the version (`InboundPipeline.decryptAndDeliver`, `MeshManager`'s inline-ack give-back,

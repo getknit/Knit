@@ -144,7 +144,34 @@ interface Notifier {
      * the requests-list analogue of [setVisibleConversation].
      */
     fun setRequestsVisible(visible: Boolean)
+
+    /**
+     * Posts the single "open to chat nearby" cue naming [names] (the caller's collision-aware labels, arrival
+     * order) — a nudge to post in the Nearby room, so tapping it opens that room. [avatarBytes] is the lone
+     * person's avatar for the single form; the multi form shows the room glyph. Every call is a real cue
+     * (the policy in `presence/OpenToChatPolicy` already spaces them), so it alerts each time. Suppressed
+     * while the Nearby room is on screen; an empty [names] cancels it.
+     */
+    fun notifyOpenToChat(
+        names: List<String>,
+        avatarBytes: ByteArray?,
+    )
+
+    /** Cancels the open-to-chat cue — the user switched their own flag off. */
+    fun clearOpenToChat()
 }
+
+/** How many people the open-to-chat cue names before folding the rest into "and N others". */
+const val OPEN_TO_CHAT_MAX_NAMED = 2
+
+/**
+ * The names the open-to-chat cue prints, and how many it folds into "and N others": the first [maxNamed]
+ * verbatim, the remainder as a count. Pure so it is unit-tested without Android.
+ */
+fun openToChatNames(
+    names: List<String>,
+    maxNamed: Int = OPEN_TO_CHAT_MAX_NAMED,
+): Pair<List<String>, Int> = names.take(maxNamed) to (names.size - maxNamed).coerceAtLeast(0)
 
 /**
  * Total buffered messages and the number of distinct conversations with any, for the group summary line

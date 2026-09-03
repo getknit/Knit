@@ -27,6 +27,7 @@ class PeerDaoTest : RoomDbTest() {
                     verified = true,
                     deviceTag = "tag",
                     updatedAt = 5L,
+                    openToChat = true,
                 ),
             )
             val got = dao.findByNodeId("a")!!
@@ -34,6 +35,7 @@ class PeerDaoTest : RoomDbTest() {
             assertEquals("KEY", got.pubKey)
             assertTrue(got.verified)
             assertEquals("tag", got.deviceTag)
+            assertTrue(got.openToChat)
         }
 
     @Test

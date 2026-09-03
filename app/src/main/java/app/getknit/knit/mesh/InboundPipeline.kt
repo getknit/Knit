@@ -1049,6 +1049,9 @@ class InboundPipeline(
                 status = payload.status.take(TextLimits.STATUS),
                 avatarHash = resolveAvatarHash(advertised, haveAvatar, existing.avatarHash),
                 updatedAt = payload.version,
+                // The whole presentation set moves together (see ProfilePayload): a field this path did not
+                // copy would be reverted by every sealed update after the cleartext frame that set it.
+                openToChat = payload.openToChat,
             ),
         )
         // Status notices for what actually moved. Compared against the pre-write row, and written here
@@ -2449,6 +2452,9 @@ class InboundPipeline(
                 // exposed: a re-served older profile would look prekey-newer than the clear and re-pin a key
                 // the peer has stopped serving, black-holing v2 sends exactly as a stale pin does.
                 prekeyProfileAt = if (stalePrekey) base.prekeyProfileAt else version,
+                // A presentation field: gated with name/status, never with the prekey. Absent on the wire
+                // reads false, which is how a flip back to off arrives.
+                openToChat = if (stalePresentation) base.openToChat else content.openToChat,
             ),
         )
         applyPresentationFollowUps(env.senderId, existing, name, advertised, haveAvatar, version, stalePresentation)

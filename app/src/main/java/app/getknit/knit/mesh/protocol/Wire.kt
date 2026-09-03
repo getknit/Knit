@@ -173,6 +173,13 @@ data class ChatContent(
  * Splitting them lets `sentAt` be a *publish* stamp the sender refreshes on a cadence while [version]
  * stays put, so a re-publish is not mistaken for an edit and cannot advance a receiver's watermark.
  * Null on a peer predating this field — read `sentAt` for those, which is exactly what it meant.
+ *
+ * [openToChat] is the sender's "open to chat" availability flag. Defaulted rather than nullable: it is elided
+ * from the wire while off, so an unset flag costs nothing and a peer predating the field reads false —
+ * absence means off, which is also how a flip back to off propagates (a newer profile simply omits it, the
+ * same shape as a newer profile carrying no [prekey] clearing the pin). Carried, not derived: nothing on
+ * either end can compute it. Every presentation field rides **both** profile paths — this frame and the
+ * sealed [ProfilePayload] — or a sealed update would silently revert it.
  */
 @Serializable
 data class ProfileContent(
@@ -185,6 +192,7 @@ data class ProfileContent(
     val capabilities: Long? = null,
     val prekey: PrekeyInfo? = null,
     val version: Long? = null,
+    val openToChat: Boolean = false,
 )
 
 /** Content of a [FrameType.GROUP_LEAVE] frame: the group the (self-asserted) sender is leaving. */
@@ -486,6 +494,10 @@ data class ReactionPayload(
  * repeats it in [ChatContent.attachmentHash] — the hash alone, never a mime (ADR 035) — so a blind
  * carrier, and the Internet plane's attachment pass, can fetch the bytes; see docs/WIRE_COMPAT.md's
  * DB v19 precedent.
+ *
+ * [openToChat] mirrors [ProfileContent.openToChat] — a presentation field, so it rides here too (defaulted,
+ * elided while off): the sealed path overwrites the whole presentation set under a newer version, and a
+ * field carried by the cleartext frame alone would be reverted by the next sealed update.
  */
 @Serializable
 data class ProfilePayload(
@@ -493,6 +505,7 @@ data class ProfilePayload(
     val status: String,
     val avatarHash: String? = null,
     val version: Long = 0L,
+    val openToChat: Boolean = false,
 )
 
 /**

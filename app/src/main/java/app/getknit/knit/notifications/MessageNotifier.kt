@@ -30,6 +30,7 @@ import app.getknit.knit.MainActivity
 import app.getknit.knit.R
 import app.getknit.knit.data.decodeBoundedFromBytes
 import app.getknit.knit.data.message.ConversationKind
+import app.getknit.knit.data.message.Conversations
 import java.text.BreakIterator
 
 /**
@@ -207,6 +208,68 @@ class MessageNotifier(
         // Leaving a chat (null) just resumes notifying; opening one clears what it already showed
         // (both its normal and mention entries).
         if (conversationId != null) clearConversation(conversationId)
+        // The open-to-chat cue points at the Nearby room: opening the room by hand is the cue taken.
+        if (conversationId == Conversations.NEARBY) runCatching { manager.cancel(ID_OPEN_TO_CHAT) }
+    }
+
+    override fun notifyOpenToChat(
+        names: List<String>,
+        avatarBytes: ByteArray?,
+    ) {
+        // Already in the room the cue points at: nothing to say. (The policy still counts the peers as
+        // named — the cue was moot, not missed.)
+        if (names.isEmpty() || visibleConversationId == Conversations.NEARBY) {
+            runCatching { manager.cancel(ID_OPEN_TO_CHAT) }
+            return
+        }
+        val single = names.size == 1
+        val (shown, others) = openToChatNames(names)
+        val title =
+            if (single) {
+                context.getString(R.string.notif_open_to_chat_title_one, names[0])
+            } else {
+                context.resources.getQuantityString(R.plurals.notif_open_to_chat_title, names.size, names.size)
+            }
+        val text =
+            when {
+                single -> {
+                    context.getString(R.string.notif_open_to_chat_body_one)
+                }
+
+                others == 0 -> {
+                    context.getString(R.string.notif_open_to_chat_names_two, shown[0], shown[1])
+                }
+
+                else -> {
+                    context.resources.getQuantityString(
+                        R.plurals.notif_open_to_chat_names_more,
+                        others,
+                        shown.joinToString(", "),
+                        others,
+                    )
+                }
+            }
+        // One person: their face (keyed on the name for the letter fallback — no identity reaches here);
+        // several: the room the cue points at.
+        val largeIcon = if (single) bitmapFor(avatarBytes) ?: letterAvatar(names[0], names[0]) else roomAvatar()
+        val notification =
+            NotificationCompat
+                .Builder(context, NotificationChannels.OPEN_TO_CHAT)
+                .setSmallIcon(R.drawable.ic_stat_mesh)
+                .setLargeIcon(largeIcon)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+                .setContentIntent(openChatIntent(TAG_OPEN_TO_CHAT, Conversations.NEARBY))
+                .setAutoCancel(true)
+                // Every post is a genuine cue — the policy spaces them — so a re-post alerts again.
+                .setOnlyAlertOnce(false)
+                .build()
+        postNotification(null, ID_OPEN_TO_CHAT, notification)
+    }
+
+    override fun clearOpenToChat() {
+        runCatching { manager.cancel(ID_OPEN_TO_CHAT) }
     }
 
     override fun clearConversation(conversationId: String) {
@@ -684,6 +747,12 @@ class MessageNotifier(
 
         // The single coalesced "N message requests" heads-up (standalone — not in the messages group/summary).
         private const val ID_REQUESTS = 8
+
+        // The single "someone nearby is open to chat" cue (standalone; refreshed in place).
+        private const val ID_OPEN_TO_CHAT = 9
+
+        // Its PendingIntent tag: a request code of its own so its deep link never clobbers a chat's.
+        private const val TAG_OPEN_TO_CHAT = "open-to-chat"
 
         /** Groups every message notification under one stack with the summary. */
         private const val GROUP_KEY_MESSAGES = "app.getknit.knit.MESSAGES"

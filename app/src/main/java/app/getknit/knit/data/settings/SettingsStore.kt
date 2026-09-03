@@ -119,6 +119,24 @@ class SettingsStore(
         dataStore.data.map { it[KEY_CONTENT_FILTERING] ?: true }
 
     /**
+     * Whether this device's profile declares its user "open to chat". Defaults to off. A profile field like
+     * [displayName]/[status]: a change bumps [profileVersion] and republishes the profile on both paths
+     * (`MeshManager.watchProfileChanges`), and while on, the presence cue (`presence/OpenToChatWatch`) nudges
+     * the user when someone nearby declares the same.
+     */
+    val openToChat: Flow<Boolean> = dataStore.data.map { it[KEY_OPEN_TO_CHAT] ?: false }
+
+    /**
+     * The open-to-chat cue's durable state (`presence/OpenToChatWatch`): the peers a cue has named, as
+     * `"<peerId>|<millis>"` entries — several per peer, one per cue, pruned to the last day — and when the
+     * last cue was posted. Persisted so a process restart cannot re-nudge about someone named minutes ago;
+     * written together so the two can never disagree. The watch reads them once at start and writes through —
+     * it must never *collect* them, since a DataStore write re-emits every flow in the store.
+     */
+    val openToChatNamed: Flow<Set<String>> = dataStore.data.map { it[KEY_OPEN_TO_CHAT_NAMED] ?: emptySet() }
+    val openToChatLastPostAt: Flow<Long> = dataStore.data.map { it[KEY_OPEN_TO_CHAT_LAST_POST_AT] ?: 0L }
+
+    /**
      * Whether the mesh foreground service should be running — the persisted twin of "is the mesh on".
      * Defaults to on. Flipped to false when the user manually stops the service from its ongoing
      * notification, and back to true whenever the service (re)starts, so [app.getknit.knit.mesh.BootReceiver]
@@ -371,6 +389,17 @@ class SettingsStore(
 
     suspend fun setContentFilteringEnabled(value: Boolean) = dataStore.edit { it[KEY_CONTENT_FILTERING] = value }
 
+    suspend fun setOpenToChat(value: Boolean) = dataStore.edit { it[KEY_OPEN_TO_CHAT] = value }
+
+    /** Replaces the cue's named set and last-post stamp in one write (see [openToChatNamed]). */
+    suspend fun setOpenToChatCueState(
+        named: Set<String>,
+        lastPostAt: Long,
+    ) = dataStore.edit {
+        it[KEY_OPEN_TO_CHAT_NAMED] = named
+        it[KEY_OPEN_TO_CHAT_LAST_POST_AT] = lastPostAt
+    }
+
     suspend fun setMeshEnabled(value: Boolean) = dataStore.edit { it[KEY_MESH_ENABLED] = value }
 
     suspend fun setReviewEngagementStartedAt(value: Long) = dataStore.edit { it[KEY_REVIEW_ENGAGEMENT_STARTED_AT] = value }
@@ -574,6 +603,9 @@ class SettingsStore(
         val KEY_PENDING_INTROS = stringSetPreferencesKey("pending_intros")
         val KEY_INTRO_GRACE = stringSetPreferencesKey("intro_grace")
         val KEY_CONTENT_FILTERING = booleanPreferencesKey("content_filtering_enabled")
+        val KEY_OPEN_TO_CHAT = booleanPreferencesKey("open_to_chat")
+        val KEY_OPEN_TO_CHAT_NAMED = stringSetPreferencesKey("open_to_chat_named")
+        val KEY_OPEN_TO_CHAT_LAST_POST_AT = longPreferencesKey("open_to_chat_last_post_at")
         val KEY_MESH_ENABLED = booleanPreferencesKey("mesh_enabled")
         val KEY_REVIEW_ENGAGEMENT_STARTED_AT = longPreferencesKey("review_engagement_started_at")
         val KEY_REVIEW_LAST_ATTEMPT_AT = longPreferencesKey("review_last_attempt_at")

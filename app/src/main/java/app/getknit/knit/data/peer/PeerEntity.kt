@@ -30,6 +30,10 @@ import androidx.room3.PrimaryKey
  * including the null-prekey downgrade case). All null until a v2-capable profile arrives. The key
  * bytes are base64 like [pubKey] — a `ByteArray` column would break this data class's equality, which
  * Room's flow dedup relies on.
+ *
+ * [openToChat] is the peer's declared "open to chat" availability, as their latest profile carried it
+ * (`ProfileContent.openToChat` / `ProfilePayload.openToChat`); false when their profile predates the flag.
+ * A presentation field: it moves with name/status under the same last-writer-wins watermark ([updatedAt]).
  */
 @Entity(tableName = "peers")
 data class PeerEntity(
@@ -47,4 +51,5 @@ data class PeerEntity(
     val prekeyPub: String? = null,
     val prekeySig: String? = null,
     val prekeyProfileAt: Long? = null,
+    val openToChat: Boolean = false,
 )

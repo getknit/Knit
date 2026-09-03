@@ -87,6 +87,7 @@ internal data class ProfileFormState(
     val alias: String,
     val avatarHash: String?,
     val contentFilteringEnabled: Boolean,
+    val openToChat: Boolean = false,
     val relay: RelaySummary,
     val lora: LoraSummary,
     val isDirty: Boolean,
@@ -106,6 +107,7 @@ fun ProfileScreen(
     val avatarHash by viewModel.avatarHash.collectAsStateWithLifecycle()
     val cropTarget by viewModel.cropTarget.collectAsStateWithLifecycle()
     val contentFilteringEnabled by viewModel.contentFilteringEnabled.collectAsStateWithLifecycle()
+    val openToChat by viewModel.openToChat.collectAsStateWithLifecycle()
     val relay by viewModel.relaySummary.collectAsStateWithLifecycle()
     val lora by viewModel.loraSummary.collectAsStateWithLifecycle()
     val isDirty by viewModel.isDirty.collectAsStateWithLifecycle()
@@ -140,6 +142,7 @@ fun ProfileScreen(
                 alias = alias,
                 avatarHash = avatarHash,
                 contentFilteringEnabled = contentFilteringEnabled,
+                openToChat = openToChat,
                 relay = relay,
                 lora = lora,
                 isDirty = isDirty,
@@ -151,6 +154,7 @@ fun ProfileScreen(
         onStatusChange = viewModel::setStatus,
         onStatusCommit = viewModel::commitStatus,
         onToggleContentFiltering = viewModel::setContentFilteringEnabled,
+        onToggleOpenToChat = viewModel::setOpenToChat,
         onOpenRelays = onOpenRelays,
         onOpenLora = onOpenLora,
         onPickPhoto = {
@@ -175,6 +179,7 @@ internal fun ProfileScreenContent(
     onStatusChange: (String) -> Unit,
     onStatusCommit: () -> Unit,
     onToggleContentFiltering: (Boolean) -> Unit,
+    onToggleOpenToChat: (Boolean) -> Unit = {},
     onOpenRelays: () -> Unit,
     onOpenLora: () -> Unit = {},
     // Whether the Internet-relay plane is introduced at all in this build. A parameter rather than a
@@ -271,7 +276,19 @@ internal fun ProfileScreenContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            ContentFilteringRow(
+            // A profile field like the name and status above it (peers see it on your profile), but a switch:
+            // persisted on toggle, not on Save, since that write is what republishes the profile.
+            ToggleRow(
+                title = stringResource(R.string.settings_open_to_chat_title),
+                subtitle = stringResource(R.string.settings_open_to_chat_subtitle),
+                enabled = form.openToChat,
+                onToggle = onToggleOpenToChat,
+                modifier = Modifier.testTag("profile_open_to_chat"),
+            )
+
+            ToggleRow(
+                title = stringResource(R.string.settings_content_filtering_title),
+                subtitle = stringResource(R.string.settings_content_filtering_subtitle),
                 enabled = form.contentFilteringEnabled,
                 onToggle = onToggleContentFiltering,
             )
@@ -345,15 +362,21 @@ private fun CharCounter(
     )
 }
 
-/** Toggle for on-device content moderation (abusive-text + explicit-image filtering). */
+/**
+ * A titled switch row — the open-to-chat flag and on-device content moderation (abusive-text +
+ * explicit-image filtering) share it.
+ */
 @Composable
-private fun ContentFilteringRow(
+private fun ToggleRow(
+    title: String,
+    subtitle: String,
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
         modifier =
-            Modifier
+            modifier
                 .fillMaxWidth()
                 // One toggle target: the row owns the switch so a screen reader announces the title +
                 // subtitle as the label with an on/off state, instead of an unlabelled switch node.
@@ -363,11 +386,11 @@ private fun ContentFilteringRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = stringResource(R.string.settings_content_filtering_title),
+                text = title,
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = stringResource(R.string.settings_content_filtering_subtitle),
+                text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -559,11 +582,21 @@ fun CharCounterPreview() =
 
 @Preview(showBackground = true)
 @Composable
-fun ContentFilteringRowPreview() =
+fun ToggleRowPreview() =
     KnitPreview {
         Column {
-            ContentFilteringRow(enabled = true, onToggle = {})
-            ContentFilteringRow(enabled = false, onToggle = {})
+            ToggleRow(
+                title = stringResource(R.string.settings_open_to_chat_title),
+                subtitle = stringResource(R.string.settings_open_to_chat_subtitle),
+                enabled = true,
+                onToggle = {},
+            )
+            ToggleRow(
+                title = stringResource(R.string.settings_content_filtering_title),
+                subtitle = stringResource(R.string.settings_content_filtering_subtitle),
+                enabled = false,
+                onToggle = {},
+            )
         }
     }
 
@@ -590,6 +623,7 @@ fun ProfileScreenPreview() =
                     alias = "Rustling Rabbit",
                     avatarHash = null,
                     contentFilteringEnabled = true,
+                    openToChat = true,
                     relay = RelaySummary(),
                     lora = LoraSummary(),
                     isDirty = true,

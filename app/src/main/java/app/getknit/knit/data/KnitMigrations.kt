@@ -212,6 +212,20 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v9 — the "open to chat" profile flag: one `peers.openToChat` column, the peer's declared availability as
+     * its latest profile carried it. `NOT NULL DEFAULT 0` because a flag nobody has asserted is off, which is
+     * also what the wire says (the field is elided while false), so every existing row reads correctly without
+     * a backfill. Additive only; the SQL must stay byte-equivalent to what Room generates for
+     * `app/schemas/**/9.json`.
+     */
+    val MIGRATION_8_9 =
+        object : Migration(8, 9) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE `peers` ADD COLUMN `openToChat` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
     /** All migrations, applied by Room in order. */
     val ALL: Array<Migration> =
         arrayOf(
@@ -222,5 +236,6 @@ object KnitMigrations {
             MIGRATION_5_6,
             MIGRATION_6_7,
             MIGRATION_7_8,
+            MIGRATION_8_9,
         )
 }

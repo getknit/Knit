@@ -80,6 +80,19 @@ class ProfileDetailsViewModelTest {
         }
 
     @Test
+    fun openToChatMirrorsThePeerRow() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer(nodeId, name = "Ada", openToChat = true))
+            advanceUntilIdle()
+            assertTrue(vm.state.value.openToChat)
+            peersFlow.value = listOf(peer(nodeId, name = "Ada"))
+            advanceUntilIdle()
+            assertFalse(vm.state.value.openToChat)
+        }
+
+    @Test
     fun onScannedMatchingPinnedKeyMarksVerified() =
         runTest {
             val vm = vm()

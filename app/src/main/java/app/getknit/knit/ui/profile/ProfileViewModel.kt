@@ -107,6 +107,15 @@ class ProfileViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     /**
+     * The "open to chat" profile flag. Bound to the DataStore flow like [contentFilteringEnabled] and
+     * persisted on toggle rather than on Save: a switch has no keystroke lag to absorb, and the write is what
+     * republishes the profile (`MeshManager.watchProfileChanges`) and arms the nearby cue.
+     */
+    val openToChat: StateFlow<Boolean> =
+        settings.openToChat
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /**
      * Summary of the Internet (spool) plane for the row that navigates to its own screen — the switch
      * itself lives there now, with the relay-list editor it needs to be actionable.
      */
@@ -180,6 +189,10 @@ class ProfileViewModel(
 
     fun setContentFilteringEnabled(value: Boolean) {
         viewModelScope.launch { settings.setContentFilteringEnabled(value) }
+    }
+
+    fun setOpenToChat(value: Boolean) {
+        viewModelScope.launch { settings.setOpenToChat(value) }
     }
 
     // The picked image awaiting crop. Held here (not in SavedStateHandle — a Bitmap is large and not

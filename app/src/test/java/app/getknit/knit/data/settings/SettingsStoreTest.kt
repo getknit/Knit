@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -126,6 +127,26 @@ class SettingsStoreTest {
             assertTrue(store.contentFilteringEnabled.first())
             store.setContentFilteringEnabled(false)
             assertEquals(false, store.contentFilteringEnabled.first())
+        }
+
+    @Test
+    fun `open to chat defaults off and round-trips on`() =
+        runTest {
+            val store = newStore()
+            assertFalse(store.openToChat.first())
+            store.setOpenToChat(true)
+            assertTrue(store.openToChat.first())
+        }
+
+    @Test
+    fun `the open-to-chat cue state is written as one unit`() =
+        runTest {
+            val store = newStore()
+            assertEquals(emptySet<String>(), store.openToChatNamed.first())
+            assertEquals(0L, store.openToChatLastPostAt.first())
+            store.setOpenToChatCueState(setOf("a|1", "a|2", "b|3"), 42L)
+            assertEquals(setOf("a|1", "a|2", "b|3"), store.openToChatNamed.first())
+            assertEquals(42L, store.openToChatLastPostAt.first())
         }
 
     @Test

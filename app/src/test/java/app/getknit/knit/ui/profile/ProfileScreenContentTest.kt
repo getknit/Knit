@@ -33,6 +33,7 @@ class ProfileScreenContentTest {
         isDirty: Boolean,
         relay: RelaySummary = RelaySummary(),
         lora: LoraSummary = LoraSummary(),
+        openToChat: Boolean = false,
     ) = ProfileFormState(
         name = "Alice",
         status = "Hiking",
@@ -40,6 +41,7 @@ class ProfileScreenContentTest {
         alias = "Cool Fox",
         avatarHash = null,
         contentFilteringEnabled = true,
+        openToChat = openToChat,
         relay = relay,
         lora = lora,
         isDirty = isDirty,
@@ -52,11 +54,13 @@ class ProfileScreenContentTest {
         onOpenRelays: () -> Unit = {},
         showInternetRelays: Boolean = true,
         lora: LoraSummary = LoraSummary(),
+        openToChat: Boolean = false,
+        onToggleOpenToChat: (Boolean) -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
                 ProfileScreenContent(
-                    form = form(isDirty, relay, lora),
+                    form = form(isDirty, relay, lora, openToChat),
                     batteryExempt = true,
                     onBack = {},
                     onNameChange = {},
@@ -64,6 +68,7 @@ class ProfileScreenContentTest {
                     onStatusChange = {},
                     onStatusCommit = {},
                     onToggleContentFiltering = {},
+                    onToggleOpenToChat = onToggleOpenToChat,
                     onOpenRelays = onOpenRelays,
                     showInternetRelays = showInternetRelays,
                     onPickPhoto = {},
@@ -84,6 +89,23 @@ class ProfileScreenContentTest {
         val hint = compose.onNodeWithTag("profile_alias", useUnmergedTree = true)
         hint.performScrollTo().assertIsDisplayed()
         hint.assertTextContains("Cool Fox", substring = true)
+    }
+
+    /** The open-to-chat row is one toggle target (the row owns its switch) and reports the flipped value. */
+    @Test
+    fun theOpenToChatRowTogglesTheFlagOn() {
+        var toggled: Boolean? = null
+        render(isDirty = false, onToggleOpenToChat = { toggled = it })
+        compose.onNodeWithTag("profile_open_to_chat").performScrollTo().performClick()
+        assertEquals(true, toggled)
+    }
+
+    @Test
+    fun theOpenToChatRowTogglesTheFlagOff() {
+        var toggled: Boolean? = null
+        render(isDirty = false, openToChat = true, onToggleOpenToChat = { toggled = it })
+        compose.onNodeWithTag("profile_open_to_chat").performScrollTo().performClick()
+        assertEquals(false, toggled)
     }
 
     @Test

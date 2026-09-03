@@ -10,6 +10,7 @@ import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReplyRef
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -75,7 +76,14 @@ class MessageContentV2Test {
                 ctl = null,
                 ack = null,
                 rp = ReactionPayload(messageId = FrameId.new(), emoji = "🔥"),
-                pr = ProfilePayload(name = "Alice", status = "out", avatarHash = "cd".repeat(32), version = 1_756_100_000_000L),
+                pr =
+                    ProfilePayload(
+                        name = "Alice",
+                        status = "out",
+                        avatarHash = "cd".repeat(32),
+                        version = 1_756_100_000_000L,
+                        openToChat = true,
+                    ),
                 acks = listOf(FrameId.new(), FrameId.new()),
             )
         assertEquals(full, roundTrip(full))
@@ -148,6 +156,18 @@ class MessageContentV2Test {
         assertEquals("report.pdf", back.attachmentName)
         assertEquals(1_400_000L, back.attachmentSize)
         assertEquals("application/pdf", back.attachmentMime)
+    }
+
+    /** The open-to-chat flag is additive: a profile without it carries no label 5, so an older peer's bytes are unchanged. */
+    @Test
+    fun aProfileWithoutTheOpenToChatFlagCarriesNoLabelFive() {
+        val off = MessageContent(body = "", ctl = MessageContent.CTL_PROFILE, pr = ProfilePayload(name = "A", status = "", version = 5L))
+        val on = off.copy(pr = checkNotNull(off.pr).copy(openToChat = true))
+        val offBytes = checkNotNull(MessageContentV2.encodeOrNull(off))
+        val onBytes = checkNotNull(MessageContentV2.encodeOrNull(on))
+        assertEquals("label 5 + `f5`", offBytes.size + 2, onBytes.size)
+        assertFalse(checkNotNull(roundTrip(off).pr).openToChat)
+        assertTrue(checkNotNull(roundTrip(on).pr).openToChat)
     }
 
     /** The two file labels are additive: an image's compact bytes must not move because they exist. */

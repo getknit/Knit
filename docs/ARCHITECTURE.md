@@ -323,7 +323,8 @@ class RelayEnvelope(type: String, id, senderId, sentAt, recipientId?, group?, @B
 // L3 — per-type content inside `payload` (only endpoints parse it):
 data class ChatContent(body="", mentions, attachmentHash?, attachmentMime?, enc?)     // enc = EncEnvelope for a DM/group
                                                                                      // (a sealed frame sets attachmentHash only — ADR 035)
-data class ProfileContent(name, status, avatarHash?, pubKey?, deviceTag?, protoVersion?, capabilities?)
+data class ProfileContent(name, status, avatarHash?, pubKey?, deviceTag?, protoVersion?, capabilities?, prekey?, version?,
+                          openToChat = false)                                    // the flag is elided while off
 data class ReactionContent(messageId, emoji?)  ·  ReceiptContent(ackId)  ·  GroupLeaveContent(groupId)
 data class BlobReqContent(hash)  ·  KeyReqContent(nodeIds)               // a groupupdate carries its GroupInfo in `group`
 
@@ -534,7 +535,8 @@ that budget is a purely local knob that can differ per node without breaking cue
     plus `markReceived`, `deleteByConversation`, and `hashesNeedingFetch`.
   - `peers`: `nodeId` (PK), `name`, `status`, `avatarHash?`, `pubKey?` (pinned E2E public-key bundle),
     `verified` (out-of-band key confirmation, see §14), `deviceTag?` (key-independent block-list
-    continuity), `protoVersion?` / `capabilities?` (advertised, diagnostic), `updatedAt`.
+    continuity), `protoVersion?` / `capabilities?` (advertised, diagnostic), `updatedAt`, `openToChat` (their
+    declared availability, ADR 2026-09.74fq).
   - `reactions`: composite PK `(messageId, reactorNodeId)`, `emoji?`, `updatedAt` (see §6).
   - `blobs`: `hash` (PK, SHA-256), `mime`, `bytes` — content-addressed attachment bytes (avatars, images,
     voice notes, arbitrary files); E2E-attachment bytes are stored as **ciphertext**, addressed by their
@@ -607,7 +609,16 @@ that budget is a purely local knob that can differ per node without breaking cue
   `onDismissed`. `NotificationChannels` registers the channels per context: `knit_msg_nearby`
   (`IMPORTANCE_DEFAULT` — the busy broadcast room), plus `knit_msg_dms`, `knit_msg_groups_v2`, and a
   dedicated `knit_msg_mentions` (all `IMPORTANCE_HIGH`); separate app channels are the foreground-service
-  `knit_mesh` (`IMPORTANCE_MIN`) and `knit_alerts` (`IMPORTANCE_LOW`).
+  `knit_mesh` (`IMPORTANCE_MIN`), `knit_alerts` (`IMPORTANCE_LOW`), and `knit_open_to_chat`
+  (`IMPORTANCE_DEFAULT`) for the presence cue below.
+- **The "open to chat" cue** (`presence/`): a profile flag (`ProfileContent.openToChat`, carried on both
+  profile paths, stored as `PeerEntity.openToChat`) plus one standalone notification — "Sam is nearby and open
+  to chat" / "3 people nearby are open to chat" — that opens the Nearby room. `OpenToChatWatch` (started by
+  `MeshManager.start`) joins the own flag, the short-range `neighbors` set, the peer rows carrying the flag and
+  the block list; the pure `OpenToChatPolicy` batches newcomers for 20 s, re-cues a person only per encounter
+  (out of range ≥ 15 min, ≥ 2 h since their last cue, ≤ 2 cues a day), and posts at most once an hour overall,
+  holding later arrivals for the next post. Its per-person stamps and the last post time persist in
+  `SettingsStore` so a restart cannot re-buzz.
 - **Room/DM notifications** use `NotificationCompat.MessagingStyle` so multiple senders show in one
   grouped notification; `NotificationHistory` keeps the last ~8 `NotifMessage`s for that context, and
   each becomes a `Person`-attributed line with the sender's cached avatar.

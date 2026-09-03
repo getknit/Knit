@@ -5,6 +5,7 @@ import app.getknit.knit.notifications.NotifMessage
 import app.getknit.knit.notifications.NotificationHistory
 import app.getknit.knit.notifications.incomingNotification
 import app.getknit.knit.notifications.mentionNotification
+import app.getknit.knit.notifications.openToChatNames
 import app.getknit.knit.notifications.summaryCounts
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,6 +21,13 @@ class NotificationTest {
         id: String,
         conversationId: String = "nearby",
     ) = NotifMessage(senderId = id, senderName = id, body = "hi $id", sentAt = 0L, conversationId = conversationId, avatarBytes = null)
+
+    @Test
+    fun openToChatNamesPrintsTwoAndFoldsTheRest() {
+        assertEquals(listOf("Sam") to 0, openToChatNames(listOf("Sam")))
+        assertEquals(listOf("Sam", "Dani") to 0, openToChatNames(listOf("Sam", "Dani")))
+        assertEquals(listOf("Sam", "Dani") to 3, openToChatNames(listOf("Sam", "Dani", "Theo", "Priya", "Lena")))
+    }
 
     @Test
     fun historyKeepsOnlyMostRecentInOrder() {

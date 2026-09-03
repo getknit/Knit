@@ -82,6 +82,7 @@ internal object MessageContentV2 {
                         status = it.status,
                         avatarHash = it.avatarHash?.let(::hashBytes),
                         version = it.version,
+                        openToChat = it.openToChat,
                     )
                 },
         )
@@ -137,6 +138,7 @@ internal object MessageContentV2 {
                             status = it.status,
                             avatarHash = it.avatarHash?.let(CanonicalText::hashText),
                             version = it.version,
+                            openToChat = it.openToChat,
                         )
                     },
             )
@@ -154,6 +156,8 @@ internal object MessageContentV2 {
      * since `ignoreUnknownKeys` skips a label it does not model: a new label is additive, a new *form* (the
      * group form) is a new envelope version. `14`/`15` are the file attachment's name and byte count (ADR
      * 2026-09.qq2r), which took the next free labels rather than the reserved pair. Never recycle a label.
+     * The nested layouts are append-only too: `ProfileV2`'s label 5 is the open-to-chat flag (defaulted, so
+     * elided while off — a profile without it decodes as before).
      */
     @Serializable
     @Suppress("MagicNumber") // the CBOR labels are the layout itself, pinned by GoldenVectorTest
@@ -232,6 +236,8 @@ internal object MessageContentV2 {
         val avatarHash: ByteArray? = null,
         @CborLabel(4)
         val version: Long = 0L,
+        @CborLabel(5)
+        val openToChat: Boolean = false,
     )
 }
 

@@ -76,6 +76,8 @@ import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.moderation.ScopedTextModerator
 import app.getknit.knit.normalizeSingleLine
 import app.getknit.knit.notifications.Notifier
+import app.getknit.knit.presence.OpenToChatPolicy
+import app.getknit.knit.presence.OpenToChatWatch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -245,6 +247,28 @@ class MeshManager(
             now = clock,
             flush = { authorId, ackIds -> flushDmAcks(authorId, ackIds) },
             flushScope = { sessionScope },
+        )
+
+    // The "someone nearby is open to chat" cue: the join of our own flag, the short-range reachable set, the
+    // peer rows carrying the flag and the block list, batched and cooled down by OpenToChatPolicy. Started
+    // on the session scope in start(); its durable half (who was named when, the last post) lives in settings.
+    internal val openToChatWatch =
+        OpenToChatWatch(
+            ownFlag = settings.openToChat,
+            neighborIds = nearbyPeers.map { nearby -> nearby.mapTo(HashSet()) { it.nodeId } },
+            openIds = peers.observePeers().map { rows -> rows.filter { it.openToChat }.mapTo(HashSet()) { it.nodeId } },
+            blocked = settings.blockedNodeIds,
+            loadState = {
+                OpenToChatWatch.Persisted(
+                    named = OpenToChatPolicy.decodeNamed(settings.openToChatNamed.first()),
+                    lastPostAt = settings.openToChatLastPostAt.first(),
+                )
+            },
+            persist = { settings.setOpenToChatCueState(OpenToChatPolicy.encodeNamed(it.named), it.lastPostAt) },
+            post = ::postOpenToChat,
+            clear = notifier::clearOpenToChat,
+            now = clock,
+            log = { Log.d(TAG, it) },
         )
 
     // Bounded in-memory buffer of frames dropped for a missing sender key: parked alongside the key
@@ -470,6 +494,7 @@ class MeshManager(
         transport.start()
         watchNeighbors(session)
         watchReachable(session)
+        openToChatWatch.start(session)
         seedOwnProfileCustody(session)
         watchProfileChanges(session)
         watchIncomingFiles(session)
@@ -1786,10 +1811,29 @@ class MeshManager(
         }
     }
 
+    /**
+     * Posts the open-to-chat cue for [peerIds] (arrival order): the collision-aware label per peer (ADR 058,
+     * the same resolution `InboundPipeline.notifyIncoming` uses) and, for a lone person, their avatar bytes.
+     * A peer whose row is gone by now is simply not named.
+     */
+    private suspend fun postOpenToChat(peerIds: List<String>) {
+        val labels = peers.labelIndex()
+        val rows = peerIds.mapNotNull { peers.find(it) }
+        if (rows.isEmpty()) return
+        val names = rows.map { labels.labelFor(it.nodeId, it.name).text }
+        val avatar = rows.singleOrNull()?.avatarHash?.let { blobs.bytes(it) }
+        notifier.notifyOpenToChat(names, avatar)
+    }
+
     private fun watchProfileChanges(session: CoroutineScope) {
         session.launch {
-            combine(settings.displayName, settings.status, settings.avatarUpdatedAt) { name, status, avatarAt ->
-                Triple(name, status, avatarAt)
+            combine(
+                settings.displayName,
+                settings.status,
+                settings.avatarUpdatedAt,
+                settings.openToChat,
+            ) { name, status, avatarAt, openToChat ->
+                OwnPresentation(name, status, avatarAt, openToChat)
             }.drop(1) // skip the initial stored value; only react to real edits
                 // A Save writes name+status in one transaction; without this the duplicate flow
                 // re-emits would broadcast more than once. Also drops no-op saves.
@@ -1936,6 +1980,7 @@ class MeshManager(
                     status = normalizeSingleLine(settings.status.first()).take(TextLimits.STATUS),
                     avatarHash = avatarHash,
                     version = version,
+                    openToChat = settings.openToChat.first(),
                 ),
         )
 
@@ -2026,6 +2071,7 @@ class MeshManager(
                 capabilities = Protocol.LOCAL_CAPABILITIES,
                 prekey = PrekeyInfo(id = spk.id, pub = spk.pub, sig = spk.sig),
                 version = version,
+                openToChat = settings.openToChat.first(),
             )
         return RelayEnvelope(
             type = FrameType.PROFILE,
@@ -2348,6 +2394,14 @@ class MeshManager(
         val EMPTY_PAYLOAD = ByteArray(0)
     }
 }
+
+/** The own-profile fields whose edit republishes the profile (`watchProfileChanges`). */
+private data class OwnPresentation(
+    val name: String,
+    val status: String,
+    val avatarUpdatedAt: Long,
+    val openToChat: Boolean,
+)
 
 /** `"<peerId>|<millis>"` entries ↔ a peer→stamp map, the intro driver's two settings sets. */
 private fun decodeStamped(entries: Set<String>): Map<String, Long> =

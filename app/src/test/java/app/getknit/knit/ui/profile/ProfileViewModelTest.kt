@@ -43,6 +43,7 @@ class ProfileViewModelTest {
     private val statusFlow = MutableStateFlow("Hiking")
     private val avatarHashFlow = MutableStateFlow<String?>(null)
     private val filteringFlow = MutableStateFlow(true)
+    private val openToChatFlow = MutableStateFlow(false)
     private val spoolEnabledFlow = MutableStateFlow(false)
     private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
     private val activeSpoolUrlsFlow = MutableStateFlow(emptySet<String>())
@@ -55,6 +56,7 @@ class ProfileViewModelTest {
         every { settings.status } returns statusFlow
         every { settings.ownAvatarHash } returns avatarHashFlow
         every { settings.contentFilteringEnabled } returns filteringFlow
+        every { settings.openToChat } returns openToChatFlow
         every { settings.spoolEnabled } returns spoolEnabledFlow
         every { settings.spoolUrls } returns spoolUrlsFlow
         every { settings.activeSpoolUrls } returns activeSpoolUrlsFlow
@@ -66,6 +68,23 @@ class ProfileViewModelTest {
     }
 
     private fun vm() = ProfileViewModel(settings, identity, avatars, blobs, MutableStateFlow(RelayFacts()), MutableStateFlow(LoraFacts()))
+
+    /** The switch binds straight to the store (no keystroke lag to absorb) and persists on toggle, not on Save. */
+    @Test
+    fun openToChatMirrorsTheStoreAndPersistsOnToggle() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.openToChat.collect {} }
+            advanceUntilIdle()
+            assertFalse(vm.openToChat.value)
+            openToChatFlow.value = true
+            advanceUntilIdle()
+            assertTrue(vm.openToChat.value)
+
+            vm.setOpenToChat(false)
+            advanceUntilIdle()
+            coVerify { settings.setOpenToChat(false) }
+        }
 
     @Test
     fun loadsPersistedProfileAndIsNotDirty() =

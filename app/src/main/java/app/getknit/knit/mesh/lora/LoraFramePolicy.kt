@@ -49,11 +49,19 @@ internal object LoraFramePolicy {
         }
 
     /**
-     * How a frame ranks when the bridge can only afford a few (ADR 044). The cleartext `profile` comes first
-     * because nothing the far side receives verifies without the author's key — serving a DM to a peer that
-     * cannot check its signature is airtime spent on a frame that will be dropped. Sealed DM-form chat
-     * outranks the ambient room for the same reason it does in the pacing queue: somebody is specifically
-     * waiting for it. Lower is better.
+     * How a frame ranks when the bridge can only afford a few (ADR 044, reordered by ADR 2026-09.rre4).
+     * Lower is better.
+     *
+     * The cleartext `profile` still comes first, because nothing the far side receives verifies without the
+     * author's key — serving anything to a peer that cannot check its signature is airtime thrown away.
+     *
+     * The **room then outranks DM-form chat**, which is the reverse of the pacing queue's [FrameClass] order
+     * and deliberately so: the two answer different questions. The queue asks who transmits first once both
+     * frames are already paid for, and there a DM wins because one named person is waiting. The rank asks
+     * which frames are worth the *scarce* slots — four per offer — and there the room wins on both terms of
+     * the trade. A bridged room post is readable by every member of the far pocket, while a bridged DM has
+     * exactly one addressee (and `coveredByLink` has already dropped the ones a link would carry). It is
+     * also cheaper: a cleartext room post is typically one packet, a sealed DM two.
      */
     fun backfillRank(env: RelayEnvelope): Int =
         when {
@@ -63,8 +71,8 @@ internal object LoraFramePolicy {
         }
 
     private const val RANK_PROFILE = 0
-    private const val RANK_DM = 1
-    private const val RANK_ROOM = 2
+    private const val RANK_ROOM = 1
+    private const val RANK_DM = 2
 
     /** DM-form chat: addressed to one recipient, no group — a DM, or any sealed ctl frame riding as one. */
     fun isDmForm(env: RelayEnvelope): Boolean = env.type == FrameType.CHAT && env.recipientId != null && env.group == null

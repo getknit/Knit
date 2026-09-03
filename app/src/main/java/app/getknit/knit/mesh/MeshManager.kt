@@ -2145,9 +2145,9 @@ class MeshManager(
 
     /**
      * [BridgeFrameSource]: the carriable frames we hold whose id prefix [theirPrefixes] does not name — what
-     * the publishing gateway is missing. Ranked by [LoraFramePolicy.backfillRank] (key bootstrap, then sealed
-     * DMs, then the room) and newest-first within a rank, then capped at [limit]; the caller's airtime budget
-     * is the real bound and usually bites first.
+     * the publishing gateway is missing. Ranked by [LoraFramePolicy.backfillRank] (key bootstrap, then the
+     * room, then sealed DMs — ADR 2026-09.rre4) and newest-first within a rank, then capped at [limit]; the
+     * caller's airtime budget is the real bound and usually bites first.
      *
      * A prefix that collides makes a frame look present when it is not, so it is skipped this round. That is
      * the accepted cost of fitting a useful window into one packet (see [LoraCtl]); nothing here is a trust

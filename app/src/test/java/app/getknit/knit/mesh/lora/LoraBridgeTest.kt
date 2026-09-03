@@ -383,6 +383,47 @@ class LoraBridgeTest {
             )
         }
 
+    /**
+     * ADR 2026-09.rre4: an offer buys four slots, and the room takes one before the DMs do.
+     *
+     * The scarce resource here is the slot, not the queue position — once both frames are paid for the pacing
+     * queue still transmits the DM first, since [FrameClass] answers a different question. What the rank buys
+     * is that a pocket with a backlog of DMs cannot spend every round on them while the room never crosses.
+     */
+    @Test
+    fun aScarceAllowanceSpendsASlotOnTheRoomBeforeItSpendsFourOnDms() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            a.transport.onForeignReachable(setOf("a2"))
+            b.transport.onForeignReachable(setOf("b2"))
+            runCurrent()
+
+            // More missing frames than one offer can buy. Alice's profile is not among them — her session-up
+            // beacon already reached B, so B's offer names it — leaving one room post against a backlog of
+            // five DMs for a peer only pocket B can reach.
+            val room = frame("a2", body = "room post")
+            val dms = List(5) { frame("a2", body = "dm $it", recipientId = "b2") }
+            a.custody.held += room
+            a.custody.held += dms
+
+            advanceTimeBy(toFirstOffer)
+            runCurrent()
+            advanceTimeBy(30_000)
+            runCurrent()
+
+            val crossed = b.received.mapTo(HashSet()) { it.envelope.id }
+            assertTrue("the room post takes one of the four slots", idOf(room) in crossed)
+            assertEquals(
+                "the room takes one of the four slots, so three of the five DMs cross rather than four",
+                3,
+                dms.count { idOf(it) in crossed },
+            )
+        }
+
     @Test
     fun aSecondBoardInThePocketGoesPassiveAndPutsNothingOnTheAir() =
         runTest {

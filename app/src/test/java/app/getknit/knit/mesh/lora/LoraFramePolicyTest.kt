@@ -4,6 +4,7 @@ import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -89,5 +90,21 @@ class LoraFramePolicyTest {
     @Test
     fun typingIsRefusedOnTheTargetedPathEvenThoughItIsRelayFalse() {
         assertFalse(targeted(env(FrameType.TYPING, recipientId = "alice"), wire(relay = false), to = "alice"))
+    }
+
+    /**
+     * The backfill's scarce-slot order (ADR 2026-09.rre4): profile, then the room, then DM-form. The room
+     * ahead of the DM is the reverse of the pacing queue's [FrameClass] order and must stay that way — the
+     * queue decides who transmits first, this decides which frames are worth one of four slots an offer buys.
+     */
+    @Test
+    fun theBackfillRanksTheRoomAheadOfADmAndAProfileAheadOfBoth() {
+        val profile = LoraFramePolicy.backfillRank(env(FrameType.PROFILE))
+        val room = LoraFramePolicy.backfillRank(env(FrameType.CHAT))
+        val dm = LoraFramePolicy.backfillRank(env(FrameType.CHAT, recipientId = "bob"))
+        assertTrue("the key bootstrap outranks everything", profile < room)
+        assertTrue("a room post outranks a DM", room < dm)
+        // A cleartext room reaction ranks with the room it belongs to, not below the DMs.
+        assertEquals(room, LoraFramePolicy.backfillRank(env(FrameType.REACTION)))
     }
 }

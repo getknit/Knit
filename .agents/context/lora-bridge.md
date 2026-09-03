@@ -199,7 +199,10 @@ prefixes (`StoreDigest.hash64` truncated), never fragmented, one packet. `LoraGo
 5 → 15 min doubling, transmit in the interval's second half, snap to the floor on news, suppress only on **set
 equality** (a superset has not said what we needed to say). On a far gateway's OFFER: `BridgeFrameSource`
 (`MeshManager` over `ForwardStore.liveFrames`, already TTL- and quota-bounded, so no extra age gate) returns
-what the prefixes don't name, ranked profile → DM → room newest-first; ≤ 4 per offer, ≤ 12 per publisher per
+what the prefixes don't name, ranked profile → room → DM newest-first (ADR 2026-09.rre4 — the reverse of the
+pacing queue's `FrameClass` order, on purpose: the queue asks who transmits first, the rank asks which frames
+are worth a scarce slot, and a room post is readable by the whole far pocket for typically one packet against
+a DM's one addressee for two); ≤ 4 per offer, ≤ 12 per publisher per
 hour, and hard-bounded by the BRIDGE budget. Frames are re-wrapped verbatim like any custody
 re-serve — no wire change, no custody rule touched. `SettingsStore.loraBridgeEnabled` (default **on**, the
 "Bridge distant groups" switch) gates offering and serving together.

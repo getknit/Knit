@@ -14,7 +14,7 @@ Your phones talk directly to each other over Wi-Fi Aware and Bluetooth LE, and r
 ![Transports](https://img.shields.io/badge/radios-Wi--Fi%20Aware%20%2B%20BLE-00BCD4)
 ![Encryption](https://img.shields.io/badge/DMs%20%26%20groups-E2E%20%2B%20forward%20secrecy-2EA043?logo=signal&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
-![Version](https://img.shields.io/badge/version-2.2.3-FF6F61)
+[![Latest release](https://img.shields.io/github/v/release/getknit/knit?label=release&color=FF6F61)](https://github.com/getknit/knit/releases/latest)
 [![Knit changelog on whatsnew.fyi](https://whatsnew.fyi/product/knit/badge.svg)](https://whatsnew.fyi/product/knit)
 
 <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02_chat-nearby.png"
@@ -52,7 +52,6 @@ dependency** and **end-to-end encryption** on direct and group messages.
 | **Encryption** | E2E on 1:1 DMs & group chats, forward-secret between current builds (X3DH-style bootstrap + epoch ratchet, AES-256-GCM, Ed25519); at-rest DB via SQLCipher |
 | **Works without** | Internet, cellular, Wi-Fi routers, accounts, phone numbers, or any server |
 | **License** | GPL-3.0-or-later — free and open source |
-| **Status** | v2.2.3 on Play and F-Droid; forward secrecy and sealed receipts/reactions landed on `main` |
 
 ## Contents
 
@@ -73,16 +72,12 @@ dependency** and **end-to-end encryption** on direct and group messages.
 - [License](#-license)
 
 > [!NOTE]
-> **Status — v2.2.3 on the stores.** Feature-complete: a **"Nearby" public broadcast room**, **1:1
-> direct messages**, and **multi-member group chats**, with profiles (name / status / avatar), emoji
-> reactions, @-mentions, and image attachments. **Direct and group messages are end-to-end
-> encrypted** — bodies, mentions, and image attachments are readable only by their intended recipients,
-> even though every message floods through relay devices. The public Nearby room is plaintext by design
-> (no fixed recipient set). See the [Security note](#-security-note).
->
-> **Landed on `main`, not yet in a published release:** forward secrecy for DMs and group chats, and
-> encrypted delivery receipts and reactions. Both are described in the [Security
-> note](#-security-note) and ship in the next release.
+> Knit is feature-complete: a **"Nearby" public broadcast room**, **1:1 direct messages**, and
+> **multi-member group chats**, with profiles (name / status / avatar), emoji reactions, @-mentions,
+> and image attachments. **Direct and group messages are end-to-end encrypted** — bodies, mentions,
+> and image attachments are readable only by their intended recipients, even though every message
+> floods through relay devices. The public Nearby room is plaintext by design (no fixed recipient
+> set). See the [Security note](#-security-note).
 
 ## 📥 Install
 
@@ -200,7 +195,7 @@ Knit is built for situations where there's **no reliable network but people are 
   required.
   - Wi-Fi Aware uses Instant Communication Mode + `NEARBY_WIFI_DEVICES` on **API 33+**, falling back to
     `ACCESS_FINE_LOCATION` (location-scoped, no ICM) on **API 29–32**.
-- **JDK 21** and the **Android SDK** (compileSdk 37.1) to build.
+- **JDK 21** and the **Android SDK** to build (versions in [Tech stack](#-tech-stack)).
 - Real mesh testing needs **two or more physical devices** — see [Running](#-running).
 
 ## 🧰 Tech stack
@@ -220,14 +215,14 @@ Knit is built for situations where there's **no reliable network but people are 
 | App sharing | ARSCLib + apksig (on-device split-APK merge & re-sign) |
 | Quality | detekt · ktlint · Kover (all pinned; detekt/ktlint run as Gradle plugins) |
 
-> The bleeding-edge toolchain (AGP 9.3.0 / Kotlin 2.4.0) forces several non-obvious choices — Koin over
+> The bleeding-edge toolchain forces several non-obvious choices — Koin over
 > Hilt, a Kotlin override off AGP's bundled compiler, and Gradle-plugin linting. See
 > [`AGENTS.md`](AGENTS.md) before touching build config or dependencies.
 
 ## 🔨 Build
 
 The source lives at **<https://github.com/getknit/knit>**. You need **JDK 21** and the
-Android SDK (compileSdk 37.1) — Android Studio is optional. When building from the command line without
+Android SDK — Android Studio is optional. When building from the command line without
 Studio, point Gradle at your SDK first: create a git-ignored `local.properties` containing
 `sdk.dir=/path/to/Android/Sdk`, or export `ANDROID_HOME`.
 
@@ -310,9 +305,9 @@ there are no accounts, sign-ups, phone numbers, or servers.
 **If it's offline, why does the app declare the `INTERNET` permission?**
 For two reasons. Wi-Fi Aware forms a direct radio link between two phones and runs a TCP socket *over
 that local link* (link-local IPv6, no router or gateway), which Android gates behind the `INTERNET`
-permission even though no traffic leaves the mesh — that alone would require it. Since 2.4.0 the
-optional [Internet relay plane](#-roadmap) also uses it, once you switch it on; it is off on a fresh
-install, which therefore makes no network calls at all. Knit bundles no analytics, telemetry, or crash
+permission even though no traffic leaves the mesh — that alone would require it. The optional
+[Internet relay plane](#-roadmap) also uses it, once you switch it on; it is off on a fresh install,
+which therefore makes no network calls at all. Knit bundles no analytics, telemetry, or crash
 reporting either way — you can confirm all of it from the source and the deliberately GMS-free
 dependency list.
 
@@ -381,7 +376,7 @@ offline app sharing.
 - **Encrypting the broadcast room** — the last cleartext plane, and as much a product question as a
   crypto one: a room with no fixed recipient set has nobody in particular to encrypt to.
 
-**Shipped since 2.4.0, off until you switch it on:** an optional Internet layer that carries DMs and
+**Optional, and off until you switch it on:** an Internet layer that carries DMs and
 group messages between contacts you already have when no radio path exists, keeping the mesh's
 delay-tolerant behaviour and running through small relays ("spools") that hold sealed frames without
 learning whose they are or what is in them. The protocol is specified in [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) with

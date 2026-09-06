@@ -17,12 +17,12 @@ Your phones talk directly to each other over Wi-Fi Aware and Bluetooth LE, and r
 [![Latest release](https://img.shields.io/github/v/release/getknit/knit?label=release&color=FF6F61)](https://github.com/getknit/knit/releases/latest)
 [![Knit changelog on whatsnew.fyi](https://whatsnew.fyi/product/knit/badge.svg)](https://whatsnew.fyi/product/knit)
 
-<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02_chat-nearby.png"
-     alt="Knit's Nearby broadcast room: a header reading &quot;Connected to 3 mesh nodes&quot;, message bubbles with an @-mention, emoji reactions, delivery ticks, and a photo attachment"
+<img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01_chat-nearby.png"
+     alt="Knit's Nearby broadcast room: a header reading &quot;Connected to 3 mesh nodes&quot;, a line carried in over a LoRa board, a photo attachment, and a link-preview card the sender fetched and sent with the link"
      width="300">
 
-<sub>The public <b>Nearby</b> room, relayed over Wi-Fi Aware + BLE with no internet — mentions, reactions,
-delivery ticks, and image attachments included.</sub>
+<sub>The public <b>Nearby</b> room, relayed over Wi-Fi Aware + BLE with no internet — photos, link previews,
+and a line that came the long way over a LoRa radio.</sub>
 
 </div>
 

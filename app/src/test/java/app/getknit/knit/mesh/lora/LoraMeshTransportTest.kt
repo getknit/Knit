@@ -955,6 +955,56 @@ class LoraMeshTransportTest {
             b.transport.stop()
         }
 
+    /**
+     * A board between sessions must cost the queue nothing. The two states look alike from the send path and
+     * are opposites: a slot that is not the Knit channel is a frame that must never leave, while a link that
+     * is merely down is a frame that has not left *yet*.
+     *
+     * Field-observed 2026-09-06: a lab Pixel 7's board flapped five times in twenty minutes, and the
+     * escalating reconnect backoff (93 s by the fifth) let the pacer take and discard one queued frame per
+     * gap — six destroyed in eighteen seconds, logged as `slot 1 is not the Knit channel — set this board up`
+     * against a board whose setup was never wrong. Nothing else holds a copy of a frame the pacer has taken,
+     * so this is silent, permanent loss on the one plane whose whole point is reaching a peer no other plane
+     * can.
+     */
+    @Test
+    fun framesQueuedWhileTheBoardIsReconnectingSurviveTheOutage() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            // The real pacer's floor, not the rig's default 0: the bug was one lost frame *per gap*, so a
+            // test that never gaps cannot see how much an outage costs.
+            val a = rig(air, 1u, "alice", backgroundScope, pace = LoraPacePolicy(minGapMs = 3_000)) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+            val airedBeforeOutage = a.link.sent.size
+
+            a.link.drop()
+            runCurrent()
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate in ten"))
+            runCurrent()
+            advanceTimeBy(93_000) // the backoff the field actually saw — thirty-one pacer gaps
+            runCurrent()
+
+            assertEquals("nothing leaves a board that is not there", airedBeforeOutage, a.link.sent.size)
+            assertEquals("and no frame is charged to the channel guard", 0L, a.metrics.snapshot().loraSuppressed)
+
+            a.link.ready()
+            runCurrent()
+            advanceTimeBy(5_000)
+            runCurrent()
+
+            assertTrue(
+                "the frame the outage held reaches bob once the board is back",
+                b.received.any { it.envelope.senderId == "alice" && it.envelope.type == FrameType.CHAT },
+            )
+            a.transport.stop()
+            b.transport.stop()
+        }
+
     @Test
     fun aLongRoomChatFragmentsAndReassembles() =
         runTest {

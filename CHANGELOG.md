@@ -64,6 +64,8 @@ document:
   picker and nearby count now show only what your own radios can currently see.
 - A Nearby room message sent while two radios were out of range of each other now arrives when they come
   back into range. It used to wait for the phones to get close enough for Wi-Fi or Bluetooth instead.
+- Messages waiting on your Meshtastic radio now survive a dropped Bluetooth connection. Knit used to
+  discard them one at a time while the phone reconnected, so a message could vanish without ever being sent.
 - Message details for a room post names more of the people who got it. The list now says it may not be
   everyone who received the post.
 

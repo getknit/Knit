@@ -595,9 +595,15 @@ internal class LoraMeshTransport(
      *
      * A board that reports no channel table at all is given the benefit of the doubt: going mute on firmware
      * whose table we failed to read would be a worse failure than the one this guards against.
+     *
+     * Takes [channels] rather than reading the link itself, because "the board is between sessions" is not an
+     * answer to this question and must never be confused with one: a disconnected link used to fail here and
+     * cost the frame, when the only correct handling of it is to put the frame back — see [sendFrame].
      */
-    private fun boundSlotIsKnit(index: Int): Boolean {
-        val channels = (link.state.value as? LinkState.Ready)?.channels ?: return false
+    private fun boundSlotIsKnit(
+        channels: List<ChannelInfo>,
+        index: Int,
+    ): Boolean {
         if (channels.isEmpty()) return true
         return channels.any { it.index == index && it.name == KnitChannel.NAME }
     }
@@ -884,16 +890,24 @@ internal class LoraMeshTransport(
 
     private suspend fun pacerLoop() {
         while (scope.isActive) {
-            val frame = pace.take(clock())
-            // Reported after every take, admitted or not: one bucket can be spent while another still flows,
-            // and it is the *held* frame that has to be visible — nothing else counts it until the queue
-            // fills and sheds it as an ordinary drop.
-            pace.lastAirtimeHolds.forEach { metrics.onLoraAirtimeHeld(it.name) }
-            if (frame == null) {
-                waitForNextSend()
-                continue
-            }
-            sendFrame(frame)
+            // Nothing leaves while the board is between sessions, so take nothing: a frame off the queue has
+            // no owner but the pacer, and every take during an outage is one more round-trip through
+            // [requeue]. [onLinkState] wakes this the moment the handshake completes, and [waitForNextSend]'s
+            // idle tick is the net under a missed wake.
+            val frame =
+                if (link.state.value is LinkState.Ready) {
+                    pace.take(clock()).also {
+                        // Reported after every take, admitted or not: one bucket can be spent while another
+                        // still flows, and it is the *held* frame that has to be visible — nothing else counts
+                        // it until the queue fills and sheds it as an ordinary drop. Inside this branch
+                        // because [LoraPacePolicy.lastAirtimeHolds] clears on entry to `take` and nowhere
+                        // else: reading it on a wake that took nothing re-reports the previous wake's holds.
+                        pace.lastAirtimeHolds.forEach { hold -> metrics.onLoraAirtimeHeld(hold.name) }
+                    }
+                } else {
+                    null
+                }
+            if (frame == null) waitForNextSend() else sendFrame(frame)
         }
     }
 
@@ -925,8 +939,18 @@ internal class LoraMeshTransport(
             sendPublicFrame(frame)
             return
         }
+        // The board went away between the take and here — a GATT drop, or the reconnect backoff still running.
+        // The frame is owed either way, so it goes back on the queue: nothing else holds a copy, and the
+        // pacer would otherwise eat one every `minGapMs` for the whole outage. Field-observed on a board whose
+        // link flapped five times in twenty minutes: a 93-second backoff destroyed six queued frames, and the
+        // log blamed the channel setup because this read a missing link as the wrong slot.
+        val ready = link.state.value as? LinkState.Ready
+        if (ready == null) {
+            requeue(frame)
+            return
+        }
         val ch = currentConfig?.channelIndex ?: return
-        if (!boundSlotIsKnit(ch)) {
+        if (!boundSlotIsKnit(ready.channels, ch)) {
             metrics.onLoraSuppressed()
             log("lora send skipped: slot $ch is not the Knit channel — set this board up")
             return
@@ -1204,6 +1228,9 @@ internal class LoraMeshTransport(
                 log("lora ready: evicted $evicted queued frame(s) chunked past the negotiated cap $maxPayload")
             }
             metrics.onLoraSessionUp()
+            // The pacer parks itself while the link is down, so the queue it kept across the outage only
+            // moves again if the session-up wakes it.
+            wake.trySend(Unit)
             pace.airtime.onRadioConfig(state.radio)
             // 2.8 signs the broadcasts it sends for us, which is airtime the budget has to know about.
             pace.airtime.onFirmware(state.board.firmwareVersion, state.board.hasXeddsa)

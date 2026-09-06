@@ -13,12 +13,14 @@ import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.withReply
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.mesh.protocol.LinkPreviewBlob
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
 import org.koin.core.Koin
@@ -76,9 +78,18 @@ class DemoWriter(
                     verified = p.verified,
                     updatedAt = now,
                     openToChat = p.openToChat,
+                    // The board a contact's own profile claims, and the key it signs under — what lets a post
+                    // heard on the radio channel resolve to them, and the Profile Details "their board" row
+                    // have something to name.
+                    loraNode = p.loraNode,
+                    loraKey = p.loraKey,
                 ),
             )
         }
+        // Our own availability flag, on: the Profile screen's switch is a control worth photographing in its
+        // set state, and it is the local half of the cue the peer badges are the remote half of. Not a
+        // scenario field — it reads the same at a trailhead and on the playa, like the planes.
+        settings.setOpenToChat(true)
     }
 
     /** Writes the full Nearby history + a read watermark leaving the latest message unread (a "1" badge). */
@@ -146,6 +157,50 @@ class DemoWriter(
     }
 
     /**
+     * Writes the Meshtastic room's history — the paired board's own primary channel, mirrored into a room on
+     * this phone and nowhere else (ADR 2026-09.26q3). Its own writer rather than a [write] call, because
+     * almost every column means something different here:
+     *
+     * - [MessageEntity.senderId] is **this phone** on every row, heard posts included — there is no frame and
+     *   no signer, the row is written by the phone whose board heard it — and the `origin*` columns beside it
+     *   are what say the words are somebody else's.
+     * - A heard post is not "ours" despite that sender, so `received` stays false and `arrivedAt` is stamped;
+     *   one of *our* posts leaves through the board and never earns a ✓✓, because nothing on the channel acks,
+     *   so it is `received = false` too — the difference is [DemoMeshPost.mine], which clears `originNode`.
+     * - Everything the radio reported is denormalized on the row, resolved **once**, at ingest: the channel it
+     *   was heard on, the hops and SNR, the contact whose profile claimed the speaker's number, and what the
+     *   XEdDSA signature proved. Boards change hands; re-resolving later would put old words under whoever
+     *   holds the board now.
+     *
+     * There are no receipts, reactions or read watermark: the room takes none of them.
+     */
+    suspend fun seedMeshRoom(now: Long) {
+        scenario.meshRoom.forEach { post ->
+            val heard = !post.mine
+            messages.save(
+                MessageEntity(
+                    id = post.id,
+                    senderId = me,
+                    conversationId = Conversations.MESHTASTIC,
+                    body = post.body,
+                    sentAt = now - post.minsAgo * 60_000L,
+                    arrivedAt = if (heard) now - post.minsAgo * 60_000L + 30_000L else null,
+                    received = false,
+                    receivedVia = DeliveryPlane.LoRa.code,
+                    originNode = if (heard) post.node else null,
+                    originName = post.name.takeIf { heard },
+                    originChannel = MESH_ROOM_CHANNEL.takeIf { heard },
+                    originHops = post.hops.takeIf { heard },
+                    originSnrDeci = post.snrDeci.takeIf { heard },
+                    originViaMqtt = heard && post.viaMqtt,
+                    originPeerId = post.peer?.takeIf { heard }?.let { nodeId(it) },
+                    originSigned = if (heard) post.signed else MessageEntity.ORIGIN_UNSIGNED,
+                ),
+            )
+        }
+    }
+
+    /**
      * Writes one [DemoMsg] (message row + any inline reactions + any per-member delivery receipts). For a
      * DM, [dmPeer] is the other party so the
      * recipient is set per direction; for the room/group it's null. [received] doubles as the delivery tick and
@@ -165,6 +220,9 @@ class DemoWriter(
         val fromMe = m.from == Slot.ME
         val voice = m.voiceSeconds?.let { voiceBlob(it) }
         val imageHash = if (voice == null) m.image?.let { imageBlob(it, m.imageMime) } else null
+        // One attachment per message, in the order the fields are declared: a card only when neither a voice
+        // note nor a photo took the slot.
+        val linkHash = if (voice == null && imageHash == null) m.link?.let { linkBlob(it) } else null
         messages.save(
             MessageEntity(
                 id = m.id,
@@ -185,12 +243,14 @@ class DemoWriter(
                     MentionStore.encode(
                         if (m.mentionsMe) listOf(Mention(me, scenario.meName)) else emptyList(),
                     ),
-                attachmentHash = voice?.hash ?: imageHash,
-                // Plaintext blob (attachmentKey stays null) → BlobFetcher decodes the bytes directly.
+                attachmentHash = voice?.hash ?: imageHash ?: linkHash,
+                // Plaintext blob (attachmentKey stays null) → BlobFetcher decodes the bytes directly. A card
+                // rides the same slot under its own MIME, which is the whole of how it is told apart.
                 attachmentMime =
                     when {
                         voice != null -> VoiceAudio.MIME
                         imageHash != null -> m.imageMime
+                        linkHash != null -> LinkPreviewBlob.MIME
                         else -> null
                     },
                 // Seeded rather than derived: the derivation runs when a blob *arrives*, and a seeded row
@@ -285,6 +345,42 @@ class DemoWriter(
             hash
         }.getOrNull()
 
+    /**
+     * Encodes [link] as a [LinkPreviewBlob] container, stores it as a plaintext content blob, and returns its
+     * hash to pin on a message's attachment — exactly what the sender's own fetch stores after it has drawn
+     * the page (ADR 2026-09.n752). The picture is the theme's bundled card asset; it is dropped when the file
+     * is missing or over [LinkPreviewBlob.IMAGE_MAX_BYTES], and the card then renders text-only rather than
+     * silently failing to decode.
+     *
+     * The bytes go through the real encoder, so what a capture shows is a container the receiver's own
+     * `LinkCardStore` decoded and normalized — never a shape only the demo can produce.
+     */
+    private suspend fun linkBlob(link: DemoLink): String? =
+        runCatching {
+            val picture = link.image?.let { assetBytes(it, "jpg") }?.takeIf { it.size <= LinkPreviewBlob.IMAGE_MAX_BYTES }
+            val bytes =
+                LinkPreviewBlob(
+                    v = LinkPreviewBlob.VERSION,
+                    url = link.url,
+                    title = link.title,
+                    description = link.description,
+                    image = picture,
+                    imageMime = picture?.let { "image/jpeg" },
+                ).encode()
+            val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+            blobs.insert(hash, LinkPreviewBlob.MIME, bytes)
+            hash
+        }.getOrNull()
+
+    /** The raw bytes of `demo/images/<theme>/<name>.<ext>`, or null when the asset is not bundled. */
+    private fun assetBytes(
+        name: String,
+        ext: String,
+    ): ByteArray? =
+        runCatching {
+            context.assets.open("demo/images/${scenario.theme}/$name.$ext").use { it.readBytes() }
+        }.getOrNull()
+
     /** A seeded voice note's blob hash plus the description a real arrival would have derived from it. */
     private class SeededVoice(
         val hash: String,
@@ -332,6 +428,13 @@ class DemoWriter(
         }.getOrNull()
 
     private companion object {
+        /**
+         * The channel a seeded heard post says it arrived on. Matches the demo board's own primary — the stock
+         * `LongFast`, which is what `DemoLoraPlane` reports and therefore what the room's title reads — so the
+         * list row, the thread header and every post's provenance line all name the same channel.
+         */
+        const val MESH_ROOM_CHANNEL = "LongFast"
+
         // A seeded voice note's synthetic ADTS stream: mono 22.05 kHz AAC-LC, the recorder's own format, so
         // VoiceAudio reads the same duration off it that it would off a real recording.
         const val SEEDED_VOICE_SAMPLE_RATE = 22_050

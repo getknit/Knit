@@ -18,8 +18,8 @@ import org.koin.core.Koin
  * Debug-only trailer director (`-PdemoDirector=true`). Plays a scripted, animated conversation on the
  * **Nearby** room so a screen recording becomes the promo trailer: the local user types + sends a message,
  * peers reply, more nodes join (the "connected to N" header climbs), and the room fills with photos, an
- * animated GIF, a voice note, reactions, quoted replies, @-mentions, "typing…" cues, and a line that
- * arrives over a LoRa board rather than the radios.
+ * animated GIF, a voice note, a link-preview card, reactions, quoted replies, @-mentions, "typing…" cues, and
+ * a line that arrives over a LoRa board rather than the radios.
  *
  * It writes through [DemoWriter] (the same repository primitives the static [DemoSeeder] uses), so every
  * change animates into the live UI with no bespoke rendering — peer messages/reactions land via reactive
@@ -72,6 +72,9 @@ class DemoDirector(
         writer.seedDms(now)
         val groupId = writer.seedGroup(scenario.group, now)
         writer.seedRequests(now)
+        // The Meshtastic room's history: the trailer cuts to it, and binding the board below is what makes
+        // its row exist at all.
+        writer.seedMeshRoom(now)
         // The trailer's cutaways are of chat screens, whose headers carry the relay globe and the board
         // glyph — so the director arms both planes exactly as the still seeder does.
         DemoPlanes.arm(koin, coveredLabels = scenario.dms.map { writer.nodeId(it.peer) } + groupId)
@@ -172,6 +175,25 @@ class DemoDirector(
                     delayMs = 2_200,
                 ),
                 Beat.Reaction("dir-6", Slot.SAM, "🙌", delayMs = 1_400),
+                // A link, and the card its sender fetched and attached with it: everyone in the room sees the
+                // page's title and picture without a single one of them touching the site.
+                Beat.Typing(Slot.PRIYA, delayMs = 1_100),
+                Beat.PeerMessage(
+                    DemoMsg(
+                        "dir-6a",
+                        Slot.PRIYA,
+                        "full sunrise line-up: https://playa.getknit.app/sunrise-sets",
+                        0,
+                        link =
+                            DemoLink(
+                                url = "https://playa.getknit.app/sunrise-sets",
+                                title = "Sunrise Sets — the whole week",
+                                description = "Every dawn set on the playa, camp by camp, with the walk time from center camp.",
+                                image = "sunrise-card",
+                            ),
+                    ),
+                    delayMs = 2_100,
+                ),
                 // A voice note lands and holds its own beat — the bubble is wide and the waveform reads at
                 // a glance, so it does not need the dwell a photo does.
                 Beat.Typing(Slot.SAM, delayMs = 1_100),

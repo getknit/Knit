@@ -30,7 +30,8 @@ import org.koin.core.Koin
  * Beyond the conversation history it arms the two **planes** the emulator cannot actually run — the
  * Internet relays and the LoRa board, via [DemoPlanes] — because both are now visible all over the UI (a
  * globe or a board glyph on a chat header, a bubble and a ✓✓ tick, two settings screens), and without them
- * every capture of that surface would be of its off state.
+ * every capture of that surface would be of its off state. Binding the board also brings up the **Meshtastic
+ * room**, whose history is seeded here for the same reason ([DemoWriter.seedMeshRoom]).
  */
 class DemoSeeder(
     private val koin: Koin,
@@ -60,6 +61,9 @@ class DemoSeeder(
         val groupId = writer.seedGroup(scenario.group, now)
         writer.seedRequests(now)
         writer.seedBlocked()
+        // The paired board's own channel, mirrored locally. [DemoPlanes] binds the board below, and the room's
+        // row appears the moment one is bound — so without this the chat list would carry an empty room.
+        writer.seedMeshRoom(now)
 
         // Pin one persistent "now typing" cue for the dm-sam marketing shot. A real cue is TTL'd (12s) and
         // would race a static capture; this bypasses the TTL. For a DM the conversationId is the peer's

@@ -3,6 +3,7 @@
 package app.getknit.knit.demo
 
 import app.getknit.knit.data.message.DeliveryPlane
+import app.getknit.knit.data.message.MessageEntity
 
 /*
  * Declarative content for the demo-screenshot builds (see [DemoSeeder]). Each [DemoScenario] is one
@@ -30,6 +31,20 @@ data class DemoReaction(
     val reactor: Slot,
     val emoji: String,
     val minsAgo: Long,
+)
+
+/**
+ * A link-preview card attached to a message (ADR 2026-09.n752). The **sender** fetches the page and sends
+ * the card as an ordinary attachment under its own MIME, so a seeded one is the same thing the real path
+ * produces: [url] must appear verbatim in the message body — a recipient draws a card only when it can find
+ * the card's link there — and [image] is the base name of a bundled asset under
+ * `demo/images/<theme>/<image>.jpg`, kept small enough to clear `LinkPreviewBlob.IMAGE_MAX_BYTES`.
+ */
+data class DemoLink(
+    val url: String,
+    val title: String,
+    val description: String,
+    val image: String? = null,
 )
 
 /**
@@ -70,6 +85,12 @@ data class DemoMsg(
      * — renders no glyph, which is why it is the default.
      */
     val via: DeliveryPlane = DeliveryPlane.Nearby,
+    /**
+     * A link-preview card for a link in [body], attached the way the sender's own fetch attaches it: a blob
+     * of its own MIME on [DemoMsg]'s attachment slot. Mutually exclusive with [image] and [voiceSeconds] —
+     * one message, one attachment — and the seeder honours that order.
+     */
+    val link: DemoLink? = null,
 )
 
 /** A peer contact. [verified] pins a (fake) key + out-of-band confirmation so the DM header shows the
@@ -81,6 +102,18 @@ data class DemoPeer(
     val status: String,
     val verified: Boolean = false,
     val openToChat: Boolean = false,
+    /**
+     * The Meshtastic node number this contact's own profile claims as their board (`ProfileContent.loraNode`),
+     * which is what lets a post heard on the radio channel resolve to them — the Profile Details "their board"
+     * row, and the attributed author in the Meshtastic room. Null for a contact with no board.
+     */
+    val loraNode: Long? = null,
+    /**
+     * The key that board signs under (`ProfileContent.loraKey`). A fake value: nothing in a demo build ever
+     * checks a signature — the verdict is seeded on the row ([DemoMeshPost.signed]) exactly as ingest froze
+     * it — but the column has to be non-null for the profile row to claim a signing board at all.
+     */
+    val loraKey: String? = null,
 )
 
 /**
@@ -96,6 +129,34 @@ data class DemoThread(
     val peer: Slot,
     val read: Boolean,
     val messages: List<DemoMsg>,
+)
+
+/**
+ * One post in the **Meshtastic room** (`Conversations.MESHTASTIC`) — the paired board's own primary channel,
+ * mirrored into a room on this phone and nowhere else (ADR 2026-09.26q3). Not a [DemoMsg]: almost nothing a
+ * Knit message carries is true here. There is no Knit sender (the row sits in our sender column by
+ * convention, and the attribution beside it says the words are somebody else's), no receipts, no reactions,
+ * and no verified identity — only what the radio said and what the board could prove about it.
+ *
+ * [node] is the speaker's Meshtastic node number, rendered as the `!hex` id every Meshtastic client shows.
+ * [name] is `User.long_name` as the board's NodeDB had it, or null when it had never heard the speaker named.
+ * [peer] is the contact whose profile claimed [node] as their board, resolved once at ingest — an
+ * attribution, not an identity, so the bubble keeps the muted styling unless [signed] is
+ * `ORIGIN_SIGNED_BY_CONTACT`. [mine] is a post the local user typed here, which leaves through the board and
+ * never earns a ✓✓, because nothing on the channel acks.
+ */
+data class DemoMeshPost(
+    val id: String,
+    val body: String,
+    val minsAgo: Long,
+    val node: Long = 0L,
+    val name: String? = null,
+    val hops: Int? = null,
+    val snrDeci: Int? = null,
+    val viaMqtt: Boolean = false,
+    val peer: Slot? = null,
+    val signed: Int = MessageEntity.ORIGIN_UNSIGNED,
+    val mine: Boolean = false,
 )
 
 /** A group thread: its name, its member set (which derives the group id), and its history. */
@@ -125,6 +186,13 @@ data class DemoScenario(
     val requestGroup: DemoGroup? = null,
     /** Peers seeded into the blocked set, so the "Blocked users" screen has rows rather than its empty state. */
     val blocked: List<Slot> = emptyList(),
+    /**
+     * The Meshtastic room's history — what the demo board "heard" on its primary channel, plus one post of
+     * our own. Seeded because the room's row appears the moment a board is bound ([DemoPlanes] binds one),
+     * so without it every capture of the chat list carries an empty room, and the room screen itself can
+     * only be photographed in its "nothing has been said yet" state.
+     */
+    val meshRoom: List<DemoMeshPost> = emptyList(),
 )
 
 /** Returns the scenario for [theme] (the `-PdemoTheme` build value), falling back to hiking. */
@@ -144,8 +212,20 @@ private val HIKING_SCENARIO =
         peers =
             listOf(
                 DemoPeer(Slot.SAM, "Sam Rivera", "Trail mix enthusiast", openToChat = true),
-                DemoPeer(Slot.DANI, "Dani Cho", "Summit or bust", verified = true),
-                DemoPeer(Slot.THEO, "Theo Blake", "Mostly lost"),
+                // Verified, open to chat, and carrying a board of her own: the one Profile Details capture then
+                // holds all three — the safety number, the availability badge, and the claimed-board row.
+                DemoPeer(
+                    Slot.DANI,
+                    "Dani Cho",
+                    "Summit or bust",
+                    verified = true,
+                    openToChat = true,
+                    loraNode = DANI_BOARD,
+                    loraKey = DEMO_LORA_KEY,
+                ),
+                // The contact who carries a board. His profile claims it, so the post his radio put on the
+                // Meshtastic room's channel resolves to him — and, signed, wears the shield.
+                DemoPeer(Slot.THEO, "Theo Blake", "Mostly lost", loraNode = THEO_BOARD, loraKey = DEMO_LORA_KEY),
                 DemoPeer(Slot.PRIYA, "Priya N.", "Golden hour chaser 🌅"),
                 DemoPeer(Slot.JONAS, "Jonas W.", "Will hike for coffee"),
                 DemoPeer(Slot.LENA, "Lena F.", "Map nerd"),
@@ -199,6 +279,23 @@ private val HIKING_SCENARIO =
                     via = DeliveryPlane.LoRa,
                 ),
                 DemoMsg("demo-nearby-9", Slot.PRIYA, "Sunset from the summit is unreal tonight 🌄", 12, image = "summit"),
+                // The room's NEWEST line, deliberately: a link with the card its SENDER fetched and attached
+                // (ADR 2026-09.n752) — nobody who reads it ever contacts the site. Last because a card's
+                // picture loads after layout and grows its row, which shoves anything below it off a freshly
+                // anchored screen; at the bottom, that growth scrolls the card INTO frame instead of out.
+                DemoMsg(
+                    "demo-nearby-10",
+                    Slot.SAM,
+                    "Ranger station just updated the closure list: https://trails.getknit.app/ridge-loop",
+                    8,
+                    link =
+                        DemoLink(
+                            url = "https://trails.getknit.app/ridge-loop",
+                            title = "Ridge Loop — conditions & closures",
+                            description = "Bridge out at the falls; upper loop open. Updated this morning by the ranger station.",
+                            image = "ridge-card",
+                        ),
+                ),
             ),
         nearbyReadMinsAgo = 20,
         dms =
@@ -296,6 +393,68 @@ private val HIKING_SCENARIO =
                     ),
             ),
         blocked = listOf(Slot.MARLO),
+        meshRoom =
+            listOf(
+                // A stranger's radio, named by the board's NodeDB, three hops out: the ordinary case, and the
+                // one the room's styling is built around — a name off an open channel that proves nothing.
+                DemoMeshPost(
+                    "demo-mesh-1",
+                    "Repeater on Bald Knob is back up, coverage to the north side again.",
+                    minsAgo = 84,
+                    node = 0x7A41C0E2L,
+                    name = "Bald Knob Relay",
+                    hops = 3,
+                    snrDeci = -78,
+                ),
+                // Off an MQTT uplink, so it may have come from anywhere on earth — the row says so.
+                DemoMeshPost(
+                    "demo-mesh-2",
+                    "Anyone else on LongFast up here, or is it just me and the repeater?",
+                    minsAgo = 61,
+                    node = 0x2C90B711L,
+                    name = "KJ7ZQF",
+                    hops = 4,
+                    snrDeci = -102,
+                    viaMqtt = true,
+                ),
+                // Theo, resolved to a contact AND verified under the key his profile advertises (ADR
+                // 2026-09.ggq4): the one post in the room that wears the shield and a Knit author's name.
+                DemoMeshPost(
+                    "demo-mesh-3",
+                    "Made the col. No phones for miles — this is the board talking.",
+                    minsAgo = 18,
+                    node = THEO_BOARD,
+                    name = "Knit 4b1e",
+                    hops = 1,
+                    snrDeci = 64,
+                    peer = Slot.THEO,
+                    signed = MessageEntity.ORIGIN_SIGNED_BY_CONTACT,
+                ),
+                // A radio the board has heard but never heard *named*, so the row falls back to the `!hex`
+                // id every Meshtastic client shows — the case a name-less NodeDB entry actually produces.
+                DemoMeshPost(
+                    "demo-mesh-3b",
+                    "Weather station at the saddle: 4C, gusting 30 km/h from the west.",
+                    minsAgo = 41,
+                    node = 0x5D08E4A1L,
+                    hops = 2,
+                    snrDeci = -35,
+                ),
+                // Ours, typed here and sent out through our own board. It never earns a ✓✓: nothing on the
+                // channel acks.
+                DemoMeshPost("demo-mesh-4", "Copy Theo — heading up the upper loop, bridge is out.", minsAgo = 14, mine = true),
+                // One more heard post after ours, so the newest-anchored window opens on a full screen rather
+                // than a thread that ends halfway up it.
+                DemoMeshPost(
+                    "demo-mesh-5",
+                    "Roger. Falls trail is closed at the washout, sign is down though.",
+                    minsAgo = 9,
+                    node = 0x7A41C0E2L,
+                    name = "Bald Knob Relay",
+                    hops = 3,
+                    snrDeci = -81,
+                ),
+            ),
     )
 
 // --- Festival / Burning Man --------------------------------------------------------------------------
@@ -308,8 +467,18 @@ private val FESTIVAL_SCENARIO =
         peers =
             listOf(
                 DemoPeer(Slot.SAM, "Kai Brooks", "Art car captain 🚐", openToChat = true),
-                DemoPeer(Slot.DANI, "Luna Reyes", "Find me at sunrise 🌅", verified = true),
-                DemoPeer(Slot.THEO, "Echo Tanaka", "Sound camp till dawn 🔊"),
+                // Verified, open to chat, and board-carrying, mirroring the hiking cast: one capture, all three.
+                DemoPeer(
+                    Slot.DANI,
+                    "Luna Reyes",
+                    "Find me at sunrise 🌅",
+                    verified = true,
+                    openToChat = true,
+                    loraNode = DANI_BOARD,
+                    loraKey = DEMO_LORA_KEY,
+                ),
+                // The contact whose profile claims a board — the attributed, signed author in the room.
+                DemoPeer(Slot.THEO, "Echo Tanaka", "Sound camp till dawn 🔊", loraNode = THEO_BOARD, loraKey = DEMO_LORA_KEY),
                 DemoPeer(Slot.PRIYA, "Sage Moreno", "Camp hydration officer 💧"),
                 DemoPeer(Slot.JONAS, "Dex Halloran", "Will trade stickers"),
                 DemoPeer(Slot.LENA, "Ravi Okafor", "Built the dome 🛖"),
@@ -358,6 +527,20 @@ private val FESTIVAL_SCENARIO =
                     via = DeliveryPlane.LoRa,
                 ),
                 DemoMsg("fest-nearby-9", Slot.PRIYA, "The glowing dragon out on the playa is unreal tonight ✨🐉", 12, image = "dragon"),
+                // The link-preview card, festival side, and last for the same reason the hiking one is.
+                DemoMsg(
+                    "fest-nearby-10",
+                    Slot.SAM,
+                    "Full sunrise line-up just went up: https://playa.getknit.app/sunrise-sets",
+                    8,
+                    link =
+                        DemoLink(
+                            url = "https://playa.getknit.app/sunrise-sets",
+                            title = "Sunrise Sets — the whole week",
+                            description = "Every dawn set on the playa, camp by camp, with the walk time from center camp.",
+                            image = "sunrise-card",
+                        ),
+                ),
             ),
         nearbyReadMinsAgo = 20,
         dms =
@@ -446,4 +629,67 @@ private val FESTIVAL_SCENARIO =
                     ),
             ),
         blocked = listOf(Slot.MARLO),
+        meshRoom =
+            listOf(
+                DemoMeshPost(
+                    "fest-mesh-1",
+                    "Node up at 9 o'clock plaza, solar. Should hold all week.",
+                    minsAgo = 84,
+                    node = 0x7A41C0E2L,
+                    name = "Plaza Solar",
+                    hops = 2,
+                    snrDeci = -64,
+                ),
+                DemoMeshPost(
+                    "fest-mesh-2",
+                    "Testing LongFast from the trash fence — anyone copy?",
+                    minsAgo = 61,
+                    node = 0x2C90B711L,
+                    name = "W7DUST",
+                    hops = 4,
+                    snrDeci = -110,
+                    viaMqtt = true,
+                ),
+                DemoMeshPost(
+                    "fest-mesh-3",
+                    "Way out past the fence. No phones out here — the board's carrying this.",
+                    minsAgo = 18,
+                    node = THEO_BOARD,
+                    name = "Knit 4b1e",
+                    hops = 1,
+                    snrDeci = 58,
+                    peer = Slot.THEO,
+                    signed = MessageEntity.ORIGIN_SIGNED_BY_CONTACT,
+                ),
+                DemoMeshPost(
+                    "fest-mesh-3b",
+                    "Temp at the fence: 41C. Drink something, all of you.",
+                    minsAgo = 41,
+                    node = 0x5D08E4A1L,
+                    hops = 2,
+                    snrDeci = -41,
+                ),
+                DemoMeshPost("fest-mesh-4", "Copy Echo — riding out that way at sunrise 🚲", minsAgo = 14, mine = true),
+                DemoMeshPost(
+                    "fest-mesh-5",
+                    "Bring water for two. It is a long way back in the dark.",
+                    minsAgo = 9,
+                    node = 0x7A41C0E2L,
+                    name = "Plaza Solar",
+                    hops = 2,
+                    snrDeci = -68,
+                ),
+            ),
     )
+
+/**
+ * The Meshtastic node number the contact-with-a-board carries in both themes (Theo / Echo), and the key their
+ * profile advertises for it. Theme-independent for the same reason the relay URLs are: a node number reads the
+ * same at a trailhead and on the playa. The key is illustrative — a demo build verifies nothing, it only draws
+ * the verdict that was frozen on the row at ingest.
+ */
+private const val THEO_BOARD = 0x4B1E77A0L
+
+/** A second contact's board, so a Profile Details capture has a claimed-board row of its own to show. */
+private const val DANI_BOARD = 0x91C33FD5L
+private const val DEMO_LORA_KEY = "ZGVtby1sb3JhLXNpZ25pbmcta2V5LW5vdC1yZWFsLTAwMDA="

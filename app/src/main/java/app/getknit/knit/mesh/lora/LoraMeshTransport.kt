@@ -349,7 +349,7 @@ internal class LoraMeshTransport(
         label: String,
         hint: FanoutHint,
     ) {
-        if (!mayTransmit()) return // another board in this pocket is the gateway; it will carry this frame
+        if (!mayTransmit()) return // no board of our own, or a pocket-mate is the gateway and will carry this
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return
         if (env.type == FrameType.PROFILE && env.senderId == selfIdCached) {
             sendSelfProfile(wire) // shares the beacon's floor so the two never double-send
@@ -630,6 +630,16 @@ internal class LoraMeshTransport(
 
     /** Whether we may put anything on the air at all. A passive gateway listens and relays, but never transmits. */
     private fun mayTransmit(): Boolean {
+        // No board bound, or the plane switched off — the state most installs are in, since the child joins the
+        // composite on `BuildConfig.LORA_PLANE` alone while the setting defaults off. Asked here rather than in
+        // each caller so a new transmit path cannot forget it: before this, [fanout] alone was unguarded and
+        // every eligible broadcast frame still paid for the ADR 060 transcode and the ADR 2026-09.mhs5 pad
+        // pricing, then sat in a queue the pacer can never drain (it takes only while the link is Ready) until
+        // the cap shed it — a lab Pixel that has never been near a board logged `lora pad fanout:chat +42B past
+        // the signature cliff`. Deliberately uncounted, unlike the passive case below: `loraSuppressed` means
+        // this plane could have carried the frame and declined, and an unconfigured plane would tick it on
+        // every frame, on most devices, forever.
+        if (currentConfig == null) return false
         if (role == LoraGatewayPolicy.Role.ACTIVE) return true
         metrics.onLoraPassive()
         return false

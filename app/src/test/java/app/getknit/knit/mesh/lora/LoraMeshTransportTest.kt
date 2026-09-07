@@ -1368,6 +1368,34 @@ class LoraMeshTransportTest {
             a.transport.stop()
         }
 
+    /**
+     * A phone with no board pays nothing for the plane. The child joins the composite on `BuildConfig.LORA_PLANE`
+     * alone, so the fan-out is reached on every install — and it used to encode and queue whatever it was handed,
+     * which is how a lab Pixel that has never been near a board came to log the ADR 2026-09.mhs5 pad decision.
+     */
+    @Test
+    fun withNoBoardBoundAFannedFrameIsNeitherEncodedNorQueued() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val pace = LoraPacePolicy(minGapMs = 0)
+            val a =
+                rig(air, 1u, "alice", backgroundScope, config = MutableStateFlow<LoraConfig?>(null), pace = pace) {
+                    testScheduler.currentTime
+                }
+            a.transport.start()
+            runCurrent()
+
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate, ten minutes"))
+            a.transport.fastFanout(profile("bob")) // the other half of what the lab device was logging
+            advanceTimeBy(4_000)
+            runCurrent()
+
+            assertEquals("the codec never ran", 0L, a.metrics.snapshot().loraTranscoded)
+            assertEquals("nothing was queued for a plane that cannot send", 0, pace.pending)
+            assertTrue("and nothing reached a board", a.link.sent.isEmpty())
+            a.transport.stop()
+        }
+
     @Test
     fun aDisconnectDegradesAndReadyRestoresHealthy() =
         runTest {

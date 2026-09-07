@@ -2185,6 +2185,10 @@ class MeshManager(
         router.originate(wire, env.id)
         forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_SELF)
         if (shouldFastFanout(env)) transport.fastFanout(wire)
+        // The targeted sibling: a sealed DM-form frame goes straight to its addressee over the coordination
+        // plane, so it does not wait on an NDP that may not exist. Size-gated and no-op'd by the transport
+        // when the peer isn't coordination-plane reachable; custody below is still the reliable path.
+        env.recipientId?.let { if (shouldFastSend(env)) transport.fastSend(wire, Peer(it)) }
         if (shouldLongRangeFanout(env)) transport.longRangeFanout(wire, hint)
         // Our own sends are the latency-sensitive case, so nudge the Internet plane instead of waiting for
         // its tick. Relayed frames ride the next heal round — they are already in flight on the radios.

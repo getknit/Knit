@@ -6,6 +6,15 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Already shipped (was deferred)
 
+- **Sealed DM-form chat rides the NAN coordination plane** (ADR 2026-09.7463,
+  `docs/DM_COORDINATION_PLANE.md`) — `FrameFanout.shouldFastSend` admits the DM form `shouldFastFanout`
+  excludes, wired at origination and the inbound re-fan (split-horizoned on `fromNodeId`), **targeted at the
+  addressee, never fanned**. Closes the gap the ADR 2026-09.9dnk wedge exposed: with no NDP and no
+  Bluetooth, broadcast room chat flowed while every DM, group-key seed and `CTL_GROUP_KEY_REQ` sat
+  undelivered in custody. Shipped with `MeshMetrics.nanOwedNoLinkPeakMs` — **do not drop that gauge as
+  unused**, it is the replacement for the symptom this removed (a wedge now presents as "works, slightly
+  worse" rather than stopping DMs). Group-form chat and the spool plane are deliberately untouched.
+
 - **The Bluetooth LE plane is implemented** (`mesh/bluetooth/`) and runs *simultaneously* with Wi-Fi Aware
   behind `CompositeMeshTransport` (wired in `di/MeshModule.kt`): BLE advertise/scan presence + persistent
   L2CAP CoC data links, *preferred* over NAN's ephemeral NDP, with per-peer escalating connect backoff and

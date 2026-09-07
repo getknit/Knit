@@ -916,6 +916,7 @@ class DebugBridgeReceiver :
             .put("reactionsSealedFallback", snap.reactionsSealedFallback)
             .put("dropsByReason", JSONObject(snap.dropsByReason.mapKeys { it.key.name }))
             .put("nanServesPeak", snap.nanServesPeak)
+            .put("nanOwedNoLinkPeakMs", snap.nanOwedNoLinkPeakMs)
             .put("nanAcceptsRefused", snap.nanAcceptsRefused)
             .put("nanIcmKeepaliveFailed", snap.nanIcmKeepaliveFailed)
             .put("nanMsgsAcked", snap.nanMsgsAcked)

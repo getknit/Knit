@@ -157,8 +157,13 @@ enum class FastPathDrop {
  * The ratio of [Snapshot.framesSuppressed] to [Snapshot.framesRelayed] shows how much redundant
  * rebroadcasting the overhear suppression eliminates; [Snapshot.bytesSent] tracks the CBOR win;
  * [Snapshot.dropsByReason] makes the otherwise-silent inbound drops visible during a rollout.
+ *
+ * Both size suppressions below say the same thing: this is a flat registry whose length tracks the *number
+ * of metrics*, not any complexity — one field and one tiny increment each. Splitting it would scatter the
+ * counters and break the single-[Snapshot] read every consumer (Diagnostics, the debug bridge, the metrics
+ * log line) depends on.
  */
-@Suppress("TooManyFunctions") // a flat counter registry: one tiny increment per metric, so the count tracks the metrics
+@Suppress("TooManyFunctions", "LargeClass")
 class MeshMetrics {
     private val framesOriginated = AtomicLong()
     private val framesDelivered = AtomicLong()
@@ -199,6 +204,7 @@ class MeshMetrics {
         ConnectFailReason.entries.associateWith { AtomicLong() }
     private val btLinksEstablished = AtomicLong()
     private val nanServesPeak = AtomicLong()
+    private val nanOwedNoLinkPeakMs = AtomicLong()
     private val nanAcceptsRefused = AtomicLong()
     private val nanIcmKeepaliveFailed = AtomicLong()
     private val nanMsgsAcked = AtomicLong()
@@ -465,6 +471,23 @@ class MeshMetrics {
     /** Record the current count of concurrent inbound NAN serves; keeps the session peak (P1 observability). */
     fun onNanServes(concurrent: Long) {
         nanServesPeak.accumulateAndGet(concurrent) { a, b -> maxOf(a, b) }
+    }
+
+    /**
+     * High-water mark of the **owed-with-no-link episode** — how long a sync has stayed owed to a reachable
+     * peer while no data path formed (`WifiAwareTransport.syncOwedSince`, the clock the wedge watchdog runs
+     * on). Zero on a healthy mesh: an idle converged mesh owes nothing, and a normal sync clears the episode
+     * the moment a link forms.
+     *
+     * This exists because the coordination plane can mask a dead data path. Once sealed DM-form chat rides
+     * `fastSend` ([shouldFastSend]), a node whose NDP never forms still delivers messages — it just stops
+     * converging custody, quietly. Before that, a wedge announced itself by breaking DMs (three-Pixel
+     * capture, 2026-09-07); after it, this gauge is what is left to notice one. A few seconds is ordinary
+     * handshake latency; minutes means the data plane is not forming and only the best-effort planes are
+     * carrying anything.
+     */
+    fun onNanSyncOwed(owedForMs: Long) {
+        nanOwedNoLinkPeakMs.accumulateAndGet(owedForMs) { a, b -> maxOf(a, b) }
     }
 
     /** An inbound NAN accept was refused by the serve policy (cap reached / initiator handshake in flight). */
@@ -850,6 +873,7 @@ class MeshMetrics {
             btConnectFailsByReason = connectByReason.filterValues { it > 0 },
             btLinksEstablished = btLinksEstablished.get(),
             nanServesPeak = nanServesPeak.get(),
+            nanOwedNoLinkPeakMs = nanOwedNoLinkPeakMs.get(),
             nanAcceptsRefused = nanAcceptsRefused.get(),
             nanIcmKeepaliveFailed = nanIcmKeepaliveFailed.get(),
             nanMsgsAcked = nanMsgsAcked.get(),
@@ -951,6 +975,7 @@ class MeshMetrics {
         val btConnectFailsByReason: Map<ConnectFailReason, Long> = emptyMap(),
         val btLinksEstablished: Long = 0,
         val nanServesPeak: Long = 0,
+        val nanOwedNoLinkPeakMs: Long = 0,
         val nanAcceptsRefused: Long = 0,
         val nanIcmKeepaliveFailed: Long = 0,
         val nanMsgsAcked: Long = 0,

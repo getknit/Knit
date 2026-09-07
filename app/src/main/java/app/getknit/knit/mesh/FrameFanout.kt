@@ -29,6 +29,32 @@ internal fun shouldFastFanout(env: RelayEnvelope): Boolean =
     }
 
 /**
+ * Whether [env] should *also* ride [MeshTransport.fastSend] — the **targeted** coordination-plane sibling of
+ * [shouldFastFanout], admitting exactly the DM-form chat frames that one excludes. Targeted, never fanned:
+ * one send to the addressee, so a sealed frame is not sprayed at neighbors with no business holding it and
+ * the ~255 B channel carries one copy rather than N.
+ *
+ * The size reasoning [shouldFastFanout] gives for excluding this form ("won't fit the ~255 B channel") does
+ * not survive contact with the rest of the tree: `AckSync` already sends **sealed receipts** over
+ * [MeshTransport.fastSend], and a sealed receipt is wire-indistinguishable from a real DM (ADR 016/018) —
+ * same type, same recipient, same sealed payload. The transport compacts and fragments to
+ * `FastFrameCodec.MAX_PARTS`, so the real budget is ~753 B, which covers a short-to-medium DM; anything
+ * larger fails the encoder's size gate and no-ops back onto custody, exactly as today.
+ *
+ * Why it matters: with no NDP and no Bluetooth a node's broadcast room chat still flows over this plane
+ * while every DM, group-key seed and `CTL_GROUP_KEY_REQ` — all this same form — sits undeliverable in its
+ * own custody with the peer sitting in `cueTarget` the whole time (three-Pixel capture, 2026-09-07;
+ * ADR 2026-09.9dnk). Same set as [shouldLongRangeFanout] by construction, and for the same reason: on a
+ * plane with no data path, fan-out is the only path a frame can take. Kept as two predicates rather than
+ * one shared helper because they answer different questions about different planes, and will drift apart
+ * the first time one plane's budget changes.
+ *
+ * Best-effort and unacknowledged, like the rest of the fast path — a latency layer over the NDP flood +
+ * custody, never a replacement for it, and the receiver's SeenSet drops whichever copy loses the race.
+ */
+internal fun shouldFastSend(env: RelayEnvelope): Boolean = env.type == FrameType.CHAT && env.recipientId != null && env.group == null
+
+/**
  * Whether [env] should *also* ride [MeshTransport.longRangeFanout] — the fan-out reserved for a plane with
  * **no data path at all** (the LoRa bridge, ADR 039), for which it is the only path a frame can take. It
  * admits exactly the **DM-form** chat frames [shouldFastFanout] excludes: `chat` with a recipient and no

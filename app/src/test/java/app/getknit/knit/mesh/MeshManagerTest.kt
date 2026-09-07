@@ -117,6 +117,8 @@ class MeshManagerTest {
         val sent = mutableListOf<Pair<WireEnvelope, Peer?>>()
         val longRangeFanouts = mutableListOf<WireEnvelope>()
         val longRangeHints = mutableListOf<FanoutHint>()
+        val fastFanouts = mutableListOf<WireEnvelope>()
+        val fastSends = mutableListOf<Pair<WireEnvelope, Peer>>()
         override val neighbors = MutableStateFlow<Set<Peer>>(emptySet()).asStateFlow()
         override val health = MutableStateFlow(TransportHealth.Healthy).asStateFlow()
         override val inbound = MutableSharedFlow<InboundFrame>().asSharedFlow()
@@ -133,6 +135,17 @@ class MeshManagerTest {
             to: Peer?,
         ) {
             sent += wire to to
+        }
+
+        override fun fastFanout(wire: WireEnvelope) {
+            fastFanouts += wire
+        }
+
+        override fun fastSend(
+            wire: WireEnvelope,
+            to: Peer,
+        ) {
+            fastSends += wire to to
         }
 
         override fun longRangeFanout(
@@ -547,6 +560,12 @@ class MeshManagerTest {
             // ADR 039: a DM is also offered to the long-range (LoRa) plane, exactly once, as the same signed bytes.
             val far = rig.transport.longRangeFanouts.single()
             assertEquals(frame.id, WireCodec.decodeEnvelope(far.signed)!!.id)
+            // ...and to the targeted coordination-plane arm, exactly once, addressed to the recipient and never
+            // fanned at every neighbor (FrameFanout.shouldFastSend). Same signed bytes on both planes.
+            val (near, to) = rig.transport.fastSends.single()
+            assertEquals(frame.id, WireCodec.decodeEnvelope(near.signed)!!.id)
+            assertEquals(rig.bob.nodeId, to.nodeId)
+            assertTrue("a DM is never fanned at every neighbor", rig.transport.fastFanouts.isEmpty())
         }
 
     // --- the long-range re-offer set (FarPeerFrameSource, ADR 039) ---

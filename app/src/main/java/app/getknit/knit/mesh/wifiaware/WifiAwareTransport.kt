@@ -695,6 +695,11 @@ class WifiAwareTransport(
             )
         syncOwedSince = decision.nextSyncOwedSince
         responderRefreshes = decision.nextResponderRefreshes
+        // Publish the episode clock the watchdog runs on: without this it has no consumer outside this
+        // function, and once DM-form chat rides the coordination plane ([shouldFastSend]) a node with a dead
+        // data path still delivers messages — it just stops converging custody. This gauge is then the only
+        // thing that says so.
+        if (syncOwedSince != 0L) metrics.onNanSyncOwed(now - syncOwedSince)
         when (decision.action) {
             NanWatchdogPolicy.Action.None -> {}
 

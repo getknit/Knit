@@ -230,6 +230,14 @@ class InboundPipeline(
         // frames re-fan; a point-to-point frame (relay = false, e.g. a broadcast receipt) reaches its addressee
         // and goes no further.
         if (wire.relay && shouldFastFanout(env)) transport.fastFanout(wire)
+        // The targeted sibling ([shouldFastSend]): a bridge node hands a sealed DM-form frame straight to its
+        // addressee over the coordination plane, so a pair joined only through us converges at message-plane
+        // speed instead of waiting on our own NDP. Same once-per-first-seen discipline as the fan-out above,
+        // so the echo dies out; the `!= fromNodeId` guard is the split horizon — never bounce a frame back at
+        // the hop that just handed it to us.
+        if (wire.relay) {
+            env.recipientId?.let { if (shouldFastSend(env) && it != fromNodeId) transport.fastSend(wire, Peer(it)) }
+        }
         // The long-range sibling: a sealed DM-form frame re-fans over a plane with no data path (LoRa) for the
         // same once-per-node reason; that plane's own sig-keyed dedup keeps a frame heard over it from bouncing
         // straight back onto it.

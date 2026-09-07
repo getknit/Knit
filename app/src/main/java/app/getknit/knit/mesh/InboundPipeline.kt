@@ -1417,6 +1417,7 @@ class InboundPipeline(
         val plaintext = MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY_REQ, gk = GroupKeyPayload(groupId)).encode()
         val sealed = ratchet.sealDm(env.senderId, bundle.dhPublicKey(), prekey, plaintext, aad, now) ?: return
         Log.w(TAG, "requesting group key for $groupId from ${env.senderId}")
+        metrics.onGroupKeyRequested()
         groupRatchet.markKeyRequested(groupId, env.senderId, now)
         originate(
             RelayEnvelope(

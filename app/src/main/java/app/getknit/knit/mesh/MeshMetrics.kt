@@ -189,6 +189,7 @@ class MeshMetrics {
     private val groupSealedV1Fallback = AtomicLong()
     private val groupSeedsSent = AtomicLong()
     private val groupSeedsAdopted = AtomicLong()
+    private val groupKeyRequestsSent = AtomicLong()
     private val groupRootsMinted = AtomicLong()
     private val groupRootsAdopted = AtomicLong()
 
@@ -424,6 +425,17 @@ class MeshMetrics {
     /** One fresh recv chain adopted from a member's seed distribution. */
     fun onGroupSeedAdopted() {
         groupSeedsAdopted.incrementAndGet()
+    }
+
+    /**
+     * One `CTL_GROUP_KEY_REQ` originated — we asked a member to re-seal the seeds we are missing. The
+     * request leg of the recovery ADR 017 describes, and the only one that used to be unmetered: with
+     * `groupSeedsSent`/`groupSeedsAdopted` covering the answer and the adoption, a node stuck on
+     * `GROUP_RATCHET_NO_KEY` still could not be told apart from one whose heuristic never fired, except by
+     * a logcat line (unreadable on a lab Pixel that had not restarted — three-Pixel capture, 2026-09-07).
+     */
+    fun onGroupKeyRequested() {
+        groupKeyRequestsSent.incrementAndGet()
     }
 
     /** We minted a group's shared spool root — version 1, or a departure re-mint (SPOOL_PROTOCOL §3.2). */
@@ -831,6 +843,7 @@ class MeshMetrics {
             groupSealedV1Fallback = groupSealedV1Fallback.get(),
             groupSeedsSent = groupSeedsSent.get(),
             groupSeedsAdopted = groupSeedsAdopted.get(),
+            groupKeyRequestsSent = groupKeyRequestsSent.get(),
             groupRootsMinted = groupRootsMinted.get(),
             groupRootsAdopted = groupRootsAdopted.get(),
             btConnectFails = connectByReason.values.sum(),
@@ -931,6 +944,7 @@ class MeshMetrics {
         val groupSealedV1Fallback: Long = 0,
         val groupSeedsSent: Long = 0,
         val groupSeedsAdopted: Long = 0,
+        val groupKeyRequestsSent: Long = 0,
         val groupRootsMinted: Long = 0,
         val groupRootsAdopted: Long = 0,
         val btConnectFails: Long = 0,

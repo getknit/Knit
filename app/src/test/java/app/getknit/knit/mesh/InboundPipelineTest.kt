@@ -991,7 +991,7 @@ class InboundPipelineTest {
             rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
 
             // The hash isn't adopted until its blob arrives, so "stored != advertised" stays true on every
-            // re-serve. Keying the notice on the profile version rather than the hash is what bounds it to one.
+            // re-serve. Keying the notice on the hash rather than the profile version is what bounds it to one.
             val profile = rig.profile(alice, avatarHash = "avatar-hash", sentAt = 7L)
             rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
             rig.pipeline.onDeliver(alice.sign(profile), profile, alice.nodeId)
@@ -999,6 +999,47 @@ class InboundPipelineTest {
             val notice = rig.msgMap.values.single { it.kind == MessageEntity.KIND_PEER_AVATAR }
             assertEquals(alice.nodeId, notice.conversationId)
             assertEquals("", notice.body)
+        }
+
+    @Test
+    fun aLaterProfileVersionDoesNotReAnnounceAnAvatarStillInFlight() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, name = "Peer", updatedAt = 1L)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
+
+            // One photo change, then a later profile version carrying the same (still un-adopted) hash —
+            // a status edit, a prekey rotation, a board re-bind. A device trial found two lines 58 minutes
+            // apart for one change, because the version-keyed row id could not see they were the same photo.
+            val change = rig.profile(alice, avatarHash = "avatar-hash", sentAt = 7L)
+            rig.pipeline.onDeliver(alice.sign(change), change, alice.nodeId)
+            val later = rig.profile(alice, avatarHash = "avatar-hash", sentAt = 9L)
+            rig.pipeline.onDeliver(alice.sign(later), later, alice.nodeId)
+
+            val notice = rig.msgMap.values.single { it.kind == MessageEntity.KIND_PEER_AVATAR }
+            // …and the one line keeps the time of the change, not of whatever re-asserted it.
+            assertEquals(7L, notice.sentAt)
+        }
+
+    @Test
+    fun aSecondAvatarIsAnnouncedOnItsOwnLine() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, name = "Peer", updatedAt = 1L)
+            rig.msgMap["m1"] = MessageEntity(id = "m1", senderId = alice.nodeId, conversationId = alice.nodeId, body = "hi", sentAt = 1L)
+
+            // Keying on the hash must still tell two different photos apart, blob or no blob.
+            val first = rig.profile(alice, avatarHash = "avatar-one", sentAt = 7L)
+            rig.pipeline.onDeliver(alice.sign(first), first, alice.nodeId)
+            val second = rig.profile(alice, avatarHash = "avatar-two", sentAt = 9L)
+            rig.pipeline.onDeliver(alice.sign(second), second, alice.nodeId)
+
+            val notices = rig.msgMap.values.filter { it.kind == MessageEntity.KIND_PEER_AVATAR }
+            assertEquals(listOf(7L, 9L), notices.map { it.sentAt }.sorted())
         }
 
     @Test

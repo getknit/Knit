@@ -64,18 +64,28 @@ object StatusNotices {
         )
 
     /**
-     * [MessageEntity.KIND_PEER_AVATAR] — [peerId] changed their avatar, as of profile [version].
+     * [MessageEntity.KIND_PEER_AVATAR] — [peerId] changed their avatar to [avatarHash], as of profile
+     * [version].
      *
-     * Keyed on the version and **not** on the avatar hash on purpose: a hash is only adopted once its
-     * blob has landed, so "the stored hash differs from the advertised one" stays true on every re-serve
-     * until the bytes arrive. One notice per profile version is the idempotent form.
+     * Keyed on the **hash**, as [groupPhotoChanged] is, and written first-write-wins. A hash is only
+     * adopted once its blob has landed, so "the stored hash differs from the advertised one" stays true
+     * for every profile that arrives while the bytes are in flight. Keying on the version deduped a
+     * re-serve of one profile but not the *next* version, so any later bump inside that window — a
+     * status edit, a prekey rotation, a board re-bind — announced the same photo a second time (a
+     * device trial caught two lines 58 minutes apart for one change). The hash is what actually changed,
+     * so it is what the row id records.
+     *
+     * The cost is the mirror image of the group-photo line's: a peer who switches back to a photo this
+     * thread already announced gets no new line. That is the same trade [groupPhotoChanged] documents,
+     * and the quieter failure of the two.
      */
     fun peerAvatarChanged(
         peerId: String,
+        avatarHash: String,
         version: Long,
     ): MessageEntity =
         notice(
-            id = "avatar:$peerId:$version",
+            id = "avatar:$peerId:$avatarHash",
             subjectId = peerId,
             conversationId = peerId,
             sentAt = version,

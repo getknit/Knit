@@ -1095,9 +1095,10 @@ class InboundPipeline(
      * sighting nor a first name (an empty stored one) is a rename, and both get no line: there was no old
      * name to have changed from, and pinning a stranger's key must not conjure a thread out of nothing.
      *
-     * The avatar comparison is against the *advertised* hash rather than the adopted one, and both
-     * notices key their row id on [version], so the repeated "advertised != stored" that persists while
-     * an avatar's blob is still in flight collapses to a single line per profile version. The
+     * The avatar comparison is against the *advertised* hash rather than the adopted one, so it stays
+     * true for every profile that lands while the blob is still in flight; the notice absorbs that by
+     * keying its row on the hash and writing it once (see [StatusNotices.peerAvatarChanged]), which is
+     * what collapses the repeat to one line per photo rather than one per profile version. The
      * blob-arrival writers ([adoptAdvertisedAvatar], [onAvatarReceived]) deliberately post nothing —
      * by then this has already said it.
      */
@@ -1115,7 +1116,7 @@ class InboundPipeline(
         // A cleared avatar is a change too, but there is no "removed their photo" line to draw and the
         // reclaim path already handles the bytes, so only an actual new avatar is announced.
         if (advertisedAvatar != null && advertisedAvatar != previous.avatarHash) {
-            savePeerNotice(peerId, StatusNotices.peerAvatarChanged(peerId, version))
+            savePeerNotice(peerId, StatusNotices.peerAvatarChanged(peerId, advertisedAvatar, version), once = true)
         }
     }
 
@@ -1131,14 +1132,18 @@ class InboundPipeline(
      * don't satisfy the gate, or one notice would license the next.
      *
      * Idempotent by construction: every [StatusNotices] row has a deterministic id, so a re-served or
-     * republished profile upserts the same row rather than stacking a second identical line.
+     * republished profile upserts the same row rather than stacking a second identical line. [once]
+     * keeps the *first* write instead — for a row whose id is keyed on the change rather than on the
+     * profile version, so that a later version re-asserting the same change neither duplicates the line
+     * nor drags its `sentAt` (and with it its place in the thread) forward to the re-assertion.
      */
     private suspend fun savePeerNotice(
         peerId: String,
         notice: MessageEntity,
+        once: Boolean = false,
     ) {
         if (!messages.hasMessagesIn(peerId)) return
-        messages.save(notice)
+        if (once) messages.saveIfAbsent(notice) else messages.save(notice)
     }
 
     /**

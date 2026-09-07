@@ -21,6 +21,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.random.Random
 
 /**
  * The two-pocket bridge (ADR 044), end to end on the JVM.
@@ -972,27 +973,94 @@ class LoraBridgeTest {
         }
 
     @Test
-    fun onePublishersRepeatedOffersCannotDragTheWholeStoreOntoTheAir() =
+    fun theOfferDoesNotSpendTheBridgeShareItIsExemptFrom() =
         runTest {
+            // ADR 2026-09.7c8n. The OFFER is exempt from the BRIDGE share (ADR 2026-09.t8t8) but used to be
+            // *recorded* against it, which puts the whole cost of gossip on the one class with nowhere to
+            // fall back to. At the Trickle floor — where two genuinely divergent gateways sit — that was
+            // ~44 % of serving's budget spent on packets serving cannot decline to send.
             val air = FakeMeshtasticAir()
-            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val ledger = LoraAirtime()
+            // Muted: nothing to beacon and nothing to serve, so every byte alice puts on the air is her offer.
+            val a =
+                rig(
+                    air,
+                    1u,
+                    "alice",
+                    backgroundScope,
+                    mute = true,
+                    pace = LoraPacePolicy(minGapMs = 0, airtime = ledger),
+                ) { testScheduler.currentTime }
+            a.transport.start()
+            a.transport.onForeignReachable(setOf("a2"))
+            runCurrent()
+
+            advanceTimeBy(toFirstOffer)
+            runCurrent()
+
+            val now = testScheduler.currentTime
+            assertTrue("the offer flew", a.metrics.snapshot().loraOfferSent > 0)
+            assertTrue("and booked its own bucket", ledger.usedMs(AirBucket.GOSSIP, now) > 0)
+            assertEquals("leaving serving's share untouched", 0L, ledger.usedMs(AirBucket.BRIDGE, now))
+        }
+
+    @Test
+    fun aCandidateTheWindowCannotAffordIsSkippedRatherThanEndingTheRound() =
+        runTest {
+            // ADR 2026-09.7c8n. [LoraFramePolicy.backfillRank] puts the priciest candidate first — a profile,
+            // then a room post — and the round used to stop at the first frame the budget refused. So a
+            // window holding a one-packet DM but not a multi-packet room post served *nothing*:
+            // `lora bridge served=0/4`, twice running, while the ledger still had seconds of bridge air.
+            val air = FakeMeshtasticAir()
+            val ledger = LoraAirtime()
+            val a =
+                rig(air, 1u, "alice", backgroundScope, pace = LoraPacePolicy(minGapMs = 0, airtime = ledger)) {
+                    testScheduler.currentTime
+                }
             val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
             a.transport.start()
             b.transport.start()
+            a.transport.onForeignReachable(setOf("a2"))
+            b.transport.onForeignReachable(setOf("b2"))
             runCurrent()
-            repeat(40) { a.custody.held += frame("a2", body = "history $it") }
 
-            // Bob keeps announcing what he holds, inside one serve window.
-            repeat(6) {
-                advanceTimeBy(LoraGossipPolicy.MIN_INTERVAL_MS)
-                runCurrent()
+            // Incompressible on purpose: the codec deflates, so a repeated character rides one cheap packet
+            // and leaves the round nothing to choose between. 600 chars is three packets; much more than
+            // that stops encoding at all, which is `loraTooBig` — a SKIPPED, not the refusal under test.
+            val rnd = Random(1)
+            val alphabet = ('a'..'z') + ('A'..'Z') + ('0'..'9')
+            val bulk = (0 until 600).map { alphabet[rnd.nextInt(alphabet.size)] }.joinToString("")
+            val room = frame("a2", body = bulk)
+            val dm = frame("a2", body = "dm", recipientId = "b2")
+            a.custody.held += room
+            a.custody.held += dm
+
+            fun costOf(wire: WireEnvelope) =
+                LoraFrameCodec
+                    .encodeBest(wire, 0, MeshtasticProto.MAX_PAYLOAD, transcode = true, cost = ledger)!!
+                    .parts
+                    .map { it.size }
+            val roomCost = costOf(room)
+            val dmCost = costOf(dm)
+            assertTrue("the room post must cost more than the DM, or this proves nothing", roomCost.size > dmCost.size)
+
+            // Spend the bridge bucket down to less than the room post costs but more than the DM does, a
+            // quarter-packet at a time so the leftover can land between the two.
+            while (ledger.admits(AirBucket.BRIDGE, FrameClass.ROOM, roomCost, 0L)) {
+                ledger.record(AirBucket.BRIDGE, MeshtasticProto.MAX_PAYLOAD / 4, 0L)
             }
-
-            val bridged = a.metrics.snapshot().loraBridged
-            assertTrue("some history crossed", bridged > 0)
             assertTrue(
-                "but one publisher cannot exceed its hourly allowance ($bridged)",
-                bridged <= LoraMeshTransport.SERVE_CAP_PER_HOUR,
+                "the window must still hold the cheap frame, or this proves nothing",
+                ledger.admits(AirBucket.BRIDGE, FrameClass.DM, dmCost, 0L),
             )
+
+            advanceTimeBy(toFirstOffer)
+            runCurrent()
+            advanceTimeBy(60_000)
+            runCurrent()
+
+            val crossed = b.received.mapTo(HashSet()) { it.envelope.id }
+            assertFalse("the room post is genuinely unaffordable", idOf(room) in crossed)
+            assertTrue("but the cheap frame ranked behind it still crossed", idOf(dm) in crossed)
         }
 }

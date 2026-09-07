@@ -14,11 +14,19 @@ internal enum class AirBucket {
     LIVE,
 
     /**
-     * Nobody is waiting: the gossip offer, the digest-driven backfill, and the first-hearing re-offer. All
-     * three **book** their air here, but only serving is judged against the share — a [FrameClass.GOSSIP]
-     * offer is exempt, for the reason [LoraAirtime] gives.
+     * Nobody is waiting: the digest-driven backfill and the first-hearing re-offer. Judged against — and
+     * booked against — the share, which is the whole point of the bucket: backfill is the right thing to
+     * shed when the air runs short.
      */
     BRIDGE,
+
+    /**
+     * The gossip OFFER. Judged against the window total alone, like the bootstrap is judged against its own
+     * share alone: it is the packet that decides whether any backfill happens at all, so serving must never
+     * be able to starve it (ADR 2026-09.t8t8). It books **here** rather than against [BRIDGE] for the
+     * converse reason — see [LoraAirtime] and ADR 2026-09.7c8n.
+     */
+    GOSSIP,
 
     /**
      * The key bootstrap — a `profile` frame on the live fan-out, ours or a relayed one. Its own budget
@@ -78,11 +86,21 @@ internal data class AirtimeSnapshot(
     val bootstrapBudgetMs: Long,
     val publicUsedMs: Long = 0L,
     val publicBudgetMs: Long = 0L,
+    val gossipUsedMs: Long = 0L,
+    val gossipBudgetMs: Long = 0L,
     /** Whether the board is on a dedicated RF slot, and so out from under the politeness ceiling (ADR 067). */
     val dedicated: Boolean = false,
     /** Whether the budget is charging for the signature 2.8 firmware adds to our small packets. */
     val signing: Boolean = true,
-)
+) {
+    /**
+     * Every bucket's spend, which is what the window's one allowance is actually measured against — the
+     * shares below it are how that allowance is divided, not four allowances beside each other. Callers that
+     * want "how full is the window" must read this rather than adding up the buckets they happen to know
+     * about: two of them were summing three of five and under-reporting the plane's real utilization.
+     */
+    val totalUsedMs: Long get() = liveUsedMs + bridgeUsedMs + bootstrapUsedMs + publicUsedMs + gossipUsedMs
+}
 
 /**
  * The LoRa plane's airtime governor: turns a packet size into milliseconds on air, keeps a rolling
@@ -93,18 +111,28 @@ internal data class AirtimeSnapshot(
  * would allow ~1200 packets an hour (over 70 % duty). That was survivable while the plane only carried
  * frames a human had just typed; it is not once the bridge starts serving backfill nobody asked for.
  *
- * Three budgets come out of one number. [AirBucket.LIVE] may spend the whole allowance; [AirBucket.BRIDGE] is
+ * Several budgets come out of one number. [AirBucket.LIVE] may spend the whole allowance; [AirBucket.BRIDGE] is
  * capped at [bridgeShare] of it, so a busy bridge degrades into serving less history rather than into
  * delaying somebody's message. A [FrameClass.TICK] — our own delivery receipt — is refused once a window is
  * [tickTailShare] from spent, so the last of the air always goes to content (ADR 054): a ✓✓ heals on
  * re-delivery, a message somebody is waiting for does not.
  *
- * That [bridgeShare] cap is on **serving**, and a [FrameClass.GOSSIP] frame is exempt from it. The OFFER is
- * not backfill: it is the one packet that decides whether any backfill happens at all — including the far
- * pocket's, whose air this budget does not pay for — so a gateway whose offers never fly silences the other
- * pocket rather than merely serving it less. Serving is the right thing to shed under pressure; the packet
- * that unlocks the reverse direction is not. It is still charged against the **total** and still *recorded*
- * against [AirBucket.BRIDGE], so heavy gossip costs serving its headroom and never the other way round.
+ * That [bridgeShare] cap is on **serving**, and the OFFER is exempt from it. The OFFER is not backfill: it is
+ * the one packet that decides whether any backfill happens at all — including the far pocket's, whose air
+ * this budget does not pay for — so a gateway whose offers never fly silences the other pocket rather than
+ * merely serving it less. Serving is the right thing to shed under pressure; the packet that unlocks the
+ * reverse direction is not. It is still charged against the **total**, which is the ceiling that is actually
+ * law.
+ *
+ * It **books its own bucket** ([AirBucket.GOSSIP]) rather than [AirBucket.BRIDGE], and that is a correction
+ * to ADR 2026-09.t8t8 rather than a change of mind about it (ADR 2026-09.7c8n). Recording an exempt class
+ * against the share it is exempt from puts the whole cost of gossip on the one class with nowhere to fall
+ * back to: at the Trickle floor three offers a window is ~6 s of a 13.5 s bridge budget, so serving loses
+ * ~44 % of its share to packets it cannot refuse — and when the two gateways genuinely disagree, the floor
+ * is exactly where Trickle sits. Field-observed 2026-09-07 with `bridgeMs` at **14026/13500** — past its own
+ * budget, spent almost entirely on offers — while `liveMs` was 0/45000 and a Nearby-room post sat undelivered
+ * for 50 minutes. Gossip is bounded by the timer, not by a share; charging it to a share only means
+ * something else goes unsent.
  *
  * Both exemptions here are bounded, but not by the same thing, and the difference is the point.
  * [AirBucket.BOOTSTRAP] is bounded by a **share** because nothing else bounds it — a relayed profile arrives
@@ -173,6 +201,7 @@ internal class LoraAirtime(
     private var bridgeUsedMs = 0L
     private var bootstrapUsedMs = 0L
     private var publicUsedMs = 0L
+    private var gossipUsedMs = 0L
 
     /** The board's radio settings, or null until the handshake reports them. */
     var radio: LoraRadioConfig? = null
@@ -287,9 +316,16 @@ internal class LoraAirtime(
     fun budgetMs(bucket: AirBucket): Long =
         when (bucket) {
             AirBucket.LIVE -> allowanceMs()
+
             AirBucket.BRIDGE -> (allowanceMs() * bridgeShare).toLong()
+
             AirBucket.BOOTSTRAP -> (allowanceMs() * bootstrapShare).toLong()
+
             AirBucket.PUBLIC -> (allowanceMs() * publicShare).toLong()
+
+            // No share of its own: the OFFER is bounded by the Trickle timer and by the window total, and
+            // reporting the total here is what the settings row and the `…debug.LORA` dump should show.
+            AirBucket.GOSSIP -> allowanceMs()
         }
 
     fun usedMs(
@@ -302,6 +338,7 @@ internal class LoraAirtime(
             AirBucket.BRIDGE -> bridgeUsedMs
             AirBucket.BOOTSTRAP -> bootstrapUsedMs
             AirBucket.PUBLIC -> publicUsedMs
+            AirBucket.GOSSIP -> gossipUsedMs
         }
     }
 
@@ -309,10 +346,10 @@ internal class LoraAirtime(
      * Whether a whole frame — [payloadSizes] is one entry per packet it fragments into — fits [bucket]'s
      * budget. Admission is all-or-nothing per frame: half a fragmented message on the air is pure waste, so
      * a frame that does not fit entirely waits rather than starting. A [FrameClass.TICK] stops at the tail,
-     * an [AirBucket.BOOTSTRAP] frame is judged against its own share alone and a [FrameClass.GOSSIP] one is
-     * not judged against [AirBucket.BRIDGE] at all (see the class doc for both). Note [AirBucket.BRIDGE] and
-     * [AirBucket.BOOTSTRAP] spending counts against the **total** as well as its own budget: each is a share
-     * of the one allowance, not a second allowance beside it.
+     * an [AirBucket.BOOTSTRAP] frame is judged against its own share alone, and an [AirBucket.GOSSIP] one is
+     * judged against nothing but the total (see the class doc for both). Note every bucket's spending counts
+     * against the **total** as well as its own budget: each is a share of the one allowance, not a second
+     * allowance beside it.
      */
     fun admits(
         bucket: AirBucket,
@@ -324,7 +361,7 @@ internal class LoraAirtime(
     ): Boolean {
         prune(now)
         val cost = payloadSizes.sumOf { timeOnAirMs(it, signedUpTo) }
-        val used = liveUsedMs + bridgeUsedMs + bootstrapUsedMs + publicUsedMs
+        val used = liveUsedMs + bridgeUsedMs + bootstrapUsedMs + publicUsedMs + gossipUsedMs
         val tickCeiling = (budgetMs(AirBucket.LIVE) * (1 - tickTailShare)).toLong()
         // A `when` rather than a ladder of early returns only because there are now five answers; the order
         // is the same and load-bearing. Note the TICK arm refuses but does not admit — a tick under the tail
@@ -351,12 +388,13 @@ internal class LoraAirtime(
                 false
             }
 
-            // The OFFER is not backfill: it is the one packet that decides whether any backfill happens at
-            // all, including the far pocket's, whose air this budget does not pay for. So serving must not be
-            // able to starve it — see the class doc.
+            // [AirBucket.GOSSIP] lands here and passes: the OFFER is not backfill, it is the one packet that
+            // decides whether any backfill happens at all — including the far pocket's, whose air this budget
+            // does not pay for — so serving must not be able to starve it (ADR 2026-09.t8t8). The total above
+            // still binds it. It used to reach that exemption as a [FrameClass.GOSSIP] frame *on this
+            // bucket*, which is what let it spend the share it was exempt from; ADR 2026-09.7c8n.
             else -> {
                 bucket != AirBucket.BRIDGE ||
-                    klass == FrameClass.GOSSIP ||
                     bridgeUsedMs + cost <= budgetMs(AirBucket.BRIDGE)
             }
         }
@@ -377,6 +415,7 @@ internal class LoraAirtime(
             AirBucket.BRIDGE -> bridgeUsedMs += ms
             AirBucket.BOOTSTRAP -> bootstrapUsedMs += ms
             AirBucket.PUBLIC -> publicUsedMs += ms
+            AirBucket.GOSSIP -> gossipUsedMs += ms
         }
     }
 
@@ -405,6 +444,8 @@ internal class LoraAirtime(
             bootstrapBudgetMs = budgetMs(AirBucket.BOOTSTRAP),
             publicUsedMs = publicUsedMs,
             publicBudgetMs = budgetMs(AirBucket.PUBLIC),
+            gossipUsedMs = gossipUsedMs,
+            gossipBudgetMs = budgetMs(AirBucket.GOSSIP),
             dedicated = dedicated(),
             signing = signing,
         )
@@ -421,6 +462,7 @@ internal class LoraAirtime(
                 AirBucket.BRIDGE -> bridgeUsedMs -= oldest.ms
                 AirBucket.BOOTSTRAP -> bootstrapUsedMs -= oldest.ms
                 AirBucket.PUBLIC -> publicUsedMs -= oldest.ms
+                AirBucket.GOSSIP -> gossipUsedMs -= oldest.ms
             }
         }
     }

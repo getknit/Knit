@@ -1212,6 +1212,10 @@ class DebugBridgeReceiver :
                         .put("bootstrapBudgetMs", air.bootstrapBudgetMs)
                         .put("publicMs", air.publicUsedMs)
                         .put("publicBudgetMs", air.publicBudgetMs)
+                        // No budget of its own — bounded by the Trickle timer and the window total (ADR
+                        // 2026-09.7c8n) — so what matters here is that it is no longer inside bridgeMs.
+                        .put("gossipMs", air.gossipUsedMs)
+                        .put("totalMs", air.totalUsedMs)
                 } ?: JSONObject.NULL,
             ).put("counters", metricsJson(metrics.snapshot()))
     }

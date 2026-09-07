@@ -208,8 +208,9 @@ class LoraPacePolicyTest {
 
     @Test
     fun theOfferGoesWhileTheBackfillBesideItWaitsForTheWindow() {
-        // The whole failure, at the layer that decides it: both frames spend BRIDGE, the bucket is spent, and
-        // only the one that unlocks the far pocket's reply may still leave.
+        // The whole failure, at the layer that decides it: the bridge bucket is spent, and only the packet
+        // that unlocks the far pocket's reply may still leave. Since ADR 2026-09.7c8n the offer books its
+        // own bucket, so it is not part of what spent this one either.
         val air = LoraAirtime()
         val pace = LoraPacePolicy(minGapMs = 0, airtime = air)
         var now = 0L
@@ -219,7 +220,7 @@ class LoraPacePolicyTest {
         }
         val big = ByteArray(MeshtasticProto.MAX_PAYLOAD)
         pace.enqueue(OutboundFrame(listOf(big), "backfill", FrameClass.ROOM, AirBucket.BRIDGE))
-        pace.enqueue(OutboundFrame(listOf(big), "offer", FrameClass.GOSSIP, AirBucket.BRIDGE))
+        pace.enqueue(OutboundFrame(listOf(big), "offer", FrameClass.GOSSIP, AirBucket.GOSSIP))
         assertEquals("offer", pace.take(now)!!.label)
         assertEquals("the backfill it would have crowded out is still queued", 1, pace.pending)
     }

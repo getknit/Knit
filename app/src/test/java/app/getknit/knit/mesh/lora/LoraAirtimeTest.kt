@@ -108,7 +108,7 @@ class LoraAirtimeTest {
             now += 3_000
         }
         assertFalse("serving is refused at its share", air.admits(AirBucket.BRIDGE, FrameClass.ROOM, offer, now))
-        assertTrue("the offer still rides", air.admits(AirBucket.BRIDGE, FrameClass.GOSSIP, offer, now))
+        assertTrue("the offer still rides", air.admits(AirBucket.GOSSIP, FrameClass.GOSSIP, offer, now))
     }
 
     @Test
@@ -122,17 +122,44 @@ class LoraAirtimeTest {
             air.record(AirBucket.LIVE, MeshtasticProto.MAX_PAYLOAD, now)
             now += 3_000
         }
-        assertFalse("no air left at all", air.admits(AirBucket.BRIDGE, FrameClass.GOSSIP, packet, now))
+        assertFalse("no air left at all", air.admits(AirBucket.GOSSIP, FrameClass.GOSSIP, packet, now))
     }
 
     @Test
-    fun gossipSpendingCostsServingItsHeadroom() {
-        // It books BRIDGE even though it is not judged against it, so a chatty gossip timer degrades the
-        // backfill rather than the reverse — which is the direction the whole split is arguing for.
+    fun gossipSpendingLeavesServingsShareAlone() {
+        // The reversal of ADR 2026-09.t8t8's "heavy gossip costs serving its headroom" (ADR 2026-09.7c8n).
+        // Booking an exempt class against the share it is exempt from puts the whole cost of gossip on the
+        // one class that has nowhere to fall back to. Its own bucket keeps the exemption and drops the cost.
         val air = LoraAirtime().apply { onRadioConfig(radio()) }
-        val before = air.usedMs(AirBucket.BRIDGE, 0L)
-        air.record(AirBucket.BRIDGE, MeshtasticProto.MAX_PAYLOAD, 0L)
-        assertTrue("the offer's air is on the bridge ledger", air.usedMs(AirBucket.BRIDGE, 0L) > before)
+        air.record(AirBucket.GOSSIP, MeshtasticProto.MAX_PAYLOAD, 0L)
+        assertEquals("the offer's air is not on serving's ledger", 0L, air.usedMs(AirBucket.BRIDGE, 0L))
+        assertTrue("it is on its own", air.usedMs(AirBucket.GOSSIP, 0L) > 0L)
+        assertEquals(
+            "and still on the total, which is the ceiling that is actually law",
+            air.usedMs(AirBucket.GOSSIP, 0L),
+            air.snapshot(0L).totalUsedMs,
+        )
+    }
+
+    @Test
+    fun offersAtTheTrickleFloorCannotStarveServing() {
+        // The field failure (2026-09-07): two gateways that genuinely disagree keep Trickle at its 5-minute
+        // floor, so three offers land in every 15-minute window. Against the 13.5 s bridge share that was
+        // ~44 % of serving's budget spent on packets serving cannot decline — and with the rest going to the
+        // backfill those offers asked for, `bridgeMs` reached 14026/13500 and a room post sat for 50 minutes.
+        val air = LoraAirtime().apply { onRadioConfig(radio()) }
+        val offer = listOf(LoraCtl.HEADER_BYTES + LoraCtl.MAX_PREFIXES * LoraCtl.PREFIX_BYTES)
+        var now = 0L
+        repeat(3) {
+            assertTrue("an offer always rides", air.admits(AirBucket.GOSSIP, FrameClass.GOSSIP, offer, now))
+            air.record(AirBucket.GOSSIP, offer.single(), now)
+            now += 5 * 60_000L
+        }
+        assertEquals("none of it landed on serving", 0L, air.usedMs(AirBucket.BRIDGE, now))
+        assertTrue(
+            "so a whole window's serving is still affordable",
+            air.admits(AirBucket.BRIDGE, FrameClass.ROOM, listOf(MeshtasticProto.MAX_PAYLOAD), now),
+        )
     }
 
     @Test

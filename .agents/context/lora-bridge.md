@@ -220,9 +220,12 @@ firmware's own `override_duty_cycle` lifts it, while the 10 % is Knit's manners 
 shared band — which a dedicated RF slot makes vacuous. So a board on a dedicated slot in a 100 %-duty region
 gets **450 s a window**, one in EU_868 still gets 45 s, and the unlock is a constructor flag wired to
 `BuildConfig.DEBUG` (`LoraAirtime` itself stays pure and is tested both ways).
-`AirBucket.LIVE` may spend all of it; `AirBucket.BRIDGE` (offers + backfill + the ADR 039 re-offer) is capped
-at 30 %, so backfill degrades before live chat does — but that cap is on **serving**: a `FrameClass.GOSSIP`
-OFFER books `BRIDGE` and is judged only against the window *total* (ADR 2026-09.t8t8). An OFFER is not
+`AirBucket.LIVE` may spend all of it; `AirBucket.BRIDGE` (backfill + the ADR 039 re-offer) is capped
+at 30 %, so backfill degrades before live chat does. The OFFER is **not** in that bucket: it books
+`AirBucket.GOSSIP` and is judged only against the window *total* (ADR 2026-09.t8t8 for the exemption,
+ADR 2026-09.7c8n for the bucket — booking an exempt class against the share it is exempt from put the whole
+cost of gossip on the one class with nowhere to fall back to, and at the Trickle floor that is ~44 % of
+serving's budget: field-observed 2026-09-07 at `bridgeMs 14026/13500` with `liveMs 0/45000`). An OFFER is not
 backfill, it is the packet that decides whether any backfill happens at all — including the far pocket's,
 whose air this budget does not pay for — so a gateway busy serving used to starve its own offers and thereby
 silence the other pocket entirely (field-observed 2026-09-04: `BRIDGE 13372/13500`, two transmitted offers
@@ -230,7 +233,9 @@ against seven published, the far side hearing none and holding a room post ~30 m
 Trickle timer, not a share; a reserved *slice* of BRIDGE was rejected because it cannot be sized across presets
 (a 48-prefix OFFER is ~2 s at LongFast and ~13 s at LongSlow against the same 13.5 s budget). Only one OFFER is
 ever queued — `publishOffer` calls `LoraPacePolicy.dropQueued`, since a superseded snapshot names a set we have
-since changed. Serving also asks the budget **before** it queues (`serveOne` → `Serve.NO_AIR` ends the round),
+since changed. Serving also asks the budget **before** it queues (`serveOne` → `Serve.NO_AIR`, which **skips that
+candidate** — ADR 2026-09.7c8n; it used to end the round, and since `backfillRank` puts the priciest
+candidate first, a window holding a one-packet DM but not a three-packet room post served nothing at all),
 so the hourly serve cap is no longer spent on frames that only class shedding will remove — and it asks
 against what is already **queued** for BRIDGE (`LoraPacePolicy.pendingSizes`) as well as what is recorded, so
 a round cannot promise more air than the window has left. Without that, a round passed admission whole and
@@ -257,7 +262,9 @@ equality** (a superset has not said what we needed to say). "News" includes a *h
 that is not ours (ADR 2026-09.qsj6), which `onCtlPacket` follows with a `gossipWake` poke like the other two
 reset sites — without it the loop sleeps on the old due time, wakes past the reset interval's end and doubles.
 It snaps only a **backed-off** interval, so a divergence that cannot converge (serve cap spent, permanent
-superset) settles at the floor cadence instead of two gateways resetting each other into the BRIDGE budget;
+superset) settles at the floor cadence instead of two gateways resetting each other into the window. Since
+ADR 2026-09.7c8n what that floor spends is `GOSSIP`, so an unconvergeable divergence no longer eats the
+serving budget that would end it — which is the loop it used to close;
 and a reset never moves an unspent transmit point *later* than the one its interval already picked.
 On a far gateway's OFFER: `BridgeFrameSource`
 (`MeshManager` over `ForwardStore.liveFrames`, already TTL- and quota-bounded, so no extra age gate) returns
@@ -795,7 +802,9 @@ where no other Knit board is listening. Set the Meshtastic app's device to **Non
   climbing and no backfill is served, while a live room post still crosses. (6) With `bridgeMs` at its budget
   from serving, `lora tx offer` still appears on the gossip schedule and `loraOfferSent` matches that line
   count; `loraAirtimeHeld` names `BRIDGE` while `queued` shows the depth, and `loraBridged` stops short of
-  `SERVE_CAP_PER_HOUR` rather than running to it with nothing landing (ADR 2026-09.t8t8).
+  `SERVE_CAP_PER_HOUR` rather than running to it with nothing landing (ADR 2026-09.t8t8). (7) `gossipMs`
+  climbs with the offers while `bridgeMs` does not, and a `served=0/4 (n over budget)` round is followed by
+  a cheaper frame crossing in the same round rather than a second `0/4` (ADR 2026-09.7c8n).
 
 ## First-session unknowns to confirm (assumptions, not blockers)
 

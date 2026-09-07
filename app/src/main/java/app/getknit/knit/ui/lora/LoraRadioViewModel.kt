@@ -316,7 +316,7 @@ internal class LoraRadioViewModel(
     private fun airtimePercent(air: AirtimeSnapshot): Int {
         val budget = air.liveBudgetMs
         if (budget <= 0) return 0
-        val used = air.liveUsedMs + air.bridgeUsedMs + air.bootstrapUsedMs
+        val used = air.totalUsedMs
         return ((used * PERCENT + budget - 1) / budget).toInt().coerceIn(0, PERCENT.toInt())
     }
 

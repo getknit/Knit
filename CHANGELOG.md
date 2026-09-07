@@ -70,6 +70,8 @@ document:
   discard them one at a time while the phone reconnected, so a message could vanish without ever being sent.
 - Message details for a room post names more of the people who got it. The list now says it may not be
   everyone who received the post.
+- A message that has to travel between two Meshtastic radios now goes out as soon as there's room on the
+  air. It could sit for the better part of an hour while a larger one blocked the queue ahead of it.
 
 ## [2.4.0](https://github.com/getknit/knit/releases/tag/v2.4.0) — 2026-08-31T05:12:27Z
 

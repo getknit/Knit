@@ -729,7 +729,10 @@ internal class LoraMeshTransport(
             listOf(payload),
             "offer:${lastOfferPrefixes.size}",
             FrameClass.GOSSIP,
-            AirBucket.BRIDGE,
+            // Its own bucket, not BRIDGE: the offer is exempt from the bridge share, and booking an exempt
+            // packet against that share spends serving's budget on something serving cannot decline to send
+            // (ADR 2026-09.7c8n). The window total still bounds it.
+            AirBucket.GOSSIP,
             supersedes = OFFER_KEY,
         )
     }
@@ -780,11 +783,13 @@ internal class LoraMeshTransport(
      * would crowd out live chat. The sig dedup is deliberately **not** a fourth: see [serveOne]. What it
      * cost us was the repair, what it saved is at most a duplicate frame the receiver's SeenSet drops.
      *
-     * The budget is asked **before** each frame is queued, and the round stops at the first refusal. It used
-     * to be consulted only by the pacer, after the hourly allowance had been booked and `loraBridged`
-     * counted — so a bridge whose window was spent kept enqueueing frames that sat until class shedding
-     * evicted them, and both the cap and the counter described air nobody ever heard (2026-09-04: `loraBridged`
-     * at the full 12, `loraDroppedQueue` 23, nothing landing). The check reads **recorded** air, not what is
+     * The budget is asked **before** each frame is queued, and a frame it refuses is skipped rather than
+     * ending the round (ADR 2026-09.7c8n: the rank puts the priciest candidate first, so stopping there let
+     * one unaffordable frame silence a whole round). It used to be consulted only by the pacer, after the
+     * hourly allowance had been booked and `loraBridged` counted — so a bridge whose window was spent kept
+     * enqueueing frames that sat until class shedding evicted them, and both the cap and the counter
+     * described air nobody ever heard (2026-09-04: `loraBridged` at the full 12, `loraDroppedQueue` 23,
+     * nothing landing). The check reads **recorded** air, not what is
      * already queued and unspent, so one round's frames still all pass; what it stops is the next round, and
      * the rounds after that, which is where the pile came from.
      */
@@ -816,17 +821,21 @@ internal class LoraMeshTransport(
         // every gateway in range; beaconing on each one would spend more air on profiles than on messages.
         if (candidates.isNotEmpty()) beaconProfile(FIRST_HEARING_GAP_MS)
         var served = 0
-        var windowSpent = false
+        var unaffordable = 0
         for (wire in candidates) {
-            if (windowSpent || served >= allowance) break
+            if (served >= allowance) break
             when (serveOne(wire)) {
                 Serve.SENT -> served++
 
                 Serve.SKIPPED -> Unit
 
-                // The next frame will not fit either, so the round ends here rather than queueing what only
-                // class shedding would remove later — and the unserved allowance goes back below.
-                Serve.NO_AIR -> windowSpent = true
+                // Skipped, not the end of the round. [LoraFramePolicy.backfillRank] deliberately puts the
+                // *most expensive* candidate first — a profile, then a room post — so ending here handed the
+                // whole round to whichever frame happened not to fit, and a one-packet DM behind it went
+                // unsent against air that would have carried it. Nothing is queued by a refusal, so there is
+                // no pile to shed either; [LoraPacePolicy.admitBest] has always skipped for the same reason.
+                // ADR 2026-09.7c8n.
+                Serve.NO_AIR -> unaffordable++
             }
         }
         budget.refund(allowance - served)
@@ -837,15 +846,19 @@ internal class LoraMeshTransport(
             gossip.reset(clock())
             gossipWake.trySend(Unit)
         }
-        log("lora bridge served=$served/$allowance to $key")
+        // The reason, not just the count: `served=0/4` alone cannot tell an offer that named everything we
+        // hold from a window with no air left, and those want opposite remedies (ADR 2026-09.7c8n).
+        val why = if (unaffordable > 0) " ($unaffordable over budget)" else ""
+        log("lora bridge served=$served/$allowance to $key$why")
     }
 
-    /** What one backfill candidate did: went out, was passed over, or found the bridge window spent. */
+    /** What one backfill candidate did: went out, was passed over, or cost more air than the window has. */
     private enum class Serve { SENT, SKIPPED, NO_AIR }
 
     /**
      * Enqueues one backfilled frame. [Serve.SKIPPED] when it can't ride (too big, or a link already covers
-     * it); [Serve.NO_AIR] when the bridge window cannot carry it, which ends the round rather than this frame.
+     * it); [Serve.NO_AIR] when the bridge window cannot carry *this* frame — the caller tries the next one,
+     * since a cheaper candidate may still fit what is left.
      *
      * Deliberately gated by **neither** dedup set. This is the digest-driven repair path: the offer is
      * positive evidence that the far gateway lacks this exact frame, which outranks either set's guess that
@@ -1372,7 +1385,7 @@ internal class LoraMeshTransport(
         const val BACKFILL_LIMIT = 4 // frames per offer heard
         const val SERVE_CAP_PER_HOUR = 12 // frames per far gateway per hour
         const val SERVE_WINDOW_MS = 60 * 60_000L
-        const val CANDIDATE_SLACK = 3 // ask custody for more than we can send: some won't encode or are deduped
+        const val CANDIDATE_SLACK = 3 // ask custody for more than we can send: some won't encode, or won't fit the window
         const val HEX = 16
 
         /**

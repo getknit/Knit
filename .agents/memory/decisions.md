@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-99 decisions.
+100 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -95,6 +95,7 @@ carries; never renumber an old one.
 | [2026-09.6ww7](decisions/2026-09-6ww7-a-group-chat-says-lora-will-not-carry-it.md) | A group chat says LoRa will not carry it | lora, ui |
 | [2026-09.7463](decisions/2026-09-7463-sealed-dm-form-chat-rides-the-targeted-coordination-plane-arm.md) | Sealed DM-form chat rides the targeted coordination-plane arm | mesh, nan, fanout |
 | [2026-09.74fq](decisions/2026-09-74fq-open-to-chat-is-a-carried-profile-flag.md) | Open to chat is a carried profile flag, and the nearby cue is batched with per-person and hourly cooldowns | profile, wire, notifications, ui |
+| [2026-09.7c8n](decisions/2026-09-7c8n-gossip-pays-for-its-own-air.md) | Gossip pays for its own air, and a backfill round skips what it cannot afford | lora, airtime, reliability |
 | [2026-09.7r4d](decisions/2026-09-7r4d-a-post-typed-in-the-bridged-room-is-the-same-frame-with-no-speaker.md) | A post typed in the bridged room is the same frame with no speaker | lora, meshtastic, mesh |
 | [2026-09.9469](decisions/2026-09-9469-a-post-to-the-meshtastic-room-carries-no-author-name.md) | A post to the Meshtastic room carries no author name | lora, meshtastic, privacy |
 | [2026-09.995c](decisions/2026-09-995c-a-peer-rename-notice-stores-both-names.md) | A peer rename notice stores both names | ui, data |

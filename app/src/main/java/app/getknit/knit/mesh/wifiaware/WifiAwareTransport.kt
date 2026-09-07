@@ -419,12 +419,17 @@ class WifiAwareTransport(
     // of the current episode where a sync is owed AND no link has formed since (0 = no episode). The wedge is
     // *a sync owed continuously for WEDGE_RESTART_MS with no link* — NOT merely "no link in a while" (an idle,
     // converged mesh does zero data-path work for long stretches, so time-since-last-link is meaningless until
-    // something is actually owed). [lastRestartAt] rate-limits the self-restart.
+    // something is actually owed). [lastRestartAt] rate-limits the self-restart. [responderRefreshes] is the
+    // Tier-1 budget spent in this episode — capped at MAX_RESPONDER_REFRESHES, because a session cycle that
+    // has not produced a link is not curing anything and each repeat re-breaks the very sessions the
+    // handshake needs (see [NanWatchdogPolicy]); it resets with the episode.
     @Volatile private var lastLinkOrAcceptAt = 0L
 
     @Volatile private var syncOwedSince = 0L
 
     @Volatile private var lastRestartAt = 0L
+
+    @Volatile private var responderRefreshes = 0
 
     private var powerJob: Job? = null
     private var loopJob: Job? = null
@@ -682,18 +687,25 @@ class WifiAwareTransport(
                 lastLinkOrAcceptAt = lastLinkOrAcceptAt,
                 lastReattachAt = lastReattachAt,
                 lastRestartAt = lastRestartAt,
+                responderRefreshes = responderRefreshes,
                 responderRefreshMs = RESPONDER_REFRESH_MS,
                 reattachCooldownMs = REATTACH_COOLDOWN_MS,
                 wedgeRestartMs = WEDGE_RESTART_MS,
+                maxResponderRefreshes = MAX_RESPONDER_REFRESHES,
             )
         syncOwedSince = decision.nextSyncOwedSince
+        responderRefreshes = decision.nextResponderRefreshes
         when (decision.action) {
             NanWatchdogPolicy.Action.None -> {}
 
             // Tier 1: refresh the (possibly wedged) responder — light, uncorroborated, safe at 0 NDPs.
             NanWatchdogPolicy.Action.RefreshResponder -> {
                 lastReattachAt = now
-                Log.w(TAG, "sync owed ${now - syncOwedSince}ms with no link — refreshing responder via session cycle")
+                Log.w(
+                    TAG,
+                    "sync owed ${now - syncOwedSince}ms with no link — refreshing responder via session cycle " +
+                        "($responderRefreshes/$MAX_RESPONDER_REFRESHES this episode)",
+                )
                 sessionCycleWithSettle()
             }
 
@@ -1302,6 +1314,17 @@ class WifiAwareTransport(
             // Tier-1 responder self-heal (a wedged responder refreshed) — each logs its own reason first.
             Log.w(TAG, "session cycle: tearing down for a fresh session, settling")
             stopResponder()
+            // A PeerHandle is only valid on the discovery session it was learned on, so closing subscribe
+            // invalidates every entry in [discovered] — drop them with it, exactly as [rearmSubscribe] and
+            // [stop] do. Keeping them is not merely untidy, it is the wedge: [initiateTo] would pair the
+            // *fresh* subscribe session with a *dead* handle (the framework then sets an NDP up and drops it,
+            // which arrives here as a sub-FAST_FAIL_MS onUnavailable and is misread as a stale peer handle,
+            // inflating failStreak and the backoff), while [needsRediscovery] reads the stale entries as "we
+            // already hold a handle" and so suppresses the very subscribe re-arm that would refresh them.
+            // ++attachGen for the same reason it is bumped on the NAN-down path: discovery callbacks still in
+            // flight from the generation we are tearing down must not repopulate the map we just cleared.
+            ++attachGen
+            synchronized(lock) { discovered.clear() }
             runCatching { publishSession?.close() }
             runCatching { subscribeSession?.close() }
             runCatching { session?.close() }
@@ -2492,7 +2515,10 @@ class WifiAwareTransport(
                 subscribing.set(false)
                 reattaching.set(false)
                 clearAttachBackoff() // symmetric with the up edge; the streak can't outlive the radio it measured
-                synchronized(lock) { accepting = 0 }
+                synchronized(lock) {
+                    accepting = 0
+                    discovered.clear() // handles die with the sessions closed just above — see [sessionCycleWithSettle]
+                }
                 cueTarget.clear()
                 hopTable.clear()
                 lastSeenAt.clear()
@@ -2734,6 +2760,14 @@ class WifiAwareTransport(
         // refreshes a possibly-wedged responder. Well under WEDGE_RESTART_MS (the last-resort process kill) and
         // comfortably above a healthy owed→link latency, so it only fires on a genuine stuck episode.
         const val RESPONDER_REFRESH_MS = 45_000L
+
+        // ...and how many of those cycles one episode may spend. WEDGE_CHECK_MS (30 s) is longer than
+        // REATTACH_COOLDOWN_MS (20 s), so the cooldown never blocks Tier 1 in production and this cap is the
+        // only thing that stops it: three tries at ~30 s spacing, then quiet so the radio holds still long
+        // enough for a handshake to finish and for Tier 2's 180 s corroborated escalation to be reachable at
+        // all. Uncapped, the cycle destroys the sessions each initiate needs and the wedge sustains itself
+        // (three-Pixel capture 2026-09-07 — see [NanWatchdogPolicy]).
+        const val MAX_RESPONDER_REFRESHES = 3
 
         // Min spacing between subscribe re-arms to re-discover a stale/missing peer handle: long enough that a
         // departed peer's cue target is pruned (cue send fails) before we'd re-arm again, so we don't churn

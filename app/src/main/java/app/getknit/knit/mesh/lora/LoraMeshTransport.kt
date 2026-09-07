@@ -888,14 +888,28 @@ internal class LoraMeshTransport(
         // 2026-09.zkma). The ledger only books a frame when it leaves, so a whole round used to pass
         // admission and then run out of window half-way down the queue — and the frame left behind was
         // always the room post, because [FrameClass] drains a DM before the room while
-        // [LoraFramePolicy.backfillRank] spends the round's scarce slots the other way round. Serving in
-        // rank order only means anything if the round stops at what it can actually pay for.
-        val outstanding = pace.pendingSizes(AirBucket.BRIDGE) + parts.map { it.size }
-        if (!pace.airtime.admits(AirBucket.BRIDGE, klass, outstanding, clock())) {
+        // [LoraFramePolicy.backfillRank] spends the round's scarce slots the other way round, so asking per
+        // candidate is what lets the round pay for the ones it can and skip the ones it cannot.
+        val now = clock()
+        val queued = pace.pendingSizes(AirBucket.BRIDGE)
+        val outstanding = queued + parts.map { it.size }
+        if (!pace.airtime.admits(AirBucket.BRIDGE, klass, outstanding, now)) {
             // The same counter a frame the pacer holds ticks, because it is the same fact: this one waits for
             // a later window and the next offer will name it again. Refusing here instead of in the queue is
             // what keeps the serve cap honest, but it must not make the refusal invisible on the way.
             metrics.onLoraAirtimeHeld(AirBucket.BRIDGE.name)
+            // Named, priced, and against the ledger it was priced by — the three things a field trial cannot
+            // reconstruct afterwards (ADR 2026-09.7c8n). `loraBridgeRefused` counts only the hourly serve cap
+            // and read 0 all session, so the aggregate `served=0/N` line could say a round paid for nothing
+            // but never which frame, nor whether the window was spent or merely already promised. The
+            // `+ Nms queued` half is the ADR 2026-09.zkma distinction: air this round has committed and the
+            // ledger has not yet booked.
+            val ownMs = parts.sumOf { pace.airtime.timeOnAirMs(it.size) }
+            val queuedMs = queued.sumOf { pace.airtime.timeOnAirMs(it) }
+            log(
+                "lora bridge held $label: ${ownMs}ms + ${queuedMs}ms queued, " +
+                    "BRIDGE ${pace.airtime.usedMs(AirBucket.BRIDGE, now)}/${pace.airtime.budgetMs(AirBucket.BRIDGE)}",
+            )
             return Serve.NO_AIR
         }
         sigSeen.add(dedupKey(wire, env)) // recorded for the fan-out's benefit, never consulted here — see the kdoc

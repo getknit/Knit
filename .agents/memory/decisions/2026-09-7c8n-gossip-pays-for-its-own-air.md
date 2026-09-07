@@ -97,10 +97,22 @@ queue pressure and never applied to a candidate the governor had already decline
 has always skipped a refused frame for the identical reason. `CANDIDATE_SLACK` (3×) already asks custody for
 more candidates than the allowance can send.
 
-**The serve log says why.** `lora bridge served=0/4 to <key> (1 over budget)`. `served=0/4` alone cannot
-distinguish an offer that named everything we hold from a window with no air left, and those want opposite
-remedies. `loraBridgeRefused` stayed **0** through the whole trial — it counts only the hourly serve cap —
-so `loraAirtimeHeldByBucket.BRIDGE` was the sole tell, one indirection away from the question.
+**The serve log says why, and which frame.** The round line gains a reason —
+`lora bridge served=0/4 to <key> (1 over budget)` — since `served=0/4` alone cannot distinguish an offer that
+named everything we hold from a window with no air left, and those want opposite remedies. Each refusal then
+names itself:
+
+```
+lora bridge held bridge:JVGFW1BMj15mWoVZyIpYiw: 590ms + 0ms queued, BRIDGE 13208/13500
+```
+
+Priced by the same ledger that refused it, so the three questions a field trial cannot answer afterwards —
+*which* frame, what it cost, and whether the window was spent or merely already promised — are on one line.
+The `+ Nms queued` half is the ADR 2026-09.zkma distinction: air the round has committed that the ledger has
+not booked, which is the difference between "come back next window" and "this round over-promised".
+`loraBridgeRefused` stayed **0** through the whole trial — it counts only the hourly serve cap, and is left
+alone rather than widened, since a held frame is not a refused one — so `loraAirtimeHeldByBucket.BRIDGE` was
+the sole tell, one indirection away from the question.
 
 **`AirtimeSnapshot.totalUsedMs`.** `LoraRadioViewModel.airtimePercent` and `LoraStatusRepository.saturated`
 each summed `live + bridge + bootstrap`, three buckets of five: the settings row's "airtime used" and the

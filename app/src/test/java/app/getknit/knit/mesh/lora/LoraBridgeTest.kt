@@ -1062,5 +1062,7 @@ class LoraBridgeTest {
             val crossed = b.received.mapTo(HashSet()) { it.envelope.id }
             assertFalse("the room post is genuinely unaffordable", idOf(room) in crossed)
             assertTrue("but the cheap frame ranked behind it still crossed", idOf(dm) in crossed)
+            val held = a.metrics.snapshot().loraAirtimeHeldByBucket[AirBucket.BRIDGE.name] ?: 0L
+            assertTrue("and the refusal left a trace — it is logged per frame, and counted here", held > 0)
         }
 }

@@ -804,7 +804,8 @@ where no other Knit board is listening. Set the Meshtastic app's device to **Non
   count; `loraAirtimeHeld` names `BRIDGE` while `queued` shows the depth, and `loraBridged` stops short of
   `SERVE_CAP_PER_HOUR` rather than running to it with nothing landing (ADR 2026-09.t8t8). (7) `gossipMs`
   climbs with the offers while `bridgeMs` does not, and a `served=0/4 (n over budget)` round is followed by
-  a cheaper frame crossing in the same round rather than a second `0/4` (ADR 2026-09.7c8n).
+  a cheaper frame crossing in the same round rather than a second `0/4`; each refusal names its own frame as
+  `lora bridge held bridge:<id>: <n>ms + <n>ms queued, BRIDGE <used>/<budget>` (ADR 2026-09.7c8n).
 
 ## First-session unknowns to confirm (assumptions, not blockers)
 

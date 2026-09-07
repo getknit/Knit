@@ -55,6 +55,8 @@ document:
 - Chats now say what happened in them. A quiet centered line marks a contact changing their name ("Sam is
   now Sam Vimes") or photo and a group being renamed or created, with no notification, no unread badge and
   no bump up your chat list.
+- Adding someone from a contact link now says they have to add yours as well. The Add-by-link screen and
+  the waiting line on their profile both carry the note, so a one-sided add no longer looks like a bug.
 
 ### Fixed
 

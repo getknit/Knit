@@ -387,7 +387,7 @@
     <string name="contact_link_copied">Link copied</string>
     <string name="add_contact_title">Add contact</string>
     <string name="add_contact_link_title">Add by link</string>
-    <string name="add_contact_caption">Paste a contact link someone sent you, or open it from the message it arrived in.</string>
+    <string name="add_contact_caption">Paste a contact link someone sent you, or open it from the message it arrived in. Send them yours too — it only connects once you\'ve both added the other\'s link.</string>
     <string name="add_contact_input_label">Contact link</string>
     <string name="add_contact_input_hint">https://getknit.app/c#…</string>
     <string name="add_contact_paste">Paste</string>
@@ -403,7 +403,7 @@
     <string name="add_contact_relay_hint">%1$s uses relay %2$s, which you don\'t. To meet over the Internet, add it under Settings › Internet relays.</string>
     <string name="add_contact_mismatch">This link\'s key doesn\'t match the one you already have for %1$s. Ask them to confirm their safety number.</string>
     <string name="add_contact_invalid">That\'s not a Knit contact link.</string>
-    <string name="intro_status_awaiting_key">Waiting to reach %1$s — connects once their device is heard nearby, over LoRa, or through a relay.</string>
+    <string name="intro_status_awaiting_key">Waiting to reach %1$s — connects once their device is heard nearby, over LoRa, or through a relay. If you added them from a link, they need to add yours too.</string>
     <string name="intro_status_waiting">Waiting for %1$s\'s device to answer.</string>
     <string name="intro_status_connected">Connected — you can message each other over any path you share.</string>
 

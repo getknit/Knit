@@ -90,6 +90,10 @@ class DemoWriter(
         // set state, and it is the local half of the cue the peer badges are the remote half of. Not a
         // scenario field — it reads the same at a trailhead and on the playa, like the planes.
         settings.setOpenToChat(true)
+        // The room's "never sent over the Internet" notice, already dismissed. It is a first-run banner a
+        // real user clears once and never sees again, so leaving it up puts a transient state across the top
+        // of every capture of the room — and it is the one shot where the messages are the subject.
+        settings.dismissRelayRoomNotice()
     }
 
     /** Writes the full Nearby history + a read watermark leaving the latest message unread (a "1" badge). */

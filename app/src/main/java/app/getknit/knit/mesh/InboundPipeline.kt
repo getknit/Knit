@@ -307,9 +307,7 @@ class InboundPipeline(
                 handleTyping(env)
             }
 
-            else -> {
-                Unit
-            }
+            else -> {}
         }
     }
 

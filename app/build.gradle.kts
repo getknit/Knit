@@ -494,6 +494,28 @@ room3 {
     schemaDirectory("$projectDir/schemas")
 }
 
+kotlin {
+    compilerOptions {
+        // Kotlin warnings are build errors. They are otherwise invisible in day-to-day work: kotlinc only
+        // prints a diagnostic for the files it actually compiles, so an UP-TO-DATE / FROM-CACHE / incremental
+        // `assembleDebug` reports nothing, and the whole module's warning set only reappears on a cold compile
+        // of a variant nobody builds often (which is how eight of them reached 2.5.0 unseen). Nothing else
+        // catches these: Android Lint runs its own UAST issue registry, and detekt runs without type
+        // resolution, so neither sees an unused expression, an always-true condition, or a missing opt-in.
+        //
+        // Applies to every compilation in the module — main, unit-test and androidTest — deliberately: a
+        // flag that covered only main sources would let the test sources rot instead.
+        //
+        // `-Pknit.warningsAsErrors=false` turns it back into warnings. That is the escape hatch for a
+        // toolchain bump on this deliberately bleeding-edge stack (a new Kotlin, AGP or androidx release can
+        // deprecate an API we call and turn a green build red): flip it off, triage, fix, flip it back — do
+        // not delete this block. It changes no bytecode, so the release APK stays byte-identical either way.
+        allWarningsAsErrors.set(
+            providers.gradleProperty("knit.warningsAsErrors").map(String::toBoolean).orElse(true),
+        )
+    }
+}
+
 kover {
     // Coverage is measured from the DEBUG unit tests (`:app:testDebugUnitTest` — the JVM mesh/protocol/data +
     // Robolectric Room/Compose suites), so the per-variant report tasks to run are the *Debug ones:

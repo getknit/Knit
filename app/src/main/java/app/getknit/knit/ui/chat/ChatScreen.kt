@@ -2702,7 +2702,7 @@ private fun FullscreenImageViewer(
         var offset by remember { mutableStateOf(Offset.Zero) }
         var menuOpen by remember { mutableStateOf(false) }
         val transformState =
-            rememberTransformableState { zoomChange, panChange, _ ->
+            rememberTransformableState { _, zoomChange, panChange, _ ->
                 scale = (scale * zoomChange).coerceIn(1f, 5f)
                 offset += panChange
             }

@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalCoroutinesApi::class) // UnconfinedTestDispatcher / setMain / advanceUntilIdle are experimental kotlinx APIs
+
 package app.getknit.knit.mesh
 
 import androidx.room3.Room
@@ -81,6 +83,7 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -320,7 +323,6 @@ class InboundPipelineTest {
                 val via = thirdArg<DeliveryPlane>()
                 messages.markReceived(id, via)
                 if (acker != null) receiptMap.putIfAbsent(id to acker, MessageReceiptEntity(id, acker, arg(3), via.code))
-                Unit
             }
             coEvery { groups.find(any()) } answers { groupMap[firstArg()] }
             coEvery { groups.upsert(any()) } answers { groupMap[firstArg<GroupEntity>().groupId] = firstArg() }

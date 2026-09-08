@@ -1225,18 +1225,14 @@ class WifiAwareTransport(
             recomputeReachable() // age out the nearby set even on an idle tick
             val now = SystemClock.elapsedRealtime()
             when {
-                !hasHardware -> {
-                    Unit
-                }
+                !hasHardware -> {}
 
                 session == null -> {
                     attachAfterCycleSettle(now)
                 }
 
                 // radio came back / first attach failed
-                anyLinkActivity() -> {
-                    Unit
-                }
+                anyLinkActivity() -> {}
 
                 // links/handshakes/accepts are live — wait for the supervisors to free the radio
                 // P2: a served-then-idle responder request pins the NDI (§2 of the re-audit) and an initiate
@@ -1247,9 +1243,7 @@ class WifiAwareTransport(
                     sessionCycleWithSettle()
                 }
 
-                driveSync() -> {
-                    Unit
-                }
+                driveSync() -> {}
 
                 // a sync-wanted peer we can initiate to → NDP up
                 // Re-fire discovery only when a sync is actually blocked on a missing/stale subscribe handle
@@ -1274,9 +1268,7 @@ class WifiAwareTransport(
                     fireIcmRelight(now)
                 }
 
-                else -> {
-                    Unit
-                }
+                else -> {}
             }
         }
     }
@@ -2347,9 +2339,7 @@ class WifiAwareTransport(
     private fun scheduleServeReattach(peerNodeId: String) {
         handler.postDelayed({
             when {
-                session == null || publishSession == null -> {
-                    Unit
-                }
+                session == null || publishSession == null -> {}
 
                 // detached; the loop re-attaches
                 anyLinkActivity() -> {

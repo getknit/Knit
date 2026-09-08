@@ -106,6 +106,10 @@ internal class MeshtasticGatt(
         }
     }
 
+    // `DEPRECATION`: compileSdk 37.1 deprecates every `connectGatt(Context, …)` overload in favour of the
+    // API-37 `connectGatt(BluetoothGattConnectionSettings, Executor, callback)`, which is eight releases
+    // above minSdk 29 — this is still the only form that reaches the boards we support.
+    @Suppress("DEPRECATION")
     private suspend fun connectAndConfigure(device: BluetoothDevice): DialResult {
         val channel = AndroidGattChannel()
         val gatt =

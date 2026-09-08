@@ -661,9 +661,7 @@ class ForwardSyncTest {
                     WireCodec.decodePayload<BlobReqContent>(env.payload)?.let { blobExchange.onRequest(it.hash, fromNodeId) }
                 }
 
-                else -> {
-                    Unit
-                }
+                else -> {}
             }
         }
 

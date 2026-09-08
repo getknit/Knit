@@ -247,11 +247,11 @@ class SpoolRecordsTest {
         // A v1 spool decodes unchanged and is *not* offered attachment records — it would skip them
         // without answering, hanging the client's q until the request timeout.
         assertEquals(false, plain.limits!!.attachments)
-        assertNull(plain.limits!!.maxAget)
+        assertNull(plain.limits.maxAget)
         assertEquals(true, attaching.limits!!.attachments)
-        assertEquals(16_777_216, attaching.limits!!.maxAttachBytes)
-        assertEquals(49_221, attaching.limits!!.maxAChunk)
-        assertEquals(32, attaching.limits!!.maxAget)
+        assertEquals(16_777_216, attaching.limits.maxAttachBytes)
+        assertEquals(49_221, attaching.limits.maxAChunk)
+        assertEquals(32, attaching.limits.maxAget)
         // The v1 hello's bytes must not have moved: the three fields are nullable and defaults are omitted.
         assertEquals(EXPECTED.getValue("helloSpool"), vectors().getValue("helloSpool").toHex())
     }

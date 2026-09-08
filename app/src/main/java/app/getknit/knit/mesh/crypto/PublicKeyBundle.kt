@@ -67,6 +67,7 @@ class PublicKeyBundle private constructor(
 
     /** The raw-key wire form: a CBOR map of two 32-byte `@ByteString`s, `sigPub` then `hpkePub`. */
     @Serializable
+    @OptIn(ExperimentalSerializationApi::class) // @ByteString is an experimental kotlinx API
     private class Proto(
         @ByteString val sigPub: ByteArray,
         @ByteString val hpkePub: ByteArray,

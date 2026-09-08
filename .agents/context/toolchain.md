@@ -62,6 +62,30 @@ literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reprod
   (2.12.0 is alpha), `activity-compose` on 1.13.0 (1.14.0 is alpha), and AGP on 9.3.2 (9.5.0 is alpha;
   9.4.0 is rc). `navigation-compose` was held at 2.9.8 by this rule until 2.10.0 went stable.
 
+## Kotlin warnings are errors (`allWarningsAsErrors`)
+
+`app/build.gradle.kts` sets `kotlin { compilerOptions { allWarningsAsErrors } }` for **every** compilation
+in the module — main, unit-test and androidTest. Nothing else in the build sees these diagnostics: Android
+Lint runs its own UAST issue registry, and detekt runs *without type resolution*, so an unused expression, an
+always-true condition or a missing `@OptIn` is invisible to both. And kotlinc only prints a diagnostic for
+the files it actually compiles, so an UP-TO-DATE / FROM-CACHE / incremental build reports nothing at all —
+the module's full warning set only reappears on a cold compile of a variant nobody builds often, which is how
+eighteen of them reached 2.5.0 unseen.
+
+**`-Pknit.warningsAsErrors=false`** turns them back into warnings. That is the escape hatch for a toolchain
+bump on this bleeding-edge stack — a new Kotlin, AGP or androidx release can deprecate an API we call and
+turn a green build red. Flip it off, triage, fix, flip it back; don't delete the block. It changes no
+bytecode, so release-APK bytes (and F-Droid's rebuild) are unaffected either way.
+
+Two rules that follow from this, when a warning has no clean fix:
+
+- **Suppress at the narrowest scope, with the reason.** `MainActivity.disableContentCapture()` exists only
+  so `@Suppress("DEPRECATION")` covers one platform call instead of all of `onCreate`; `MeshtasticGatt`
+  carries one on `connectAndConfigure` because every `connectGatt(Context, …)` overload is deprecated in
+  compileSdk 37.1 in favour of an API-37-only replacement, eight releases above minSdk 29.
+- **A no-op `when` branch is `-> {}`, never `-> { Unit }`.** The lone `Unit` inside a block is an unused
+  expression; the braces themselves are required by ktlint whenever a sibling entry is braced.
+
 ## Static analysis: detekt / ktlint Gradle plugins
 
 `detekt` runs via the **`dev.detekt` Gradle plugin** (detekt 2.0.x — the first line that supports

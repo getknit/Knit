@@ -42,13 +42,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // Opt the whole app out of content capture (the on-device "app content" feed to Android System
-        // Intelligence): an offline, end-to-end-encrypted messenger has no business streaming its screen text
-        // to another process. Two switches, because the platform one only silences the events: Compose keeps
-        // its own manager and still re-walks every on-screen semantics node whenever the tree changes (measured:
-        // ~2 ms per frame across a 120-cell emoji grid fling, ~260 ms per fling), and only its flag stops that.
-        getSystemService(ContentCaptureManager::class.java)?.isContentCaptureEnabled = false
-        ComposeContentCaptureManager.isEnabled = false
+        disableContentCapture()
         watchForUndrawnWindow()
         // A cold-start share: stage the payload before composition so KnitApp opens the picker.
         handleShareIntent(intent)
@@ -71,6 +65,24 @@ class MainActivity : ComponentActivity() {
                 KnitApp(startRoute = startRoute)
             }
         }
+    }
+
+    /**
+     * Opt the whole app out of content capture (the on-device "app content" feed to Android System
+     * Intelligence): an offline, end-to-end-encrypted messenger has no business streaming its screen text to
+     * another process. Two switches, because the platform one only silences the events: Compose keeps its own
+     * manager and still re-walks every on-screen semantics node whenever the tree changes (measured: ~2 ms per
+     * frame across a 120-cell emoji grid fling, ~260 ms per fling), and only its flag stops that.
+     *
+     * `DEPRECATION`: compileSdk 37.1 deprecates the platform flag with no replacement that reaches minSdk 29 —
+     * and the deprecated setter still works, which is the whole point. Extracted into its own function so the
+     * suppression covers exactly this call and not the rest of `onCreate`.
+     */
+    @Suppress("DEPRECATION")
+    @OptIn(ExperimentalComposeUiApi::class)
+    private fun disableContentCapture() {
+        getSystemService(ContentCaptureManager::class.java)?.isContentCaptureEnabled = false
+        ComposeContentCaptureManager.isEnabled = false
     }
 
     /**

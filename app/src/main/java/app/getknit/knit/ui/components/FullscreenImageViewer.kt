@@ -60,7 +60,7 @@ fun FullscreenImageViewer(
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
         val transformState =
-            rememberTransformableState { zoomChange, panChange, _ ->
+            rememberTransformableState { _, zoomChange, panChange, _ ->
                 scale = (scale * zoomChange).coerceIn(1f, 5f)
                 offset += panChange
             }

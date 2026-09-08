@@ -72,7 +72,7 @@ fun AvatarCropDialog(
         val baseScale = if (diameter == 0f) 0f else diameter / min(srcW, srcH)
 
         val transformState =
-            rememberTransformableState { zoomChange, panChange, _ ->
+            rememberTransformableState { _, zoomChange, panChange, _ ->
                 scale = (scale * zoomChange).coerceIn(1f, MAX_SCALE)
                 // Clamp the pan so the image edges can never pull inside the crop circle.
                 val s = baseScale * scale

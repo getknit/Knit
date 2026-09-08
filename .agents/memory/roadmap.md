@@ -420,3 +420,10 @@ doc). **Don't start a deferred item without explicit direction.**
   per-sender `epochSeal` export reserved for the spool plane's `sealv = 2` extension; the shared
   group root is now specified by `docs/SPOOL_PROTOCOL.md` §3.2, client machinery deferred with the
   group-scope milestone above.) See `context/e2e-encryption.md`.
+- **Compose test rules on the `junit4.v2` API** — `createComposeRule()` / `createEmptyComposeRule()` are
+  deprecated as of Compose UI 1.12 in favour of `androidx.compose.ui.test.junit4.v2`, and the ~20 call sites
+  (every `*ScreenContentTest` plus `SeededUiTest`) carry a `@Suppress("DEPRECATION")` pointing here. Not a
+  rename: the v2 rules run composition on a `StandardTestDispatcher` instead of `UnconfinedTestDispatcher`,
+  so work that used to run eagerly inside `setContent` now queues, and any test that asserts without an
+  explicit sync can start failing. Do it as its own change — migrate one Robolectric screen test, run the
+  suite, then the rest — not as a side effect of a dependency bump.

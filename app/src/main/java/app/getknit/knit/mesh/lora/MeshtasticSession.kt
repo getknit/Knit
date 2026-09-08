@@ -404,9 +404,7 @@ internal class MeshtasticSession(
                 MeshtasticProto.decodeTelemetry(data.payload)?.let(::onSelfMetrics)
             }
 
-            self -> {
-                Unit
-            }
+            self -> {}
 
             // our own broadcast echoed back (belt-and-suspenders)
 

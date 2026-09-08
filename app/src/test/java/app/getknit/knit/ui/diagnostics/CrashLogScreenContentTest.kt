@@ -28,6 +28,7 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CrashLogScreenContentTest {
+    @Suppress("DEPRECATION") // junit4.v2 rules swap in StandardTestDispatcher — a test-semantics migration, see roadmap.md
     @get:Rule
     val compose = createComposeRule()
 

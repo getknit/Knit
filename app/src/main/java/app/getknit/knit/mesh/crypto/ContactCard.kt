@@ -50,6 +50,7 @@ object ContactCard {
 
     /** The signed body: the identity, its presentation, and the optional relay hints. */
     @Serializable
+    @OptIn(ExperimentalSerializationApi::class) // @ByteString is an experimental kotlinx API
     private class Body(
         val v: Int,
         val id: String,
@@ -61,6 +62,7 @@ object ContactCard {
 
     /** The outer wrapper: opaque signed bytes plus the raw Ed25519 signature over them. */
     @Serializable
+    @OptIn(ExperimentalSerializationApi::class) // @ByteString is an experimental kotlinx API
     private class Signed(
         @ByteString val body: ByteArray,
         @ByteString val sig: ByteArray,

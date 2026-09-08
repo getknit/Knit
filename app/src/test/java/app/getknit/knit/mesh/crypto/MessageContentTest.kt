@@ -106,7 +106,7 @@ class MessageContentTest {
         assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.gk)
 
         // A seed distribution carries no root unless one is gossiped alongside it.
-        assertNull(dist.gk?.gr)
+        assertNull(dist.gk.gr)
     }
 
     @Test
@@ -120,9 +120,9 @@ class MessageContentTest {
                 MessageContent(body = "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload("g-1", gr = root)).encode(),
             )!!
         assertTrue(rootOnly.gk!!.keys.isEmpty())
-        assertEquals(2, rootOnly.gk?.gr?.version)
-        assertEquals("bbbbbbbbbbbbbbbbbbbbbbbbbb", rootOnly.gk?.gr?.minter)
-        assertTrue(ByteArray(32) { 9 }.contentEquals(rootOnly.gk!!.gr!!.root))
+        assertEquals(2, rootOnly.gk.gr?.version)
+        assertEquals("bbbbbbbbbbbbbbbbbbbbbbbbbb", rootOnly.gk.gr?.minter)
+        assertTrue(ByteArray(32) { 9 }.contentEquals(rootOnly.gk.gr!!.root))
 
         // ...and the ordinary shape: seeds and root together on one ctl DM.
         val both =

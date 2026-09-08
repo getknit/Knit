@@ -257,7 +257,7 @@ class MeshtasticProtoTest {
         // AdminMessage { get_owner_response = User { long_name = "Knit abcd", short_name = "Knit" } }
         val reply = MeshtasticProto.decodeAdmin(hex("22 11 12 09 4B 6E 69 74 20 61 62 63 64 1A 04 4B 6E 69 74"))!!
         assertEquals(BoardOwner("Knit abcd", "Knit"), reply.owner!!.owner)
-        assertEquals("the raw User is kept for splicing", 17, reply.owner!!.raw.size)
+        assertEquals("the raw User is kept for splicing", 17, reply.owner.raw.size)
     }
 
     @Test
@@ -291,7 +291,7 @@ class MeshtasticProtoTest {
         // get_config_response(6){ Config{ position(2) = 08 84 07 } } + session_passkey(101)
         val reply = MeshtasticProto.decodeAdmin(hex("32 05 12 03 08 84 07 AA 06 03 AA BB CC"))!!
         assertEquals(BoardConfig.POSITION, reply.config!!.config)
-        assertEquals("08 84 07", reply.config!!.raw.hex())
+        assertEquals("08 84 07", reply.config.raw.hex())
         assertEquals("AA BB CC", reply.passkey!!.hex())
     }
 
@@ -300,7 +300,7 @@ class MeshtasticProtoTest {
         // get_module_config_response(8){ ModuleConfig{ telemetry(6) = 08 84 07 } }
         val reply = MeshtasticProto.decodeAdmin(hex("42 05 32 03 08 84 07"))!!
         assertEquals(BoardConfig.TELEMETRY, reply.config!!.config)
-        assertEquals("08 84 07", reply.config!!.raw.hex())
+        assertEquals("08 84 07", reply.config.raw.hex())
     }
 
     @Test
@@ -688,8 +688,8 @@ class MeshtasticProtoTest {
         val p = fr.packet
         assertEquals(0x12345678u, p.from)
         assertEquals(1, p.decoded!!.portnum)
-        assertEquals("hi", p.decoded!!.payload.decodeToString())
-        assertEquals(sig.hex(), p.decoded!!.signature!!.hex())
+        assertEquals("hi", p.decoded.payload.decodeToString())
+        assertEquals(sig.hex(), p.decoded.signature!!.hex())
         assertTrue("the board's own verdict rides beside the signature", p.xeddsaSigned)
     }
 

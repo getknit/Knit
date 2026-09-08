@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalCoroutinesApi::class) // UnconfinedTestDispatcher / setMain / advanceUntilIdle are experimental kotlinx APIs
+
 package app.getknit.knit.ui.contacts
 
 import app.getknit.knit.data.GroupRepository
@@ -23,6 +25,7 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch

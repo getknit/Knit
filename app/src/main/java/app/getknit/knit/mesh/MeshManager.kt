@@ -996,7 +996,7 @@ class MeshManager(
             val rootDue = heldVersion != null && lastRootGossipVersion[group.groupId to memberId] != heldVersion
             if (!seedDue && !rootDue) return@forEach
             if (!seedSendFloorOpen(group.groupId, memberId)) return@forEach
-            val seeds = if (seedDue && chain != null) listOf(chain) else emptyList()
+            val seeds = if (seedDue) listOfNotNull(chain) else emptyList()
             sendSeedDm(group.groupId, memberId, groupKeyPayload(group.groupId, seeds), seeds.firstOrNull()?.epoch, me)
         }
     }

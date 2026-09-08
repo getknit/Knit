@@ -27,8 +27,13 @@ import org.robolectric.shadows.ShadowNetworkInfo
 class AndroidInternetGateTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val connectivity = requireNotNull(context.getSystemService(ConnectivityManager::class.java))
+
+    // `DEPRECATION`: Robolectric's connectivity shadows are still modelled on the pre-API-29 NetworkInfo
+    // surface, so setting up an active network can only be expressed through the deprecated types.
+    @Suppress("DEPRECATION")
     private val network = ShadowNetwork.newInstance(ConnectivityManager.TYPE_WIFI)
 
+    @Suppress("DEPRECATION") // as above: ShadowNetworkInfo.newInstance takes the deprecated enums
     private fun activate(vararg capabilities: Int) {
         shadowOf(connectivity).setActiveNetworkInfo(
             ShadowNetworkInfo.newInstance(

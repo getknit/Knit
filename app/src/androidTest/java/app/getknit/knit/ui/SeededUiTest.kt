@@ -36,6 +36,7 @@ import org.junit.rules.TestName
  * Results → Screenshots tab so a screen's rendering is comparable across the API 29/33/36 matrix.
  */
 abstract class SeededUiTest {
+    @Suppress("DEPRECATION") // junit4.v2 rules swap in StandardTestDispatcher — a test-semantics migration, see roadmap.md
     @get:Rule
     val compose: ComposeTestRule = createEmptyComposeRule()
 

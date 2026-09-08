@@ -254,9 +254,7 @@ class FakeSpool(
         @Synchronized
         private fun handle(bytes: ByteArray) {
             when (SpoolCodec.peekType(bytes)) {
-                SpoolRecordType.HELLO -> {
-                    Unit
-                }
+                SpoolRecordType.HELLO -> {}
 
                 // the client's answer; nothing to do
                 SpoolRecordType.SUB -> {
@@ -287,9 +285,7 @@ class FakeSpool(
                     if (attachments) SpoolCodec.decode<SpoolAput>(bytes)?.let(::onAput) else skip(SpoolRecordType.APUT)
                 }
 
-                else -> {
-                    Unit
-                }
+                else -> {}
             }
         }
 

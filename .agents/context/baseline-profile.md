@@ -1,16 +1,33 @@
 # Baseline profile
 
-`app/src/main/baseline-prof.txt` is a committed list of classes and methods ART compiles ahead of time at
-install, instead of interpreting-then-JIT-ing them on first run. It is the single biggest lever on
-first-launch and first-navigation smoothness, and it costs the shipped app nothing but its own size.
+Two committed text files, produced by one journey, consumed by two different parts of the build:
+
+| file | consumer | what it buys |
+| --- | --- | --- |
+| `app/src/main/baseline-prof.txt` | `mergeReleaseArtProfile` → the ART profile in the APK | ART compiles those methods **ahead of time** at install instead of interpreting-then-JIT-ing them |
+| `app/src/main/baselineProfiles/startup-prof.txt` | `mergeReleaseStartupProfile` → R8 | R8 **reorders dex** so startup classes sit together, for page locality |
+
+Between them they are the single biggest lever on first-launch and first-navigation smoothness, and they
+cost the shipped app nothing but their own size.
+
+**Mind the two paths — they are not symmetrical, and getting it wrong fails silently.** The baseline
+profile is a flat file in `src/main`; the startup profile lives in the `src/main/baselineProfiles/`
+*directory*. A `startup-prof.txt` placed next to `baseline-prof.txt` is simply never read: the build stays
+UP-TO-DATE, the APK is byte-identical, and nothing warns you. Verified on AGP 9.3.2 by doing exactly that.
+
+The two never mix. 503 rules exist in the startup profile that are absent from the baseline one, yet
+`merged_art_profile` is exactly `baseline-prof.txt` + the AAR profiles (36,904 + 5,287 = 42,191 lines) —
+the startup file reaches R8's layout pass and nothing else.
 
 ## The shape of it, and why
 
-**The release build consumes a plain text file and nothing else.** No Gradle plugin is applied to `:app`,
-no dependency is added, and `app/gradle.lockfile` is untouched. AGP picks up `src/main/baseline-prof.txt`
-on its own (verified on AGP 9.3.1: adding a rule moved `mergeReleaseArtProfile`'s output from 5507 to 5509
+**The release build consumes two plain text files and nothing else.** No Gradle plugin is applied to
+`:app` — the `androidx.baselineprofile` plugin is deliberately *not* used — no dependency is added, and
+`app/gradle.lockfile` is untouched. AGP picks both files up on its own: `mergeReleaseArtProfile` takes
+`src/main/baseline-prof.txt` (verified on AGP 9.3.1: adding a rule moved its output from 5507 to 5509
 lines), merges it with the profiles the AndroidX AARs ship, hands the result to R8 — which rewrites the
 rules through its own mapping — and packages `assets/dexopt/baseline.prof` + `.profm`.
+`mergeReleaseStartupProfile` takes `src/main/baselineProfiles/startup-prof.txt` and feeds R8's dex layout.
 
 That shape is chosen for `.agents/context/distribution.md`'s reproducibility contract. F-Droid rebuilds the
 tagged commit and byte-compares against our APK, so the release build must not be a function of the build
@@ -44,11 +61,17 @@ ANDROID_SERIAL=emulator-5580 \
   ./gradlew -Pknit.baselineProfile=true :baselineprofile:connectedNonMinifiedReleaseAndroidTest
 ```
 
-Then copy the generated profile over the committed one and rebuild:
+That runs **both** tests — `startupAndFirstConversation` and `startupProfileForDexLayout` — over the same
+journey, which is why it takes ~20 minutes. `includeInStartupProfile` is a **flavour switch, not an
+additive flag**: one collection emits `-baseline-prof.txt` *or* `-startup-prof.txt`, never both, and names
+the file after the test method. Two methods is what gets two files.
+
+Then copy both over the committed ones and rebuild:
 
 ```bash
-cp "baselineprofile/build/outputs/connected_android_test_additional_output/nonMinifiedRelease/connected/Knit_Mesh_BT(AVD) - 16/BaselineProfileGenerator_startupAndFirstConversation-baseline-prof.txt" \
-   app/src/main/baseline-prof.txt
+OUT="baselineprofile/build/outputs/connected_android_test_additional_output/nonMinifiedRelease/connected/Knit_Mesh_BT(AVD) - 16"
+cp "$OUT/BaselineProfileGenerator_startupAndFirstConversation-baseline-prof.txt" app/src/main/baseline-prof.txt
+cp "$OUT/BaselineProfileGenerator_startupProfileForDexLayout-startup-prof.txt"   app/src/main/baselineProfiles/startup-prof.txt
 ./gradlew :app:assembleRelease
 ```
 
@@ -70,13 +93,41 @@ produce a profile that matches nothing. That is what `nonMinifiedRelease` exists
 profile for it does not describe how the shipped app runs. `isProfileable = true` opens the profile to the
 shell and nothing else.
 
+**The startup profile changes dex layout, so it had to clear the reproducibility contract** before it could
+ship (`context/distribution.md`). Verified 2026-09-07 on AGP 9.3.2: adding it moved the release APK
+(`7a4791eb…` → `172e2258…`, R8 re-ran), a full `clean` rebuild reproduced that byte-for-byte, and so did a
+rebuild inside `registry.gitlab.com/fdroid/fdroidserver:buildserver` — different JDK, F-Droid's own Gradle
+shim fetching 9.7.1, fresh Maven downloads, no `.git` present. R8's layout pass is a deterministic function
+of the committed profile, exactly like the baseline half.
+
 ## What the profile deliberately does not cover
 
-The journey in `BaselineProfileGenerator` is cold start → chat list → a thread → back. It is not a tour of
+The journey is cold start → chat list → a thread → **send a message** → scroll → back. It is not a tour of
 the app, and should not become one: a baseline profile buys ahead-of-time compilation for the code it
 names, so naming everything dilutes the dex layout's locality and lengthens install. Settings, diagnostics,
 the LoRa and relay screens and the verify flow are all reached deliberately, once, by a user who is already
-committed — they are not what first impressions are made of.
+committed — they are not what first impressions are made of. The startup profile makes that discipline
+load-bearing rather than tasteful: marking a tour of the app as "startup" tells R8 nothing about what to
+put next to what.
+
+**Narrow in screens, deep in content.** The room is empty on a fresh install, so the journey used to
+profile `EmptyState` and `BubbleSkeleton` and never once compile the code that draws a message —
+`MessageBubble`, `timeLabel`, `relativeTime` and the emoji path were all absent from the shipped profile,
+which was ahead-of-time compiling the *loading shimmer* of a conversation nobody was having. It therefore
+sends before it reads, and scrolls what comes back: item composition is only half of what a list costs, and
+the recycle-and-rebind half never runs unless something scrolls. That is also where the profile's few
+genuinely *hot* (`H`) rules come from — an empty room produces almost none.
+
+Sending rather than seeding is forced, twice over. `-PseedDemo=true` cannot reach this variant at all:
+`release` (and so `nonMinifiedRelease`) hard-codes `SEED_DEMO=false` and the seeder lives only in
+`src/debug`, with `src/release` supplying a no-op `seedDemoIfEnabled`. And even if it could, `SEED_DEMO`
+gates real startup branches — `KnitApp`'s onboarding check, `BootReceiver`, `ReviewPrompter` — so a seeded
+run would faithfully profile a path the shipped app never takes, which is the same error as collecting
+against a minified build.
+
+What the journey still does not create: file attachments, link-preview cards and replies. Those bubble
+kinds are absent from the profile by construction, and adding them means deciding they are first-impression
+code, which they are not — a first-session user has not been sent a file.
 
 The mesh transports are covered only as far as **bring-up**. On `Knit_Mesh_BT` the radio is real, so the
 run does start the advertiser, open the L2CAP responder, and scan and parse advertisements off the air —

@@ -20,27 +20,27 @@
 # │ AGP FORWARD-COMPAT WORKAROUND — load-bearing, do not remove.                                 │
 # │                                                                                              │
 # │ Qodana 2026.2's Android plugin refuses to sync anything past AGP 9.1.0:                      │
-# │   "The project is using an incompatible version (AGP 9.3.2) ... Latest supported is 9.1.0"   │
+# │   "The project is using an incompatible version (AGP 9.4.0) ... Latest supported is 9.1.0"   │
 # │ and this project is deliberately ahead of that (AGENTS.md: bleeding-edge toolchain). 2026.2  │
 # │ is the newest image there is — `latest` is byte-identical to it, `2026.2-eap` is OLDER, and  │
 # │ no 2026.3 image exists. So without the property below, the run cannot start at all.          │
 # │                                                                                              │
 # │ `gradle.ide.support.future.agp.versions` is the IntelliJ Android plugin's own escape hatch   │
-# │ (JetBrains KMT-2106 / IDEA-385007). It SUPPRESSES THE VERSION CHECK; it does not add AGP 9.3 │
+# │ (JetBrains KMT-2106 / IDEA-385007). It SUPPRESSES THE VERSION CHECK; it does not add AGP 9.4 │
 # │ support, and AGP promises no forward compatibility. Verified 2026-09-02: the scan completes  │
 # │ and its findings agree with Android Studio's own — but with one known blind spot below.      │
 # │                                                                                              │
 # │ KNOWN BLIND SPOT: @Preview is not recognised as an entry point, so all 115 @Preview          │
 # │ composables report as UnusedSymbol. The committed baseline absorbs them; a NEW unused symbol │
 # │ still surfaces. It errs toward over-reporting, never toward hiding — which is the safe       │
-# │ direction. Re-check this whenever the linter is bumped; it should disappear on real 9.3      │
+# │ direction. Re-check this whenever the linter is bumped; it should disappear on real 9.4      │
 # │ support, and the property can then go.                                                       │
 # └──────────────────────────────────────────────────────────────────────────────────────────────┘
 version: "1.0"
 linter: qodana-jvm-android
 image: jetbrains/qodana-jvm-android:2026.2
 
-# See the banner above — without this the scan cannot start on AGP 9.3.2.
+# See the banner above — without this the scan cannot start on AGP 9.4.0.
 properties:
   gradle.ide.support.future.agp.versions: "true"
 

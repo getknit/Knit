@@ -92,7 +92,7 @@ Builds:
 
   - versionName: 2.5.0
     versionCode: 20
-    commit: v2.5.0
+    commit: 93eabf2bd61b534d0f5dbfe3550ef3206a001be8
     subdir: app
     gradle:
       - yes

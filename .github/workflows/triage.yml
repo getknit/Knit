@@ -52,7 +52,7 @@ jobs:
               ['area: ble',        /\bBLE\b|bluetooth|\bL2CAP\b|\bGATT\b|\bPSM\b|advertis(e|ing|er)/i],
               ['area: mesh',       /store[- ]and[- ]forward|custody|convergence|\bCBOR\b|wire format|forward_store|\bhops?\b|reachab/i],
               ['area: crypto',     /\bcrypto\b|encrypt|\bX25519\b|\bEd25519\b|key exchange|safety number/i],
-              ['area: ui',         /\bUI\b|\bcompose\b|composable|\bscreen\b|\btheme\b|dark mode|splash|\bicons?\b|accessib|talkback/i],
+              ['area: ui',         /\bUI\b|\bcompose\b|composable|\bscreen\b|\btheme\b|\bcolou?rs?\b|material you|\bmonet\b|wallpaper|dark mode|splash|\bicons?\b|accessib|talkback/i],
               ['area: build',      /\bgradle\b|\bAGP\b|lockfile|detekt|ktlint|\bJDK\b|compileSdk|\bproguard\b|\bR8\b/i],
               ['dist: fdroid',     /f-?droid|reproducible build/i],
               ['dist: play',       /play store|google play|play console|pre-?launch report/i],

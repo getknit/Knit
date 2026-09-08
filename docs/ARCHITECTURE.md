@@ -788,23 +788,25 @@ before the first message.
 
 ## 15. Build & tooling decisions
 
-The project runs on intentionally bleeding-edge tooling (AGP 9.3.0, Gradle 9.5.0, Kotlin 2.4.0,
-Compose BOM 2026.08, compileSdk 37.1). Consequences, all load-bearing:
+The project runs on intentionally bleeding-edge tooling — a current AGP / Gradle / Kotlin / Compose line
+and an early `compileSdk`. The pins themselves live in `gradle/libs.versions.toml` and the reasoning behind
+each in `.agents/context/toolchain.md`; what follows is the *shape* of the constraints, which outlives any
+particular version. Consequences, all load-bearing:
 
 | Decision | Reason |
 |---|---|
 | **Koin, not Hilt** | Hilt's Gradle plugin is broken on AGP 9.x (dagger#5083/#5099). Koin has no Gradle plugin / no annotation processor → immune. |
-| **Built-in Kotlin overridden to 2.4.0** | AGP 9.3.0 bundles KGP 2.2.10, whose compiler can't read Kotlin-2.4 class metadata. The root `build.gradle.kts` puts KGP 2.4.0 on the buildscript classpath (`classpath(libs.kotlin.gradle.plugin)`) so built-in Kotlin compiles with 2.4.0 (Kotlin 2.4 needs AGP 9.1+). This override — **not** an AGP bump (9.3/9.4 still bundle 2.2.10) — is the lever, and it's why **Coil now tracks latest (3.5.0)**: the old 3.3.0 pin was a Kotlin-2.2-metadata workaround that no longer applies. |
-| **`android.disallowKotlinSourceSets=false`** | AGP 9 built-in Kotlin otherwise rejects the `kotlin.sourceSets` DSL KSP (Room) uses. |
-| **No `kotlin-android` plugin** | AGP 9's built-in Kotlin compiles Kotlin; only compose / serialization / ksp plugins are applied. |
-| **KSP `2.3.9`** | KSP adopted independent (KSP2) versioning at 2.3.0 — decoupled from the compiler, supports Kotlin 2.2+ — so one version tracks Kotlin 2.4.0 (no more `<kotlin>-<ksp>` scheme). |
+| **Built-in Kotlin overridden past AGP's bundled KGP** | AGP ships a KGP older than the Kotlin we compile with, and the older compiler can't read the newer one's class metadata. The root `build.gradle.kts` puts our KGP on the buildscript classpath (`classpath(libs.kotlin.gradle.plugin)`) so built-in Kotlin compiles with it. **Bumping AGP does not move Kotlin** — that classpath entry is the only lever; check Google's AGP/Kotlin matrix for the AGP floor the Kotlin line needs. It's also why **Coil tracks latest**: its old pin was a stale-metadata workaround that no longer applies. |
+| **No `disallowKotlinSourceSets` override** | The `=false` escape hatch was dropped 2026-09-08. KSP2 registers its generated sources through AGP's sources API, not `kotlin.sourceSets`, so the flag bought nothing — and AGP 10 enforces it regardless. |
+| **No `kotlin-android` plugin** | AGP's built-in Kotlin compiles Kotlin; only the compose / serialization / ksp plugins are applied. |
+| **KSP on its own version line** | KSP adopted independent (KSP2) versioning at 2.3.0 — decoupled from the compiler, Kotlin 2.2+ — so one KSP version spans Kotlin releases instead of the old `<kotlin>-<ksp>` lockstep scheme. |
 | **CBOR on the JSON BOM line** | `kotlinx-serialization-cbor` shares the version ref with the JSON artifact, so it's built with the same (toolchain-safe) Kotlin — no separate bump to vet. |
-| **LiteRT 1.4.x / SQLCipher / Tink** | The on-device ML runtime (`com.google.ai.edge.litert`), at-rest DB encryption, and E2E crypto are Java + native `.so` with **no Kotlin metadata and no Gradle plugin**, so they can't perturb the pinned Kotlin-2.4 graph — per-dep rationale is in the version catalog. |
+| **LiteRT / SQLCipher / Tink** | The on-device ML runtime (`com.google.ai.edge.litert`), at-rest DB encryption, and E2E crypto are Java + native `.so` with **no Kotlin metadata and no Gradle plugin**, so they can't perturb the pinned Kotlin graph — per-dep rationale is in the version catalog. LiteRT's pin is *separately* load-bearing for F-Droid and for 16 KB page alignment: don't move it without reading `.agents/context/distribution.md`. |
 
 The wire codec uses **CBOR** (`kotlinx-serialization-cbor`) and the UI uses **Navigation Compose**. When
-adding dependencies, pin versions in `gradle/libs.versions.toml`; built-in Kotlin is now 2.4.0, so deps
-built with Kotlin ≤ 2.4 are readable (the old "≤ 2.3 only" ceiling is lifted), but still probe Maven
-before bumping anything that could pull in a newer Kotlin stdlib.
+adding dependencies, pin versions in `gradle/libs.versions.toml`; a dep built with a Kotlin at or below our
+overridden built-in Kotlin is readable, but still probe Maven before bumping anything that could pull in a
+newer Kotlin stdlib.
 
 ## 16. Notable bugs fixed (lessons)
 

@@ -31,25 +31,33 @@ F-Droid's buildserver passes no `-P` flags, so it sees a three-build-type app wi
 
 ## Regenerating it
 
-Needs a connected device or emulator (API 29+; the Gradle-managed ones are fine — pin `ANDROID_SERIAL`,
-and see `.agents/rules/devices.md` before pointing this at lab hardware).
+Needs a connected device or emulator (API 29+; pin `ANDROID_SERIAL`, and see `.agents/rules/devices.md`
+before pointing this at lab hardware).
+
+**Collect on `Knit_Mesh_BT` with the BLE dongle passed through**, brought up by
+`scripts/emulator-ble-mesh.sh up` (see *Real BLE from an emulator* in `context/testing.md`). It listens on
+`emulator-5580`:
 
 ```bash
-./gradlew -Pknit.baselineProfile=true :baselineprofile:connectedNonMinifiedReleaseAndroidTest
+scripts/emulator-ble-mesh.sh up
+ANDROID_SERIAL=emulator-5580 \
+  ./gradlew -Pknit.baselineProfile=true :baselineprofile:connectedNonMinifiedReleaseAndroidTest
 ```
 
 Then copy the generated profile over the committed one and rebuild:
 
 ```bash
-cp "baselineprofile/build/outputs/connected_android_test_additional_output/nonMinifiedRelease/connected/<AVD> - <api>/BaselineProfileGenerator_startupAndFirstConversation-baseline-prof.txt" \
+cp "baselineprofile/build/outputs/connected_android_test_additional_output/nonMinifiedRelease/connected/Knit_Mesh_BT(AVD) - 16/BaselineProfileGenerator_startupAndFirstConversation-baseline-prof.txt" \
    app/src/main/baseline-prof.txt
 ./gradlew :app:assembleRelease
 ```
 
 Regenerate when the startup or chat path changes shape — not on every commit. A stale profile is not a
 correctness problem, only a smaller win; a *churning* one is a large, unreviewable diff on every PR.
-**Regenerate on the same AVD as last time** (`Pixel_10_Pro_XL`) — the device is most of the diff otherwise:
-the same change collected on `Knit_Mesh_BT` moved 2500 lines where `Pixel_10_Pro_XL` moved 600.
+**Regenerate on the same AVD as last time**, because the device is most of the diff otherwise: collecting
+the same change on `Knit_Mesh_BT` once moved 2500 lines where `Pixel_10_Pro_XL` moved 600. That is an
+argument for consistency, not for a particular device — the profile moved to `Knit_Mesh_BT` on 2026-09-07
+and stays there. Rules are symbolic, so the x86_64 host ABI costs nothing on arm64.
 
 ## Two things that are easy to get wrong
 
@@ -70,7 +78,14 @@ names, so naming everything dilutes the dex layout's locality and lengthens inst
 the LoRa and relay screens and the verify flow are all reached deliberately, once, by a user who is already
 committed — they are not what first impressions are made of.
 
-The mesh transports are also thin here by construction: the run drives a real, un-seeded app on an emulator
-with no peers, so `MeshService` starts but never completes a discovery. That is the right trade. Radio code
-runs in a foreground service over seconds and minutes, where interpretation costs nothing a user can feel;
-the profile's job is the sixteen milliseconds after a tap.
+The mesh transports are covered only as far as **bring-up**. On `Knit_Mesh_BT` the radio is real, so the
+run does start the advertiser, open the L2CAP responder, and scan and parse advertisements off the air —
+`BleAdvertPayload$Parsed`, `BleScanner` and `BlePresenceTracker$Sighting` are all in the profile because
+they genuinely ran. What never happens is a *link*: the journey is over in seconds, long before a peer is
+connected, so nothing past discovery is named. Wi-Fi Aware is absent entirely — there is no NAN in an
+emulator, so the node is BLE-only.
+
+That is the right trade rather than a gap to close. Radio code runs in a foreground service over seconds
+and minutes, where interpretation costs nothing a user can feel; the profile's job is the sixteen
+milliseconds after a tap. The bring-up path is worth having because it is on the cold-start critical path —
+the rest of the transport is not.

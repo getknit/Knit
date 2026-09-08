@@ -9,6 +9,13 @@ and set up.
 
 ## Shape
 
+**Nothing here ticks until a board is configured** (ADR 2026-09.5bqu). The child is in the composite on
+`BuildConfig.LORA_PLANE` alone, so on most installs it is started and never armed; `gossipLoop` and
+`lingerSweepLoop` therefore park on `awaitConfigured()` rather than running the ADR 044 election over an
+empty heard set once a minute forever. Losing the board runs the same `quiesce()` that `stop()` does —
+that is what makes the parking safe, since `recomputeReachable` is the only thing that ages `lastHeardAt`
+out, and a parked sweep would otherwise strand the last board's peers in `reachable` permanently.
+
 `LoraMeshTransport` (`mesh/lora/`, pure) is a **fast-plane-only** `CompositeMeshTransport` child, added
 LAST (lowest send-preference). `neighbors` is always empty, so the flood / custody digest sync / keyreq /
 blob pulls never touch the ~1 kbps link — `send`/`sendFile`/`sendDigest` are no-ops. Only

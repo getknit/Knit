@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-100 decisions.
+101 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -91,6 +91,7 @@ carries; never renumber an old one.
 | [2026-09.26q3](decisions/2026-09-26q3-the-meshtastic-room-is-a-local-mirror-of-the-bound-board-s-slot-0.md) | The Meshtastic room is a local mirror of the bound board's slot 0 | lora, meshtastic, mesh |
 | [2026-09.2ajk](decisions/2026-09-2ajk-lora-reach-is-relay-reach.md) | LoRa reach is relay reach, and a custody re-serve is not presence | lora, mesh, ui |
 | [2026-09.3yje](decisions/2026-09-3yje-the-open-to-chat-cue-introduces-strangers-only.md) | The open-to-chat cue introduces strangers only, gated on a two-way exchange | notifications, presence, data |
+| [2026-09.5bqu](decisions/2026-09-5bqu-the-lora-plane-is-fully-quiescent-until-a-board-is-configured.md) | The LoRa plane is fully quiescent until a board is configured | lora, mesh, performance |
 | [2026-09.6gtm](decisions/2026-09-6gtm-the-lora-plane-is-introduced-at-2-5-0.md) | The LoRa plane is introduced at 2.5.0 | lora, release, mesh |
 | [2026-09.6ww7](decisions/2026-09-6ww7-a-group-chat-says-lora-will-not-carry-it.md) | A group chat says LoRa will not carry it | lora, ui |
 | [2026-09.7463](decisions/2026-09-7463-sealed-dm-form-chat-rides-the-targeted-coordination-plane-arm.md) | Sealed DM-form chat rides the targeted coordination-plane arm | mesh, nan, fanout |

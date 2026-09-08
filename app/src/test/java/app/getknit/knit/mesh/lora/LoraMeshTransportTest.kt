@@ -1880,6 +1880,79 @@ class LoraMeshTransportTest {
             a.transport.stop()
         }
 
+    @Test
+    fun anUnconfiguredPlaneParksItsLoopsInsteadOfSweepingAndGossiping() =
+        runTest {
+            var reads = 0
+            val clock = {
+                reads++
+                if (reads > SPIN_CAP) throw SpinCap()
+                testScheduler.currentTime
+            }
+            val scope =
+                CoroutineScope(
+                    StandardTestDispatcher(testScheduler) + SupervisorJob() + CoroutineExceptionHandler { _, _ -> },
+                )
+            val a =
+                rig(
+                    FakeMeshtasticAir(),
+                    1u,
+                    "alice",
+                    scope,
+                    config = MutableStateFlow<LoraConfig?>(null),
+                    now = clock,
+                )
+            a.transport.start()
+            runCurrent()
+
+            // The state most installs are in: the child is in the composite because BuildConfig.LORA_PLANE is
+            // on, and no board has ever been paired. Before the loops were gated this cost a sweep a minute
+            // -- an election over an empty heard set -- plus a gossip wake, for the life of the service.
+            val atRest = reads
+            advanceTimeBy(60 * 60_000)
+            runCurrent()
+            assertEquals(
+                "an hour with no board reads the clock not at all (${reads - atRest} reads)",
+                atRest,
+                reads,
+            )
+            a.transport.stop()
+            scope.cancel()
+        }
+
+    @Test
+    fun losingTheBoardDropsWhatItHeardRatherThanLeavingItToTheSweep() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val cfg = MutableStateFlow<LoraConfig?>(LoraConfig("AA:2", 0))
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope, config = cfg) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate in ten"))
+            runCurrent()
+            assertTrue(
+                "bob heard alice through the board",
+                b.transport.reachable.value
+                    .any { it.nodeId == "alice" },
+            )
+
+            // Unpairing is the case that makes parking the sweep safe to do at all: recomputeReachable is the
+            // only thing that ages lastHeardAt out, so a plane that idles here would strand alice in reach
+            // forever. The route she was reachable *through* is gone, so the set goes with it.
+            cfg.value = null
+            runCurrent()
+            assertEquals(
+                "reach empties with the board, not a linger window later",
+                emptySet<Peer>(),
+                b.transport.reachable.value,
+            )
+            a.transport.stop()
+            b.transport.stop()
+        }
+
     private companion object {
         /** Far more clock reads than a loop that suspends between passes can make; a spin blows past it at once. */
         const val SPIN_CAP = 5_000

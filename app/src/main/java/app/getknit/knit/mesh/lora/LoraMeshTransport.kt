@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -216,6 +217,16 @@ internal class LoraMeshTransport(
     // stops a single peer monopolising it.
     private val servedTo = ConcurrentHashMap<Long, ServeBudget>()
 
+    /**
+     * Whether a board is configured — the gate the timed loops park on. Mirrors `currentConfig != null`
+     * as a flow, because [gossipLoop] and [lingerSweepLoop] have to *wait* on it rather than poll it.
+     *
+     * Most installs never arm this plane (the child joins the composite on `BuildConfig.LORA_PLANE`
+     * alone, while `SettingsStore.loraEnabled` defaults false), so an ungated loop is a wake-up every
+     * minute, forever, on a plane with no radio behind it.
+     */
+    private val configured = MutableStateFlow(false)
+
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private val gossipWake = Channel<Unit>(Channel.CONFLATED)
     private val jobs = mutableListOf<Job>()
@@ -278,6 +289,26 @@ internal class LoraMeshTransport(
     override fun stop() {
         jobs.forEach { it.cancel() }
         jobs.clear()
+        quiesce()
+        // Republish, or the row keeps serving the snapshot taken while the plane was up — a signal reading,
+        // a board count and a role for a plane that is no longer running.
+        publishStatus()
+    }
+
+    /**
+     * Drops the board and everything this session heard through it, leaving the plane in the state it has
+     * before it is ever configured. Shared by [stop] and by [onConfig] losing its board, because those are
+     * the same state and used not to be: unpairing only stopped the link, and the heard sets were left for
+     * [lingerSweepLoop] to expire on its next pass.
+     *
+     * That is what makes parking the sweep safe. [recomputeReachable] is the only thing that ages
+     * [lastHeardAt] / [boardsHeardAt] out, so a loop that idles while unconfigured would otherwise strand
+     * whatever the last board heard in `reachable` — forever, since nothing else ever shrinks it. Clearing
+     * here rather than waiting out `REACHABLE_LINGER_MS` is also the more honest answer: the route those
+     * peers were reachable *through* is gone the moment the board is.
+     */
+    private fun quiesce() {
+        configured.value = false
         link.stop()
         lastHeardAt.clear()
         heardPeers.clear()
@@ -291,9 +322,15 @@ internal class LoraMeshTransport(
         lastOfferPrefixes = IntArray(0)
         _reachable.value = emptySet()
         _health.value = TransportHealth.Unavailable
-        // Republish, or the row keeps serving the snapshot taken while the plane was up — a signal reading,
-        // a board count and a role for a plane that is no longer running.
-        publishStatus()
+    }
+
+    /**
+     * Parks a timed loop until a board is configured. The plane's own gate, not the link's: a configured
+     * board that is merely disconnected still has sweeping and gossiping to do, and both loops already
+     * handle a down link on their own.
+     */
+    private suspend fun awaitConfigured() {
+        configured.first { it }
     }
 
     override fun heal() {
@@ -706,6 +743,9 @@ internal class LoraMeshTransport(
      */
     private suspend fun gossipLoop() {
         while (scope.isActive) {
+            // Nothing to offer without a board, and the interval bookkeeping would only be thrown away when
+            // one arrives — [LoraGossipPolicy.ensureInterval] starts a fresh interval at that moment anyway.
+            awaitConfigured()
             val wait = (gossip.nextDueAt(clock()) - clock()).coerceAtLeast(0)
             // The slot is consumed before the link is consulted, and that ordering is load-bearing: skipping
             // the take while the board is down leaves the transmit point in the past, so the next pass
@@ -1227,6 +1267,9 @@ internal class LoraMeshTransport(
 
     private suspend fun lingerSweepLoop() {
         while (scope.isActive) {
+            // [quiesce] has already emptied everything this would sweep, so an unconfigured pass could only
+            // re-run the election over an empty heard set — once a minute, on most installs, forever.
+            awaitConfigured()
             delay(LINGER_SWEEP_MS)
             recomputeReachable(clock())
             // Also re-run the election on a timer. Both its event triggers can go quiet at once — a passive
@@ -1242,9 +1285,9 @@ internal class LoraMeshTransport(
     private fun onConfig(cfg: LoraConfig?) {
         currentConfig = cfg
         if (cfg == null) {
-            link.stop()
-            _health.value = TransportHealth.Unavailable
+            quiesce()
         } else {
+            configured.value = true
             link.start(cfg.address)
         }
         publishStatus()

@@ -2,11 +2,14 @@ package app.getknit.knit.ui.chat
 
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -300,6 +303,39 @@ class ChatScreenContentTest {
         attachmentFlagged = flagged,
         linkCard = linkCard,
     )
+
+    /** A group is the one thread that has to say it per bubble: the header names the group, not the person. */
+    @Test
+    fun aVerifiedAuthorWearsTheShieldBesideTheirNameInAGroup() {
+        compose.setContent(
+            content(
+                input = "",
+                state =
+                    ChatUiState(
+                        isRoom = false,
+                        isGroup = true,
+                        myNodeId = "me",
+                        title = "Trailhead Crew",
+                        rows = listOf(rows(1).single().copy(senderVerified = true)),
+                    ),
+            ),
+        )
+
+        compose.onNodeWithTag("chat_verified_shield", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("You verified Bob", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun anUnverifiedAuthorWearsNoShield() {
+        compose.setContent(
+            content(
+                input = "",
+                state = ChatUiState(isRoom = false, isGroup = true, myNodeId = "me", title = "Trailhead Crew", rows = rows(1)),
+            ),
+        )
+
+        compose.onAllNodesWithTag("chat_verified_shield", useUnmergedTree = true).assertCountEquals(0)
+    }
 
     @Test
     fun aDecodedCardDrawsAsOneLabelledNodeWithItsTitleAndHost() {

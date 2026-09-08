@@ -1812,6 +1812,10 @@ private fun MessageBubble(
                                         } else {
                                             MaterialTheme.colorScheme.primary
                                         },
+                                    // As in the header: weight (fill = false) lets a long name ellipsize
+                                    // rather than push the shield beside it out of the bubble, while a short
+                                    // one still sits snug against it.
+                                    modifier = Modifier.weight(1f, fill = false),
                                 )
                                 if (row.origin?.verified == true) {
                                     Spacer(Modifier.width(4.dp))
@@ -1822,6 +1826,19 @@ private fun MessageBubble(
                                         contentDescription = stringResource(R.string.chat_mesh_signed_by_radio, row.senderPlainName),
                                         tint = MaterialTheme.colorScheme.tertiary,
                                         modifier = Modifier.size(14.dp).testTag("chat_mesh_shield"),
+                                    )
+                                } else if (row.senderVerified) {
+                                    Spacer(Modifier.width(4.dp))
+                                    // The same shield the DM header gives a key-verified peer, at label size,
+                                    // because a group is where that fact is otherwise invisible: the header
+                                    // names the group, not the person, so each bubble has to carry it. It says
+                                    // the local user checked this author's safety number — nothing about the
+                                    // message, which every group bubble is encrypted and signed alike.
+                                    Icon(
+                                        imageVector = Icons.Filled.VerifiedUser,
+                                        contentDescription = stringResource(R.string.chat_sender_verified, row.senderPlainName),
+                                        tint = MaterialTheme.colorScheme.tertiary,
+                                        modifier = Modifier.size(14.dp).testTag("chat_verified_shield"),
                                     )
                                 }
                             }
@@ -4427,7 +4444,9 @@ fun ChatScreenGroupTypingPreview() =
             conversationId = "g-hiking",
             state =
                 ChatUiState(
-                    rows = previewDmRows().take(2),
+                    // Ada's key was verified out of band, so her bubble wears the shield a group carries
+                    // per author (the header names the group, not the person).
+                    rows = previewDmRows().take(2).map { row -> row.copy(senderVerified = !row.mine) },
                     myNodeId = "node-self",
                     isRoom = false,
                     isGroup = true,

@@ -102,6 +102,12 @@ data class ChatRow(
     // the author snapshot a reply puts on the wire ([app.getknit.knit.mesh.protocol.ReplyRef.author]).
     val senderDiscriminator: String? = null,
     val senderPlainName: String = senderName,
+    // True when this row's author is a Knit peer whose pinned key the local user confirmed out of band
+    // ([app.getknit.knit.data.peer.PeerEntity.verified]), in a thread where the name above a bubble is the
+    // only thing that says who wrote it — a group. A DM says it once in the header instead, and our own
+    // rows never say it at all. Never set on a heard Meshtastic post: that shield is [MeshOrigin.verified]'s,
+    // and it vouches for a radio rather than for a person.
+    val senderVerified: Boolean = false,
     // A non-[MessageEntity.KIND_NORMAL] row is a status notice (e.g. [MessageEntity.KIND_MEMBER_LEFT]),
     // rendered as a centered line using [senderName] instead of a chat bubble.
     val kind: Int = MessageEntity.KIND_NORMAL,
@@ -794,6 +800,9 @@ class ChatViewModel(
                         senderNodeId = m.senderId,
                         senderDiscriminator = contact?.discriminator ?: senderLabel?.discriminator,
                         senderPlainName = contact?.name ?: senderLabel?.name ?: name,
+                        // Groups only: the room's speakers are whoever is in range, the bridged room's are
+                        // not Knit peers at all, and a DM's header already carries the badge.
+                        senderVerified = isGroup && !mine && origin == null && peersByNode[m.senderId]?.verified == true,
                         kind = m.kind,
                         // Never our own avatar on a heard post (the sender column is ours by convention):
                         // the resolved contact's face where there is one, else the letter avatar.

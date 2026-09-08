@@ -41,6 +41,8 @@ document:
 - React with any emoji. Long-press a message and tap the "+" beside the quick reactions to browse or
   search the whole set, and the quick row starts remembering what you actually use instead of the same
   six forever.
+- A group chat now shows which members you've verified. A shield sits beside their name on every message they
+  send, the same one a direct message shows in its header.
 
 ### Changed
 

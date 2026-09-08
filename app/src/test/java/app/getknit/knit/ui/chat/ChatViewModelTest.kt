@@ -963,6 +963,59 @@ class ChatViewModelTest {
         }
 
     @Test
+    fun groupRowsCarryTheAuthorsLocalVerification() =
+        runTest {
+            // A group header names the group, so the only place the reader learns which of several senders
+            // they have checked a safety number with is the bubble itself. Ours never claims it.
+            val vm = vm(GROUP)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            groupFlow.value = group(GROUP, members = listOf("me", "sam", "priya"))
+            peersFlow.value = listOf(peer("sam", name = "Sam", verified = true), peer("priya", name = "Priya"))
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "me", body = "mine", id = "g0", sentAt = 100, conversationId = GROUP),
+                    msg(senderId = "sam", body = "theirs", id = "g1", sentAt = 200, conversationId = GROUP),
+                    msg(senderId = "priya", body = "hers", id = "g2", sentAt = 300, conversationId = GROUP),
+                )
+            advanceUntilIdle()
+
+            val rows =
+                vm.state.value.rows
+                    .associateBy { it.id }
+            assertTrue(rows.getValue("g1").senderVerified)
+            assertFalse("an unverified member says nothing", rows.getValue("g2").senderVerified)
+            assertFalse("our own bubble never vouches for us", rows.getValue("g0").senderVerified)
+        }
+
+    @Test
+    fun roomAndDmRowsNeverCarryTheBadge() =
+        runTest {
+            // The room draws names for whoever is in range and a DM says it once in its header, so neither
+            // repeats it per bubble — the flag is the group's alone.
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer("sam", name = "Sam", verified = true))
+            messagesFlow.value = listOf(msg(senderId = "sam", body = "hi", id = "m0", sentAt = 100))
+            advanceUntilIdle()
+            assertFalse(
+                vm.state.value.rows
+                    .single()
+                    .senderVerified,
+            )
+
+            stubDm("sam")
+            val dm = vm("sam")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { dm.state.collect {} }
+            messagesFlow.value = listOf(msg(senderId = "sam", body = "hi", id = "d0", sentAt = 100, conversationId = "sam"))
+            advanceUntilIdle()
+            val row =
+                dm.state.value.rows
+                    .single()
+            assertFalse("the DM header carries it instead", row.senderVerified)
+            assertTrue(dm.state.value.verified)
+        }
+
+    @Test
     fun roomRowsCarryNoDeliveredCounts() =
         runTest {
             // The broadcast room has no roster, so there is no denominator and the tick keeps its plain

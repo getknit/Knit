@@ -9,9 +9,11 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
-private val LightColorScheme =
+// `internal` rather than private so ColorSchemeTest can assert over the roles directly.
+internal val LightColorScheme =
     lightColorScheme(
         primary = CoralPrimaryLight,
         onPrimary = CoralOnPrimaryLight,
@@ -34,9 +36,40 @@ private val LightColorScheme =
         outline = OutlineLight,
         error = ErrorLight,
         onError = OnErrorLight,
+        // The roles below used to be left to lightColorScheme()'s defaults, which are Material's
+        // BASELINE palette — purple-grey neutrals under every Card, AlertDialog, DropdownMenu, sheet and
+        // scrolled TopAppBar, next to these warm surfaces. Tones follow Material's own role assignment
+        // (dynamicLightColorScheme31, material3 1.4.0); several land on constants already declared above.
+        inversePrimary = CoralPrimaryDark, // primary 80
+        surfaceTint = CoralPrimaryLight, // primary 40
+        inverseSurface = NeutralVariant20,
+        inverseOnSurface = NeutralVariant95,
+        outlineVariant = OnSurfaceVariantDark, // neutral-variant 80, shared with the dark scheme
+        scrim = Color.Black,
+        surfaceBright = BackgroundLight, // neutral-variant 98
+        surfaceDim = NeutralVariant87,
+        surfaceContainerLowest = Color.White,
+        surfaceContainerLow = NeutralVariant96,
+        surfaceContainer = NeutralVariant94,
+        surfaceContainerHigh = NeutralVariant92,
+        surfaceContainerHighest = SurfaceVariantLight, // neutral-variant 90
+        // The "fixed" roles are identical in both schemes by definition, and every one of them lands on a
+        // tone the brand palette already carries.
+        primaryFixed = CoralPrimaryContainerLight, // primary 90
+        primaryFixedDim = CoralPrimaryDark, // primary 80
+        onPrimaryFixed = CoralOnPrimaryContainerLight, // primary 10
+        onPrimaryFixedVariant = CoralPrimaryContainerDark, // primary 30
+        secondaryFixed = CoralSecondaryContainerLight, // secondary 90
+        secondaryFixedDim = CoralSecondaryDark, // secondary 80
+        onSecondaryFixed = CoralOnSecondaryContainerLight, // secondary 10
+        onSecondaryFixedVariant = CoralSecondaryContainerDark, // secondary 30
+        tertiaryFixed = CoralTertiaryContainerLight, // tertiary 90
+        tertiaryFixedDim = CoralTertiaryDark, // tertiary 80
+        onTertiaryFixed = CoralOnTertiaryContainerLight, // tertiary 10
+        onTertiaryFixedVariant = CoralTertiaryContainerDark, // tertiary 30
     )
 
-private val DarkColorScheme =
+internal val DarkColorScheme =
     darkColorScheme(
         primary = CoralPrimaryDark,
         onPrimary = CoralOnPrimaryDark,
@@ -59,6 +92,32 @@ private val DarkColorScheme =
         outline = OutlineDark,
         error = ErrorDark,
         onError = OnErrorDark,
+        // See the note in LightColorScheme; tones from dynamicDarkColorScheme31.
+        inversePrimary = CoralPrimaryLight, // primary 40
+        surfaceTint = CoralPrimaryDark, // primary 80
+        inverseSurface = OnSurfaceDark, // neutral-variant 90
+        inverseOnSurface = NeutralVariant20,
+        outlineVariant = SurfaceVariantDark, // neutral-variant 30
+        scrim = Color.Black,
+        surfaceBright = NeutralVariant24,
+        surfaceDim = BackgroundDark, // neutral-variant 6
+        surfaceContainerLowest = NeutralVariant4,
+        surfaceContainerLow = OnBackgroundLight, // neutral-variant 10, shared with the light scheme
+        surfaceContainer = NeutralVariant12,
+        surfaceContainerHigh = NeutralVariant17,
+        surfaceContainerHighest = NeutralVariant22,
+        primaryFixed = CoralPrimaryContainerLight, // primary 90
+        primaryFixedDim = CoralPrimaryDark, // primary 80
+        onPrimaryFixed = CoralOnPrimaryContainerLight, // primary 10
+        onPrimaryFixedVariant = CoralPrimaryContainerDark, // primary 30
+        secondaryFixed = CoralSecondaryContainerLight, // secondary 90
+        secondaryFixedDim = CoralSecondaryDark, // secondary 80
+        onSecondaryFixed = CoralOnSecondaryContainerLight, // secondary 10
+        onSecondaryFixedVariant = CoralSecondaryContainerDark, // secondary 30
+        tertiaryFixed = CoralTertiaryContainerLight, // tertiary 90
+        tertiaryFixedDim = CoralTertiaryDark, // tertiary 80
+        onTertiaryFixed = CoralOnTertiaryContainerLight, // tertiary 10
+        onTertiaryFixedVariant = CoralTertiaryContainerDark, // tertiary 30
     )
 
 @Composable

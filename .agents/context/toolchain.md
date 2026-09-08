@@ -50,8 +50,20 @@ literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reprod
   the 9.4 line we now build on still bundles it (9.3 did too), so the override — not an AGP bump — is
   the lever. Keep KGP and the `ksp` version in lockstep with `kotlin`; KSP adopted independent (KSP2)
   versioning at 2.3.0 (decoupled, Kotlin 2.2+), so it no longer uses the old `<kotlin>-<ksp>` scheme.
-- **`android.disallowKotlinSourceSets=false`** is set in `gradle.properties`. AGP 9's built-in
-  Kotlin otherwise rejects the `kotlin.sourceSets` DSL that KSP (Room's processor) uses.
+- **The new DSL / Variant API is already on; AGP 10 changes nothing here.** `android.newDsl` has
+  defaulted to *true* since AGP 9.0 — verified in the shipped 9.4.0 jar (`USE_NEW_DSL` → `iconst_1`,
+  `FeatureStage.SoftlyEnforced(VERSION_10_0)`), because Google's DSL/API migration-timeline page reads as
+  if 9.x still defaults to the legacy DSL and is wrong. Nothing in the build scripts touches the legacy
+  variant API (`applicationVariants`, `variantFilter`, `registerJavaGeneratingTask`, Transform), and
+  neither `android.newDsl` nor `android.newDsl.optOut` is set, so AGP 10 making the new API mandatory is a
+  no-op for us. The `sourceSets { }` block in `app/build.gradle.kts` is AGP's own, not Kotlin's.
+- **Do not re-add `android.disallowKotlinSourceSets=false`.** It sat in `gradle.properties` until
+  2026-09-08 because AGP 9's built-in Kotlin rejects the `kotlin.sourceSets` DSL that KSP once used to
+  register its generated sources. KSP2 (the 2.3.x line we run) goes through AGP's own sources API instead,
+  so the flag buys nothing: `:app:assembleDebug` plus forced recompiles of `compileDebugKotlin` and
+  `compileDebugUnitTestKotlin` all pass under `-Pandroid.disallowKotlinSourceSets=true`. AGP 9.4.0 carries
+  the option at `FeatureStage.Experimental` with a `FutureStage` of `Enforced(VERSION_10_0)`, so `=false`
+  stops being honored at AGP 10 anyway.
 - **No explicit `kotlin-android` plugin.** AGP 9's built-in Kotlin handles compilation; only the
   `kotlin.plugin.compose`, `kotlin.plugin.serialization`, and `ksp` plugins are applied.
 - Pin third-party versions in `gradle/libs.versions.toml` (version catalog); probe Maven before

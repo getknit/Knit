@@ -1,0 +1,14 @@
+A Meshtastic radio for reaching far past Wi-Fi and Bluetooth, and files of any kind.
+
+Knit now talks to a Meshtastic LoRa radio over Bluetooth. Set the board up once and the Nearby room and
+your direct messages travel over it as well, so a contact kilometres away is in range. Your radio's own
+channel becomes a second room in Knit, which you can read, post to, or switch off. A contact's post there
+shows a shield when their radio signed it.
+
+Send any kind of file in a direct message or group chat, under the 8 MB limit photos already have. React
+with any emoji, not the six in the quick row. Paste a link and, when your phone is online, a card with the
+page's title and picture goes with it; that one is off until you turn it on, since fetching the card shows
+the website your IP address.
+
+Fixed: a long chat that opened on "No messages yet" and took its time, phones that only relayed for you
+counting as nearby, and a blank screen that only force-stopping the app could clear.

@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-08-31T05:12:27Z
+  updated: 2026-09-08T07:54:21Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -18,7 +18,9 @@ document:
 
 # Knit changelog
 
-## Unreleased
+## [2.5.0](https://github.com/getknit/knit/releases/tag/v2.5.0) — 2026-09-08T07:54:21Z
+
+> A Meshtastic radio for reaching far past Wi-Fi and Bluetooth, and files of any kind.
 
 ### Added
 

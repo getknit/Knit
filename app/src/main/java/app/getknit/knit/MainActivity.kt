@@ -10,9 +10,11 @@ import android.view.contentcapture.ContentCaptureManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import app.getknit.knit.ui.KnitApp
@@ -23,6 +25,7 @@ import app.getknit.knit.ui.addcontact.contactLinkFrom
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.SharedContent
 import app.getknit.knit.ui.theme.KnitTheme
+import app.getknit.knit.ui.theme.ThemePreferences
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
@@ -37,6 +40,9 @@ class MainActivity : ComponentActivity() {
 
     // Single-shot holder for a contact link (a tapped getknit.app/c link, or a shared text carrying one).
     private val contactCardInbox: ContactCardInbox by inject()
+
+    // The theme flags, already warmed by KnitApplication so the first composition reads a settled value.
+    private val themePrefs: ThemePreferences by inject()
 
     @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,7 +67,10 @@ class MainActivity : ComponentActivity() {
                 null
             }
         setContent {
-            KnitTheme {
+            // collectAsStateWithLifecycle seeds the first composition from the StateFlow's current value,
+            // and keeps the theme live when the switch is toggled in Settings without leaving the app.
+            val dynamicColor by themePrefs.dynamicColor.collectAsStateWithLifecycle()
+            KnitTheme(dynamicColor = dynamicColor) {
                 KnitApp(startRoute = startRoute)
             }
         }

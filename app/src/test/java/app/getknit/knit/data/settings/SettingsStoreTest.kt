@@ -150,6 +150,17 @@ class SettingsStoreTest {
         }
 
     @Test
+    fun `dynamic color defaults off and round-trips on`() =
+        runTest {
+            // Note the flow is NOT gated on Build.VERSION here: isReturnDefaultValues makes SDK_INT 0 on the
+            // JVM, so a folded-in API check would pin this false and this test would fail inexplicably.
+            val store = newStore()
+            assertFalse(store.dynamicColor.first())
+            store.setDynamicColor(true)
+            assertTrue(store.dynamicColor.first())
+        }
+
+    @Test
     fun `the open-to-chat cue state is written as one unit`() =
         runTest {
             val store = newStore()

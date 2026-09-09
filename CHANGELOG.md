@@ -18,6 +18,19 @@ document:
 
 # Knit changelog
 
+## Unreleased
+
+### Added
+
+- Knit can take its colours from your wallpaper, the way Android does for its own apps. It stays off until
+  you turn it on in Settings on Android 12 or newer, and the online dot and verified shield stay green
+  either way.
+
+### Changed
+
+- Menus, cards, dialogs and sheets now match the rest of the app. They had been drawing a grey-purple from
+  Material's defaults that never sat right next to Knit's coral.
+
 ## [2.5.0](https://github.com/getknit/knit/releases/tag/v2.5.0) — 2026-09-08T07:54:21Z
 
 > A Meshtastic radio for reaching far past Wi-Fi and Bluetooth, and files of any kind.

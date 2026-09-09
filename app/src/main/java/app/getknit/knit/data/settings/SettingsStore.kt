@@ -139,6 +139,19 @@ class SettingsStore(
     val openToChat: Flow<Boolean> = dataStore.data.map { it[KEY_OPEN_TO_CHAT] ?: false }
 
     /**
+     * Whether to colour the app from the system wallpaper (Material You) instead of the Knit coral.
+     * Defaults to off: the brand is what a first run should show, and a user who wants their system's
+     * palette asks for it.
+     *
+     * Deliberately **not** folded with an API-31 check here, the way [linkPreviewsEnabled] folds
+     * `BuildConfig.INTERNET_PLANE`. This module sets `unitTests.isReturnDefaultValues = true`, so
+     * `Build.VERSION.SDK_INT` reads 0 in a plain-JVM test and the flow would be permanently false --
+     * `SettingsStoreTest` would fail for a reason nobody would find. A `BuildConfig` constant is safe
+     * there; `Build.VERSION` is not. The availability gate lives in `ui/theme/DynamicColor.kt` instead.
+     */
+    val dynamicColor: Flow<Boolean> = dataStore.data.map { it[KEY_DYNAMIC_COLOR] ?: false }
+
+    /**
      * The open-to-chat cue's durable state (`presence/OpenToChatWatch`): the peers a cue has named, as
      * `"<peerId>|<millis>"` entries — several per peer, one per cue, pruned to the last day — and when the
      * last cue was posted. Persisted so a process restart cannot re-nudge about someone named minutes ago;
@@ -454,6 +467,8 @@ class SettingsStore(
 
     suspend fun setOpenToChat(value: Boolean) = dataStore.edit { it[KEY_OPEN_TO_CHAT] = value }
 
+    suspend fun setDynamicColor(value: Boolean) = dataStore.edit { it[KEY_DYNAMIC_COLOR] = value }
+
     /** Replaces the cue's named set and last-post stamp in one write (see [openToChatNamed]). */
     suspend fun setOpenToChatCueState(
         named: Set<String>,
@@ -692,6 +707,7 @@ class SettingsStore(
         val KEY_CONTENT_FILTERING = booleanPreferencesKey("content_filtering_enabled")
         val KEY_LINK_PREVIEWS = booleanPreferencesKey("link_previews_enabled")
         val KEY_OPEN_TO_CHAT = booleanPreferencesKey("open_to_chat")
+        val KEY_DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val KEY_OPEN_TO_CHAT_NAMED = stringSetPreferencesKey("open_to_chat_named")
         val KEY_OPEN_TO_CHAT_LAST_POST_AT = longPreferencesKey("open_to_chat_last_post_at")
         val KEY_MESH_ENABLED = booleanPreferencesKey("mesh_enabled")

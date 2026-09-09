@@ -47,6 +47,7 @@ class ProfileViewModelTest {
     private val avatarHashFlow = MutableStateFlow<String?>(null)
     private val filteringFlow = MutableStateFlow(true)
     private val openToChatFlow = MutableStateFlow(false)
+    private val dynamicColorFlow = MutableStateFlow(false)
     private val spoolEnabledFlow = MutableStateFlow(false)
     private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
     private val activeSpoolUrlsFlow = MutableStateFlow(emptySet<String>())
@@ -61,6 +62,7 @@ class ProfileViewModelTest {
         every { settings.contentFilteringEnabled } returns filteringFlow
         every { settings.linkPreviewsEnabled } returns linkPreviewsFlow
         every { settings.openToChat } returns openToChatFlow
+        every { settings.dynamicColor } returns dynamicColorFlow
         every { settings.spoolEnabled } returns spoolEnabledFlow
         every { settings.spoolUrls } returns spoolUrlsFlow
         every { settings.activeSpoolUrls } returns activeSpoolUrlsFlow
@@ -103,6 +105,22 @@ class ProfileViewModelTest {
             vm.setOpenToChat(false)
             advanceUntilIdle()
             coVerify { settings.setOpenToChat(false) }
+        }
+
+    @Test
+    fun dynamicColorMirrorsTheStoreAndPersistsOnToggle() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.dynamicColor.collect {} }
+            advanceUntilIdle()
+            assertFalse(vm.dynamicColor.value)
+            dynamicColorFlow.value = true
+            advanceUntilIdle()
+            assertTrue(vm.dynamicColor.value)
+
+            vm.setDynamicColor(false)
+            advanceUntilIdle()
+            coVerify { settings.setDynamicColor(false) }
         }
 
     @Test

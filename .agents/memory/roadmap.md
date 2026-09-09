@@ -44,6 +44,14 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **An in-app light/dark override** (ADR 2026-09.m9h8) — Material You shipped as a Settings switch, but the
+  light/dark decision stays `isSystemInDarkTheme()` with no in-app copy, per ADR 047's rule that the user has
+  already told the system once. If it is ever revisited: `AppCompatDelegate` is the wrong mechanism (a bare
+  `ComponentActivity` has no delegate, and AppCompat is only on the classpath transitively);
+  `UiModeManager.setApplicationNightMode` is the right one, but it is API 31+ and minSdk is 29, so on 29-30
+  an override re-creates issue #2 — force dark on a light system and every cold launch flashes `#FFF8F6`
+  full-screen, because the launch window is resolved before the process starts.
+
 - **The LoRa (Meshtastic-over-BLE) plane was hidden in shipped builds, INTRODUCED at 2.5.0**
   (2026-08-24, ADR 038; flipped 2026-09-06, ADR 2026-09.6gtm) — `BuildConfig.LORA_PLANE` is now true
   everywhere and `-PloraPlane=false` rebuilds the dark artifact 2.3.0–2.4.x shipped. It gates the LoRa

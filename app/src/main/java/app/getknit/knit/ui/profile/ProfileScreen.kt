@@ -80,6 +80,7 @@ import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.isIgnoringBatteryOptimizations
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
+import app.getknit.knit.ui.theme.DYNAMIC_COLOR_SUPPORTED
 import org.koin.androidx.compose.koinViewModel
 
 /** UI-local projection of [ProfileViewModel]'s per-field flows for the stateless content. */
@@ -93,6 +94,7 @@ internal data class ProfileFormState(
     val contentFilteringEnabled: Boolean,
     val linkPreviewsEnabled: Boolean = false,
     val openToChat: Boolean = false,
+    val dynamicColor: Boolean = false,
     val relay: RelaySummary,
     val lora: LoraSummary,
     val isDirty: Boolean,
@@ -115,6 +117,7 @@ fun ProfileScreen(
     val contentFilteringEnabled by viewModel.contentFilteringEnabled.collectAsStateWithLifecycle()
     val linkPreviewsEnabled by viewModel.linkPreviewsEnabled.collectAsStateWithLifecycle()
     val openToChat by viewModel.openToChat.collectAsStateWithLifecycle()
+    val dynamicColor by viewModel.dynamicColor.collectAsStateWithLifecycle()
     val relay by viewModel.relaySummary.collectAsStateWithLifecycle()
     val lora by viewModel.loraSummary.collectAsStateWithLifecycle()
     val isDirty by viewModel.isDirty.collectAsStateWithLifecycle()
@@ -152,6 +155,7 @@ fun ProfileScreen(
                 contentFilteringEnabled = contentFilteringEnabled,
                 linkPreviewsEnabled = linkPreviewsEnabled,
                 openToChat = openToChat,
+                dynamicColor = dynamicColor,
                 relay = relay,
                 lora = lora,
                 isDirty = isDirty,
@@ -165,6 +169,7 @@ fun ProfileScreen(
         onToggleContentFiltering = viewModel::setContentFilteringEnabled,
         onToggleLinkPreviews = viewModel::setLinkPreviewsEnabled,
         onToggleOpenToChat = viewModel::setOpenToChat,
+        onToggleDynamicColor = viewModel::setDynamicColor,
         onOpenRelays = onOpenRelays,
         onOpenLora = onOpenLora,
         onPickPhoto = {
@@ -191,6 +196,7 @@ internal fun ProfileScreenContent(
     onToggleContentFiltering: (Boolean) -> Unit,
     onToggleLinkPreviews: (Boolean) -> Unit = {},
     onToggleOpenToChat: (Boolean) -> Unit = {},
+    onToggleDynamicColor: (Boolean) -> Unit = {},
     onOpenRelays: () -> Unit,
     onOpenLora: () -> Unit = {},
     // Whether the Internet-relay plane is introduced at all in this build. A parameter rather than a
@@ -198,6 +204,9 @@ internal fun ProfileScreenContent(
     showInternetRelays: Boolean = BuildConfig.INTERNET_PLANE,
     // Same, for the LoRa plane.
     showLoraRadio: Boolean = BuildConfig.LORA_PLANE,
+    // Whether the platform can do wallpaper colours at all (API 31+). A parameter for the same reason as
+    // the two above: the hidden case stays previewable and testable rather than depending on the device.
+    showDynamicColor: Boolean = DYNAMIC_COLOR_SUPPORTED,
     onPickPhoto: () -> Unit,
     onClearPhoto: () -> Unit,
     onAllowBattery: () -> Unit,
@@ -300,6 +309,18 @@ internal fun ProfileScreenContent(
                 enabled = form.contentFilteringEnabled,
                 onToggle = onToggleContentFiltering,
             )
+
+            // Hidden rather than disabled below API 31, matching the two plane rows: a switch that can
+            // never move needs a reason next to it, and there is nowhere here to put one.
+            if (showDynamicColor) {
+                ToggleRow(
+                    title = stringResource(R.string.settings_dynamic_color_title),
+                    subtitle = stringResource(R.string.settings_dynamic_color_subtitle),
+                    enabled = form.dynamicColor,
+                    onToggle = onToggleDynamicColor,
+                    modifier = Modifier.testTag("profile_dynamic_color"),
+                )
+            }
 
             // Link previews are the one other thing that uses the Internet, so they ship under the same build
             // switch as the relay plane; the subtitle carries the disclosure that would otherwise need a sheet.

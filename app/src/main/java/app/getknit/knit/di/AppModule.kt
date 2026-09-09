@@ -56,6 +56,7 @@ import app.getknit.knit.ui.RouteInbox
 import app.getknit.knit.ui.addcontact.ContactCardInbox
 import app.getknit.knit.ui.review.ReviewPromptInbox
 import app.getknit.knit.ui.share.ShareInbox
+import app.getknit.knit.ui.theme.ThemePreferences
 import app.getknit.knit.ui.voice.VoicePlayer
 import kotlinx.coroutines.CoroutineScope
 import org.koin.android.ext.koin.androidContext
@@ -69,6 +70,9 @@ val appModule =
             }
         }
         single { SettingsStore(get()) }
+        // Warmed at process start by KnitApplication so the first composition can read the theme flag
+        // synchronously; see ThemePreferences for why that matters at launch.
+        single { ThemePreferences(get<SettingsStore>().dynamicColor, get<CoroutineScope>()) }
         // Emoji catalog for the reaction picker: parsed once per process, off the main thread, the first time the
         // sheet opens; emoji this device's fonts cannot draw are dropped at load (Paint.hasGlyph).
         single { EmojiCatalogLoader(open = { androidContext().assets.open(EmojiCatalogLoader.ASSET) }, canRender = AndroidGlyphCheck()) }

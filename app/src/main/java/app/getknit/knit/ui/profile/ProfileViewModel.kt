@@ -127,6 +127,11 @@ class ProfileViewModel(
         settings.openToChat
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /** Whether to colour the app from the wallpaper. Off by default; hidden entirely below API 31. */
+    val dynamicColor: StateFlow<Boolean> =
+        settings.dynamicColor
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     /**
      * Summary of the Internet (spool) plane for the row that navigates to its own screen — the switch
      * itself lives there now, with the relay-list editor it needs to be actionable.
@@ -210,6 +215,10 @@ class ProfileViewModel(
 
     fun setOpenToChat(value: Boolean) {
         viewModelScope.launch { settings.setOpenToChat(value) }
+    }
+
+    fun setDynamicColor(value: Boolean) {
+        viewModelScope.launch { settings.setDynamicColor(value) }
     }
 
     // The picked image awaiting crop. Held here (not in SavedStateHandle — a Bitmap is large and not

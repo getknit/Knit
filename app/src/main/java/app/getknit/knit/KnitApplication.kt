@@ -19,6 +19,7 @@ import app.getknit.knit.ui.image.BlobFetcher
 import app.getknit.knit.ui.image.BlobKeyer
 import app.getknit.knit.ui.image.LinkCardFetcher
 import app.getknit.knit.ui.image.LinkCardKeyer
+import app.getknit.knit.ui.theme.ThemePreferences
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -55,6 +56,11 @@ class KnitApplication :
             }
         // Register the message notification channel up front so it appears in system settings.
         koinApp.koin.get<Notifier>().createChannel()
+
+        // Start the theme-flag read now, not at setContent. Koin singles are lazy, so resolving it here is
+        // what actually begins the DataStore collect; MainActivity then reads an already-warmed value and
+        // the app does not repaint from coral to the wallpaper palette a frame into launch.
+        koinApp.koin.get<ThemePreferences>()
 
         // Warm the toxicity model off the send path. The first classify() lazily loads a ~16 MB TFLite
         // model + tokenizer + Interpreter and pays first-inference allocation; done on the first outgoing

@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-102 decisions.
+103 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -106,6 +106,7 @@ carries; never renumber an old one.
 | [2026-09.emd7](decisions/2026-09-emd7-a-knit-board-tells-the-mesh-it-is-unmonitored.md) | A Knit board tells the mesh it is unmonitored | lora, meshtastic, provisioning |
 | [2026-09.ggq4](decisions/2026-09-ggq4-a-heard-meshtastic-post-is-verified-against-the-board-key-in-its-author-s-profil.md) | A heard Meshtastic post is verified against the board key in its author's profile | lora, meshtastic, mesh |
 | [2026-09.hd5n](decisions/2026-09-hd5n-the-chat-thread-reads-a-newest-anchored-window.md) | The chat thread reads a newest-anchored window, not the whole conversation | ui, data, perf |
+| [2026-09.m9h8](decisions/2026-09-m9h8-material-you-is-opt-in.md) | Material You is opt-in, and green stays green | ui, theme, settings |
 | [2026-09.mhs5](decisions/2026-09-mhs5-a-lora-packet-is-padded-past-the-firmware-s-signature-cliff.md) | A LoRa packet is padded past the firmware's signature cliff | lora, airtime, link |
 | [2026-09.n752](decisions/2026-09-n752-a-link-preview-is-a-sender-fetched-card-riding-the-photo-path.md) | A link preview is a sender-fetched card riding the photo path | attachments, ui, wire, privacy, moderation, network |
 | [2026-09.qgk4](decisions/2026-09-qgk4-the-startup-profile-ships-beside-the-baseline-one.md) | The startup profile ships beside the baseline one, from the same journey | performance, build, distribution |

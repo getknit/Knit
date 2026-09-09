@@ -38,6 +38,7 @@ class ProfileScreenContentTest {
         lora: LoraSummary = LoraSummary(),
         openToChat: Boolean = false,
         linkPreviewsEnabled: Boolean = false,
+        dynamicColor: Boolean = false,
     ) = ProfileFormState(
         name = "Alice",
         status = "Hiking",
@@ -48,6 +49,7 @@ class ProfileScreenContentTest {
         contentFilteringEnabled = true,
         linkPreviewsEnabled = linkPreviewsEnabled,
         openToChat = openToChat,
+        dynamicColor = dynamicColor,
         relay = relay,
         lora = lora,
         isDirty = isDirty,
@@ -64,11 +66,14 @@ class ProfileScreenContentTest {
         onToggleOpenToChat: (Boolean) -> Unit = {},
         linkPreviewsEnabled: Boolean = false,
         onToggleLinkPreviews: (Boolean) -> Unit = {},
+        dynamicColor: Boolean = false,
+        onToggleDynamicColor: (Boolean) -> Unit = {},
+        showDynamicColor: Boolean = true,
     ) {
         compose.setContent {
             KnitTheme {
                 ProfileScreenContent(
-                    form = form(isDirty, relay, lora, openToChat, linkPreviewsEnabled),
+                    form = form(isDirty, relay, lora, openToChat, linkPreviewsEnabled, dynamicColor),
                     batteryExempt = true,
                     onBack = {},
                     onNameChange = {},
@@ -78,6 +83,8 @@ class ProfileScreenContentTest {
                     onToggleContentFiltering = {},
                     onToggleOpenToChat = onToggleOpenToChat,
                     onToggleLinkPreviews = onToggleLinkPreviews,
+                    onToggleDynamicColor = onToggleDynamicColor,
+                    showDynamicColor = showDynamicColor,
                     onOpenRelays = onOpenRelays,
                     showInternetRelays = showInternetRelays,
                     onPickPhoto = {},
@@ -187,6 +194,31 @@ class ProfileScreenContentTest {
             lora = LoraSummary(enabled = true, boardName = "Meshtastic_1a2b", plane = LoraPlane.Live, battery = battery),
         )
         compose.onNodeWithText("On · Meshtastic_1a2b · connected · battery 78%").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun theWallpaperColoursRowIsOffByDefaultAndTogglesOn() {
+        var toggled: Boolean? = null
+        render(isDirty = false, onToggleDynamicColor = { toggled = it })
+        compose.onNodeWithTag("profile_dynamic_color").performScrollTo().assertIsOff()
+        compose.onNodeWithTag("profile_dynamic_color").performClick()
+        assertEquals(true, toggled)
+    }
+
+    @Test
+    fun theWallpaperColoursRowTogglesOff() {
+        var toggled: Boolean? = null
+        render(isDirty = false, dynamicColor = true, onToggleDynamicColor = { toggled = it })
+        compose.onNodeWithTag("profile_dynamic_color").performScrollTo().assertIsOn()
+        compose.onNodeWithTag("profile_dynamic_color").performClick()
+        assertEquals(false, toggled)
+    }
+
+    /** Below API 31 the platform has no wallpaper palette, so the row is absent rather than dead. */
+    @Test
+    fun theWallpaperColoursRowIsAbsentWhereThePlatformCannotDoIt() {
+        render(isDirty = false, showDynamicColor = false)
+        compose.onNodeWithTag("profile_dynamic_color").assertDoesNotExist()
     }
 
     @Test

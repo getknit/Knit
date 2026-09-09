@@ -3,6 +3,7 @@ package app.getknit.knit.ui.theme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -58,6 +59,15 @@ class ColorSchemeTest {
                 hueDistance(hue, BRAND_HUE) <= HUE_TOLERANCE,
             )
         }
+    }
+
+    /** Material You landed in API 31; minSdk here is 29, so two supported releases have no wallpaper palette. */
+    @Test
+    fun dynamicColourIsOfferedOnlyFromApi31() {
+        assertFalse("API 29 has no wallpaper palette", dynamicColorAvailable(29))
+        assertFalse("API 30 has no wallpaper palette", dynamicColorAvailable(30))
+        assertTrue("API 31 is where Material You landed", dynamicColorAvailable(31))
+        assertTrue(dynamicColorAvailable(34))
     }
 
     @Test

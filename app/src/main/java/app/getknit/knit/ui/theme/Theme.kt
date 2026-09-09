@@ -23,8 +23,8 @@ internal val LightColorScheme =
         onSecondary = CoralOnSecondaryLight,
         secondaryContainer = CoralSecondaryContainerLight,
         onSecondaryContainer = CoralOnSecondaryContainerLight,
-        tertiary = CoralTertiaryLight,
-        onTertiary = CoralOnTertiaryLight,
+        tertiary = PositiveLight,
+        onTertiary = OnPositiveLight,
         tertiaryContainer = CoralTertiaryContainerLight,
         onTertiaryContainer = CoralOnTertiaryContainerLight,
         background = BackgroundLight,
@@ -64,7 +64,7 @@ internal val LightColorScheme =
         onSecondaryFixed = CoralOnSecondaryContainerLight, // secondary 10
         onSecondaryFixedVariant = CoralSecondaryContainerDark, // secondary 30
         tertiaryFixed = CoralTertiaryContainerLight, // tertiary 90
-        tertiaryFixedDim = CoralTertiaryDark, // tertiary 80
+        tertiaryFixedDim = PositiveDark, // tertiary 80
         onTertiaryFixed = CoralOnTertiaryContainerLight, // tertiary 10
         onTertiaryFixedVariant = CoralTertiaryContainerDark, // tertiary 30
     )
@@ -79,8 +79,8 @@ internal val DarkColorScheme =
         onSecondary = CoralOnSecondaryDark,
         secondaryContainer = CoralSecondaryContainerDark,
         onSecondaryContainer = CoralOnSecondaryContainerDark,
-        tertiary = CoralTertiaryDark,
-        onTertiary = CoralOnTertiaryDark,
+        tertiary = PositiveDark,
+        onTertiary = OnPositiveDark,
         tertiaryContainer = CoralTertiaryContainerDark,
         onTertiaryContainer = CoralOnTertiaryContainerDark,
         background = BackgroundDark,
@@ -115,7 +115,7 @@ internal val DarkColorScheme =
         onSecondaryFixed = CoralOnSecondaryContainerLight, // secondary 10
         onSecondaryFixedVariant = CoralSecondaryContainerDark, // secondary 30
         tertiaryFixed = CoralTertiaryContainerLight, // tertiary 90
-        tertiaryFixedDim = CoralTertiaryDark, // tertiary 80
+        tertiaryFixedDim = PositiveDark, // tertiary 80
         onTertiaryFixed = CoralOnTertiaryContainerLight, // tertiary 10
         onTertiaryFixedVariant = CoralTertiaryContainerDark, // tertiary 30
     )
@@ -148,7 +148,13 @@ fun KnitTheme(
     // platform's "Remove animations" setting is a property of being inside the theme, not something a call
     // site can forget. MaterialTheme's motionScheme is left at its default (standard, not expressive) — see
     // KnitMotion for why.
-    CompositionLocalProvider(LocalReduceMotion provides rememberReduceMotion()) {
+    // LocalKnitColors is keyed on darkTheme and NOT on dynamicColor: the semantic green is fixed in
+    // every scheme (see KnitSemanticColors), and pairing it with onPositive by mode keeps the two
+    // legible together in all four combinations.
+    CompositionLocalProvider(
+        LocalReduceMotion provides rememberReduceMotion(),
+        LocalKnitColors provides if (darkTheme) DarkSemanticColors else LightSemanticColors,
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = Typography,

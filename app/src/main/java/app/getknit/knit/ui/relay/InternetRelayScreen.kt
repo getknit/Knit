@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.mesh.spool.SpoolErrCode
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.theme.knitColors
 import org.koin.androidx.compose.koinViewModel
 
 /**
@@ -291,7 +292,7 @@ private fun RelayListRow(
             val dot =
                 when {
                     !planeEnabled || !relay.enabled -> MaterialTheme.colorScheme.outline
-                    relay.connected -> MaterialTheme.colorScheme.tertiary
+                    relay.connected -> MaterialTheme.knitColors.positive
                     relay.lastError != null -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.outline
                 }

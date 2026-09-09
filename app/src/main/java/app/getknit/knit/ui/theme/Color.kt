@@ -5,7 +5,9 @@ import androidx.compose.ui.graphics.Color
 // Knit brand palette — a warm coral, ported from the legacy app (colorPrimary #E67474,
 // colorPrimaryDark #ED4854, accent slate #454551, success green #08AD6C) and expanded into a
 // Material 3 scheme. Seeds: primary #E55E4C (warm coral), secondary #454551 (slate),
-// tertiary #08AD6C (green — used for the "online" indicator).
+// tertiary #08AD6C (green). The green is the app's semantic "good" colour rather than a scheme role:
+// it lives in KnitSemanticColors.positive, because Material You would otherwise derive tertiary from the
+// wallpaper and the online dot could come out the same hue as an error.
 
 // Light
 val CoralPrimaryLight = Color(0xFFBD4030)
@@ -16,8 +18,8 @@ val CoralSecondaryLight = Color(0xFF5B5B67)
 val CoralOnSecondaryLight = Color(0xFFFFFFFF)
 val CoralSecondaryContainerLight = Color(0xFFE0E0EC)
 val CoralOnSecondaryContainerLight = Color(0xFF181824)
-val CoralTertiaryLight = Color(0xFF006D43)
-val CoralOnTertiaryLight = Color(0xFFFFFFFF)
+val PositiveLight = Color(0xFF006D43)
+val OnPositiveLight = Color(0xFFFFFFFF)
 val CoralTertiaryContainerLight = Color(0xFF8FF7BD)
 val CoralOnTertiaryContainerLight = Color(0xFF00210F)
 val BackgroundLight = Color(0xFFFFF8F6)
@@ -39,8 +41,8 @@ val CoralSecondaryDark = Color(0xFFC5C4D2)
 val CoralOnSecondaryDark = Color(0xFF2D2E39)
 val CoralSecondaryContainerDark = Color(0xFF444450)
 val CoralOnSecondaryContainerDark = Color(0xFFE0E0EC)
-val CoralTertiaryDark = Color(0xFF72DAA0)
-val CoralOnTertiaryDark = Color(0xFF00391F)
+val PositiveDark = Color(0xFF72DAA0)
+val OnPositiveDark = Color(0xFF00391F)
 val CoralTertiaryContainerDark = Color(0xFF005230)
 val CoralOnTertiaryContainerDark = Color(0xFF8FF7BD)
 val BackgroundDark = Color(0xFF1A110E)

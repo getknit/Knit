@@ -65,6 +65,7 @@ import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.mesh.spool.SpoolUrl
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
+import app.getknit.knit.ui.theme.knitColors
 import app.getknit.knit.ui.util.compactTimeAgo
 import app.getknit.knit.ui.util.rememberCurrentTimeMillis
 import org.koin.androidx.compose.koinViewModel
@@ -509,11 +510,11 @@ private fun TransportRow(status: TransportStatus) {
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Health dot: tertiary when Healthy, error when Degraded (seized), muted outline when Unavailable
+        // Health dot: the semantic positive when Healthy, error when Degraded (seized), muted outline when Unavailable
         // (radio off) — off isn't a fault, so it shouldn't read as alarmingly as a seized radio.
         val dotColor =
             when (status.health) {
-                TransportHealth.Healthy -> MaterialTheme.colorScheme.tertiary
+                TransportHealth.Healthy -> MaterialTheme.knitColors.positive
                 TransportHealth.Degraded -> MaterialTheme.colorScheme.error
                 TransportHealth.Unavailable -> MaterialTheme.colorScheme.outline
             }
@@ -613,8 +614,8 @@ private fun NodeRow(
         // carried its traffic for us; muted = we only hold its profile.
         val dotColor =
             when (node.reach) {
-                Reach.Direct -> MaterialTheme.colorScheme.tertiary
-                Reach.Relay -> MaterialTheme.colorScheme.tertiary.copy(alpha = RELAY_DOT_ALPHA)
+                Reach.Direct -> MaterialTheme.knitColors.positive
+                Reach.Relay -> MaterialTheme.knitColors.positive.copy(alpha = RELAY_DOT_ALPHA)
                 Reach.Known -> MaterialTheme.colorScheme.outline
             }
         Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(dotColor))

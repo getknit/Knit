@@ -59,6 +59,7 @@ import app.getknit.knit.ui.components.skeletonBlockColor
 import app.getknit.knit.ui.components.skeletonPulseAlpha
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.theme.KnitMotion
+import app.getknit.knit.ui.theme.knitColors
 import org.koin.androidx.compose.koinViewModel
 
 /**
@@ -285,7 +286,7 @@ private fun ContactRow(
                     Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.tertiary),
+                        .background(MaterialTheme.knitColors.positive),
             )
             Spacer(Modifier.width(12.dp))
         }

@@ -44,6 +44,7 @@ import app.getknit.knit.R
 import app.getknit.knit.ui.image.QrCode
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.theme.KnitMotion
+import app.getknit.knit.ui.theme.knitColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -114,7 +115,7 @@ fun EncryptionSection(
                     contentDescription = null,
                     tint =
                         if (peer.verified) {
-                            MaterialTheme.colorScheme.tertiary
+                            MaterialTheme.knitColors.positive
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },

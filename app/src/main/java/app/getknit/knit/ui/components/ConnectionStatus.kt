@@ -41,6 +41,7 @@ import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.theme.KnitMotion
+import app.getknit.knit.ui.theme.knitColors
 import kotlinx.coroutines.delay
 
 /**
@@ -87,7 +88,7 @@ fun ConnectionStatusRow(
             }
 
             TransportHealth.Healthy -> {
-                if (neighborCount > 0) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
+                if (neighborCount > 0) MaterialTheme.knitColors.positive else MaterialTheme.colorScheme.outline
             }
         }
     // The dot changes meaning whenever a peer appears or the radios go dark. Crossfading it is what turns
@@ -177,7 +178,7 @@ private fun PlaneGlyph(
     live: Boolean,
 ) {
     val tint by animateColorAsState(
-        targetValue = if (live) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline,
+        targetValue = if (live) MaterialTheme.knitColors.positive else MaterialTheme.colorScheme.outline,
         animationSpec = KnitMotion.effects(),
         label = "planeTint",
     )

@@ -218,6 +218,7 @@ import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.theme.KnitMotion
+import app.getknit.knit.ui.theme.knitColors
 import app.getknit.knit.ui.theme.rememberPressScale
 import app.getknit.knit.ui.util.rememberCurrentTimeMillis
 import app.getknit.knit.ui.voice.VoiceNoteBubble
@@ -851,7 +852,7 @@ internal fun ChatScreenContent(
                                     Icon(
                                         imageVector = Icons.Filled.VerifiedUser,
                                         contentDescription = stringResource(R.string.verify_verified),
-                                        tint = MaterialTheme.colorScheme.tertiary,
+                                        tint = MaterialTheme.knitColors.positive,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 }
@@ -1824,7 +1825,7 @@ private fun MessageBubble(
                                     Icon(
                                         imageVector = Icons.Filled.VerifiedUser,
                                         contentDescription = stringResource(R.string.chat_mesh_signed_by_radio, row.senderPlainName),
-                                        tint = MaterialTheme.colorScheme.tertiary,
+                                        tint = MaterialTheme.knitColors.positive,
                                         modifier = Modifier.size(14.dp).testTag("chat_mesh_shield"),
                                     )
                                 } else if (row.senderVerified) {
@@ -1837,7 +1838,7 @@ private fun MessageBubble(
                                     Icon(
                                         imageVector = Icons.Filled.VerifiedUser,
                                         contentDescription = stringResource(R.string.chat_sender_verified, row.senderPlainName),
-                                        tint = MaterialTheme.colorScheme.tertiary,
+                                        tint = MaterialTheme.knitColors.positive,
                                         modifier = Modifier.size(14.dp).testTag("chat_verified_shield"),
                                     )
                                 }

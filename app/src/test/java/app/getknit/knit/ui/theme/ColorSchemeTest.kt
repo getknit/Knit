@@ -9,6 +9,7 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 
 /**
  * Contract tests for the two static [androidx.compose.material3.ColorScheme]s in [KnitTheme].
@@ -55,6 +56,25 @@ class ColorSchemeTest {
                 "$name is ${color.hex()} (hue ${hue.toInt()}°). Material's baseline neutrals sit near 270° " +
                     "— set this role explicitly in Theme.kt rather than letting it default.",
                 hueDistance(hue, BRAND_HUE) <= HUE_TOLERANCE,
+            )
+        }
+    }
+
+    @Test
+    fun positiveClearsContrastAgainstItsOwnSurface() {
+        // KnitSemanticColors pins this green across every scheme, so it has to hold up against a dynamic
+        // surface too. That is safe because Material fixes the dynamic surface *tone* (98 light, 6 dark)
+        // and varies only its hue, which means the static surfaces below are a fair stand-in.
+        listOf(
+            "light" to (LightSemanticColors.positive to LightColorScheme.surface),
+            "dark" to (DarkSemanticColors.positive to DarkColorScheme.surface),
+        ).forEach { (which, pair) ->
+            val (positive, surface) = pair
+            val ratio = contrastRatio(positive, surface)
+            assertTrue(
+                "positive on the $which surface is %.2f:1, under the %.1f:1 floor for a meaningful graphic"
+                    .format(ratio, MIN_CONTRAST),
+                ratio >= MIN_CONTRAST,
             )
         }
     }
@@ -118,6 +138,9 @@ class ColorSchemeTest {
 
         /** Below this, a colour is a grey and its hue is numerically meaningless. */
         const val CHROMA_FLOOR = 0.012f
+
+        /** WCAG's floor for a graphical object that carries meaning. */
+        const val MIN_CONTRAST = 3.0
 
         val NAMED_ARG = Regex("""(\w+)\s*=""")
 
@@ -215,6 +238,25 @@ class ColorSchemeTest {
         ): Float {
             val d = abs(a - b) % 360f
             return if (d > 180f) 360f - d else d
+        }
+
+        fun relativeLuminance(color: Color): Double {
+            val (r, g, b) = color.rgb()
+
+            fun channel(c: Int): Double {
+                val n = c / 255.0
+                return if (n <= 0.03928) n / 12.92 else ((n + 0.055) / 1.055).pow(2.4)
+            }
+            return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+        }
+
+        fun contrastRatio(
+            a: Color,
+            b: Color,
+        ): Double {
+            val la = relativeLuminance(a)
+            val lb = relativeLuminance(b)
+            return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
         }
     }
 }

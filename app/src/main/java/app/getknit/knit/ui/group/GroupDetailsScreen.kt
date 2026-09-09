@@ -63,6 +63,7 @@ import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.profile.AvatarCropDialog
+import app.getknit.knit.ui.theme.knitColors
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -340,7 +341,7 @@ private fun MemberRow(
                     Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.tertiary),
+                        .background(MaterialTheme.knitColors.positive),
             )
         }
     }

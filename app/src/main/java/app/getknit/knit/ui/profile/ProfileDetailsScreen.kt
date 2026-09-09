@@ -55,6 +55,7 @@ import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.scan.QrScanner
+import app.getknit.knit.ui.theme.knitColors
 import app.getknit.knit.ui.verify.EncryptionSection
 import app.getknit.knit.ui.verify.PeerVerification
 import org.koin.androidx.compose.koinViewModel
@@ -227,7 +228,7 @@ internal fun ProfileDetailsScreenContent(
                             .clip(CircleShape)
                             .background(
                                 if (state.online) {
-                                    MaterialTheme.colorScheme.tertiary
+                                    MaterialTheme.knitColors.positive
                                 } else {
                                     MaterialTheme.colorScheme.outline
                                 },
@@ -259,14 +260,14 @@ internal fun ProfileDetailsScreenContent(
                         imageVector = Icons.Outlined.ChatBubbleOutline,
                         // Decorative: the label beside it carries the meaning.
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary,
+                        tint = MaterialTheme.knitColors.positive,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
                         text = stringResource(R.string.profile_details_open_to_chat),
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.tertiary,
+                        color = MaterialTheme.knitColors.positive,
                     )
                 }
             }

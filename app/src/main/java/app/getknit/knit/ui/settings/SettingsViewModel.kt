@@ -10,6 +10,7 @@ import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
+import app.getknit.knit.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -94,6 +95,17 @@ class SettingsViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /**
+     * Light, dark, or the system's answer. Follows the system by default; hidden entirely below API 31,
+     * where there is no per-app night mode to set.
+     *
+     * Read from the store rather than from the configuration so the selector shows what the *user* chose:
+     * a device in dark mode with the mode left on [ThemeMode.System] must not read back as [ThemeMode.Dark].
+     */
+    val themeMode: StateFlow<ThemeMode> =
+        settings.themeMode
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeMode.System)
+
+    /**
      * Summary of the Internet (spool) plane for the row that navigates to its own screen — the switch
      * itself lives there, with the relay-list editor it needs to be actionable.
      */
@@ -126,5 +138,14 @@ class SettingsViewModel(
 
     fun setDynamicColor(value: Boolean) {
         viewModelScope.launch { settings.setDynamicColor(value) }
+    }
+
+    /**
+     * Persist the choice; `ThemePreferences` collects it and hands it to the platform, which applies it as a
+     * configuration change — so this Activity is recreated, exactly as it is when the system's own dark-theme
+     * switch is flipped.
+     */
+    fun setThemeMode(value: ThemeMode) {
+        viewModelScope.launch { settings.setThemeMode(value) }
     }
 }

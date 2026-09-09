@@ -185,8 +185,9 @@ Knit is built for situations where there's **no reliable network but people are 
   significant-motion re-scan, and radio-availability recovery; prompts to disable battery optimization.
 - **Offline app sharing** — hand Knit to a nearby phone with no store: the installed splits are merged
   into a universal APK and re-signed on-device (ARSCLib + apksig).
-- **Material 3** UI with a coral brand theme and full dark mode, or your wallpaper's colours if you
-  turn them on (Android 12+); encrypted at rest (SQLCipher).
+- **Material 3** UI with a coral brand theme and full dark mode — following your phone, or pinned to
+  light or dark in Settings, or taking your wallpaper's colours if you turn them on (Android 12+);
+  encrypted at rest (SQLCipher).
 
 ## 📋 Requirements
 

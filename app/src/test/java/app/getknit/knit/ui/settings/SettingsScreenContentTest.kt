@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -14,6 +15,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.theme.KnitTheme
+import app.getknit.knit.ui.theme.ThemeMode
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -41,6 +43,9 @@ class SettingsScreenContentTest {
         onOpenLora: () -> Unit = {},
         contentFilteringEnabled: Boolean = true,
         onToggleContentFiltering: (Boolean) -> Unit = {},
+        themeMode: ThemeMode = ThemeMode.System,
+        onSelectThemeMode: (ThemeMode) -> Unit = {},
+        showThemeMode: Boolean = true,
         linkPreviewsEnabled: Boolean = false,
         onToggleLinkPreviews: (Boolean) -> Unit = {},
         dynamicColor: Boolean = false,
@@ -54,6 +59,7 @@ class SettingsScreenContentTest {
                         SettingsFormState(
                             header = header,
                             contentFilteringEnabled = contentFilteringEnabled,
+                            themeMode = themeMode,
                             linkPreviewsEnabled = linkPreviewsEnabled,
                             dynamicColor = dynamicColor,
                             relay = relay,
@@ -63,6 +69,8 @@ class SettingsScreenContentTest {
                     onBack = {},
                     onOpenProfile = onOpenProfile,
                     onToggleContentFiltering = onToggleContentFiltering,
+                    onSelectThemeMode = onSelectThemeMode,
+                    showThemeMode = showThemeMode,
                     onToggleLinkPreviews = onToggleLinkPreviews,
                     onToggleDynamicColor = onToggleDynamicColor,
                     showDynamicColor = showDynamicColor,
@@ -144,6 +152,30 @@ class SettingsScreenContentTest {
         val battery = BoardBattery(percent = 78, voltage = 3.92f, powered = false)
         render(lora = LoraSummary(enabled = true, boardName = "Meshtastic_1a2b", plane = LoraPlane.Live, battery = battery))
         compose.onNodeWithText("On · Meshtastic_1a2b · connected · battery 78%").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun theThemeRowStartsOnSystemAndReportsAPin() {
+        var picked: ThemeMode? = null
+        render(onSelectThemeMode = { picked = it })
+        compose.onNodeWithTag("settings_theme_mode").performScrollTo()
+        compose.onNodeWithText("System").assertIsSelected()
+        compose.onNodeWithText("Dark").performClick()
+        assertEquals(ThemeMode.Dark, picked)
+    }
+
+    @Test
+    fun theThemeRowShowsThePinnedMode() {
+        render(themeMode = ThemeMode.Light)
+        compose.onNodeWithTag("settings_theme_mode").performScrollTo()
+        compose.onNodeWithText("Light").assertIsSelected()
+    }
+
+    /** Below API 31 there is no per-app night mode, so the control is absent rather than dead. */
+    @Test
+    fun theThemeRowIsAbsentWhereThePlatformCannotDoIt() {
+        render(showThemeMode = false)
+        compose.onNodeWithTag("settings_theme_mode").assertDoesNotExist()
     }
 
     @Test

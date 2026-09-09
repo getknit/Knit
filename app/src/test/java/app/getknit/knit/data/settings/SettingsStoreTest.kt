@@ -1,7 +1,10 @@
 package app.getknit.knit.data.settings
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import app.getknit.knit.data.emoji.RecentReactions
+import app.getknit.knit.ui.theme.ThemeMode
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -158,6 +161,31 @@ class SettingsStoreTest {
             assertFalse(store.dynamicColor.first())
             store.setDynamicColor(true)
             assertTrue(store.dynamicColor.first())
+        }
+
+    @Test
+    fun `theme mode defaults to the system and round-trips a pinned one`() =
+        runTest {
+            // Not gated on Build.VERSION here either, for the reason the dynamic-color test spells out.
+            val store = newStore()
+            assertEquals(ThemeMode.System, store.themeMode.first())
+            store.setThemeMode(ThemeMode.Dark)
+            assertEquals(ThemeMode.Dark, store.themeMode.first())
+            store.setThemeMode(ThemeMode.System)
+            assertEquals(ThemeMode.System, store.themeMode.first())
+        }
+
+    /**
+     * A mode written by a newer build, or a constant since renamed, must read as the system default rather
+     * than throw. Written through the raw key so this also pins the key's name.
+     */
+    @Test
+    fun `an unrecognised stored theme mode reads back as the system`() =
+        runTest {
+            val file = File(tmp.root, "settings-raw-theme.preferences_pb")
+            val dataStore = PreferenceDataStoreFactory.create(scope = backgroundScope) { file }
+            dataStore.edit { it[stringPreferencesKey("theme_mode")] = "Sepia" }
+            assertEquals(ThemeMode.System, SettingsStore(dataStore).themeMode.first())
         }
 
     @Test

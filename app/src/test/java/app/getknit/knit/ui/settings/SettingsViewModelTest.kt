@@ -8,6 +8,7 @@ import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
+import app.getknit.knit.ui.theme.ThemeMode
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -42,6 +43,7 @@ class SettingsViewModelTest {
     private val filteringFlow = MutableStateFlow(true)
     private val linkPreviewsFlow = MutableStateFlow(false)
     private val dynamicColorFlow = MutableStateFlow(false)
+    private val themeModeFlow = MutableStateFlow(ThemeMode.System)
     private val loraEnabledFlow = MutableStateFlow(false)
     private val loraDeviceNameFlow = MutableStateFlow<String?>(null)
 
@@ -57,6 +59,7 @@ class SettingsViewModelTest {
         every { settings.contentFilteringEnabled } returns filteringFlow
         every { settings.linkPreviewsEnabled } returns linkPreviewsFlow
         every { settings.dynamicColor } returns dynamicColorFlow
+        every { settings.themeMode } returns themeModeFlow
         every { settings.loraEnabled } returns loraEnabledFlow
         every { settings.loraDeviceName } returns loraDeviceNameFlow
     }
@@ -153,6 +156,22 @@ class SettingsViewModelTest {
             vm.setDynamicColor(false)
             advanceUntilIdle()
             coVerify { settings.setDynamicColor(false) }
+        }
+
+    @Test
+    fun themeModeMirrorsTheStoreAndPersistsOnSelect() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.themeMode.collect {} }
+            advanceUntilIdle()
+            assertEquals(ThemeMode.System, vm.themeMode.value)
+            themeModeFlow.value = ThemeMode.Dark
+            advanceUntilIdle()
+            assertEquals(ThemeMode.Dark, vm.themeMode.value)
+
+            vm.setThemeMode(ThemeMode.Light)
+            advanceUntilIdle()
+            coVerify { settings.setThemeMode(ThemeMode.Light) }
         }
 
     /** The relay row's subtitle is driven straight off the plane's facts. */

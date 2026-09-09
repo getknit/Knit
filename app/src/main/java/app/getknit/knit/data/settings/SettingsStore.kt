@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.emoji.RecentReactions
+import app.getknit.knit.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -150,6 +151,22 @@ class SettingsStore(
      * there; `Build.VERSION` is not. The availability gate lives in `ui/theme/DynamicColor.kt` instead.
      */
     val dynamicColor: Flow<Boolean> = dataStore.data.map { it[KEY_DYNAMIC_COLOR] ?: false }
+
+    /**
+     * Whether this device draws light, dark, or whatever the system says — [ThemeMode.System] by default,
+     * which is what every install did before the choice existed.
+     *
+     * The stored value is only half the state: `ThemePreferences` projects it onto the platform's per-app
+     * night mode, and it is that override — not this flow — the app actually renders from. Stored anyway,
+     * because the platform has no getter, and because a mode this store still remembers can be re-applied
+     * after a restore that carried the preferences but not the system-side override (ADR 2026-09.v5ck).
+     *
+     * Deliberately **not** folded with an API-31 check here, for the reason [dynamicColor] spells out: this
+     * module sets `unitTests.isReturnDefaultValues = true`, so `Build.VERSION.SDK_INT` reads 0 on the JVM and
+     * a folded gate would pin the flow to [ThemeMode.System] and fail `SettingsStoreTest` for a reason nobody
+     * would find. The availability gate lives in `ui/theme/ThemeMode.kt` instead.
+     */
+    val themeMode: Flow<ThemeMode> = dataStore.data.map { ThemeMode.of(it[KEY_THEME_MODE]) }
 
     /**
      * The open-to-chat cue's durable state (`presence/OpenToChatWatch`): the peers a cue has named, as
@@ -480,6 +497,8 @@ class SettingsStore(
 
     suspend fun setDynamicColor(value: Boolean) = dataStore.edit { it[KEY_DYNAMIC_COLOR] = value }
 
+    suspend fun setThemeMode(value: ThemeMode) = dataStore.edit { it[KEY_THEME_MODE] = value.name }
+
     /** Replaces the cue's named set and last-post stamp in one write (see [openToChatNamed]). */
     suspend fun setOpenToChatCueState(
         named: Set<String>,
@@ -722,6 +741,7 @@ class SettingsStore(
         val KEY_LINK_PREVIEWS = booleanPreferencesKey("link_previews_enabled")
         val KEY_OPEN_TO_CHAT = booleanPreferencesKey("open_to_chat")
         val KEY_DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
+        val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         val KEY_OPEN_TO_CHAT_NAMED = stringSetPreferencesKey("open_to_chat_named")
         val KEY_OPEN_TO_CHAT_LAST_POST_AT = longPreferencesKey("open_to_chat_last_post_at")
         val KEY_MESH_ENABLED = booleanPreferencesKey("mesh_enabled")

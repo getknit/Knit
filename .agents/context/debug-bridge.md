@@ -164,7 +164,8 @@ as `resource-id="<tag>"` (the bare tag — some Android/uiautomator versions pre
 `app.getknit.knit:id/<tag>`, so a matcher should accept either form). Tagged so far: `chat_input`, `chat_send`, `chat_row_<conversationId>` (e.g.
 `chat_row_nearby`), `chatlist_fab`, `contacts_fab`, `contact_<nodeId>`, `onboarding_grant`,
 `onboarding_start`, `profile_name`, `profile_status`, `profile_save`, `settings_profile_row` (Settings'
-header row, which opens the profile editor), `settings_relays`, `settings_lora`, `chat_group_avatar`
+header row, which opens the profile editor), `settings_theme_mode` (the System/Light/Dark segmented
+control; API 31+ only, absent below), `settings_relays`, `settings_lora`, `chat_group_avatar`
 (opens group details), plus screen-root tags on the otherwise-untagged destinations — `screen_settings`,
 `screen_profile`, `screen_diagnostics`, `screen_blocked_users`, `screen_add_contact`, `screen_donate`,
 `screen_share_target`, `screen_profile_details`.

@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-106 decisions.
+107 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -120,6 +120,7 @@ carries; never renumber an old one.
 | [2026-09.tss4](decisions/2026-09-tss4-a-shared-location-is-a-geo-uri-in-the-body.md) | A shared location is a geo URI in the body, read only when you send it | location, privacy, ui, permissions, moderation |
 | [2026-09.un9n](decisions/2026-09-un9n-a-never-drawn-window-is-recovered-by-recreating-it.md) | A never-drawn window is recovered by recreating it | ui, android, resilience, back |
 | [2026-09.ursc](decisions/2026-09-ursc-the-nearby-room-says-when-lora-airtime-is-spent.md) | The Nearby room says when LoRa airtime is spent | lora, ui |
+| [2026-09.v5ck](decisions/2026-09-v5ck-light-and-dark-are-a-per-app-night-mode.md) | Light and dark are a per-app night mode | ui, theme, settings |
 | [2026-09.v66c](decisions/2026-09-v66c-reactions-are-an-open-emoji-set-with-a-receive-side-length-cap.md) | Reactions are an open emoji set with a receive-side length cap | wire, ui, limits |
 | [2026-09.wuqj](decisions/2026-09-wuqj-an-alias-is-a-word-encoded-digest-prefix-that-grows-when-matched.md) | An alias is a word-encoded digest prefix that grows when matched | identity, ui, security |
 | [2026-09.x52a](decisions/2026-09-x52a-the-meshtastic-room-is-a-switch.md) | The Meshtastic room is a switch, and off means unread | lora, ui, settings |

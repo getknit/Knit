@@ -9,7 +9,9 @@ topics: [ui, theme, settings]
 # ADR 2026-09.m9h8 — Material You is opt-in, and green stays green
 
 Status: Accepted (2026-09-08; `KnitTheme`, `KnitSemanticColors`, `ThemePreferences`, `DynamicColor`,
-`SettingsStore.dynamicColor`, `ColorSchemeTest`, `scripts/gen-color-scheme.py`)
+`SettingsStore.dynamicColor`, `ColorSchemeTest`, `scripts/gen-color-scheme.py`). The closing paragraph —
+no in-app light/dark override — is **superseded by ADR 2026-09.v5ck**, which builds the override on the
+platform's per-app night mode and hides it on the two releases that have none. Everything else stands.
 
 Issue #12 asked Knit to respect Material You. `KnitTheme` had carried a `dynamicColor: Boolean = false`
 parameter and a live `Build.VERSION_CODES.S` branch since the first commit, and no caller had ever passed

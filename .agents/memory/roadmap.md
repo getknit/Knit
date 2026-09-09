@@ -6,6 +6,16 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Already shipped (was deferred)
 
+- **An in-app light/dark override SHIPPED** (2026-09-09, ADR 2026-09.v5ck, superseding
+  ADR 2026-09.m9h8's closing paragraph) — Settings carries a System / Light / Dark segmented control,
+  defaulting to System. Built on `UiModeManager.setApplicationNightMode` rather than in Compose, so the
+  choice moves the app's own `Configuration` and the launch window, `isSystemInDarkTheme()` and
+  `enableEdgeToEdge()`'s bar polarity all follow it without `KnitTheme` or `MainActivity` changing at all;
+  `MODE_NIGHT_AUTO` clears the override, which is what makes "System" reversible. **Hidden on API 29-30**,
+  which have no per-app night mode and no route to the launch window, so an override there would re-create
+  issue #2. **Still owed:** the device trial (a cold launch with Dark pinned on a light phone is the whole
+  point) and the ATF pass over the segmented control.
+
 - **Sealed DM-form chat rides the NAN coordination plane** (ADR 2026-09.7463,
   `docs/DM_COORDINATION_PLANE.md`) — `FrameFanout.shouldFastSend` admits the DM form `shouldFastFanout`
   excludes, wired at origination and the inbound re-fan (split-horizoned on `fromNodeId`), **targeted at the
@@ -53,14 +63,6 @@ doc). **Don't start a deferred item without explicit direction.**
   makes), and **the Meshtastic public room** (excluded: the token has to come off the room's hard 166-byte
   counter — `MaxUtf8Bytes`, `PostLengthCounter`, `PublicPostPolicy.fit` — before the pin can be offered
   there). A static map preview was never on the table: the phone drawing the card usually has no Internet.
-
-- **An in-app light/dark override** (ADR 2026-09.m9h8) — Material You shipped as a Settings switch, but the
-  light/dark decision stays `isSystemInDarkTheme()` with no in-app copy, per ADR 047's rule that the user has
-  already told the system once. If it is ever revisited: `AppCompatDelegate` is the wrong mechanism (a bare
-  `ComponentActivity` has no delegate, and AppCompat is only on the classpath transitively);
-  `UiModeManager.setApplicationNightMode` is the right one, but it is API 31+ and minSdk is 29, so on 29-30
-  an override re-creates issue #2 — force dark on a light system and every cold launch flashes `#FFF8F6`
-  full-screen, because the launch window is resolved before the process starts.
 
 - **The LoRa (Meshtastic-over-BLE) plane was hidden in shipped builds, INTRODUCED at 2.5.0**
   (2026-08-24, ADR 038; flipped 2026-09-06, ADR 2026-09.6gtm) — `BuildConfig.LORA_PLANE` is now true

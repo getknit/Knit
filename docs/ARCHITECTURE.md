@@ -656,8 +656,8 @@ that budget is a purely local knob that can differ per node without breaking cue
     decoder for GIF/WebP), `@`-mention highlighting and typeahead, auto-scroll, and an IME-padded
     input.
   - `SettingsScreen` — what the overflow menu opens: a profile header row into `ProfileScreen`, the
-    content-filtering / Material You / link-preview switches, the rows that hand off to the
-    Internet-relay and LoRa screens, and the battery-opt row.
+    light/dark selector, the content-filtering / Material You / link-preview switches, the rows that hand
+    off to the Internet-relay and LoRa screens, and the battery-opt row.
   - `ProfileScreen` — your own profile behind that header row: avatar via photo picker + Coil,
     name/status fields, node id, alias, and the open-to-chat flag, with one Save for the two text
     fields; key verification (safety number / QR) of a *peer* is `ProfileDetailsScreen`.
@@ -673,6 +673,9 @@ that budget is a purely local knob that can differ per node without breaking cue
   dynamic scheme fills set explicitly (`ColorSchemeTest` guards that). Material You is a Settings
   switch, off by default so the brand shows; `KnitSemanticColors.positive` keeps "online / verified /
   healthy" green in every scheme, since a wallpaper-derived `tertiary` could land on the error hue.
+  Light/dark is a Settings selector too, but it is applied as the platform's **per-app night mode**
+  (`NightMode`/`AndroidNightMode`, API 31+) rather than passed to `KnitTheme`, so the launch window,
+  `isSystemInDarkTheme()` and the system bars all follow one configuration; ADR 2026-09.v5ck.
 - **Editable fields use write-through local state**, not the DataStore flow directly (see §15).
 - **Coil 3** is configured app-wide in `KnitApplication` with the `AnimatedImageDecoder` so message
   GIFs/WebP animate.

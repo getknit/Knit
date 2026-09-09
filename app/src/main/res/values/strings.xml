@@ -378,6 +378,11 @@
     <string name="profile_open_to_chat_subtitle">Let people nearby know you\'re up for a conversation. You\'ll both get a nudge when you\'re near each other.</string>
     <string name="settings_content_filtering_title">Content filtering</string>
     <string name="settings_content_filtering_subtitle">Hide explicit images and abusive messages you receive from others</string>
+    <string name="settings_theme_title">Theme</string>
+    <string name="settings_theme_subtitle">Knit follows your phone unless you override it here.</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
     <string name="settings_dynamic_color_title">Dynamic colors</string>
     <string name="settings_dynamic_color_subtitle">Color Knit from your wallpaper using Material You. Off keeps Knit\'s default.</string>
     <string name="settings_link_previews_title">Link previews</string>

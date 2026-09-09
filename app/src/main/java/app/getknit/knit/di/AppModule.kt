@@ -40,6 +40,8 @@ import app.getknit.knit.linkpreview.LinkPreviewService
 import app.getknit.knit.linkpreview.OkHttpPreviewFetcher
 import app.getknit.knit.linkpreview.PreviewFetcher
 import app.getknit.knit.linkpreview.PreviewImage
+import app.getknit.knit.location.AndroidLocationSource
+import app.getknit.knit.location.LocationSource
 import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
@@ -105,6 +107,9 @@ val appModule =
                 log = { Log.i(OkHttpPreviewFetcher.TAG, it) },
             )
         }
+        // Where the composer's "Send location" reads the device's position: the one android.location importer,
+        // behind a seam so the ViewModel is tested against a fake. Nothing collects it but the staged tile.
+        single<LocationSource> { AndroidLocationSource(androidContext()) }
         single { GallerySaver(androidContext()) }
         // One voice player for the whole app: any number of voice-note bubbles can be on screen, and
         // starting one note has to stop whichever was playing. Owns its own scope (see VoicePlayer).

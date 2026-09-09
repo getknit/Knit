@@ -30,6 +30,7 @@ import app.getknit.knit.identity.NodeId
 import app.getknit.knit.identity.PeerLabelIndex
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.isValidReactionEmoji
+import app.getknit.knit.location.GeoUri
 import app.getknit.knit.mesh.crypto.AesGcm
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.MessageContent
@@ -2408,7 +2409,7 @@ class InboundPipeline(
         val senderLabel = labels.labelFor(env.senderId, peer?.name)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
         // Attachment-only messages have a blank body; show a placeholder so they still notify.
-        val body = content.body.ifBlank { attachmentPreview(content, fileName) }
+        val body = GeoUri.describe(content.body, GeoUri.LABEL).ifBlank { attachmentPreview(content, fileName) }
         // A heard Meshtastic post is authored by its speaker, not by this phone, whose id sits in the row's
         // sender column by convention. Two things follow, and both are wrong without this. The notification
         // must name the speaker — the contact their board resolved to, else the board's NodeDB name, else the
@@ -2463,6 +2464,10 @@ class InboundPipeline(
      * `Context` (it is deliberately Android-light, `rules/mesh.md`); they mirror `chat_list_preview_photo`,
      * `chat_list_preview_voice` and `chat_list_preview_file` and should be changed together with them.
      *
+     * A shared position in the body is named the same way, by [GeoUri.describe] at both call sites — a
+     * lock-screen line should say "📍 Location", not print coordinates — mirroring `messagePreview` in
+     * `ui/chat/AttachmentLabels.kt`, the `Context`-holding twin this is changed together with.
+     *
      * A [fileName] wins over the mime because it is the more specific fact and the only one a *file* has:
      * an arbitrary file's mime is whatever its sender's provider called it, and "📎 application/zip" would be
      * a worse lock-screen line than the name the sender actually chose. Already normalized on decode
@@ -2493,7 +2498,7 @@ class InboundPipeline(
         val labels = peers.labelIndex()
         val senderLabel = labels.labelFor(env.senderId, peer?.name)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
-        val body = content.body.ifBlank { attachmentPreview(content, fileName) }
+        val body = GeoUri.describe(content.body, GeoUri.LABEL).ifBlank { attachmentPreview(content, fileName) }
         val incoming =
             mentionNotification(
                 senderId = env.senderId,

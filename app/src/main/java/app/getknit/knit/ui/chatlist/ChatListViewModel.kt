@@ -29,7 +29,7 @@ import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.meshNodeLabel
 import app.getknit.knit.ui.chat.DeliveryStatus
-import app.getknit.knit.ui.chat.attachmentPreview
+import app.getknit.knit.ui.chat.messagePreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -413,20 +413,7 @@ class ChatListViewModel(
         me: String?,
         isDm: Boolean,
     ): String {
-        val body =
-            when {
-                message.body.isNotBlank() -> {
-                    message.body
-                }
-
-                message.attachmentHash != null -> {
-                    attachmentPreview(context, message)
-                }
-
-                else -> {
-                    ""
-                }
-            }
+        val body = messagePreview(context, message)
         // A heard Meshtastic post's author is the speaker, never us — the row sits in our sender column by
         // convention, so without this the preview would read "You: …" over somebody else's words. A speaker
         // whose board a contact's profile claims is named as that contact; a stranger is the NodeDB name the

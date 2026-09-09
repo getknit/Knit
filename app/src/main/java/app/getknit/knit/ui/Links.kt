@@ -2,7 +2,11 @@ package app.getknit.knit.ui
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.core.net.toUri
+import app.getknit.knit.location.GeoPoint
+import app.getknit.knit.location.GeoUri
 
 /** Knit's Play Store listing — the "Share Knit" link, and the rate target when Play installed the app. */
 const val PLAY_LISTING_URL = "https://play.google.com/store/apps/details?id=app.getknit.knit"
@@ -43,4 +47,28 @@ fun shareText(
             .createChooser(send, chooserTitle)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     runCatching { context.startActivity(chooser) }
+}
+
+/**
+ * Hands [point] to whatever maps app the user has, pinned under [label] — the `geo:` intent every maps app
+ * answers, offline ones included. Returns false when nothing could take it, unlike [openUrl], because the
+ * caller has a fallback worth offering (the coordinates on the clipboard) and silence would read as a dead
+ * tap. No `<queries>` entry is needed: package visibility never filters an implicit `startActivity`.
+ */
+fun openLocation(
+    context: Context,
+    point: GeoPoint,
+    label: String,
+): Boolean {
+    val query = GeoUri.mapsQuery(point)
+    val intent =
+        Intent(Intent.ACTION_VIEW, "geo:$query?q=$query(${Uri.encode(label)})".toUri())
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    return runCatching { context.startActivity(intent) }.isSuccess
+}
+
+/** Opens the system's location toggle — the only way out of a staged tile that says location is off. */
+fun openLocationSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(intent) }
 }

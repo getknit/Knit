@@ -16,7 +16,7 @@ import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.ui.chat.attachmentPreview
+import app.getknit.knit.ui.chat.messagePreview
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -199,20 +199,7 @@ class MessageRequestsViewModel(
         directory: PeerDirectory,
         isGroup: Boolean,
     ): String {
-        val body =
-            when {
-                message.body.isNotBlank() -> {
-                    message.body
-                }
-
-                message.attachmentHash != null -> {
-                    attachmentPreview(context, message)
-                }
-
-                else -> {
-                    ""
-                }
-            }
+        val body = messagePreview(context, message)
         if (!isGroup) return body
         val sender = directory.label(message.senderId).text
         return context.getString(R.string.chat_list_preview_with_sender, sender, body)

@@ -84,6 +84,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -198,12 +199,14 @@ import app.getknit.knit.data.relay.dismissable
 import app.getknit.knit.demo.DemoComposeCommand
 import app.getknit.knit.demo.DemoComposer
 import app.getknit.knit.identity.PeerLabel
+import app.getknit.knit.location.GeoUri
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.lora.LoraSizeHint
 import app.getknit.knit.mesh.protocol.LinkPreviewBlob
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.ui.camera.PhotoCapture
+import app.getknit.knit.ui.camera.openAppSettings
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
 import app.getknit.knit.ui.components.GroupAvatar
@@ -213,6 +216,8 @@ import app.getknit.knit.ui.components.RoomAvatar
 import app.getknit.knit.ui.components.skeletonBlockColor
 import app.getknit.knit.ui.components.skeletonPulseAlpha
 import app.getknit.knit.ui.image.BlobImage
+import app.getknit.knit.ui.openLocation
+import app.getknit.knit.ui.openLocationSettings
 import app.getknit.knit.ui.openUrl
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
@@ -271,6 +276,8 @@ fun ChatScreen(
     val stagedAttachmentRelay by viewModel.stagedAttachmentRelay.collectAsStateWithLifecycle()
     val linkPreviewLoading by viewModel.linkPreviewLoading.collectAsStateWithLifecycle()
     val showPublicConsent by viewModel.showPublicConsent.collectAsStateWithLifecycle()
+    val stagedLocation by viewModel.stagedLocation.collectAsStateWithLifecycle()
+    val showLocationConsent by viewModel.showLocationConsent.collectAsStateWithLifecycle()
     val voiceRecording by viewModel.voiceRecording.collectAsStateWithLifecycle()
     val voicePlayback by viewModel.voicePlayback.collectAsStateWithLifecycle()
     val recentReactions by viewModel.recentReactions.collectAsStateWithLifecycle()
@@ -355,6 +362,44 @@ fun ChatScreen(
     val context = LocalContext.current
     LaunchedEffect(Unit) {
         viewModel.events.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    }
+
+    // "Send location": the ViewModel says when a position may be sought (the disclosure stands accepted), and
+    // the grant is a composable's to ask for, so the asking happens here and hands back to `startLocation`.
+    // A refusal the system will not ask about again gets the one route left, this app's settings page.
+    var locationDeniedForGood by remember { mutableStateOf(false) }
+    val locationDeniedMessage = stringResource(R.string.chat_location_denied)
+    val locationGate =
+        rememberLocationGate(
+            onDenied = { permanently ->
+                if (permanently) {
+                    locationDeniedForGood = true
+                } else {
+                    Toast.makeText(context, locationDeniedMessage, Toast.LENGTH_LONG).show()
+                }
+            },
+        )
+    LaunchedEffect(Unit) {
+        viewModel.locationPermissionNeeded.collect { locationGate.runOrRequest(viewModel::startLocation) }
+    }
+    if (locationDeniedForGood) {
+        AlertDialog(
+            onDismissRequest = { locationDeniedForGood = false },
+            icon = { Icon(Icons.Filled.LocationOn, contentDescription = null) },
+            title = { Text(stringResource(R.string.chat_location_denied_title)) },
+            text = { Text(stringResource(R.string.chat_location_denied_settings)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        locationDeniedForGood = false
+                        openAppSettings(context)
+                    },
+                ) { Text(stringResource(R.string.action_open_settings)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { locationDeniedForGood = false }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
     }
 
     // Clear the input only once a message is accepted and sent (not when it's blocked for abuse).
@@ -453,6 +498,14 @@ fun ChatScreen(
         showPublicConsent = showPublicConsent,
         onAcceptPublicConsent = viewModel::acceptPublicConsent,
         onDismissPublicConsent = viewModel::dismissPublicConsent,
+        stagedLocation = stagedLocation,
+        showLocationConsent = showLocationConsent,
+        onAcceptLocationConsent = viewModel::acceptLocationConsent,
+        onDismissLocationConsent = viewModel::dismissLocationConsent,
+        onLocationClick = viewModel::attachLocation,
+        onClearLocation = viewModel::clearLocation,
+        onRefreshLocation = viewModel::refreshLocation,
+        onOpenLocationSettings = { openLocationSettings(context) },
         onAttachClick = {
             picker.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -585,6 +638,16 @@ internal fun ChatScreenContent(
     showPublicConsent: Boolean = false,
     onAcceptPublicConsent: () -> Unit = {},
     onDismissPublicConsent: () -> Unit = {},
+    // "Send location": the composer's staged position, the pin's first-use disclosure, and the pin's own
+    // actions. All defaulted so the previews and the content tests need not name them.
+    stagedLocation: ChatViewModel.StagedLocation? = null,
+    showLocationConsent: Boolean = false,
+    onAcceptLocationConsent: () -> Unit = {},
+    onDismissLocationConsent: () -> Unit = {},
+    onLocationClick: () -> Unit = {},
+    onClearLocation: () -> Unit = {},
+    onRefreshLocation: () -> Unit = {},
+    onOpenLocationSettings: () -> Unit = {},
     onAttachClick: () -> Unit,
     // Long-pressing the attach affordance opens the in-app camera (ADR 029, unchanged); the paperclip in
     // the field opens the file picker. Defaulted so previews and the content tests need no extra wiring.
@@ -659,6 +722,7 @@ internal fun ChatScreenContent(
     // buildReplySnippet for why a voice note's quote label rides the snippet rather than the wire.
     val voiceQuoteLabel = stringResource(R.string.chat_reply_voice)
     val fileQuoteLabel = stringResource(R.string.chat_list_preview_file)
+    val locationQuoteLabel = stringResource(R.string.chat_list_preview_location)
 
     // The thread is rendered bottom-anchored (the LazyColumn below uses reverseLayout), so it opens
     // already resting on the newest message — no initial scroll, no visible glide through history — and
@@ -948,6 +1012,14 @@ internal fun ChatScreenContent(
                         // Files are DM/group only, for the reason voice notes are: nothing on the device can screen
                         // one, and the room floods unencrypted to everyone in range. See docs/CONTENT_MODERATION.md §7.
                         fileEnabled = state.canSendFile,
+                        // A position is offered everywhere but the bridged room, whose channel carries one line of text.
+                        locationEnabled = !state.isBridged,
+                        locationScopeIsRoom = state.isRoom,
+                        stagedLocation = stagedLocation,
+                        onLocationClick = onLocationClick,
+                        onClearLocation = onClearLocation,
+                        onRefreshLocation = onRefreshLocation,
+                        onOpenLocationSettings = onOpenLocationSettings,
                         // Naming the author in the hint is the whole of the ADR 049 exception's visible surface:
                         // everywhere else on the radio this user is "Knit abcd", and here they are themselves.
                         hint =
@@ -978,7 +1050,9 @@ internal fun ChatScreenContent(
                         onDraftChanged = onDraftChanged,
                         linkPreviewLoading = linkPreviewLoading,
                         loraBudget =
-                            loraBudgetFor(state.loraCarry, replying = replyingTo != null, attached = pendingAttachment != null),
+                            loraBudgetFor(state.loraCarry, replying = replyingTo != null, attached = pendingAttachment != null)
+                                // A staged position rides the body, so its bytes come off the same budget.
+                                ?.let { if (stagedLocation != null) (it - GeoUri.RESERVE_BYTES).coerceAtLeast(0) else it },
                         maxBytes = state.publicPostBudget,
                         // Voice notes are DM/group only: the Nearby room floods unencrypted to everyone in range and
                         // no on-device model can screen speech, so it is the one place unscreenable audio is not
@@ -1123,7 +1197,8 @@ internal fun ChatScreenContent(
                                                 author = msg.senderPlainName,
                                                 snippet =
                                                     buildReplySnippet(
-                                                        msg.body,
+                                                        // A quoted position reads as its label, not as a `geo:` line.
+                                                        GeoUri.describe(msg.body, locationQuoteLabel),
                                                         msg.moderationFlagged,
                                                         attachmentLabel =
                                                             when {
@@ -1281,6 +1356,15 @@ internal fun ChatScreenContent(
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
             PublicPostConsentBody(onAccept = onAcceptPublicConsent, onDecline = onDismissPublicConsent)
+        }
+    }
+
+    if (showLocationConsent) {
+        ModalBottomSheet(
+            onDismissRequest = onDismissLocationConsent,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            LocationConsentBody(isRoom = state.isRoom, onAccept = onAcceptLocationConsent, onDecline = onDismissLocationConsent)
         }
     }
 
@@ -1521,6 +1605,46 @@ private fun PublicPostConsentBody(
 }
 
 /**
+ * The first-use disclosure behind the pin: what goes out, when Knit reads the position, and who receives it
+ * in this thread — the room's line is the one that mentions strangers and the day a carried message can sit
+ * with them. Shown once, before the system's own permission prompt (which on Android 10–12 the radios already
+ * cleared at onboarding, making this the feature's only explicit opt-in there). Decline first, accept second.
+ */
+@Composable
+private fun LocationConsentBody(
+    isRoom: Boolean,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(stringResource(R.string.chat_location_consent_title), style = MaterialTheme.typography.headlineSmall)
+        Text(stringResource(R.string.chat_location_consent_can_title), style = MaterialTheme.typography.titleSmall)
+        Text(stringResource(R.string.chat_location_consent_can_body), style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.chat_location_consent_cannot_title), style = MaterialTheme.typography.titleSmall)
+        Text(stringResource(R.string.chat_location_consent_cannot_body), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = stringResource(if (isRoom) R.string.chat_location_consent_scope_room else R.string.chat_location_consent_scope_chat),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(onClick = onDecline) { Text(stringResource(R.string.chat_location_consent_decline)) }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = onAccept,
+                modifier = Modifier.testTag("chat_location_consent_accept"),
+            ) { Text(stringResource(R.string.chat_location_consent_accept)) }
+        }
+    }
+}
+
+/**
  * What stands in for the composer when the Meshtastic room has nothing to post through: a line saying so, in
  * the slot the input would occupy. Its own footer rather than a disabled [MessageInput] because a greyed-out
  * text field is a puzzle — the user taps it, nothing happens, and nothing explains why.
@@ -1715,6 +1839,9 @@ private fun MessageBubble(
     // A message flagged by the on-device text moderator is collapsed until the user taps to reveal it.
     var revealed by remember(row.id) { mutableStateOf(false) }
     val context = LocalContext.current
+    // The body without its position token, which the card below draws in its place. The raw body stays what
+    // "Copy" copies: a pasted `geo:` line is the one form every maps app reads.
+    val shownBody = remember(row.body, row.location) { if (row.location != null) GeoUri.strip(row.body) else row.body }
     // Fast light-up then slow fade when a tapped quote scrolls to this bubble (see ChatScreen).
     val highlight by animateFloatAsState(
         targetValue = if (highlighted) 1f else 0f,
@@ -1932,9 +2059,28 @@ private fun MessageBubble(
                                 )
                             }
                             val drewAttachment = row.attachmentMime != LinkPreviewBlob.MIME || row.linkCard != null
-                            if (row.body.isNotBlank() && drewAttachment) Spacer(Modifier.height(4.dp))
+                            if ((shownBody.isNotBlank() || row.location != null) && drewAttachment) Spacer(Modifier.height(4.dp))
                         }
-                        if (row.body.isNotBlank()) {
+                        // The position the body carried as a `geo:` line, drawn as a card in its place — and hidden
+                        // with the text when the content filter collapsed the message: one verdict, one reveal.
+                        row.location?.takeIf { !(row.moderationFlagged && !revealed) }?.let { point ->
+                            val noMapsMessage = stringResource(R.string.chat_location_no_maps_app)
+                            LocationCard(
+                                point = point,
+                                onOpen = {
+                                    // The pin is labelled with who was there. No maps app at all is answered with
+                                    // the coordinates on the clipboard and a line saying so, never a dead tap.
+                                    if (!openLocation(context, point, row.senderName)) {
+                                        onCopy(GeoUri.coordinates(point))
+                                        Toast.makeText(context, noMapsMessage, Toast.LENGTH_LONG).show()
+                                    }
+                                },
+                                onCopy = { onCopy(GeoUri.coordinates(point)) },
+                                onLongClick = { showPicker = true },
+                            )
+                            if (shownBody.isNotBlank()) Spacer(Modifier.height(4.dp))
+                        }
+                        if (shownBody.isNotBlank()) {
                             if (row.moderationFlagged && !revealed) {
                                 Text(
                                     text = stringResource(R.string.moderation_text_hidden),
@@ -1956,7 +2102,7 @@ private fun MessageBubble(
                                 // down as the count grows. annotateMessageBody is a no-op on it (an
                                 // all-emoji body has no mentions/URLs), so the call stays shared.
                                 val bodyStyle =
-                                    when (emojiOnlyCount(row.body)) {
+                                    when (emojiOnlyCount(shownBody)) {
                                         0 -> MaterialTheme.typography.bodyLarge
                                         1 -> MaterialTheme.typography.bodyLarge.copy(fontSize = 44.sp, lineHeight = 52.sp)
                                         in 2..3 -> MaterialTheme.typography.bodyLarge.copy(fontSize = 34.sp, lineHeight = 42.sp)
@@ -1965,7 +2111,7 @@ private fun MessageBubble(
                                 Text(
                                     text =
                                         annotateMessageBody(
-                                            row.body,
+                                            shownBody,
                                             row.mentions,
                                             mentionStyle,
                                             linkStyle,
@@ -3140,6 +3286,15 @@ private fun MessageInput(
     // files is refused at the pick instead, by ChatViewModel.attachFile, so the refusal can say so.
     fileEnabled: Boolean = false,
     onFileClick: () -> Unit = {},
+    // "Send location", the pin inboard of the mic. Off in the bridged room only. `stagedLocation` is the
+    // composer's staged position, drawn as a tile above the field until it is sent or cleared.
+    locationEnabled: Boolean = false,
+    locationScopeIsRoom: Boolean = false,
+    stagedLocation: ChatViewModel.StagedLocation? = null,
+    onLocationClick: () -> Unit = {},
+    onClearLocation: () -> Unit = {},
+    onRefreshLocation: () -> Unit = {},
+    onOpenLocationSettings: () -> Unit = {},
     onClearAttachment: () -> Unit,
     onReceiveImage: (Uri) -> Unit,
     onSend: () -> Unit,
@@ -3206,7 +3361,7 @@ private fun MessageInput(
             }
         }
     // The trailing button doubles as Attach when there's nothing to send, and Send once there is.
-    val canSend = state.text.isNotBlank() || pendingAttachment != null
+    val canSend = state.text.isNotBlank() || pendingAttachment != null || stagedLocation != null
 
     // Show a spinner in the send button only once a send has been in flight past a short grace period.
     // Most sends complete in well under a frame, so gating on the delay keeps them from flashing a
@@ -3342,6 +3497,19 @@ private fun MessageInput(
                 }
                 Spacer(Modifier.height(8.dp))
             }
+            if (stagedLocation != null) {
+                StagedLocationTile(
+                    staged = stagedLocation,
+                    scope =
+                        stringResource(
+                            if (locationScopeIsRoom) R.string.chat_location_scope_room else R.string.chat_location_scope_chat,
+                        ),
+                    onClear = onClearLocation,
+                    onRefresh = onRefreshLocation,
+                    onTurnOn = onOpenLocationSettings,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             if (linkPreviewLoading && pendingAttachment == null) {
                 LinkPreviewLoadingRow()
             }
@@ -3377,6 +3545,10 @@ private fun MessageInput(
             // something to send. That matches how attaching already works here — the trailing button is
             // Attach only until you type — so a file is picked first and captioned after, like a photo.
             val showFile = fileEnabled && voiceRecording == null && !canSend && !showSending
+            // The pin follows the paperclip's rule for when it shows, but takes the inboard slot, nearest the
+            // text: the buttons pack against the send button, so a new one at the *inner* end leaves the mic
+            // and the paperclip exactly where thumbs already find them, and the mic's hold gesture stays put.
+            val showLocation = locationEnabled && voiceRecording == null && !canSend && !showSending
             Row(verticalAlignment = Alignment.Bottom) {
                 // The field container holds the text field *and* the mic, the way Signal does: sharing the
                 // field's background makes the mic read as part of it rather than as a third button
@@ -3422,7 +3594,7 @@ private fun MessageInput(
                                         start = 16.dp,
                                         // The inline buttons carry 12dp of their own inset around the icon,
                                         // so the text only has to clear them rather than keep the full margin.
-                                        end = if (showMic || showFile) 4.dp else 16.dp,
+                                        end = if (showMic || showFile || showLocation) 4.dp else 16.dp,
                                         top = 12.dp,
                                         bottom = 12.dp,
                                     ),
@@ -3465,6 +3637,11 @@ private fun MessageInput(
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             )
                         }
+                    }
+                    // Inboard of the mic (see `showLocation`): the newest control takes the slot nearest the
+                    // text so the two that were already here do not move.
+                    if (showLocation) {
+                        AttachLocationButton(onClick = onLocationClick)
                     }
                     if (showMic) {
                         MicButton(
@@ -3725,6 +3902,32 @@ private fun AttachFileButton(onClick: () -> Unit) {
         Icon(
             Icons.Filled.AttachFile,
             contentDescription = stringResource(R.string.chat_attach_file),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp),
+        )
+    }
+}
+
+/**
+ * "Send location": the pin in the field, inboard of the mic and styled as the paperclip's twin. The tap
+ * stages a position (after the first-use disclosure and the system's own permission prompt, both asked
+ * here and never at onboarding);
+ * the position is read only from then until the send, and the tile above the field shows what was found.
+ */
+@Composable
+private fun AttachLocationButton(onClick: () -> Unit) {
+    Box(
+        modifier =
+            Modifier
+                .size(48.dp)
+                .testTag("chat_attach_location")
+                .clip(CircleShape)
+                .clickable(onClick = onClick, role = Role.Button),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Filled.LocationOn,
+            contentDescription = stringResource(R.string.chat_attach_location),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(24.dp),
         )

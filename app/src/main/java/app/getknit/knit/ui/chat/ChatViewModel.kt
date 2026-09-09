@@ -45,6 +45,12 @@ import app.getknit.knit.identity.PeerLabel
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.linkpreview.LinkPreviewPolicy
 import app.getknit.knit.linkpreview.LinkPreviewService
+import app.getknit.knit.location.GeoPoint
+import app.getknit.knit.location.GeoUri
+import app.getknit.knit.location.LocationFix
+import app.getknit.knit.location.LocationFixPolicy
+import app.getknit.knit.location.LocationPrecision
+import app.getknit.knit.location.LocationSource
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.PublicPostOutcome
 import app.getknit.knit.mesh.PublicPostRefusal
@@ -83,13 +89,16 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class ChatRow(
     val id: String,
@@ -153,6 +162,11 @@ data class ChatRow(
     // its link is one the body actually contains. Null until then: the bubble draws nothing for a card that
     // has not arrived, never a spinner, since the body's own link is already tappable.
     val linkCard: LinkCard? = null,
+    // The position this message carries as a `geo:` token in its body ([app.getknit.knit.location.GeoUri]),
+    // parsed once here so the bubble draws a card in the token's place and the token itself stays out of
+    // the text it shows. Null for every body without one — including a token that fails the grammar, which
+    // is then just text.
+    val location: GeoPoint? = null,
     // A voice note's playing time and waveform bars, both derived locally from the audio (never carried on
     // the wire — see [app.getknit.knit.data.VoiceAudio]). Null until the blob has arrived and been
     // described, which is why the bubble can render a length-less placeholder in the meantime.
@@ -391,6 +405,9 @@ class ChatViewModel(
     // Fetches the card for a link in this composer's draft — the sender-side half of link previews, the only
     // half that ever touches the Internet, gated on the setting, the validated-Internet route and the audience.
     private val linkPreviews: LinkPreviewService,
+    // Where "Send location" reads the device's position. Collected by the staged tile alone, between the pin
+    // tap and the send — see [startLocation] — and by nothing else in the app.
+    private val locationSource: LocationSource,
     // The facts flow, not the repository that produces it. Narrow on purpose: this ViewModel needs a
     // Flow<RelayFacts> and nothing else, and the production flow is an infinite poller — under a test's
     // virtual clock its `delay` is instant, so a test that drives this VM with `advanceUntilIdle()` could
@@ -841,6 +858,7 @@ class ChatViewModel(
                                 AttachmentRelay.Silent
                             },
                         linkCard = linkCardFor(m, cards),
+                        location = GeoUri.find(m.body),
                         mentions = MentionStore.decode(m.mentions),
                         reactions = tallies,
                         replyTo = m.replyRef(),
@@ -1236,6 +1254,189 @@ class ChatViewModel(
         _showPublicConsent.value = false
     }
 
+    // ---- Location sharing: the composer's pin ----
+
+    /**
+     * What the composer holds while a position is staged. [fix] is the best reading so far, null while the
+     * first is still sought; [status] is the tile's state; [precision] says whether the grant is fine or only
+     * approximate, so the tile can say a two-kilometre radius is by design rather than bad luck.
+     */
+    data class StagedLocation(
+        val fix: LocationFix?,
+        val status: Status,
+        val precision: LocationPrecision,
+    ) {
+        enum class Status {
+            /** Listening, nothing yet — the one state with a spinner, and the window bounds it. */
+            Acquiring,
+
+            /** Listening, with a reading the tile shows and keeps tightening. */
+            Refining,
+
+            /** The window closed, or the reading was good enough: the source is off and what is shown is what goes. */
+            Ready,
+
+            /** The window closed with no reading at all — indoors, no provider — and the tile offers a retry. */
+            Failed,
+
+            /** The system location toggle is off; nothing can answer until the user turns it on. */
+            ServicesOff,
+        }
+
+        /** The body token this position rides as, or null while there is none. */
+        val token: String? get() = fix?.let { GeoUri.format(it.toPoint()) }
+    }
+
+    private val _stagedLocation = MutableStateFlow<StagedLocation?>(null)
+
+    /** The position staged in the composer, or null. Its own flow, like [stagedAttachmentRelay]: the composer is the one reader. */
+    val stagedLocation: StateFlow<StagedLocation?> = _stagedLocation.asStateFlow()
+
+    private val _showLocationConsent = MutableStateFlow(false)
+
+    /** Whether the pin's first-use disclosure is on screen. See [attachLocation]. */
+    val showLocationConsent: StateFlow<Boolean> = _showLocationConsent.asStateFlow()
+
+    /**
+     * Fires once the disclosure stands accepted and a position may be sought. The screen answers it by
+     * clearing the runtime permission — a composable's job — and then calling [startLocation]. One-shot, like
+     * [events], so a screen that is not there to hear it asks nothing.
+     */
+    private val _locationPermissionNeeded = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val locationPermissionNeeded: SharedFlow<Unit> = _locationPermissionNeeded.asSharedFlow()
+
+    private var locationJob: Job? = null
+
+    /** True when the screen leaving cut a window short, so coming back re-arms it. */
+    private var locationPaused = false
+
+    /**
+     * The pin was tapped. The bridged room refuses (its channel carries one line of text); the first use
+     * reads the disclosure; after that the screen is asked to clear the grant and start.
+     */
+    fun attachLocation() {
+        if (isBridged) {
+            _events.tryEmit(R.string.chat_mesh_text_only)
+            return
+        }
+        viewModelScope.launch {
+            if (settings.locationShareConsented.first()) {
+                _locationPermissionNeeded.tryEmit(Unit)
+            } else {
+                _showLocationConsent.value = true
+            }
+        }
+    }
+
+    /**
+     * Records the disclosure as accepted, lowers it and carries on to the grant. One tap does both here,
+     * unlike [acceptPublicConsent]: the sheet's button says what the pin said, and nothing leaves the phone
+     * until the send that follows.
+     */
+    fun acceptLocationConsent() {
+        viewModelScope.launch {
+            settings.acceptLocationShareConsent()
+            _showLocationConsent.value = false
+            _locationPermissionNeeded.tryEmit(Unit)
+        }
+    }
+
+    /** Lowers the disclosure without recording anything, so the next tap asks again. */
+    fun dismissLocationConsent() {
+        _showLocationConsent.value = false
+    }
+
+    /**
+     * The grant is held: seed the tile from the platform's cached reading, then listen for at most
+     * [LocationFixPolicy.REFINE_WINDOW_MS] or until a reading is good enough, and freeze. **This is the only
+     * place in the app that collects [LocationSource.fixes]** — the invariant "Knit reads your position only
+     * when you ask it to" rests on, so a second collector anywhere is a bug.
+     */
+    fun startLocation() {
+        locationJob?.cancel()
+        locationPaused = false
+        val precision = locationSource.precision()
+        if (precision == LocationPrecision.None) {
+            _events.tryEmit(R.string.chat_location_denied)
+            return
+        }
+        if (!locationSource.isEnabled()) {
+            _stagedLocation.value = StagedLocation(fix = null, status = StagedLocation.Status.ServicesOff, precision = precision)
+            return
+        }
+        _stagedLocation.value = StagedLocation(fix = null, status = StagedLocation.Status.Acquiring, precision = precision)
+        locationJob =
+            viewModelScope.launch {
+                locationSource.lastKnown()?.let { seed ->
+                    _stagedLocation.value = StagedLocation(seed, StagedLocation.Status.Refining, precision)
+                }
+                withTimeoutOrNull(LocationFixPolicy.REFINE_WINDOW_MS) {
+                    locationSource
+                        .fixes()
+                        .map { fix -> LocationFixPolicy.better(_stagedLocation.value?.fix, fix) }
+                        .onEach { best -> _stagedLocation.value = StagedLocation(best, StagedLocation.Status.Refining, precision) }
+                        .firstOrNull { LocationFixPolicy.isGoodEnough(it) }
+                }
+                freezeLocation()
+            }
+    }
+
+    /** Listens again: the tile's retry after a failure, and its refresh once a frozen reading has aged. */
+    fun refreshLocation() {
+        if (_stagedLocation.value != null) startLocation()
+    }
+
+    /** Drops the staged position and stops listening. */
+    fun clearLocation() {
+        locationJob?.cancel()
+        locationJob = null
+        locationPaused = false
+        _stagedLocation.value = null
+    }
+
+    /** The chat left the screen: a tile still listening freezes, so a backgrounded chat never keeps the radio on. */
+    private fun pauseLocation() {
+        val job = locationJob?.takeIf { it.isActive } ?: return
+        job.cancel()
+        locationJob = null
+        locationPaused = true
+        freezeLocation()
+    }
+
+    /** Back on screen with a tile the pause froze: a fresh window, since the phone may well have moved. */
+    private fun resumeLocation() {
+        if (locationPaused && _stagedLocation.value != null) startLocation()
+    }
+
+    private fun freezeLocation() {
+        _stagedLocation.update { staged ->
+            staged?.copy(status = if (staged.fix != null) StagedLocation.Status.Ready else StagedLocation.Status.Failed)
+        }
+    }
+
+    /**
+     * [text] with the staged position folded in, or null when the send must wait: a position still being
+     * sought is not sent as nothing — the tile is visibly looking, the send says so, and the draft stays the
+     * user's, the rule every refusal here follows.
+     *
+     * The token goes on its own last line, the text cut first so the token always fits under
+     * [TextLimits.MESSAGE]: the receiver clamps the body there (`InboundPipeline`), so a token past the cap
+     * would be the part that vanished. Text first, so a build that predates the card reads
+     * "See you at the gate / geo:…" in that order.
+     */
+    private fun bodyWithLocation(
+        text: String,
+        staged: StagedLocation?,
+    ): String? {
+        if (staged == null) return text
+        val token = staged.token
+        if (token == null) {
+            _events.tryEmit(R.string.chat_location_not_ready)
+            return null
+        }
+        return listOf(text.take(TextLimits.MESSAGE - token.length - 1), token).filter { it.isNotEmpty() }.joinToString("\n")
+    }
+
     fun send(
         text: String,
         mentions: List<Mention> = emptyList(),
@@ -1243,7 +1444,8 @@ class ChatViewModel(
     ) {
         val trimmed = text.trim().take(TextLimits.MESSAGE)
         val attachment = _pendingAttachment.value
-        if (trimmed.isEmpty() && attachment == null) return
+        val staged = _stagedLocation.value
+        if (trimmed.isEmpty() && attachment == null && staged == null) return
         // The Meshtastic room is not addressed to anybody: no recipient, no group, no attachment, no reply.
         // `sendChat` would read that shape as the Nearby room and put the post there, so it has its own path
         // to the board, with its own gate, disclosure and refusals.
@@ -1251,6 +1453,7 @@ class ChatViewModel(
             postPublic(trimmed)
             return
         }
+        val body = bodyWithLocation(trimmed, staged) ?: return
         // Ignore re-entrant taps while a send is in flight, and — on success — until the field is
         // actually cleared, so a tap landing in the gap between sendChat returning and clearText running
         // can't re-send the same draft. Released in the blocked branch and in onInputCleared().
@@ -1270,7 +1473,7 @@ class ChatViewModel(
                 val sent =
                     if (group != null) {
                         meshManager.sendChat(
-                            trimmed,
+                            body,
                             attachment,
                             mentions,
                             recipientId = null,
@@ -1280,7 +1483,7 @@ class ChatViewModel(
                     } else {
                         // Broadcast room -> no recipient; a DM thread is keyed by the peer's node id.
                         val recipientId = if (isRoom) null else conversationId
-                        meshManager.sendChat(trimmed, attachment, mentions, recipientId, replyTo = outgoingReply)
+                        meshManager.sendChat(body, attachment, mentions, recipientId, replyTo = outgoingReply)
                     }
                 // MeshManager applies block-on-send. Clear the input/attachment only once a message is
                 // accepted; a blocked message keeps the draft and surfaces a toast so the user can edit.
@@ -1292,6 +1495,8 @@ class ChatViewModel(
                     // hash, so writing it here against the plaintext hash staged above would silently
                     // update no rows at all.
                     _pendingAttachment.value = null
+                    // The position went with the message; nothing is listening any more.
+                    clearLocation()
                     // The next draft starts clean: no dismissed link, no failed ones, and a card fetch still in
                     // flight for this one can no longer stage into it.
                     dismissedUrl = null
@@ -1750,12 +1955,14 @@ class ChatViewModel(
     fun onChatForeground() {
         chatForeground.value = true
         notifier.setVisibleConversation(conversationId)
+        resumeLocation()
     }
 
     /** Chat left the screen: resume notifying for this conversation's incoming messages. */
     fun onChatBackground() {
         chatForeground.value = false
         notifier.setVisibleConversation(null)
+        pauseLocation()
     }
 
     // Wall clock of the last typing cue we sent, so we throttle to at most one per TYPING_SEND_INTERVAL_MS
@@ -1788,6 +1995,7 @@ class ChatViewModel(
         recordingTicker?.cancel()
         recorder.cancel()
         voicePlayer.stop()
+        locationJob?.cancel()
     }
 
     private companion object {

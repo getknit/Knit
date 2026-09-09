@@ -60,6 +60,11 @@ Morphological derivatives and contextual cases are backstopped by the ML pass; l
 - **Outbound (block-on-send):** `MeshManager.sendChat()` returns `false` and stores/sends nothing if
   `isTextFlagged(text)`. `ChatViewModel.send()` keeps the draft and toasts; only an accepted message
   clears the input (via the `clearInput` event).
+- **A shared position is taken out first.** `isTextFlagged` classifies `GeoUri.strip(text)` and answers
+  `false` when nothing is left (ADR 2026-09.tss4): the position rides the body as a `geo:` token of digits,
+  and the lexical pass below reads leet digits as letters, so a run of coordinates can spell a blocked word
+  (`LexicalTextFilterTest` pins one). Both directions go through this one function, so the strip is
+  symmetric by construction.
 - **Inbound (flag-on-receive):** `MeshManager.deliverChat()` always classifies and stores flagged
   messages with `MessageEntity.moderation = MODERATION_TEXT_FLAGGED` (still stored, never dropped). The
   chat bubble collapses them behind tap-to-reveal **only when the content-filtering toggle is on** —

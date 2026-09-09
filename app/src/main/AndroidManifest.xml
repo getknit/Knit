@@ -3,19 +3,21 @@
 
     <!-- Mesh transport plane 1: Wi-Fi Aware (NAN). On API 33+ discovery is location-free via
          NEARBY_WIFI_DEVICES (neverForLocation); on API 29-32 there is no such permission, so Wi-Fi Aware
-         discovery needs ACCESS_FINE_LOCATION (declared below, shared with the BLE scan and capped to 32). -->
+         discovery needs ACCESS_FINE_LOCATION (declared below, shared with the BLE scan and with location sharing). -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />
 
-    <!-- Discovery on API 29-32: Wi-Fi Aware (no NEARBY_WIFI_DEVICES before 33) and the BLE scan (no
-         neverForLocation before 31) both require fine location. Android 12 requires COARSE to be declared and
-         requested alongside FINE (the precise/approximate toggle). Both capped at 32 so API 33+ is location-free. -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
-        android:maxSdkVersion="32" />
+    <!-- Two users, one declaration. Discovery on API 29-32: Wi-Fi Aware (no NEARBY_WIFI_DEVICES before 33)
+         and the BLE scan (no neverForLocation before 31) both require fine location, asked at onboarding on
+         those versions only (ui/Permissions.kt keeps the 33+ tier location-free). And "Send location" on every
+         version: the composer's pin reads the device's position once, between the tap and the send, through
+         location/AndroidLocationSource — asked the first time the pin is used, never at onboarding, never in the
+         background. Android 12 requires COARSE to be declared and requested alongside FINE (the
+         precise/approximate toggle). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- Data path (NDP): request the Aware network and open a TCP socket over its link-local IPv6. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />

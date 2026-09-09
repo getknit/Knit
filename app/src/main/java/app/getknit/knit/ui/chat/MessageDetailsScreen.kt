@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.data.message.DeliveryPlane
+import app.getknit.knit.location.GeoUri
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.preview.KnitPreview
@@ -179,7 +180,8 @@ private fun MessageSummary(state: MessageDetailsUiState) {
                     }
 
                     state.body.isNotBlank() -> {
-                        state.body
+                        // A shared position is named, as the chat list names it, rather than printed as a `geo:` line.
+                        GeoUri.describe(state.body, stringResource(R.string.chat_list_preview_location))
                     }
 
                     state.hasAttachment -> {

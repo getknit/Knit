@@ -45,6 +45,7 @@ Single Gradle module `:app`, package root `app.getknit.knit`.
 | `identity/` | `Identity` (stable node id **+ E2E public-key bundle**), `NodeId` (derivation), `DeviceIdSource` (`AndroidDeviceIdSource`), `DeviceTag`, `Alias` (deterministic display-name fallback) |
 | `notifications/` | `Notifier` (interface) + `MessageNotifier`, `NotificationChannels`, `NotificationHistory`, `NotificationActionReceiver` |
 | `crash/` | Manual crash reporting (ADR 028): `CrashHandler` (uncaught-exception capture, installed before Koin so startup crashes are caught), `CrashStore` (five reports under `noBackupFilesDir`), `CrashRedactor` (structural at capture, contact names on read), `CrashReports` (reader + share staging), `CrashIssueUrl` (prefilled GitHub bug form). No upload path — the user hands the report over |
+| `location/` | "Send location" (ADR 2026-09.tss4): `GeoUri` (the `geo:` token a message body carries — format, strict parse, strip, describe; pure), `LocationFix` + `LocationFixPolicy` (which reading to keep, the refine window; pure), `LocationSource` (seam), `AndroidLocationSource` — the **only** code that touches `android.location.*`, listening only while the composer's staged tile collects it |
 | `di/` | Koin modules: `appModule`, `meshModule`, `moderationModule`, `uiModule` |
 
 ### Data flow

@@ -48,6 +48,11 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   never fetches, both ends screen the card's picture and text into one verdict, and the fetch is gated on
   `net/InternetGate` (a validated route, never the NAN link), bound to that `Network`, https-only, with a
   private-address DNS guard. `okhttp3` stays confined to the two files `rules/mesh.md` names.
+- **When touching `location/`, the composer's "Send location" pin, or anything that reads the device's
+  position:** READ ADR 2026-09.tss4. A shared position is a `geo:` line in the message body (no wire field,
+  no capability bit); it is read only between the pin tap and the send, by `ChatViewModel.startLocation`,
+  the one collector of `LocationSource.fixes`, and `location/AndroidLocationSource` is the one
+  `android.location` importer (detekt-enforced). Never ask for the grant at onboarding.
 - **When touching contact cards, the Add-by-link / share-link flow, deep links (`getknit.app/c`,
   `knit://`), or `mesh/IntroSync`:** READ `docs/CONTACT_CARD.md` (the card layout + golden vectors, the
   intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);

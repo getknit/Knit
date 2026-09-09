@@ -364,6 +364,9 @@ private val HIKING_SCENARIO =
                         // A voice note in the group as well as the DM: the group bubble is the wider one, and
                         // it is the layout the store screenshot of a group thread actually shows.
                         DemoMsg("demo-group-6", Slot.THEO, "", 240, voiceSeconds = 12),
+                        // A shared position: the group is where "come find us" gets said, and the card it draws is
+                        // what the seeded UI, UIAutomator and accessibility runs audit for that bubble.
+                        DemoMsg("demo-group-7", Slot.SAM, "Parked at the upper lot, come find us\ngeo:37.876710,-122.245400;u=9", 200),
                     ),
             ),
         requests =

@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import app.getknit.knit.R
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.location.GeoUri
 
 /**
  * The one-line stand-in a message with no body gets: the chat list's preview, the message-request list's,
@@ -15,12 +16,27 @@ import app.getknit.knit.data.message.MessageEntity
  * and the line simply ends after the name rather than inventing one.
  *
  * The mirror of this logic without a `Context` lives in `InboundPipeline.attachmentPreview` (that layer is
- * deliberately Android-light, `rules/mesh.md`) and the two are changed together.
+ * deliberately Android-light, `rules/mesh.md`) and the two are changed together — as are the two callers of
+ * [GeoUri.describe], this file's [messagePreview] and the pipeline's notification body.
  */
 fun attachmentPreview(
     context: Context,
     message: MessageEntity,
 ): String = attachmentLabel(context, message.attachmentMime, message.attachmentName, message.attachmentSize)
+
+/**
+ * The one-line preview of a whole message: its body with a shared position named rather than printed
+ * (`geo:37.42…` reads as "📍 Location"), or, for a body-less message, [attachmentPreview]'s stand-in.
+ */
+fun messagePreview(
+    context: Context,
+    message: MessageEntity,
+): String =
+    when {
+        message.body.isNotBlank() -> GeoUri.describe(message.body, context.getString(R.string.chat_list_preview_location))
+        message.attachmentHash != null -> attachmentPreview(context, message)
+        else -> ""
+    }
 
 /** [attachmentPreview]'s form for a caller that holds the fields rather than the row. */
 fun attachmentLabel(

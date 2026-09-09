@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-103 decisions.
+104 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -115,6 +115,7 @@ carries; never renumber an old one.
 | [2026-09.rre4](decisions/2026-09-rre4-the-lora-backfill-serves-the-room-before-dms.md) | The LoRa backfill serves the room before DMs | lora, airtime, custody |
 | [2026-09.sre4](decisions/2026-09-sre4-a-resolved-meshtastic-author-s-avatar-opens-the-caveat.md) | A resolved Meshtastic author's avatar opens the caveat, not the profile | lora, meshtastic, ui |
 | [2026-09.t8t8](decisions/2026-09-t8t8-an-offer-is-not-backfill-and-must-not-compete-with-it.md) | An OFFER is not backfill and must not compete with it | lora, airtime, reliability |
+| [2026-09.tss4](decisions/2026-09-tss4-a-shared-location-is-a-geo-uri-in-the-body.md) | A shared location is a geo URI in the body, read only when you send it | location, privacy, ui, permissions, moderation |
 | [2026-09.un9n](decisions/2026-09-un9n-a-never-drawn-window-is-recovered-by-recreating-it.md) | A never-drawn window is recovered by recreating it | ui, android, resilience, back |
 | [2026-09.ursc](decisions/2026-09-ursc-the-nearby-room-says-when-lora-airtime-is-spent.md) | The Nearby room says when LoRa airtime is spent | lora, ui |
 | [2026-09.v66c](decisions/2026-09-v66c-reactions-are-an-open-emoji-set-with-a-receive-side-length-cap.md) | Reactions are an open emoji set with a receive-side length cap | wire, ui, limits |

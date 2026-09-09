@@ -44,6 +44,16 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **Location sharing beyond the one-shot pin** (ADR 2026-09.tss4 — a `geo:` line in the body, read only
+  between the pin tap and the send). Three follow-ons were named and left: **live location** (a stream of
+  positions with a stop control — every one is a message today, so it needs a rule for superseding the last
+  pin and a bound on custody), a receiver-side **"Guide me"** distance-and-bearing readout (it needs the
+  *receiver's* position on demand, so it must go through the same `rememberLocationGate` + consent and be
+  the second — and last — collector of `LocationSource.fixes`, or it breaks the promise the disclosure
+  makes), and **the Meshtastic public room** (excluded: the token has to come off the room's hard 166-byte
+  counter — `MaxUtf8Bytes`, `PostLengthCounter`, `PublicPostPolicy.fit` — before the pin can be offered
+  there). A static map preview was never on the table: the phone drawing the card usually has no Internet.
+
 - **An in-app light/dark override** (ADR 2026-09.m9h8) — Material You shipped as a Settings switch, but the
   light/dark decision stays `isSystemInDarkTheme()` with no in-app copy, per ADR 047's rule that the user has
   already told the system once. If it is ever revisited: `AppCompatDelegate` is the wrong mechanism (a bare

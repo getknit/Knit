@@ -11,7 +11,8 @@ Google Nearby / GMS. Single Gradle module `:app`, package `app.getknit.knit`, mi
 compileSdk 37.1 (minSdk 29 is the shared data-path floor: BLE L2CAP CoC and the Wi-Fi Aware NDP
 `WifiAwareNetworkSpecifier.Builder` are both API 29. Wi-Fi Aware uses Instant Communication Mode +
 `NEARBY_WIFI_DEVICES`/`neverForLocation` on 33+ and falls back to `ACCESS_FINE_LOCATION` (location-scoped,
-no ICM, `maxSdkVersion=32`) on 29–32; BLE uses the split `BLUETOOTH_*` perms on 31+ and legacy
+no ICM) on 29–32 — the location permissions are declared on every version since "Send location" (ADR
+2026-09.tss4), but the radios only ask for them on 29–32 and the pin asks on first use, never onboarding; BLE uses the split `BLUETOOTH_*` perms on 31+ and legacy
 `BLUETOOTH`/`BLUETOOTH_ADMIN` on 29–30 — a device with only one of the two radios still meshes over that
 one). It surfaces a "Nearby" broadcast room plus 1:1 DMs and group chats, with profiles, emoji reactions,
 @-mentions, content-addressed attachments (images, voice notes and arbitrary files), store-and-forward
@@ -53,6 +54,10 @@ linkpreview/   sender-side link previews (ADR 2026-09.n752): LinkPreviewService 
                attachment kind under its own MIME, decoded on receive by data/LinkCardStore
 net/           InternetGate + AndroidInternetGate — "is the default network a validated route to the
                Internet?", the one ConnectivityManager user outside the NAN data path
+location/      "Send location" (ADR 2026-09.tss4): GeoUri (the `geo:` body token — format/parse/strip/describe,
+               pure) · LocationFix + LocationFixPolicy (which reading to keep, the 60 s window, pure) ·
+               LocationSource (seam) · AndroidLocationSource (the ONLY android.location importer; listens only
+               while collected, and ChatViewModel.startLocation is the only collector)
 moderation/    on-device TextModerator (LexicalTextFilter + MlTextModerator) + ImageModerator
                (NsfwImageModerator) + ImageScreeningService (screens image blobs, caches NSFW
                verdicts — pulled out of BlobRepository) · ModelLoadGuard/ModelLoadPolicy (poison-pill:

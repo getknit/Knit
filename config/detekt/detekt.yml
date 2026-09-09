@@ -54,6 +54,7 @@ style:
       - '**/data/ImageDecode.kt'                 # the one file allowed to decode
       - '**/mesh/spool/OkHttpSpoolDialer.kt'     # the spool plane's socket (rules/mesh.md)
       - '**/linkpreview/OkHttpPreviewFetcher.kt' # the link-preview fetch (rules/mesh.md)
+      - '**/location/AndroidLocationSource.kt'   # the one android.location importer (shares the list, so also exempt from the two bans above)
     forbiddenImports:
       - value: 'android.graphics.BitmapFactory'
         reason: >-
@@ -65,6 +66,11 @@ style:
           OkHttp is confined to mesh/spool/OkHttpSpoolDialer.kt and linkpreview/OkHttpPreviewFetcher.kt
           (rules/mesh.md): each sits behind a pure seam (SpoolLink/SpoolSocket; PreviewFetcher) so everything
           above it runs against an in-process fake, and the app's whole Internet surface stays two files.
+      - value: 'android.location.*'
+        reason: >-
+          The device's position is read in location/AndroidLocationSource.kt and nowhere else, behind the
+          LocationSource seam: the only collector is the composer's staged tile, between the pin tap and the
+          send, so a second importer would be a second place the app could read where the user is.
   MagicNumber:
     ignorePropertyDeclaration: true        # theme/Color.kt + Type.kt literals
     ignoreLocalVariableDeclaration: true

@@ -274,6 +274,17 @@ class SettingsStore(
     val meshtasticPostConsented: Flow<Boolean> = dataStore.data.map { it[KEY_MESHTASTIC_POST_CONSENTED] ?: false }
 
     /**
+     * Whether the user has read, and accepted, the disclosure behind the composer's "Send location" pin —
+     * what leaves the phone (the exact position and its accuracy, as a line in one message), who receives it
+     * (that chat, or everyone in radio range in the Nearby room), and when Knit reads it (only between the
+     * pin tap and the send, never in the background). Shown once, before the first system permission prompt;
+     * on Android 10–12 the radios already hold the location grant from onboarding, so this sheet is the only
+     * explicit opt-in the feature has there. One-way, like [meshtasticPostConsented]: nothing here ever
+     * happens unless somebody taps the pin.
+     */
+    val locationShareConsented: Flow<Boolean> = dataStore.data.map { it[KEY_LOCATION_SHARE_CONSENTED] ?: false }
+
+    /**
      * Whether the user has dismissed the Nearby room's "never sent over the Internet" notice. Sticky by
      * design: the notice states a permanent structural fact (the room is not scope-eligible, spec §4.4),
      * so it is the one relay notice that will never retire itself — a dismissal that came back on the next
@@ -598,6 +609,9 @@ class SettingsStore(
     /** Records that the user accepted the disclosure behind [meshtasticPostConsented]. */
     suspend fun acceptMeshtasticPostConsent() = dataStore.edit { it[KEY_MESHTASTIC_POST_CONSENTED] = true }
 
+    /** Records that the user accepted the disclosure behind [locationShareConsented]. */
+    suspend fun acceptLocationShareConsent() = dataStore.edit { it[KEY_LOCATION_SHARE_CONSENTED] = true }
+
     /**
      * Seeds the shipped default spools (`res/values/spools.xml`) into [spoolUrls] exactly once, marking
      * the install as seeded so a **removal sticks**. A default the app kept re-adding would not be a
@@ -720,6 +734,7 @@ class SettingsStore(
         val KEY_SPOOL_SEEDED = booleanPreferencesKey("spool_defaults_seeded")
         val KEY_SPOOL_CONSENTED = booleanPreferencesKey("spool_consented")
         val KEY_MESHTASTIC_POST_CONSENTED = booleanPreferencesKey("meshtastic_post_consented")
+        val KEY_LOCATION_SHARE_CONSENTED = booleanPreferencesKey("location_share_consented")
         val KEY_RELAY_ROOM_NOTICE_DISMISSED = booleanPreferencesKey("relay_room_notice_dismissed")
         val KEY_LORA_ENABLED = booleanPreferencesKey("lora_enabled")
         val KEY_LORA_DM_ENABLED = booleanPreferencesKey("lora_dm_enabled")

@@ -1,11 +1,13 @@
 package app.getknit.knit.ui.chat
 
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -19,6 +21,9 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.location.GeoPoint
+import app.getknit.knit.location.LocationFix
+import app.getknit.knit.location.LocationPrecision
 import app.getknit.knit.mesh.protocol.LinkCard
 import app.getknit.knit.mesh.protocol.LinkPreviewBlob
 import app.getknit.knit.mesh.protocol.ReplyRef
@@ -46,6 +51,7 @@ class ChatScreenContentTest {
     private var cameras = 0
     private var cancelledReply = 0
     private var files = 0
+    private var clearedLocations = 0
 
     private fun content(
         input: String,
@@ -53,6 +59,7 @@ class ChatScreenContentTest {
         state: ChatUiState = ChatUiState(isRoom = true, myNodeId = "me"),
         pendingAttachment: AttachmentStore.Ingested? = null,
         linkPreviewLoading: Boolean = false,
+        stagedLocation: ChatViewModel.StagedLocation? = null,
         onDraftChanged: (String) -> Unit = {},
         onLoadOlder: () -> Unit = {},
     ): @androidx.compose.runtime.Composable () -> Unit =
@@ -63,6 +70,8 @@ class ChatScreenContentTest {
                     state = state,
                     inputState = TextFieldState(input),
                     pendingAttachment = pendingAttachment,
+                    stagedLocation = stagedLocation,
+                    onClearLocation = { clearedLocations++ },
                     linkPreviewLoading = linkPreviewLoading,
                     onDraftChanged = onDraftChanged,
                     replyingTo = replyingTo,
@@ -391,5 +400,108 @@ class ChatScreenContentTest {
         compose.setContent(content(input = "x", linkPreviewLoading = true, pendingAttachment = staged))
         compose.onNodeWithTag("chat_link_preview_loading").assertDoesNotExist()
         compose.onNodeWithTag("chat_link_staged").assertIsDisplayed()
+    }
+
+    // ---- Location sharing: the card, the staged tile and the pin ----
+
+    private val point = GeoPoint(37.421998, -122.084, 12)
+
+    private fun locationRow(body: String = "See you at the gate\ngeo:37.421998,-122.084000;u=12") =
+        ChatRow(
+            id = "m-loc",
+            body = body,
+            mine = false,
+            senderName = "Bob",
+            senderNodeId = "bob",
+            avatarHash = null,
+            sentAt = 1_700_000_000_000L,
+            received = false,
+            location = point,
+        )
+
+    @Test
+    fun aBodyWithAPositionDrawsTheCardInPlaceOfItsLine() {
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = true, myNodeId = "me", rows = listOf(locationRow()))))
+        compose.onNodeWithTag("chat_location_card").assertIsDisplayed()
+        compose.onNodeWithTag("chat_location_card").assertContentDescriptionEquals("Location: 37.421998, -122.084000, Accurate to 12 m")
+        compose.onNodeWithTag("chat_location_copy").assertIsDisplayed()
+        compose.onNodeWithText("See you at the gate").assertIsDisplayed()
+        compose.onNodeWithText("geo:", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun aPositionAloneDrawsOnlyTheCard() {
+        compose.setContent(
+            content(
+                input = "",
+                state = ChatUiState(isRoom = true, myNodeId = "me", rows = listOf(locationRow(body = "geo:37.421998,-122.084000;u=12"))),
+            ),
+        )
+        compose.onNodeWithTag("chat_location_card").assertIsDisplayed()
+        compose.onNodeWithText("geo:", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun aPlainBodyDrawsNoCard() {
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = true, myNodeId = "me", rows = rows(1))))
+        compose.onNodeWithTag("chat_location_card").assertDoesNotExist()
+    }
+
+    @Test
+    fun aStagedPositionShowsItsTileTurnsTheButtonIntoSendAndClearsFromItsBadge() {
+        val staged =
+            ChatViewModel.StagedLocation(
+                fix = LocationFix(37.421998, -122.084, 12f, timeMs = 1_700_000_000_000L, elapsedRealtimeMs = 0L),
+                status = ChatViewModel.StagedLocation.Status.Ready,
+                precision = LocationPrecision.Fine,
+            )
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = false, myNodeId = "me"), stagedLocation = staged))
+        compose.onNodeWithTag("chat_location_staged").assertIsDisplayed()
+        // The tile is one node for TalkBack, so its texts are read off its description.
+        compose
+            .onNodeWithTag(
+                "chat_location_staged",
+            ).assert(hasContentDescription("Your location, 37.421998, -122.084000, Accurate to 12 m", substring = true))
+        compose.onNodeWithTag("chat_location_staged").assert(hasContentDescription("Sent only to this chat", substring = true))
+        compose.onNodeWithText("Refresh").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Send").assertIsDisplayed()
+        compose.onNodeWithTag("chat_attach_location").assertDoesNotExist()
+        compose.onNodeWithTag("chat_location_clear").performClick()
+        assertEquals(1, clearedLocations)
+    }
+
+    @Test
+    fun aFailedTileSaysSoAndOffersARetryAndTheRoomTileNamesEveryoneNearby() {
+        val failed =
+            ChatViewModel.StagedLocation(
+                fix = null,
+                status = ChatViewModel.StagedLocation.Status.Failed,
+                precision = LocationPrecision.Fine,
+            )
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = true, myNodeId = "me"), stagedLocation = failed))
+        compose.onNodeWithText("Try again").assertIsDisplayed()
+        compose.onNodeWithTag("chat_location_staged").assert(hasContentDescription("Couldn't get a fix", substring = true))
+        compose
+            .onNodeWithTag(
+                "chat_location_staged",
+            ).assert(hasContentDescription("Everyone nearby will see your exact location", substring = true))
+    }
+
+    @Test
+    fun thePinIsOfferedInTheRoomAndInADmButNeverInTheBridgedRoom() {
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = true, myNodeId = "me")))
+        compose.onNodeWithTag("chat_attach_location").assertIsDisplayed()
+    }
+
+    @Test
+    fun thePinIsHiddenInTheBridgedRoom() {
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = false, isBridged = true, myNodeId = "me")))
+        compose.onNodeWithTag("chat_attach_location").assertDoesNotExist()
+    }
+
+    @Test
+    fun thePinGivesWayOnceThereIsSomethingToSend() {
+        compose.setContent(content(input = "hello", state = ChatUiState(isRoom = false, myNodeId = "me")))
+        compose.onNodeWithTag("chat_attach_location").assertDoesNotExist()
     }
 }

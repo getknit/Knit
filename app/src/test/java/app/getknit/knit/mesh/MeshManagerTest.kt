@@ -427,6 +427,47 @@ class MeshManagerTest {
         }
 
     @Test
+    fun aSharedPositionIsTakenOutOfTheTextBeforeAnyModeratorSeesIt() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The room's lexical pass maps leet digits to letters, so a run of coordinates can spell a blocked
+            // word (LexicalTextFilterTest pins one). The strip lives in `isTextFlagged`, which every send path
+            // and the inbound classify go through, so one capture here covers all of them.
+            val rig = Rig(backgroundScope)
+            val classified = mutableListOf<String>()
+            coEvery { rig.textModeration.classify(any(), any()) } answers {
+                classified += firstArg<String>()
+                TextVerdict.ALLOWED
+            }
+
+            assertTrue(rig.manager.sendChat("See you at the gate\ngeo:37.421998,-122.084000;u=12"))
+            advanceUntilIdle()
+
+            assertTrue(classified.isNotEmpty())
+            assertEquals(listOf("See you at the gate"), classified.distinct())
+            assertEquals("the body itself is stored whole", "See you at the gate\ngeo:37.421998,-122.084000;u=12", rig.saved.single().body)
+        }
+
+    @Test
+    fun aPositionAloneIsNeverClassified() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            var classified = 0
+            coEvery { rig.textModeration.classify(any(), any()) } answers {
+                classified++
+                TextVerdict(allowed = false, category = TextVerdict.Category.TOXICITY)
+            }
+
+            assertTrue(
+                "numbers are not words; a moderator that would flag them is not asked",
+                rig.manager.sendChat("geo:37.421998,-122.084000;u=12"),
+            )
+            advanceUntilIdle()
+
+            assertEquals(0, classified)
+            assertEquals(MessageEntity.MODERATION_NONE, rig.saved.single().moderation)
+        }
+
+    @Test
     fun aPublicPostIsScreenedByTheRoomModeratorOnce() =
         runTest(UnconfinedTestDispatcher()) {
             // `sendChat` infers the scope from the addressing shape, which for a post addressed to nobody

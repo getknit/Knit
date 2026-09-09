@@ -26,6 +26,7 @@ import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.isValidReactionEmoji
+import app.getknit.knit.location.GeoUri
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
@@ -2366,12 +2367,17 @@ class MeshManager(
         direction: String,
         isRoom: Boolean,
     ): Boolean {
-        if (text.isBlank()) return false
-        val verdict = textModeration.classify(text, isRoom)
+        // A shared position rides the body as a `geo:` token (location/GeoUri), and it is taken out before
+        // either moderator sees the words: the room's lexical pass maps leet digits to letters and splits on
+        // the rest, so a run of coordinates can spell a blocked word by accident, and the ML pass was never
+        // shown one. Here and nowhere else, since every send path and the inbound classify come through.
+        val words = GeoUri.strip(text)
+        if (words.isBlank()) return false
+        val verdict = textModeration.classify(words, isRoom)
         Log.d(
             TEXT_MODERATION_TAG,
             "$direction text score=${verdict.score} category=${verdict.category} " +
-                "label=${verdict.label} flagged=${verdict.flagged} len=${text.length}",
+                "label=${verdict.label} flagged=${verdict.flagged} len=${words.length}",
         )
         return verdict.flagged
     }

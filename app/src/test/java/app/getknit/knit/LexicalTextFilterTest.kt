@@ -1,5 +1,6 @@
 package app.getknit.knit
 
+import app.getknit.knit.location.GeoUri
 import app.getknit.knit.moderation.LexicalTextFilter
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -75,5 +76,12 @@ class LexicalTextFilterTest {
     fun emptyBlockListAllowsEverything() {
         val empty = LexicalTextFilter(blockedWords = emptyList())
         assertFalse(empty.check("shit fuck ass").flagged)
+    }
+
+    @Test
+    fun aRunOfCoordinatesCanSpellABlockedWordWhichIsWhyMeshManagerStripsThemFirst() {
+        // 4→a, 5→s, 5→s: the latitude's "9455" tokenizes to "ass" once the digits are read as letters.
+        assertTrue(flagged("geo:37.9455,-122.1"))
+        assertFalse(flagged(GeoUri.strip("meet here geo:37.9455,-122.1")))
     }
 }

@@ -29,6 +29,11 @@ import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.linkpreview.LinkPreviewService
+import app.getknit.knit.location.FakeLocationSource
+import app.getknit.knit.location.GeoPoint
+import app.getknit.knit.location.LocationFix
+import app.getknit.knit.location.LocationFixPolicy
+import app.getknit.knit.location.LocationPrecision
 import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.PublicPostOutcome
 import app.getknit.knit.mesh.PublicPostRefusal
@@ -60,8 +65,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -99,6 +106,7 @@ class ChatViewModelTest {
     private val voicePlayer = mockk<VoicePlayer>(relaxed = true)
     private val linkCards = mockk<LinkCardStore>(relaxed = true)
     private val linkPreviews = mockk<LinkPreviewService>(relaxed = true)
+    private val locationSource = FakeLocationSource()
 
     private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
     private val reactionsFlow = MutableStateFlow(emptyList<ReactionEntity>())
@@ -121,6 +129,7 @@ class ChatViewModelTest {
     private val onlineFlow = MutableStateFlow(true)
     private val linkPreviewsEnabledFlow = MutableStateFlow(false)
     private val publicConsentFlow = MutableStateFlow(false)
+    private val locationConsentFlow = MutableStateFlow(false)
 
     @Before
     fun setUp() {
@@ -154,6 +163,7 @@ class ChatViewModelTest {
         every { linkCards.cards } returns cardsFlow
         every { linkPreviews.online } returns onlineFlow
         every { settings.linkPreviewsEnabled } returns linkPreviewsEnabledFlow
+        every { settings.locationShareConsented } returns locationConsentFlow
     }
 
     @After
@@ -220,6 +230,7 @@ class ChatViewModelTest {
             voicePlayer,
             linkCards,
             linkPreviews,
+            locationSource,
             // A finite flow, not the production poller: RelayStatusRepository emits on an infinite
             // `while(true) { emit; delay }`, and under runTest's virtual clock that delay is instant, so
             // `advanceUntilIdle()` below would never reach idle.
@@ -2039,5 +2050,315 @@ class ChatViewModelTest {
                     .single()
                     .linkCard,
             )
+        }
+
+    // ---- Location sharing: the pin, the disclosure, the tile and the send ----
+
+    private fun reading(
+        accuracy: Float?,
+        at: Long = 1_000L,
+    ) = LocationFix(lat = 37.421998, lon = -122.084, accuracyM = accuracy, timeMs = 1_700_000_000_000L + at, elapsedRealtimeMs = at)
+
+    @Test
+    fun theFirstPinTapRaisesTheDisclosureAndAcceptingItAsksForTheGrant() =
+        runTest {
+            val vm = vm()
+            var asked = 0
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.locationPermissionNeeded.collect { asked++ } }
+
+            vm.attachLocation()
+            runCurrent()
+            assertTrue(vm.showLocationConsent.value)
+            assertEquals("nothing is asked for until the disclosure is read", 0, asked)
+            assertEquals("and nothing listens", 0, locationSource.collectors)
+
+            vm.acceptLocationConsent()
+            runCurrent()
+            coVerify(exactly = 1) { settings.acceptLocationShareConsent() }
+            assertFalse(vm.showLocationConsent.value)
+            assertEquals("accepting carries straight on to the grant", 1, asked)
+            assertNull("the grant is the screen's to clear; nothing is staged yet", vm.stagedLocation.value)
+        }
+
+    @Test
+    fun aDismissedDisclosureAsksAgainNextTimeAndAConsentedTapSkipsIt() =
+        runTest {
+            val vm = vm()
+            var asked = 0
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.locationPermissionNeeded.collect { asked++ } }
+
+            vm.attachLocation()
+            runCurrent()
+            vm.dismissLocationConsent()
+            assertFalse(vm.showLocationConsent.value)
+            coVerify(exactly = 0) { settings.acceptLocationShareConsent() }
+            assertEquals(0, asked)
+
+            locationConsentFlow.value = true
+            vm.attachLocation()
+            runCurrent()
+            assertFalse(vm.showLocationConsent.value)
+            assertEquals(1, asked)
+        }
+
+    @Test
+    fun theBridgedRoomRefusesThePin() =
+        runTest {
+            locationConsentFlow.value = true
+            val vm = vm(Conversations.MESHTASTIC)
+            val events = mutableListOf<Int>()
+            var asked = 0
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.locationPermissionNeeded.collect { asked++ } }
+
+            vm.attachLocation()
+            runCurrent()
+
+            assertEquals(listOf(R.string.chat_mesh_text_only), events)
+            assertEquals(0, asked)
+            assertFalse(vm.showLocationConsent.value)
+        }
+
+    @Test
+    fun startSeedsFromTheCachedReadingThenTightensAndStopsOnceGoodEnough() =
+        runTest {
+            locationSource.lastKnown = reading(accuracy = 30f, at = 500L)
+            val vm = vm()
+
+            vm.startLocation()
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.Refining, vm.stagedLocation.value?.status)
+            assertEquals(
+                30f,
+                vm.stagedLocation.value
+                    ?.fix
+                    ?.accuracyM,
+            )
+            assertEquals("the tile is the one listener", 1, locationSource.collectors)
+
+            locationSource.readings.tryEmit(reading(accuracy = 15f, at = 1_500L))
+            runCurrent()
+            assertEquals(
+                15f,
+                vm.stagedLocation.value
+                    ?.fix
+                    ?.accuracyM,
+            )
+            assertEquals(1, locationSource.collectors)
+
+            locationSource.readings.tryEmit(reading(accuracy = 5f, at = 2_500L))
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.Ready, vm.stagedLocation.value?.status)
+            assertEquals(
+                5f,
+                vm.stagedLocation.value
+                    ?.fix
+                    ?.accuracyM,
+            )
+            assertEquals("good enough: the listener is gone before the window closes", 0, locationSource.collectors)
+            assertEquals("geo:37.421998,-122.084000;u=5", vm.stagedLocation.value?.token)
+        }
+
+    @Test
+    fun theWindowFreezesWhatItHasOrFailsWithNothing() =
+        runTest {
+            val vm = vm()
+
+            vm.startLocation()
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.Acquiring, vm.stagedLocation.value?.status)
+            advanceTimeBy(LocationFixPolicy.REFINE_WINDOW_MS + 1)
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.Failed, vm.stagedLocation.value?.status)
+            assertEquals(0, locationSource.collectors)
+
+            // Retry from the failed tile: a fresh window, a reading, and the window closing on a Ready tile.
+            vm.refreshLocation()
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.Acquiring, vm.stagedLocation.value?.status)
+            assertEquals(2, locationSource.subscriptions)
+            locationSource.readings.tryEmit(reading(accuracy = 20f))
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.Refining, vm.stagedLocation.value?.status)
+            advanceTimeBy(LocationFixPolicy.REFINE_WINDOW_MS + 1)
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.Ready, vm.stagedLocation.value?.status)
+            assertEquals(
+                20f,
+                vm.stagedLocation.value
+                    ?.fix
+                    ?.accuracyM,
+            )
+            assertEquals(0, locationSource.collectors)
+        }
+
+    @Test
+    fun noProviderAtAllFailsWithoutWaitingOutTheWindow() =
+        runTest {
+            locationSource.noProvider = true
+            val vm = vm()
+            vm.startLocation()
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.Failed, vm.stagedLocation.value?.status)
+            assertEquals(0, locationSource.collectors)
+        }
+
+    @Test
+    fun locationServicesOffIsItsOwnStateAndARevokedGrantIsRefusedWithoutListening() =
+        runTest {
+            val vm = vm()
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+
+            locationSource.enabled = false
+            vm.startLocation()
+            runCurrent()
+            assertEquals(ChatViewModel.StagedLocation.Status.ServicesOff, vm.stagedLocation.value?.status)
+            assertEquals(0, locationSource.subscriptions)
+
+            vm.clearLocation()
+            locationSource.enabled = true
+            locationSource.precision = LocationPrecision.None
+            vm.startLocation()
+            runCurrent()
+            assertEquals(listOf(R.string.chat_location_denied), events)
+            assertNull(vm.stagedLocation.value)
+            assertEquals(0, locationSource.subscriptions)
+        }
+
+    @Test
+    fun anApproximateGrantIsStagedAndSaysSo() =
+        runTest {
+            locationSource.precision = LocationPrecision.Coarse
+            val vm = vm()
+            vm.startLocation()
+            locationSource.readings.tryEmit(reading(accuracy = 2_000f).copy(coarse = true))
+            runCurrent()
+            assertEquals(LocationPrecision.Coarse, vm.stagedLocation.value?.precision)
+            assertEquals("geo:37.421998,-122.084000;u=2000", vm.stagedLocation.value?.token)
+        }
+
+    @Test
+    fun clearingStopsListeningAndLeavingTheScreenFreezesUntilItComesBack() =
+        runTest {
+            val vm = vm()
+            vm.onChatForeground()
+            assertEquals("a chat with nothing staged never starts listening on its own", 0, locationSource.subscriptions)
+
+            vm.startLocation()
+            locationSource.readings.tryEmit(reading(accuracy = 25f))
+            runCurrent()
+            assertEquals(1, locationSource.collectors)
+
+            vm.onChatBackground()
+            runCurrent()
+            assertEquals("a backgrounded chat never keeps the radio on", 0, locationSource.collectors)
+            assertEquals(ChatViewModel.StagedLocation.Status.Ready, vm.stagedLocation.value?.status)
+            assertEquals(
+                25f,
+                vm.stagedLocation.value
+                    ?.fix
+                    ?.accuracyM,
+            )
+
+            vm.onChatForeground()
+            runCurrent()
+            assertEquals("coming back re-arms a fresh window on the tile that was cut short", 1, locationSource.collectors)
+            assertEquals(2, locationSource.subscriptions)
+
+            vm.clearLocation()
+            runCurrent()
+            assertNull(vm.stagedLocation.value)
+            assertEquals(0, locationSource.collectors)
+            vm.onChatBackground()
+            vm.onChatForeground()
+            runCurrent()
+            assertEquals("a cleared tile does not come back with the screen", 2, locationSource.subscriptions)
+        }
+
+    @Test
+    fun sendFoldsThePositionOntoTheBodyTextFirstAndClearsTheTile() =
+        runTest {
+            stubDm("bob")
+            coEvery { groups.find("bob") } returns null
+            val vm = vm("bob")
+            vm.startLocation()
+            locationSource.readings.tryEmit(reading(accuracy = 12f))
+            runCurrent()
+
+            vm.send("See you at the gate")
+            runCurrent()
+
+            assertEquals("See you at the gate\ngeo:37.421998,-122.084000;u=12", mesh.sentChats.single().text)
+            assertEquals("bob", mesh.sentChats.single().recipientId)
+            assertNull("the position went with the message", vm.stagedLocation.value)
+            assertEquals(0, locationSource.collectors)
+        }
+
+    @Test
+    fun aPositionAloneIsAMessageAndALongDraftStillKeepsItsToken() =
+        runTest {
+            stubDm("bob")
+            coEvery { groups.find("bob") } returns null
+            val vm = vm("bob")
+            vm.startLocation()
+            locationSource.readings.tryEmit(reading(accuracy = 12f))
+            runCurrent()
+
+            vm.send("")
+            runCurrent()
+            assertEquals("geo:37.421998,-122.084000;u=12", mesh.sentChats.single().text)
+
+            vm.onInputCleared()
+            vm.startLocation()
+            locationSource.readings.tryEmit(reading(accuracy = 12f))
+            runCurrent()
+            vm.send("a".repeat(5_000))
+            runCurrent()
+            val body = mesh.sentChats.last().text
+            assertTrue(
+                "the receiver clamps at TextLimits.MESSAGE, so the token has to fit under it",
+                body.length <= app.getknit.knit.TextLimits.MESSAGE,
+            )
+            assertTrue(body.endsWith("\ngeo:37.421998,-122.084000;u=12"))
+        }
+
+    @Test
+    fun sendingBeforeAReadingLandsRefusesAndKeepsTheDraftAndTheTile() =
+        runTest {
+            stubDm("bob")
+            coEvery { groups.find("bob") } returns null
+            val vm = vm("bob")
+            val events = mutableListOf<Int>()
+            var cleared = 0
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.clearInput.collect { cleared++ } }
+            vm.startLocation()
+            runCurrent()
+
+            vm.send("on my way")
+            runCurrent()
+
+            assertEquals(listOf(R.string.chat_location_not_ready), events)
+            assertTrue(mesh.sentChats.isEmpty())
+            assertEquals(0, cleared)
+            assertEquals(ChatViewModel.StagedLocation.Status.Acquiring, vm.stagedLocation.value?.status)
+            assertFalse("the guard is released, the draft is the user's", vm.isSending.value)
+        }
+
+    @Test
+    fun aRowWithAGeoLineCarriesItsPointAndAPlainRowDoesNot() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "bob", id = "m1", sentAt = 1L, body = "here\ngeo:37.421998,-122.084000;u=12"),
+                    msg(senderId = "bob", id = "m2", sentAt = 2L, body = "geo:91,0 is not a place"),
+                )
+            runCurrent()
+            val rows = vm.state.value.rows
+            assertEquals(GeoPoint(37.421998, -122.084, 12), rows[0].location)
+            assertNull(rows[1].location)
         }
 }

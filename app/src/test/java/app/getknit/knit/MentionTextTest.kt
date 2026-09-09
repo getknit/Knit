@@ -224,6 +224,12 @@ class MentionTextTest {
         assertTrue(findUrls("ping me at foo@bar.com about it").isEmpty())
     }
 
+    @Test
+    fun aGeoUriIsNotALinkTheCardIsItsAffordance() {
+        assertTrue(findUrls("at geo:37.421998,-122.084000;u=12 now").isEmpty())
+        assertTrue(findUrls("geo:37.42,-122.08?q=37.42,-122.08(Home)").isEmpty())
+    }
+
     // --- annotateMessageBody ---
 
     @Test

@@ -54,6 +54,8 @@ import app.getknit.knit.moderation.modelGuardStamp
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.review.ReviewPromptPolicy
 import app.getknit.knit.review.ReviewPrompter
+import app.getknit.knit.transfer.OfferOutcome
+import app.getknit.knit.transfer.TransferManager
 import app.getknit.knit.ui.chat.buildReplySnippet
 import app.getknit.knit.ui.invite.prepareKnitApk
 import kotlinx.coroutines.CoroutineScope
@@ -172,6 +174,7 @@ class DebugBridgeReceiver :
     private val scope: CoroutineScope by inject()
     private val lora: app.getknit.knit.mesh.lora.LoraMeshTransport by inject()
     private val loraLink: app.getknit.knit.mesh.lora.MeshtasticLink by inject()
+    private val transfers: TransferManager by inject()
 
     override fun onReceive(
         context: Context,
@@ -211,6 +214,10 @@ class DebugBridgeReceiver :
 
                         ACTION_SHARE_APK -> {
                             handleShareApk(context)
+                        }
+
+                        ACTION_XFER -> {
+                            handleXfer(intent)
                         }
 
                         ACTION_WEBPPROBE -> {
@@ -1336,6 +1343,59 @@ class DebugBridgeReceiver :
     ): JSONObject = JSONObject().put("status", status).put("message", message)
 
     /**
+     * Drives a direct Wi-Fi file transfer headless (transfer/TransferManager) so two lab phones can run one
+     * without touching a screen: `--es to <nodeId> --es path <file>` offers the file at `path` to that peer;
+     * `--es accept|decline|cancel <transferId>` answers one; no extras dumps every live transfer, plus the
+     * transfer rows of `--es conv <peerId>` when given. The file path is read as the app itself (push it with
+     * `run-as`), and the signaling, the Wi-Fi Direct group and the bytes then go exactly as a tap would send them.
+     */
+    private suspend fun handleXfer(intent: Intent): JSONObject {
+        intent.getStringExtra("accept")?.let { id ->
+            val refusal = transfers.accept(id)
+            return reply(if (refusal == null) "ok" else "refused", "accept $id: ${refusal ?: "started"}")
+        }
+        intent.getStringExtra("decline")?.let { id ->
+            transfers.decline(id)
+            return reply("ok", "declined $id")
+        }
+        intent.getStringExtra("cancel")?.let { id ->
+            transfers.cancel(id)
+            return reply("ok", "cancelled $id")
+        }
+        val to = intent.getStringExtra("to")
+        val path = intent.getStringExtra("path")
+        if (to != null && path != null) {
+            return when (val outcome = transfers.offer(to, Uri.fromFile(File(path)).toString())) {
+                is OfferOutcome.Started -> reply("ok", "offered ${outcome.id}").put("id", outcome.id)
+                is OfferOutcome.Refused -> reply("refused", outcome.refusal.name)
+            }
+        }
+        val live = JSONArray()
+        transfers.states.value.values.forEach { s ->
+            live.put(
+                JSONObject()
+                    .put("id", s.id)
+                    .put("peer", s.peerId)
+                    .put("outgoing", s.outgoing)
+                    .put("name", s.name)
+                    .put("size", s.size)
+                    .put("phase", s.phase.name)
+                    .put("bytes", s.bytes)
+                    .put("reason", s.reason ?: JSONObject.NULL),
+            )
+        }
+        val rows = JSONArray()
+        intent.getStringExtra("conv")?.let { conv ->
+            messages
+                .observeMessages(conv)
+                .first()
+                .filter { it.kind == MessageEntity.KIND_FILE_TRANSFER }
+                .forEach { row -> rows.put(JSONObject().put("id", row.id).put("sentAt", row.sentAt).put("record", row.body)) }
+        }
+        return JSONObject().put("status", "ok").put("live", live).put("rows", rows)
+    }
+
+    /**
      * Creates (or reopens) a group locally from `--es members <comma-separated peer nodeIds>` (self is
      * added automatically) — the [app.getknit.knit.ui.contacts.ContactsViewModel.createGroup] mechanics
      * without the picker UI, which cannot express a 2-member group (one selection opens a DM). Purely
@@ -1454,6 +1514,7 @@ class DebugBridgeReceiver :
         const val ACTION_LORA = "app.getknit.knit.debug.LORA"
         const val ACTION_LORATX = "app.getknit.knit.debug.LORATX"
         const val ACTION_LORAPROV = "app.getknit.knit.debug.LORAPROV"
+        const val ACTION_XFER = "app.getknit.knit.debug.XFER"
 
         const val EXTRA_TEXT = "text"
         const val EXTRA_ADDRESS = "address"

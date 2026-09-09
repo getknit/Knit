@@ -70,6 +70,9 @@ import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
+import app.getknit.knit.transfer.OfferOutcome
+import app.getknit.knit.transfer.TransferManager
+import app.getknit.knit.transfer.TransferState
 import app.getknit.knit.ui.voice.VoicePlayer
 import app.getknit.knit.ui.voice.VoiceRecorder
 import kotlinx.coroutines.Deferred
@@ -191,6 +194,9 @@ data class ChatRow(
     // ([MeshOrigin.verified]), which is drawn like a Knit author's. Null on every ordinary row, including
     // our own.
     val origin: MeshOrigin? = null,
+    // A direct-transfer record ([MessageEntity.KIND_FILE_TRANSFER]) as its card draws it — the row's facts
+    // overlaid with live progress. Null on every other row; a row carrying one is a card, never a bubble.
+    val transfer: TransferView? = null,
 )
 
 /**
@@ -422,6 +428,8 @@ class ChatViewModel(
     // The LoRa plane's facts, the same way (a pushed flow in production, but a test still supplies its own).
     private val loraFacts: Flow<LoraFacts>,
     private val context: Context,
+    // Direct Wi-Fi transfers: the app-wide state machine whose live states overlay this thread's records.
+    private val transfers: TransferManager,
 ) : ViewModel() {
     /** This thread is the broadcast room (vs a 1:1 DM keyed by the peer's node id). */
     private val isRoom = conversationId == Conversations.NEARBY
@@ -558,8 +566,9 @@ class ChatViewModel(
             imageScreening.observeFlaggedHashes(),
             settings.contentFilteringEnabled,
             linkCards.cards,
-        ) { sizes, flagged, hideSensitive, cards ->
-            BlobState(sizes, flagged.toSet(), hideSensitive, cards)
+            transfers.states,
+        ) { sizes, flagged, hideSensitive, cards, live ->
+            BlobState(sizes, flagged.toSet(), hideSensitive, cards, live)
         }
 
     init {
@@ -613,6 +622,8 @@ class ChatViewModel(
         val hideSensitiveContent: Boolean,
         // blob hash -> the decoded link-preview card, for every card this process has opened so far.
         val linkCards: Map<String, LinkCard>,
+        // transfer id -> its live state, for the direct-transfer cards in this thread.
+        val transfers: Map<String, TransferState>,
         val group: GroupEntity?,
         // messageId -> how many current roster members have acked it. Empty outside a group.
         val deliveredCounts: Map<String, Int>,
@@ -625,6 +636,7 @@ class ChatViewModel(
         val flagged: Set<String>,
         val hideSensitive: Boolean,
         val linkCards: Map<String, LinkCard>,
+        val transfers: Map<String, TransferState>,
     )
 
     // The group row paired with "how many members have acked each message", re-subscribed whenever the
@@ -670,6 +682,7 @@ class ChatViewModel(
                 blob.flagged,
                 blob.hideSensitive,
                 blob.linkCards,
+                blob.transfers,
                 group,
                 delivered,
             )
@@ -784,6 +797,7 @@ class ChatViewModel(
             val flaggedHashes = bundle.flaggedHashes
             val hideSensitive = bundle.hideSensitiveContent
             val cards = bundle.linkCards
+            val liveTransfers = bundle.transfers
             val group = bundle.group
             val deliveredCounts = bundle.deliveredCounts
             val isGroup = group != null
@@ -883,6 +897,7 @@ class ChatViewModel(
                         reactions = tallies,
                         replyTo = m.replyRef(),
                         origin = origin,
+                        transfer = if (m.kind == MessageEntity.KIND_FILE_TRANSFER) transferViewFor(m, liveTransfers) else null,
                     )
                 }
             // Autocomplete candidates: everyone we've received a message from, plus a group's roster (so
@@ -1673,6 +1688,50 @@ class ChatViewModel(
             }
             stage(attachments.ingestFile(uri), notifyFailure = true)
         }
+    }
+
+    // --- direct Wi-Fi transfer of a large file (transfer/TransferManager) ---
+
+    /** Offers the file at [uri] to this DM's peer over a one-shot Wi-Fi Direct link; the bytes never ride the mesh. */
+    fun offerTransfer(uri: Uri) {
+        viewModelScope.launch {
+            refusalForTransfer()?.let {
+                _events.tryEmit(it)
+                return@launch
+            }
+            val outcome = transfers.offer(conversationId, uri.toString())
+            if (outcome is OfferOutcome.Refused) _events.tryEmit(transferRefusalMessage(outcome.refusal))
+        }
+    }
+
+    /**
+     * Why this thread cannot take a large file, or null when it can: a DM only, toward a pinned profile
+     * carrying [Protocol.CAP_DIRECT_TRANSFER] (the [refusalForFile] rule — gate the send on a fact the peer
+     * told us, never the affordance), and a peer this phone can see right now, since the offer has to be
+     * answered while both are still in range.
+     */
+    private suspend fun refusalForTransfer(): Int? {
+        // A group is a roster, not a row: the group repository answers for every id (a relaxed double included),
+        // so the same members test refusalForFile uses is the honest one here.
+        val members = groups.find(conversationId)?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+        if (isRoom || conversationId == Conversations.MESHTASTIC || members.isNotEmpty()) return R.string.chat_transfer_needs_dm
+        if ((peers.find(conversationId)?.capabilities ?: 0L) and Protocol.CAP_DIRECT_TRANSFER == 0L) {
+            return R.string.chat_transfer_peer_too_old
+        }
+        if (meshManager.neighbors.value.none { it.nodeId == conversationId }) return R.string.chat_transfer_peer_not_nearby
+        return null
+    }
+
+    fun acceptTransfer(id: String) {
+        viewModelScope.launch { transfers.accept(id)?.let { _events.tryEmit(transferRefusalMessage(it)) } }
+    }
+
+    fun declineTransfer(id: String) {
+        viewModelScope.launch { transfers.decline(id) }
+    }
+
+    fun cancelTransfer(id: String) {
+        viewModelScope.launch { transfers.cancel(id) }
     }
 
     /**

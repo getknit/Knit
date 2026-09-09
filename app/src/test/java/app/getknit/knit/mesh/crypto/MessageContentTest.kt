@@ -6,6 +6,7 @@ import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.ReactionPayload
+import app.getknit.knit.mesh.protocol.TransferPayload
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -248,5 +249,27 @@ class MessageContentTest {
         assertNull(batch.ack)
         assertTrue(batch.isSupported())
         assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.acks)
+    }
+
+    @Test
+    fun theTransferPayloadRoundTripsEveryFieldAndNormalizesItsName() {
+        val ready =
+            TransferPayload(
+                id = "t1",
+                phase = TransferPayload.PHASE_READY,
+                name = "evil\u202Efdp.exe",
+                size = 4_000_000_000L,
+                mime = "application/octet-stream",
+                ssid = "DIRECT-ab-cdefghij",
+                passphrase = "p".repeat(24),
+                port = 45_000,
+                key = "k".repeat(44),
+                reason = TransferPayload.REASON_BUSY,
+            )
+        val decoded = MessageContent.decode(MessageContent(body = "", ctl = MessageContent.CTL_TRANSFER, xf = ready).encode())!!
+        assertEquals(MessageContent.CTL_TRANSFER, decoded.ctl)
+        // Sender-supplied text is brought inside AttachmentName's rules at the decode boundary, like attachmentName.
+        assertEquals(ready.copy(name = "evilfdp.exe"), decoded.xf)
+        assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.xf)
     }
 }

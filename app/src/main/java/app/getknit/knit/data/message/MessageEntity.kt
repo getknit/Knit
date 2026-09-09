@@ -250,6 +250,14 @@ data class MessageEntity(
          * or local pin corruption.
          */
         const val KIND_KEY_PIN_REFUSED = 7
+
+        /**
+         * [kind]: a direct Wi-Fi file transfer with this contact — the chat's record that it was offered and
+         * how it ended. [body] holds a [TransferRecord]; [senderId] is whoever offered the file. The bytes
+         * themselves never rode the mesh and are not in the blob store: a received file sits in the user's
+         * Downloads, and the record is local to each side. Drawn as a card (`ui/chat/TransferCard`), not a line.
+         */
+        const val KIND_FILE_TRANSFER = 8
     }
 }
 

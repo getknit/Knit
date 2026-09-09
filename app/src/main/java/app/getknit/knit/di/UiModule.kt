@@ -5,6 +5,7 @@ import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.linkpreview.LinkPreviewService
 import app.getknit.knit.location.LocationSource
 import app.getknit.knit.mesh.lora.LoraStatusRepository
+import app.getknit.knit.transfer.TransferManager
 import app.getknit.knit.ui.addcontact.AddContactViewModel
 import app.getknit.knit.ui.blocked.BlockedUsersViewModel
 import app.getknit.knit.ui.chat.ChatViewModel
@@ -52,6 +53,7 @@ val uiModule =
                 get<RelayStatusRepository>().facts,
                 get<LoraStatusRepository>().facts,
                 androidContext(),
+                get<TransferManager>(),
             )
         }
         viewModel {

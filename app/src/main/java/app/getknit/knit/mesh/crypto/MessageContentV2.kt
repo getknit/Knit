@@ -35,7 +35,8 @@ import kotlinx.serialization.encodeToByteArray
  * non-canonical id for anything that gets acked, reacted to or quoted, so the fallback is hostile-input
  * hygiene rather than a compatibility path, but it is what keeps this codec unable to lose a frame.
  * [MessageContent.gk] is not modelled (the group-key ctls stay v2; label 13 is reserved for a raw-seed form)
- * and refuses the same way.
+ * and refuses the same way, as does [MessageContent.xf] (the direct-transfer ctl stays v2: a rare control frame
+ * with nothing to gain from the compact layout).
  *
  * Nested types are this codec's own rather than the domain's: `Mention`/`ReplyRef`/`ReactionPayload`/
  * `ProfilePayload` are shared with the cleartext `ChatContent`, whose shape is frozen (docs/WIRE_COMPAT.md
@@ -50,7 +51,7 @@ internal object MessageContentV2 {
 
     /** [content] in the compact layout, or null when something in it has no canonical raw form (see the kdoc). */
     fun encodeOrNull(content: MessageContent): ByteArray? {
-        if (content.v != MessageContent.VERSION || content.gk != null) return null
+        if (content.v != MessageContent.VERSION || content.gk != null || content.xf != null) return null
         return try {
             compactCbor.encodeToByteArray(wireOf(content))
         } catch (_: NonCanonical) {

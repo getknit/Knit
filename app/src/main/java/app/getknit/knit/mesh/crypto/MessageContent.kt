@@ -6,6 +6,7 @@ import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.protocol.TransferPayload
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromByteArray
@@ -56,7 +57,7 @@ data class MessageContent(
     val replyTo: ReplyRef? = null,
     // Control marker for ratchet session management and sealed metadata (additive;
     // [CTL_SESSION_RESET], [CTL_GROUP_KEY], [CTL_GROUP_KEY_REQ], [CTL_GROUP_KEY_ACK],
-    // [CTL_RECEIPT], [CTL_REACTION], [CTL_PROFILE]). A non-null value means this frame is machinery, not
+    // [CTL_RECEIPT], [CTL_REACTION], [CTL_PROFILE], [CTL_TRANSFER]). A non-null value means this frame is machinery, not
     // conversation: it is never persisted as a message, never notified, never acked-as-a-message —
     // see docs/FORWARD_SECRECY_RATCHET.md §7. Inside the ciphertext deliberately: a relay cannot
     // distinguish machinery from an ordinary DM. An unknown value is consumed as a silent no-op,
@@ -73,6 +74,9 @@ data class MessageContent(
     // Batched acked frame ids for [CTL_RECEIPT] (additive; docs/ENCRYPTED_RECEIPTS_REACTIONS.md §2).
     // Single-ack ticks keep [ack]; a batch is one custody-escalated group tick covering every id.
     val acks: List<String>? = null,
+    // Direct-transfer signaling for [CTL_TRANSFER] (additive): the offer, answer and one-shot Wi-Fi Direct
+    // credentials of a file transfer whose bytes never ride the mesh.
+    val xf: TransferPayload? = null,
 ) {
     @OptIn(ExperimentalSerializationApi::class)
     fun encode(): ByteArray = cryptoCbor.encodeToByteArray(this)
@@ -82,11 +86,14 @@ data class MessageContent(
 
     /**
      * This content with every open sender-supplied string brought inside its own rules — today just
-     * [attachmentName]. Applied by **both** decoders ([decode] and [MessageContentV2.decode]) so the
+     * [attachmentName] and the transfer offer's `xf.name`. Applied by **both** decoders ([decode] and [MessageContentV2.decode]) so the
      * repair happens once, at the boundary, and no call site downstream has to remember it.
      */
-    internal fun normalized(): MessageContent =
-        if (attachmentName == null) this else copy(attachmentName = AttachmentName.sanitize(attachmentName))
+    internal fun normalized(): MessageContent {
+        val name = attachmentName?.let(AttachmentName::sanitize)
+        val transfer = xf?.let { it.copy(name = AttachmentName.sanitize(it.name)) }
+        return if (name == attachmentName && transfer == xf) this else copy(attachmentName = name, xf = transfer)
+    }
 
     companion object {
         /** Current plaintext-content schema version this build originates. */
@@ -128,6 +135,13 @@ data class MessageContent(
          * the `pubKey` inside its own payload, so it can never be encrypted.
          */
         const val CTL_PROFILE = 8
+
+        /**
+         * [ctl]: [xf] is direct-transfer signaling — the offer, answer and one-shot Wi-Fi Direct credentials of
+         * a file transfer whose bytes never ride the mesh (`transfer/TransferManager`). Never persisted as a
+         * message; a build without the feature consumes it as the usual silent no-op.
+         */
+        const val CTL_TRANSFER = 9
 
         @OptIn(ExperimentalSerializationApi::class)
         fun decode(bytes: ByteArray): MessageContent? =

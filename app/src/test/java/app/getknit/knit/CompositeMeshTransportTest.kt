@@ -84,6 +84,17 @@ class CompositeMeshTransportTest {
             heals++
         }
 
+        var pauses = 0
+        var resumes = 0
+
+        override fun pause() {
+            pauses++
+        }
+
+        override fun resume() {
+            resumes++
+        }
+
         override fun suppressDataPath(peers: Set<String>) {
             suppressCalls += peers
         }
@@ -165,6 +176,19 @@ class CompositeMeshTransportTest {
     }
 
     private fun wire() = WireEnvelope(sig = ByteArray(0), signed = ByteArray(0))
+
+    @Test
+    fun pauseAndResumeReachEveryChild() =
+        runTest(UnconfinedTestDispatcher()) {
+            val bt = FakeChild()
+            val nan = FakeChild(hasFastPlane = true)
+            val composite = CompositeMeshTransport(listOf(bt, nan), backgroundScope)
+            composite.pause()
+            composite.resume()
+            composite.resume()
+            assertEquals(listOf(1, 1), listOf(bt.pauses, nan.pauses))
+            assertEquals(listOf(2, 2), listOf(bt.resumes, nan.resumes))
+        }
 
     @Test
     fun mergedNeighborsUnionDedupsByNodeIdRicherWins() =

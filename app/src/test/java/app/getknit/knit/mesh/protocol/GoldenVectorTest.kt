@@ -291,6 +291,20 @@ class GoldenVectorTest {
                 MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = "m1").encode(),
             "messageContentReceiptBatch" to
                 MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, acks = listOf("m1", "m2")).encode(),
+            // The sealed direct-transfer ctl plaintext (an OFFER): the additive `xf` beside the ctl marker.
+            "messageContentTransferOffer" to
+                MessageContent(
+                    body = "",
+                    ctl = MessageContent.CTL_TRANSFER,
+                    xf =
+                        TransferPayload(
+                            id = frameId(3),
+                            phase = TransferPayload.PHASE_OFFER,
+                            name = "clip.mp4",
+                            size = 123_456_789L,
+                            mime = "video/mp4",
+                        ),
+                ).encode(),
             // Crypto scheme v3 (ADR 059) — every fixture above stays byte-identical. The envelope is v2's DM
             // form with `v = 3` and an EMPTY nonce (`40`); the unsigned wire envelope carries `sig` as the
             // empty byte string; the compact plaintext is the labeled `MessageContentV2` layout with raw ids.
@@ -595,6 +609,9 @@ class GoldenVectorTest {
                     "d1d8dfe66776657273696f6e02666d696e746572626161",
                 "messageContentReceipt" to "a364626f6479606363746c056361636b626d31",
                 "messageContentReceiptBatch" to "a364626f6479606363746c056461636b7382626d31626d32",
+                "messageContentTransferOffer" to
+                    "a364626f6479606363746c09627866a56269647641776f524742386d4c545137516b6c515631356c624165706861736501646e616d656863" +
+                    "6c69702e6d70346473697a651a075bcd15646d696d6569766964656f2f6d7034",
                 "encEnvelopeV3" to
                     "a5617603656e6f6e6365406263745830060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb0209" +
                     "10171e252c333a41484f646b657973806172a46273650262656b5820080f161d242b323940474e555c636a71787f868d949ba2a9b0b7" +

@@ -27,6 +27,7 @@ import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
 import app.getknit.knit.mesh.crypto.TinkInit
@@ -46,6 +47,7 @@ import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.protocol.TransferPayload
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.moderation.ImageScreeningService
@@ -607,6 +609,28 @@ class MeshManagerTest {
             assertEquals(frame.id, WireCodec.decodeEnvelope(near.signed)!!.id)
             assertEquals(rig.bob.nodeId, to.nodeId)
             assertTrue("a DM is never fanned at every neighbor", rig.transport.fastFanouts.isEmpty())
+        }
+
+    @Test
+    fun aTransferSignalIsSealedToThePeerAsAControlDmAndRefusedForAnUnpinnedOne() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            // A peer that can answer at all runs this build: pinned with a prekey, so the seal has a session to open.
+            rig.pinCryptoV3(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            val payload = TransferPayload(id = "t1", phase = TransferPayload.PHASE_OFFER, name = "clip.mp4", size = 5L, mime = "video/mp4")
+
+            assertTrue(rig.manager.sendTransferSignal(rig.bob.nodeId, payload))
+            advanceUntilIdle()
+
+            val frame = rig.sentChatFrames().single()
+            assertEquals(rig.bob.nodeId, frame.recipientId)
+            val content = WireCodec.decodePayload<ChatContent>(frame.payload)!!
+            assertEquals("no plaintext body leaks on the wire", "", content.body)
+            // The transfer ctl has no compact form, so it rides the named v2 layout even toward a v3 reader.
+            assertEquals(EncEnvelope.VERSION_RATCHET, content.enc!!.v)
+            assertNull("a ctl carries no attachment hint", content.attachmentHash)
+            assertTrue("a ctl is never a local message", rig.saved.isEmpty())
+            assertFalse("nothing to seal to", rig.manager.sendTransferSignal("nobody", payload))
         }
 
     // --- the long-range re-offer set (FarPeerFrameSource, ADR 039) ---

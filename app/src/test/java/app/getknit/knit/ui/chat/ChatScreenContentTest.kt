@@ -21,6 +21,8 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.TransferPhase
 import app.getknit.knit.location.GeoPoint
 import app.getknit.knit.location.LocationFix
 import app.getknit.knit.location.LocationPrecision
@@ -52,6 +54,7 @@ class ChatScreenContentTest {
     private var cancelledReply = 0
     private var files = 0
     private var clearedLocations = 0
+    private var accepts = 0
 
     private fun content(
         input: String,
@@ -83,6 +86,7 @@ class ChatScreenContentTest {
                     onAttachClick = { attaches++ },
                     onCameraClick = { cameras++ },
                     onFileClick = { files++ },
+                    onAcceptTransfer = { accepts++ },
                     onClearAttachment = {},
                     onReceiveImage = {},
                     onTyping = {},
@@ -99,6 +103,72 @@ class ChatScreenContentTest {
                 )
             }
         }
+
+    private fun transferRow(view: TransferView) =
+        ChatRow(
+            id = "xfer:${view.id}",
+            body = "",
+            mine = view.outgoing,
+            senderName = "Bob",
+            senderNodeId = "bob",
+            kind = MessageEntity.KIND_FILE_TRANSFER,
+            avatarHash = null,
+            sentAt = 1_700_000_000_001L,
+            received = true,
+            transfer = view,
+        )
+
+    private fun transferView(
+        phase: TransferPhase,
+        id: String = "t1",
+        name: String = "clip.mp4",
+        mime: String? = "video/mp4",
+        savedUri: String? = null,
+    ) = TransferView(
+        id,
+        outgoing = false,
+        name = name,
+        size = 2_000L,
+        mime = mime,
+        phase = phase,
+        bytes = 0L,
+        savedUri = savedUri,
+        reason = null,
+        interrupted = false,
+    )
+
+    @Test
+    fun anIncomingTransferOfferDrawsItsAnswersAndAcceptAnswers() {
+        compose.setContent(
+            content(input = "", state = ChatUiState(myNodeId = "me", rows = listOf(transferRow(transferView(TransferPhase.Offered))))),
+        )
+
+        compose.onNodeWithTag("transfer_decline").assertIsDisplayed()
+        compose.onNodeWithTag("transfer_accept").performClick()
+        assertEquals(1, accepts)
+    }
+
+    @Test
+    fun aReceivedFileOffersOpenButAnAppPackageDoesNot() {
+        val rows =
+            listOf(
+                transferRow(transferView(TransferPhase.Done, savedUri = "content://media/1")),
+                transferRow(
+                    transferView(
+                        TransferPhase.Done,
+                        id = "t2",
+                        name = "Knit.apk",
+                        mime = "application/vnd.android.package-archive",
+                        savedUri = "content://media/2",
+                    ),
+                ),
+            )
+        compose.setContent(content(input = "", state = ChatUiState(myNodeId = "me", rows = rows)))
+
+        compose.onAllNodesWithTag("transfer_card").assertCountEquals(2)
+        compose.onAllNodesWithTag("transfer_open").assertCountEquals(1)
+        compose.onAllNodesWithTag("transfer_accept").assertCountEquals(0)
+    }
 
     /** A thread of [count] rows, newest last, in the oldest-first shape the ViewModel emits. */
     private fun rows(count: Int) =

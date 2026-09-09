@@ -67,6 +67,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Direct Wi-Fi file transfer (transfer/): a partial wake lock keeps a multi-minute transfer running with
+         the screen off, held only between hosting/joining the one-shot group and releasing it. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Restart the mesh foreground service after a device reboot (see .mesh.BootReceiver). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 

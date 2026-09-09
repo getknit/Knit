@@ -246,6 +246,20 @@ interface MeshTransport {
     fun suppressDataPath(peers: Set<String>) {}
 
     /**
+     * Lends the Wi-Fi radio to another **same-app** role — the one-shot Wi-Fi Direct group of a direct file
+     * transfer (`transfer/`). On Android 12+ two interface requests from one app carry equal priority and
+     * neither evicts the other, so a transport whose radio cannot share (Wi-Fi Aware) has to let go of its
+     * session first — and must stop re-attaching while the other role holds the slot, or its attach loop
+     * burns `NanAttachPolicy`'s leak budget failing every 3 s. Availability never flaps for a same-app
+     * hand-over, so there is no edge to recover on: [resume] is the explicit way back. Default no-op —
+     * Bluetooth, LoRa and fakes ignore both.
+     */
+    fun pause() {}
+
+    /** Reverse of [pause]: takes the radio back and attaches again at once, clearing any attach backoff. */
+    fun resume() {}
+
+    /**
      * Reverse of [suppressDataPath]: hints that [peers] (by nodeId) are currently reachable over some **other**
      * plane's coordination layer but not necessarily linked here — cross-plane presence this transport can't see
      * itself. A radio that duty-cycles its discovery (Bluetooth) uses it to briefly boost its scan to try to catch

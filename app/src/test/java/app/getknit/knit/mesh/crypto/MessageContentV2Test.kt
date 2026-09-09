@@ -8,6 +8,7 @@ import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ProfilePayload
 import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.protocol.TransferPayload
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -120,6 +121,9 @@ class MessageContentV2Test {
             "a group-key ctl",
             MessageContentV2.encodeOrNull(MessageContent(body = "", ctl = 2, gk = GroupKeyPayload(groupId = "g-1"))),
         )
+        val transfer = MessageContent(body = "", ctl = MessageContent.CTL_TRANSFER, xf = TransferPayload(id = "t1", phase = 2))
+        assertNull("a direct-transfer ctl", MessageContentV2.encodeOrNull(transfer))
+        assertEquals(EncEnvelope.VERSION_RATCHET, transfer.sealBytes(v3 = true).scheme)
         assertNull("a foreign content version", MessageContentV2.encodeOrNull(MessageContent(v = 2, body = "")))
         // And the seam every seal site uses falls back to the named form instead of losing the frame.
         val (bytes, scheme) = MessageContent(body = "", ctl = 5, ack = uuid).sealBytes(v3 = true)

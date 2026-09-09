@@ -67,6 +67,7 @@ import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
+import app.getknit.knit.mesh.protocol.TransferPayload
 import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
@@ -234,6 +235,10 @@ class InboundPipelineTest {
                 .build()
         val notifier = mockk<Notifier>(relaxed = true)
         val settings = FakeSettings()
+
+        // What the direct-transfer hook saw, and what it answers (true = a live incoming offer was admitted).
+        val transferSignals = mutableListOf<Triple<String, TransferPayload, Long>>()
+        var admitTransfer = true
         val forwardSync = ForwardSync(transport, forwardStore, clock = { 0L })
         val blobExchange = BlobExchange(transport, blobStore, selfId = { self.nodeId }, onObtained = { _, _ -> })
         val keyExchange = KeyExchange(transport, selfId = { self.nodeId }, signRaw = self.crypto::signRaw, metrics = metrics)
@@ -382,6 +387,10 @@ class InboundPipelineTest {
                     redistributeGroupKey = { groupId, requester -> redistributed += groupId to requester },
                     flushGroupKeys = { member, force -> groupKeysFlushed += member to force },
                     replayGroupCustody = { groupId, senderId -> custodyReplays += groupId to senderId },
+                    onTransferCtl = { sender, xf, at ->
+                        transferSignals += Triple(sender, xf, at)
+                        admitTransfer
+                    },
                 )
         }
 
@@ -2065,6 +2074,72 @@ class InboundPipelineTest {
             coVerify { rig.notifier.notify(any(), any(), any(), any(), any()) }
         }
 
+    // --- direct-transfer signaling (CTL_TRANSFER, transfer/TransferManager) ---
+
+    private fun offerPayload(id: String = "t1") =
+        TransferPayload(id = id, phase = TransferPayload.PHASE_OFFER, name = "clip.mp4", size = 2_500_000L, mime = "video/mp4")
+
+    @Test
+    fun aTransferOfferFromAnAcceptedContactReachesTheHookAndNotifies() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.settings.accepted.value = setOf(alice.nodeId)
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("xf-1", "", ctl = MessageContent.CTL_TRANSFER, xf = offerPayload(), sentAt = 7L))
+
+            val (sender, xf, at) = rig.transferSignals.single()
+            assertEquals(alice.nodeId, sender)
+            assertEquals("clip.mp4", xf.name)
+            assertEquals(7L, at)
+            assertNull("a ctl is never a message", rig.msgMap["xf-1"])
+            val posted = slot<NotifMessage>()
+            coVerify { rig.notifier.notify(capture(posted), any(), any(), any(), any()) }
+            assertTrue(posted.captured.body, posted.captured.body.contains("clip.mp4"))
+            assertEquals(alice.nodeId, posted.captured.conversationId)
+        }
+
+    @Test
+    fun aTransferOfferTheManagerRefusesOrAnAnswerPhaseIsHandedOnButNotNotified() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.settings.accepted.value = setOf(alice.nodeId)
+            val author = V2Author(alice, rig)
+            rig.admitTransfer = false
+            rig.deliver(alice, author.dm("xf-2", "", ctl = MessageContent.CTL_TRANSFER, xf = offerPayload("t2")))
+            rig.admitTransfer = true
+            rig.deliver(
+                alice,
+                author.dm(
+                    "xf-3",
+                    "",
+                    ctl = MessageContent.CTL_TRANSFER,
+                    xf = TransferPayload(id = "t2", phase = TransferPayload.PHASE_ACCEPT),
+                ),
+            )
+
+            assertEquals(listOf(TransferPayload.PHASE_OFFER, TransferPayload.PHASE_ACCEPT), rig.transferSignals.map { it.second.phase })
+            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun aTransferOfferFromAStrangerNeverReachesTheHook() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice) // key pinned, but this DM thread is a message request: not accepted, never posted in
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("xf-4", "", ctl = MessageContent.CTL_TRANSFER, xf = offerPayload("t4")))
+
+            assertTrue(rig.transferSignals.isEmpty())
+            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
     // --- Message Requests: a stranger's DM/group is delivered + acked but silent until "accepted" ---
 
     @Test
@@ -2982,6 +3057,7 @@ class InboundPipelineTest {
             rp: ReactionPayload? = null,
             pr: ProfilePayload? = null,
             acks: List<String>? = null,
+            xf: TransferPayload? = null,
             sentAt: Long = 5L,
             /** Seal crypto scheme v3 (derived nonce, compact plaintext, header-bound AAD) instead of v2. */
             v3: Boolean = false,
@@ -2991,7 +3067,17 @@ class InboundPipelineTest {
         ): RelayEnvelope {
             val to = rig.self.nodeId
             val aad = MessageCrypto.header(id, party.nodeId, sentAt, to)
-            val (plain, scheme) = MessageContent(body = body, ctl = ctl, gk = gk, ack = ack, rp = rp, pr = pr, acks = acks).sealBytes(v3)
+            val (plain, scheme) =
+                MessageContent(
+                    body = body,
+                    ctl = ctl,
+                    gk = gk,
+                    ack = ack,
+                    rp = rp,
+                    pr = pr,
+                    acks = acks,
+                    xf = xf,
+                ).sealBytes(v3)
             check(!v3 || scheme == EncEnvelope.VERSION_DM_V3) { "fixture asked for v3 but the content has no compact form" }
             val sealed = checkNotNull(engine.seal(session, plain, aad, rig.selfSpk.pub, now = 5L, v3 = v3))
             session = sealed.session

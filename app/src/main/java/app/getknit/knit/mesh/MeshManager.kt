@@ -60,6 +60,7 @@ import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.protocol.TransferPayload
 import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
@@ -80,6 +81,7 @@ import app.getknit.knit.normalizeSingleLine
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.presence.OpenToChatPolicy
 import app.getknit.knit.presence.OpenToChatWatch
+import app.getknit.knit.transfer.TransferSignals
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -155,7 +157,11 @@ class MeshManager(
     // other direction: the two ends construct each other, so one of them has to be late-bound. The default
     // refuses with NO_BOARD, which is what every test and every board-less build wants.
     private val publicChannel: suspend (body: String) -> PublicPostRefusal? = { PublicPostRefusal.NO_BOARD },
+    // A sealed CTL_TRANSFER landed (transfer/TransferManager.onSignal): direct-transfer signaling, late-bound
+    // like publicChannel because the manager sends through this class. The default admits nothing.
+    private val onTransferSignal: suspend (senderId: String, payload: TransferPayload, sentAt: Long) -> Boolean = { _, _, _ -> false },
 ) : MeshController,
+    TransferSignals,
     ProfileFrameSource,
     FarPeerFrameSource,
     BridgeFrameSource,
@@ -345,6 +351,7 @@ class MeshManager(
             onGroupRootCtl = ::onGroupRootCtl,
             onProfilePinned = { introSync.onProfilePinned(it) },
             onPeerFrameOpened = { senderId, carriesInit -> introSync.onPeerFrameOpened(senderId, carriesInit) },
+            onTransferCtl = onTransferSignal,
         )
 
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
@@ -2026,7 +2033,7 @@ class MeshManager(
         val payload = currentProfilePayload(version, avatarHash)
         ratchet.exportedRoots().forEach { session ->
             if (sentProfileVersions[session.peerId] == version) return@forEach
-            if (sendProfileDm(session.peerId, payload, avatarHash, me)) sentProfileVersions[session.peerId] = version
+            if (sendCtlDm(session.peerId, payload, avatarHash, me)) sentProfileVersions[session.peerId] = version
         }
     }
 
@@ -2061,11 +2068,21 @@ class MeshManager(
     private suspend fun sendIntroTo(peerId: String): Boolean {
         val avatarHash = settings.ownAvatarHash.first()
         val payload = currentProfilePayload(settings.profileVersion.first(), avatarHash)
-        return sendProfileDm(peerId, payload, avatarHash, identity.nodeId())
+        return sendCtlDm(peerId, payload, avatarHash, identity.nodeId())
     }
 
     /**
-     * Seals one `CTL_PROFILE` to [peerId]. The avatar hash is repeated in the **cleartext**
+     * [TransferSignals]: one sealed `CTL_TRANSFER` DM to [peerId] — the offer/answer/credentials of a direct
+     * Wi-Fi file transfer (`transfer/TransferManager`), never a message. False when nothing could be sealed.
+     */
+    override suspend fun sendTransferSignal(
+        peerId: String,
+        payload: TransferPayload,
+    ): Boolean = sendCtlDm(peerId, MessageContent(body = "", ctl = MessageContent.CTL_TRANSFER, xf = payload), null, identity.nodeId())
+
+    /**
+     * Seals one ctl DM ([payload], a `CTL_PROFILE` or `CTL_TRANSFER`) to [peerId]. For a profile the avatar hash is
+     * repeated in the **cleartext**
      * [ChatContent.attachmentHash] — the DB v19 precedent (`docs/WIRE_COMPAT.md`) reapplied: it is what
      * lets a blind carrier custody the avatar bytes, and what the Internet plane's attachment pass reads
      * to fetch them (`docs/SPOOL_PROTOCOL.md` §9.5). The authoritative copy stays inside the seal.
@@ -2075,7 +2092,7 @@ class MeshManager(
      * mime-presence would itself become a fresh distinguisher, sorting sealed frames into "profile update"
      * and "user message" for any carrier. Nulling it here is what stops the fix creating a new signal.
      */
-    private suspend fun sendProfileDm(
+    private suspend fun sendCtlDm(
         peerId: String,
         payload: MessageContent,
         avatarHash: String?,

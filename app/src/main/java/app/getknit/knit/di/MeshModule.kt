@@ -10,6 +10,7 @@ import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.BridgeFrameSource
 import app.getknit.knit.mesh.CompositeMeshTransport
 import app.getknit.knit.mesh.FarPeerFrameSource
@@ -44,6 +45,12 @@ import app.getknit.knit.mesh.power.PowerStateSource
 import app.getknit.knit.mesh.spool.OkHttpSpoolDialer
 import app.getknit.knit.mesh.spool.SpoolDialer
 import app.getknit.knit.mesh.wifiaware.WifiAwareTransport
+import app.getknit.knit.transfer.AndroidDirectWifi
+import app.getknit.knit.transfer.AndroidTransferFiles
+import app.getknit.knit.transfer.DirectWifi
+import app.getknit.knit.transfer.TransferFiles
+import app.getknit.knit.transfer.TransferManager
+import app.getknit.knit.transfer.TransferSignals
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -222,11 +229,30 @@ val meshModule =
                 get(),
                 get(),
                 publicChannel = { body -> get<PublicChannelSink>().postToPublicChannel(body) },
+                onTransferSignal = { sender, payload, sentAt -> get<TransferManager>().onSignal(sender, payload, sentAt) },
             )
         }
         // UI ViewModels, MeshService, and the notification/debug entry points bind this narrow facade (not
         // the concrete orchestrator) so they can be tested against a fake; the same singleton backs both keys.
         single<MeshController> { get<MeshManager>() }
+        // Direct Wi-Fi file transfer (transfer/): the radio and storage seams, the sealed-DM signaling seam
+        // (MeshManager) and the one state machine. Its inbound half reaches it through MeshManager's
+        // onTransferSignal hook above, resolved late so neither singleton constructs the other.
+        single<DirectWifi> { AndroidDirectWifi(androidContext(), get<MeshTransport>()) }
+        single<TransferFiles> { AndroidTransferFiles(androidContext()) }
+        single<TransferSignals> { get<MeshManager>() }
+        single {
+            TransferManager(
+                messages = get(),
+                signals = get(),
+                wifi = get(),
+                files = get(),
+                scope = get<CoroutineScope>(),
+                selfId = { get<Identity>().nodeId() },
+                peerNearby = { id -> get<MeshController>().neighbors.value.any { it.nodeId == id } },
+                log = { Log.i("KnitTransfer", it) },
+            )
+        }
         // One place that turns settings + `spoolStatus()` into the relay facts the chat indicator, the
         // relay settings screen and Diagnostics all read.
         single { RelayStatusRepository(get(), get()) }

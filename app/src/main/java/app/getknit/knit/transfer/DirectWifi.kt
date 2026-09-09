@@ -1,0 +1,113 @@
+package app.getknit.knit.transfer
+
+import java.net.InetAddress
+import java.security.SecureRandom
+
+/**
+ * The one-shot Wi-Fi Direct group a transfer rides. The sender hosts it, the receiver joins it by these
+ * credentials alone (no discovery, no dialog), and both forget it afterwards.
+ */
+data class GroupCredentials(
+    val ssid: String,
+    val passphrase: String,
+) {
+    companion object {
+        /** Every group name starts with this — the platform requires `DIRECT-xy`, two alphanumerics, then anything. */
+        const val SSID_PREFIX = "DIRECT-"
+        const val SSID_MAX_BYTES = 32
+        const val PASSPHRASE_MIN = 8
+        const val PASSPHRASE_MAX = 63
+
+        /** The two characters after `DIRECT-` on every group we host — what a leftover of ours is recognised by. */
+        private const val SSID_HEAD = "kn"
+        private const val SSID_TAIL_CHARS = 8
+        private const val PASSPHRASE_CHARS = 24
+        private const val ALPHANUMERIC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+        /** Fresh random credentials: `DIRECT-kn-abcdefgh` and a 24-character alphanumeric passphrase (~143 bits). */
+        fun random(rng: SecureRandom = SecureRandom()): GroupCredentials =
+            GroupCredentials(
+                ssid = "$SSID_PREFIX$SSID_HEAD-${alnum(rng, SSID_TAIL_CHARS)}",
+                passphrase = alnum(rng, PASSPHRASE_CHARS),
+            )
+
+        /** Whether [ssid] names a group this app hosted (a crash can leave one up; a foreign one is never touched). */
+        fun isOurs(ssid: String?): Boolean = ssid?.startsWith("$SSID_PREFIX$SSID_HEAD-") == true
+
+        /** Whether [ssid]/[passphrase] are something the platform would accept — what a READY is checked against. */
+        fun isValid(
+            ssid: String?,
+            passphrase: String?,
+        ): Boolean =
+            ssid != null &&
+                ssid.startsWith(SSID_PREFIX) &&
+                ssid.toByteArray(Charsets.UTF_8).size <= SSID_MAX_BYTES &&
+                passphrase != null &&
+                passphrase.length in PASSPHRASE_MIN..PASSPHRASE_MAX
+
+        private fun alnum(
+            rng: SecureRandom,
+            length: Int,
+        ): String = buildString(length) { repeat(length) { append(ALPHANUMERIC[rng.nextInt(ALPHANUMERIC.length)]) } }
+    }
+}
+
+/** A group this device is hosting: its own address on the group interface, and the subnet clients arrive from. */
+class HostedGroup(
+    val ownerAddress: InetAddress,
+    val prefixLength: Int,
+    val frequencyMhz: Int,
+)
+
+/** A group this device has joined: where the host listens. */
+class JoinedGroup(
+    val ownerAddress: InetAddress,
+)
+
+/** A host/join attempt that did not produce a group; [refusal] names a user-facing cause when there is one. */
+class DirectWifiException(
+    message: String,
+    val refusal: TransferRefusal? = null,
+    cause: Throwable? = null,
+) : Exception(message, cause)
+
+/**
+ * The radio seam of a direct transfer — the only thing between the pure [TransferManager] and
+ * `android.net.wifi.p2p`. The Android implementation (`AndroidDirectWifi`) also owns the Wi-Fi Aware
+ * pause/resume around the group and the wake lock, so the manager never learns about either.
+ */
+interface DirectWifi {
+    /** Why a transfer cannot start on this device right now, or null when it can. A snapshot, re-read per attempt. */
+    fun refusal(): TransferRefusal?
+
+    /** Stands up the group and returns once it is formed (within [timeoutMs]); throws [DirectWifiException] otherwise. */
+    suspend fun host(
+        credentials: GroupCredentials,
+        timeoutMs: Long,
+    ): HostedGroup
+
+    /** One attempt to join [credentials] (within [attemptMs]); throws [DirectWifiException] when it does not form. */
+    suspend fun join(
+        credentials: GroupCredentials,
+        attemptMs: Long,
+    ): JoinedGroup
+
+    /** Leaves/removes whatever group is up and hands the radio back. Idempotent; called from every terminal path. */
+    suspend fun release()
+}
+
+/** Whether this address shares the first [prefixLength] bits with [network] — the "came in over the group" gate. */
+fun InetAddress.inPrefix(
+    network: InetAddress,
+    prefixLength: Int,
+): Boolean {
+    val a = address
+    val b = network.address
+    if (a.size != b.size) return false
+    val fullBytes = prefixLength / Byte.SIZE_BITS
+    val restBits = prefixLength % Byte.SIZE_BITS
+    for (i in 0 until minOf(fullBytes, a.size)) if (a[i] != b[i]) return false
+    if (restBits == 0 || fullBytes >= a.size) return true
+    val mask = (0xFF shl (Byte.SIZE_BITS - restBits)) and 0xFF
+    return (a[fullBytes].toInt() and mask) == (b[fullBytes].toInt() and mask)
+}

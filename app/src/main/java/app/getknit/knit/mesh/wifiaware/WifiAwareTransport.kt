@@ -239,6 +239,10 @@ class WifiAwareTransport(
 
     @Volatile private var attachAbandoned = false
 
+    // The radio is lent to another same-app role (a Wi-Fi Direct group, `transfer/`): the session is closed and
+    // attach() refuses until resume(). Never cleared by availability — a same-app hand-over does not flap it.
+    @Volatile private var paused = false
+
     // Failed attaches over the whole life of the process. The streak above is refundable on purpose; this is
     // not, except by an attach that actually succeeds ([noteAttachSucceeded]). It exists because 2.3.1 shipped
     // the streak with a refund path that a refusing chipset could drive in a loop — see [availabilityReceiver]
@@ -754,6 +758,7 @@ class WifiAwareTransport(
         attaching.set(false)
         subscribing.set(false)
         clearAttachBackoff()
+        paused = false
         lastLinkEndedAt = 0L
         sessionCycleSettleStartedAt = 0L
         synchronized(lock) {
@@ -777,6 +782,47 @@ class WifiAwareTransport(
 
     override fun heal() {
         if (!hasHardware) return
+        healSignal.trySend(Unit)
+    }
+
+    /**
+     * Lend the radio out ([MeshTransport.pause]): drop every link, the responder and the whole session, and
+     * refuse to attach until [resume]. Mirrors [reattach]'s teardown without its re-attach, on the [handler]
+     * thread for the same reason. Health reads Degraded meanwhile — the radio is on, we are just not on it.
+     */
+    override fun pause() {
+        if (!hasHardware || paused) return
+        paused = true
+        Log.i(TAG, "pausing Wi-Fi Aware: radio lent to a same-app role")
+        onHandler {
+            peers.keys.toList().forEach { teardownPeer(it) }
+            stopResponder()
+            runCatching { publishSession?.close() }
+            runCatching { subscribeSession?.close() }
+            runCatching { session?.close() }
+            publishSession = null
+            subscribeSession = null
+            session = null
+            attaching.set(false)
+            subscribing.set(false)
+            reattaching.set(false)
+            ++attachGen // callbacks still in flight from the closed session are stale now
+            synchronized(lock) { accepting = 0 }
+            _health.value = TransportHealth.Degraded
+        }
+    }
+
+    /**
+     * Take the radio back ([MeshTransport.resume]). A same-app hand-over never flips availability, so this
+     * is the only edge: clear the attach backoff (a new fact about the radio, like a Wi-Fi toggle) and attach
+     * now rather than on the discovery loop's next tick.
+     */
+    override fun resume() {
+        if (!hasHardware || !paused) return
+        paused = false
+        Log.i(TAG, "resuming Wi-Fi Aware after a same-app hand-over")
+        clearAttachBackoff()
+        attach()
         healSignal.trySend(Unit)
     }
 
@@ -867,6 +913,7 @@ class WifiAwareTransport(
     private fun attach() =
         onHandler {
             val mgr = awareManager ?: return@onHandler
+            if (paused) return@onHandler // lent out; resume() attaches
             if (!mgr.isAvailable) {
                 _health.value = TransportHealth.Unavailable // Wi-Fi Aware off (Wi-Fi off / airplane mode)
                 return@onHandler
@@ -1188,6 +1235,7 @@ class WifiAwareTransport(
     private fun reattach() =
         onHandler {
             if (anyLinkActivity()) return@onHandler
+            if (paused) return@onHandler
             if (!reattaching.compareAndSet(false, true)) return@onHandler // collapse concurrent re-attach triggers
             Log.w(TAG, "re-attaching to recover wedged discovery/responder")
             stopResponder()

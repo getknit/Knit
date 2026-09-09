@@ -65,6 +65,7 @@ import app.getknit.knit.mesh.protocol.ReactionContent
 import app.getknit.knit.mesh.protocol.ReactionPayload
 import app.getknit.knit.mesh.protocol.ReceiptContent
 import app.getknit.knit.mesh.protocol.RelayEnvelope
+import app.getknit.knit.mesh.protocol.TransferPayload
 import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
@@ -76,6 +77,7 @@ import app.getknit.knit.notifications.NotifConversation
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.notifications.incomingNotification
 import app.getknit.knit.notifications.mentionNotification
+import app.getknit.knit.transfer.TransferSizes
 import kotlinx.coroutines.flow.first
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -169,6 +171,9 @@ class InboundPipeline(
     // X3DH init, i.e. the sender has not yet seen a frame of ours (IntroSync.onPeerFrameOpened). Runs
     // post-commit, outside the ratchet lock, since the answer it may trigger seals a frame of its own.
     private val onPeerFrameOpened: suspend (senderId: String, carriesInit: Boolean) -> Unit = { _, _ -> },
+    // A sealed CTL_TRANSFER landed (transfer/TransferManager.onSignal): direct-transfer signaling, handed on
+    // post-commit like the rest. True when it admitted a live incoming OFFER, which is what earns a notification.
+    private val onTransferCtl: suspend (senderId: String, payload: TransferPayload, sentAt: Long) -> Boolean = { _, _, _ -> false },
 ) {
     // nodeId -> avatar hash a non-direct peer advertised but whose bytes we're still pulling, so a blob
     // arriving via the multi-hop BlobExchange can be attributed back to the peer that advertised it.
@@ -985,6 +990,10 @@ class InboundPipeline(
                 // Post-commit: originating a pull is outbound work, and the peer row must already be
                 // written so the bytes have somewhere to be adopted into when they land.
                 outcome.avatarToPull?.let { pullRelayAvatarIfNeeded(env.senderId, it, haveAvatar = false) }
+            }
+
+            MessageContent.CTL_TRANSFER -> {
+                plain.xf?.let { onTransferSignal(env, it, me) }
             }
 
             else -> {}
@@ -2394,6 +2403,24 @@ class InboundPipeline(
         return true
     }
 
+    /**
+     * Direct-transfer signaling, handed to the transfer manager post-commit — and only from an accepted DM
+     * thread, so a stranger's offer is dropped as silently as a stranger's message lands in Requests. An
+     * admitted OFFER is the one phase worth a notification, on the DM channel exactly as a message would be.
+     */
+    private suspend fun onTransferSignal(
+        env: RelayEnvelope,
+        payload: TransferPayload,
+        me: String,
+    ) {
+        if (!isAccepted(env.senderId, me)) return
+        val admitted = onTransferCtl(env.senderId, payload, env.sentAt)
+        if (admitted && payload.phase == TransferPayload.PHASE_OFFER) {
+            val size = payload.size?.let { " (${TransferSizes.short(it)})" }.orEmpty()
+            notifyWithBody(env, env.senderId, "\uD83D\uDCCE Wants to send ${payload.name}$size")
+        }
+    }
+
     /** Fires a "new message" notification for an inbound chat in [conversationId] (skips our own and empty messages). */
     private suspend fun notifyIncoming(
         env: RelayEnvelope,
@@ -2402,14 +2429,24 @@ class InboundPipeline(
         fileName: String?,
         origin: MeshPostOrigin? = null,
     ) {
+        // Attachment-only messages have a blank body; show a placeholder so they still notify.
+        val body = GeoUri.describe(content.body, GeoUri.LABEL).ifBlank { attachmentPreview(content, fileName) }
+        notifyWithBody(env, conversationId, body, origin)
+    }
+
+    /** Posts [body] as a message from [env]'s sender in [conversationId] — the shared tail of every inbound notification. */
+    private suspend fun notifyWithBody(
+        env: RelayEnvelope,
+        conversationId: String,
+        body: String,
+        origin: MeshPostOrigin? = null,
+    ) {
         val me = identity.nodeId()
         val peer = peers.find(env.senderId)
         // Collision-aware (ADR 058): "Alice (JoyfulFerret)" when another known peer is also an Alice.
         val labels = peers.labelIndex()
         val senderLabel = labels.labelFor(env.senderId, peer?.name)
         val peerAvatar = peer?.avatarHash?.let { blobs.bytes(it) }
-        // Attachment-only messages have a blank body; show a placeholder so they still notify.
-        val body = GeoUri.describe(content.body, GeoUri.LABEL).ifBlank { attachmentPreview(content, fileName) }
         // A heard Meshtastic post is authored by its speaker, not by this phone, whose id sits in the row's
         // sender column by convention. Two things follow, and both are wrong without this. The notification
         // must name the speaker — the contact their board resolved to, else the board's NodeDB name, else the

@@ -119,10 +119,21 @@ object Protocol {
      */
     const val CAP_LINK_PREVIEW = 0x400L
 
+    /**
+     * Direct file transfer: this build answers a sealed `CTL_TRANSFER` offer (`MessageContent.xf`) with an
+     * accept/decline card and can join the one-shot Wi-Fi Direct group the sender hosts for the bytes.
+     *
+     * A send-time input like [CAP_FILES] — an offer is sent only toward a pinned profile carrying this bit,
+     * since a build without it consumes the ctl as a silent no-op and the sender would wait out the offer
+     * for nothing. Not a privacy control, for [CAP_FILES]'s reason.
+     */
+    const val CAP_DIRECT_TRANSFER = 0x800L
+
     /** This build's advertised capability bitfield. */
     const val LOCAL_CAPABILITIES: Long =
         CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT or
-            CAP_INLINE_ACK or CAP_FRAME_TRANSCODE or CAP_CRYPTO_V3 or CAP_FILES or CAP_LINK_PREVIEW
+            CAP_INLINE_ACK or CAP_FRAME_TRANSCODE or CAP_CRYPTO_V3 or CAP_FILES or CAP_LINK_PREVIEW or
+            CAP_DIRECT_TRANSFER
 
     private const val SEP = '|'
 

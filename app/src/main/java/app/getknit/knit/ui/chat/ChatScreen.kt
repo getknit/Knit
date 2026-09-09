@@ -313,6 +313,13 @@ fun ChatScreen(
             uri?.let(viewModel::attachFile)
         }
 
+    // The same picker for a large file, which goes to the peer over a one-shot Wi-Fi Direct link rather than
+    // as an attachment: any size, never the mesh, never the blob store (transfer/TransferManager).
+    val largeFilePicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri?.let(viewModel::offerTransfer)
+        }
+
     // Where a received file goes: the user names the destination and Knit streams the decrypted bytes into
     // it. There is no "open" counterpart, deliberately — handing another app a readable copy would mean
     // either a plaintext staging file or a provider serving decrypted bytes, and ADR 029's invariant (an
@@ -526,6 +533,10 @@ fun ChatScreen(
             // that before they save one rather than after. Everything else saves straight away.
             if (FileTypes.isRisky(mime, name)) riskyFile = pending else startSave(pending)
         },
+        onSendLargeFile = { largeFilePicker.launch(arrayOf(ANY_MIME)) },
+        onAcceptTransfer = viewModel::acceptTransfer,
+        onDeclineTransfer = viewModel::declineTransfer,
+        onCancelTransfer = viewModel::cancelTransfer,
         onClearAttachment = viewModel::clearAttachment,
         onReceiveImage = viewModel::attach,
         onTyping = viewModel::onUserTyping,
@@ -661,6 +672,11 @@ internal fun ChatScreenContent(
     onCameraClick: () -> Unit = {},
     onFileClick: () -> Unit = {},
     onSaveFile: (hash: String, key: String?, name: String?, mime: String?) -> Unit = { _, _, _, _ -> },
+    // A large file over a direct Wi-Fi link (DM only): the menu item, and the card's answers.
+    onSendLargeFile: () -> Unit = {},
+    onAcceptTransfer: (id: String) -> Unit = {},
+    onDeclineTransfer: (id: String) -> Unit = {},
+    onCancelTransfer: (id: String) -> Unit = {},
     onClearAttachment: () -> Unit,
     onReceiveImage: (Uri) -> Unit,
     onTyping: () -> Unit,
@@ -960,6 +976,17 @@ internal fun ChatScreenContent(
                                         },
                                     )
                                 } else {
+                                    // A large file rides a one-shot Wi-Fi Direct link, not the mesh, so it is a
+                                    // DM affair: one peer, in range, running a build that answers.
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.chat_send_large_file)) },
+                                        leadingIcon = { Icon(Icons.Filled.AttachFile, contentDescription = null) },
+                                        modifier = Modifier.testTag("chat_send_large_file"),
+                                        onClick = {
+                                            headerMenuOpen = false
+                                            onSendLargeFile()
+                                        },
+                                    )
                                     DropdownMenuItem(
                                         text = {
                                             Text(
@@ -1160,7 +1187,13 @@ internal fun ChatScreenContent(
                             // A centred status notice and a chat bubble are different enough shapes that
                             // sharing one subcomposition slot costs more than it saves. Keyed on plain
                             // data — statusNoticeText is @Composable and cannot be called from here.
-                            contentType = { row -> if (row.kind == MessageEntity.KIND_NORMAL) "bubble" else "notice" },
+                            contentType = { row ->
+                                when {
+                                    row.transfer != null -> "transfer"
+                                    row.kind == MessageEntity.KIND_NORMAL -> "bubble"
+                                    else -> "notice"
+                                }
+                            },
                         ) { row ->
                             // Fade only, no placement animation (`placementSpec = null`): the three
                             // LaunchedEffects above already drive animateScrollToItem(0) when a message or a
@@ -1174,7 +1207,17 @@ internal fun ChatScreenContent(
                                     fadeOutSpec = KnitMotion.fastEffects(),
                                 )
                             val notice = statusNoticeText(row)
-                            if (notice != null) {
+                            val transfer = row.transfer
+                            if (transfer != null) {
+                                TransferCard(
+                                    view = transfer,
+                                    mine = row.mine,
+                                    onAccept = { onAcceptTransfer(transfer.id) },
+                                    onDecline = { onDeclineTransfer(transfer.id) },
+                                    onCancel = { onCancelTransfer(transfer.id) },
+                                    modifier = itemMotion,
+                                )
+                            } else if (notice != null) {
                                 SystemNotice(text = notice, modifier = itemMotion)
                             } else {
                                 MessageBubble(

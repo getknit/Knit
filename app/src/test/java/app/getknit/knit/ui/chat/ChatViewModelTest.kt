@@ -22,6 +22,8 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.TransferPhase
+import app.getknit.knit.data.message.TransferRecord
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.relay.RelayFacts
@@ -36,6 +38,7 @@ import app.getknit.knit.location.LocationFix
 import app.getknit.knit.location.LocationFixPolicy
 import app.getknit.knit.location.LocationPrecision
 import app.getknit.knit.mesh.FakeMeshController
+import app.getknit.knit.mesh.Peer
 import app.getknit.knit.mesh.PublicPostOutcome
 import app.getknit.knit.mesh.PublicPostRefusal
 import app.getknit.knit.mesh.TransportKind
@@ -49,6 +52,10 @@ import app.getknit.knit.mesh.protocol.LinkPreviewBlob
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
+import app.getknit.knit.transfer.OfferOutcome
+import app.getknit.knit.transfer.TransferManager
+import app.getknit.knit.transfer.TransferRefusal
+import app.getknit.knit.transfer.TransferState
 import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
@@ -110,6 +117,8 @@ class ChatViewModelTest {
     private val linkCards = mockk<LinkCardStore>(relaxed = true)
     private val linkPreviews = mockk<LinkPreviewService>(relaxed = true)
     private val locationSource = FakeLocationSource()
+    private val transfers = mockk<TransferManager>(relaxed = true)
+    private val transfersFlow = MutableStateFlow(emptyMap<String, TransferState>())
 
     private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
     private val reactionsFlow = MutableStateFlow(emptyList<ReactionEntity>())
@@ -167,6 +176,7 @@ class ChatViewModelTest {
         every { linkPreviews.online } returns onlineFlow
         every { settings.linkPreviewsEnabled } returns linkPreviewsEnabledFlow
         every { settings.locationShareConsented } returns locationConsentFlow
+        every { transfers.states } returns transfersFlow
     }
 
     @After
@@ -241,6 +251,7 @@ class ChatViewModelTest {
             relayFactsFlow,
             loraFactsFlow,
             context,
+            transfers,
         )
 
     @Test
@@ -1773,6 +1784,130 @@ class ChatViewModelTest {
             peersFlow.value = listOf(peer("bob", "Bob", capabilities = null))
             advanceUntilIdle()
             assertTrue(dm.state.value.canSendFile)
+        }
+
+    // --- direct Wi-Fi transfer of a large file (transfer/TransferManager) ---
+
+    private fun transferRow(
+        phase: TransferPhase,
+        outgoing: Boolean = false,
+    ) = TransferRecord(id = "t1", outgoing = outgoing, name = "clip.mp4", size = 2_000L, mime = "video/mp4", phase = phase)
+        .toEntity(peerId = "bob", selfId = "me", sentAt = 5L)
+
+    @Test
+    fun aLargeFileIsOfferedOnlyToANearbyPeerCarryingTheCapability() =
+        runTest {
+            stubDm("bob")
+            val uri = Uri.parse("content://docs/clip")
+            coEvery { peers.find("bob") } returns peer("bob", "Bob", capabilities = Protocol.CAP_E2E)
+            val vm = vm("bob")
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+
+            vm.offerTransfer(uri)
+            advanceUntilIdle()
+            assertEquals(listOf(R.string.chat_transfer_peer_too_old), events)
+
+            coEvery { peers.find("bob") } returns peer("bob", "Bob", capabilities = Protocol.LOCAL_CAPABILITIES)
+            vm.offerTransfer(uri)
+            advanceUntilIdle()
+            assertEquals(R.string.chat_transfer_peer_not_nearby, events.last())
+            coVerify(exactly = 0) { transfers.offer(any(), any()) }
+
+            mesh.neighbors.value = setOf(Peer("bob"))
+            coEvery { transfers.offer("bob", uri.toString()) } returns OfferOutcome.Started("t1")
+            vm.offerTransfer(uri)
+            advanceUntilIdle()
+            assertEquals("a started offer says nothing", 2, events.size)
+            coVerify { transfers.offer("bob", uri.toString()) }
+
+            coEvery { transfers.offer("bob", uri.toString()) } returns OfferOutcome.Refused(TransferRefusal.WifiOff)
+            vm.offerTransfer(uri)
+            advanceUntilIdle()
+            assertEquals(R.string.chat_transfer_wifi_off, events.last())
+        }
+
+    @Test
+    fun aLargeFileIsNeverOfferedFromTheRoomOrAGroup() =
+        runTest {
+            coEvery { groups.find(GROUP) } returns group(GROUP, members = listOf("me", "sam"))
+            for (thread in listOf(Conversations.NEARBY, GROUP)) {
+                val vm = vm(thread)
+                val events = mutableListOf<Int>()
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+                vm.offerTransfer(Uri.parse("content://docs/clip"))
+                advanceUntilIdle()
+                assertEquals(thread, listOf(R.string.chat_transfer_needs_dm), events)
+            }
+            coVerify(exactly = 0) { transfers.offer(any(), any()) }
+        }
+
+    @Test
+    fun aTransferRecordFoldsIntoACardWithLiveProgressAndReadsInterruptedWithoutIt() =
+        runTest {
+            stubDm("bob")
+            val vm = vm("bob")
+            collectState(vm)
+            messagesFlow.value = listOf(transferRow(TransferPhase.Transferring))
+            transfersFlow.value =
+                mapOf("t1" to TransferState("t1", "bob", false, "clip.mp4", 2_000L, "video/mp4", TransferPhase.Transferring, bytes = 500L))
+            advanceUntilIdle()
+            val live =
+                checkNotNull(
+                    vm.state.value.rows
+                        .single()
+                        .transfer,
+                )
+            assertEquals(TransferPhase.Transferring, live.phase)
+            assertEquals(500L, live.bytes)
+            assertFalse(live.interrupted)
+            assertEquals(
+                "a card row is a status-notice kind, not a bubble",
+                MessageEntity.KIND_FILE_TRANSFER,
+                vm.state.value.rows
+                    .single()
+                    .kind,
+            )
+
+            transfersFlow.value = emptyMap()
+            advanceUntilIdle()
+            assertTrue(
+                "no live state behind a non-terminal record",
+                checkNotNull(
+                    vm.state.value.rows
+                        .single()
+                        .transfer,
+                ).interrupted,
+            )
+
+            messagesFlow.value = listOf(transferRow(TransferPhase.Done))
+            advanceUntilIdle()
+            assertFalse(
+                checkNotNull(
+                    vm.state.value.rows
+                        .single()
+                        .transfer,
+                ).interrupted,
+            )
+        }
+
+    @Test
+    fun answeringATransferGoesToTheManagerAndARefusalIsSaid() =
+        runTest {
+            stubDm("bob")
+            val vm = vm("bob")
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+            coEvery { transfers.accept("t1") } returns TransferRefusal.NoSpace
+
+            vm.acceptTransfer("t1")
+            vm.declineTransfer("t1")
+            vm.cancelTransfer("t1")
+            advanceUntilIdle()
+
+            assertEquals(listOf(R.string.chat_transfer_no_space), events)
+            coVerify { transfers.decline("t1") }
+            coVerify { transfers.cancel("t1") }
         }
 
     /** One member on an old build is one person who cannot read the message, so the group send is refused. */

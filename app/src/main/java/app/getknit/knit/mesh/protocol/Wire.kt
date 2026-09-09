@@ -543,6 +543,49 @@ data class ProfilePayload(
 )
 
 /**
+ * The sealed `CTL_TRANSFER` payload — the signaling for a direct Wi-Fi file transfer between two contacts
+ * (`transfer/TransferManager`). The bytes themselves never touch the mesh: this carries the offer ([name],
+ * [size], [mime]), the answer, and — on the sender's READY — the one-shot Wi-Fi Direct group the receiver
+ * joins ([ssid]/[passphrase]), the TCP [port] the sender listens on, and the per-transfer [key] (base64,
+ * 32 bytes) the stream's client proof and trailer are keyed with. Every field but [id]/[phase] is nullable
+ * and phase-specific, per docs/WIRE_COMPAT.md rule 1; [key] is base64 rather than `@ByteString` for that
+ * document's no-defaulted-ByteArray rule. [name] is sender-supplied text and is normalized through
+ * [AttachmentName] at the decode boundary, exactly like `MessageContent.attachmentName`.
+ */
+@Serializable
+data class TransferPayload(
+    val id: String,
+    val phase: Int,
+    val name: String? = null,
+    val size: Long? = null,
+    val mime: String? = null,
+    val ssid: String? = null,
+    val passphrase: String? = null,
+    val port: Int? = null,
+    val key: String? = null,
+    val reason: Int? = null,
+) {
+    companion object {
+        const val PHASE_OFFER = 1
+        const val PHASE_ACCEPT = 2
+        const val PHASE_DECLINE = 3
+        const val PHASE_CANCEL = 4
+        const val PHASE_READY = 5
+
+        const val REASON_USER = 1
+        const val REASON_BUSY = 2
+        const val REASON_NO_WIFI = 3
+        const val REASON_JOIN_FAILED = 4
+        const val REASON_TIMEOUT = 5
+
+        // Local-only outcomes, numbered in the same registry so a record has one vocabulary for "why".
+        const val REASON_CORRUPT = 6
+        const val REASON_CONNECTION = 7
+        const val REASON_NO_SPACE = 8
+    }
+}
+
+/**
  * The end-to-end encryption envelope carried inside an encrypted [ChatContent]. A random per-message
  * content key encrypts the [app.getknit.knit.mesh.crypto.MessageContent] with AES-256-GCM into [ct]
  * under [nonce] (both raw byte strings — CBOR `@ByteString`, not base64: the envelope already rides a

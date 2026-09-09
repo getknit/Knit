@@ -55,6 +55,7 @@ style:
       - '**/mesh/spool/OkHttpSpoolDialer.kt'     # the spool plane's socket (rules/mesh.md)
       - '**/linkpreview/OkHttpPreviewFetcher.kt' # the link-preview fetch (rules/mesh.md)
       - '**/location/AndroidLocationSource.kt'   # the one android.location importer (shares the list, so also exempt from the two bans above)
+      - '**/transfer/AndroidDirectWifi.kt'       # the one android.net.wifi.p2p importer (direct file transfer)
     forbiddenImports:
       - value: 'android.graphics.BitmapFactory'
         reason: >-
@@ -66,6 +67,11 @@ style:
           OkHttp is confined to mesh/spool/OkHttpSpoolDialer.kt and linkpreview/OkHttpPreviewFetcher.kt
           (rules/mesh.md): each sits behind a pure seam (SpoolLink/SpoolSocket; PreviewFetcher) so everything
           above it runs against an in-process fake, and the app's whole Internet surface stays two files.
+      - value: 'android.net.wifi.p2p.*'
+        reason: >-
+          Wi-Fi Direct is driven from transfer/AndroidDirectWifi.kt and nowhere else, behind the DirectWifi seam:
+          it is what pauses and resumes the Wi-Fi Aware plane around a group, so a second importer would be a
+          second place the mesh radio could be taken without being handed back.
       - value: 'android.location.*'
         reason: >-
           The device's position is read in location/AndroidLocationSource.kt and nowhere else, behind the

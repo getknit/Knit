@@ -232,6 +232,14 @@ class CompositeMeshTransport(
         children.forEach { it.heal() }
     }
 
+    override fun pause() {
+        children.forEach { it.pause() }
+    }
+
+    override fun resume() {
+        children.forEach { it.resume() }
+    }
+
     override suspend fun send(
         wire: WireEnvelope,
         to: Peer?,

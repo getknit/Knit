@@ -33,6 +33,10 @@ document:
 
 - Menus, cards, dialogs and sheets now match the rest of the app. They had been drawing a grey-purple from
   Material's defaults that never sat right next to Knit's coral.
+- A file, link or location card in a message now carries its own colours instead of the bubble's. The same
+  card had looked different depending on whether you sent the message or received it.
+- On Android 11 and older, a list pulled past its end now glows Knit's coral. It had been a flat grey that
+  belonged to nothing else on the screen.
 
 ## [2.5.0](https://github.com/getknit/knit/releases/tag/v2.5.0) — 2026-09-08T07:54:21Z
 

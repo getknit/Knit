@@ -70,6 +70,29 @@ class ColorSchemeTest {
         assertTrue(dynamicColorAvailable(34))
     }
 
+    /**
+     * The overscroll glow is the one colour Compose does not take from a theme at all:
+     * `AndroidOverscroll.android.kt` compiles in `DefaultGlowColor = Color(0xFF666666)` and hands it to
+     * `EdgeEffect.setColor`, so a list that runs out of content glows flat grey under warm coral surfaces.
+     * `KnitTheme` overrides it through `LocalOverscrollFactory`. Only ever visible on API 29-30 — from 31
+     * the effect is the stretch, which ignores the colour — which is exactly why nothing else would catch
+     * this going missing: the lab Pixels can't show it.
+     */
+    @Test
+    fun overscrollGlowComesFromTheThemeNotComposesGrey() {
+        val match =
+            GLOW_COLOR.find(themeSource())
+                ?: error(
+                    "KnitTheme no longer provides LocalOverscrollFactory, so every list falls back to " +
+                        "Compose's hardcoded #666666 glow on API 29-30.",
+                )
+        assertTrue(
+            "The glow is ${match.groupValues[1]}, which is not a role off the scheme KnitTheme just built " +
+                "— so it stops tracking dark mode and the Material You switch.",
+            match.groupValues[1].startsWith("colorScheme."),
+        )
+    }
+
     @Test
     fun positiveClearsContrastAgainstItsOwnSurface() {
         // KnitSemanticColors pins this green across every scheme, so it has to hold up against a dynamic
@@ -153,6 +176,9 @@ class ColorSchemeTest {
         const val MIN_CONTRAST = 3.0
 
         val NAMED_ARG = Regex("""(\w+)\s*=""")
+
+        /** The `glowColor` KnitTheme hands to `rememberPlatformOverscrollFactory`. */
+        val GLOW_COLOR = Regex("""rememberPlatformOverscrollFactory\(glowColor = ([\w.]+)\)""")
 
         /**
          * Every role `dynamicLightColorScheme31`/`dynamicDarkColorScheme31` fills (material3 1.4.0).

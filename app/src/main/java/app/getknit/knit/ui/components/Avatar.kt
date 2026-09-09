@@ -1,6 +1,5 @@
 package app.getknit.knit.ui.components
 
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -11,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -90,7 +90,11 @@ fun Avatar(
                     if (onClick != null) {
                         Modifier.clickable(
                             interactionSource = interaction,
-                            indication = LocalIndication.current,
+                            // The ambient ripple colours itself from LocalContentColor, which here is
+                            // whatever the row or bubble around the avatar set — not this circle's own
+                            // content colour. Name it, the way ripple()'s own docs mean it: the colour
+                            // the component's text or iconography uses.
+                            indication = ripple(color = contentColor),
                             onClickLabel = onClickLabel,
                             role = Role.Button,
                             onClick = onClick,

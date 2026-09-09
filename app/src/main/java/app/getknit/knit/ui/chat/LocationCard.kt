@@ -25,11 +25,13 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -75,60 +77,66 @@ fun LocationCard(
     val coordinates = GeoUri.coordinates(point)
     val accuracy = accuracyLine(point.accuracyM, coarse = false)
     val description = stringResource(R.string.chat_location_card_desc, coordinates, accuracy)
-    Row(
-        modifier =
-            modifier
-                .padding(vertical = 2.dp)
-                .width(LINK_CARD_WIDTH)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surface),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(
+    // The card paints its own container, so it has to carry the matching content colour too. Without
+    // this the ripple and the "Location" label inherit the *bubble's* content colour — which on an
+    // outgoing message is onPrimaryContainer, a role belonging to a surface this card doesn't draw.
+    // CoordinatesLine already spelled onSurface out by hand; this is the same answer for the rest of it.
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+        Row(
             modifier =
-                Modifier
-                    .weight(1f)
-                    .combinedClickable(
-                        onClickLabel = stringResource(R.string.chat_location_open_maps),
-                        onClick = onOpen,
-                        onLongClick = onLongClick,
-                    )
-                    // After the clickable, so the action survives and the texts merge into one sentence.
-                    .clearAndSetSemantics {
-                        contentDescription = description
-                        role = Role.Button
-                        testTag = "chat_location_card"
-                    }.padding(start = 10.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+                modifier
+                    .padding(vertical = 2.dp)
+                    .width(LINK_CARD_WIDTH)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Filled.LocationOn,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(4.dp))
+            Column(
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .combinedClickable(
+                            onClickLabel = stringResource(R.string.chat_location_open_maps),
+                            onClick = onOpen,
+                            onLongClick = onLongClick,
+                        )
+                        // After the clickable, so the action survives and the texts merge into one sentence.
+                        .clearAndSetSemantics {
+                            contentDescription = description
+                            role = Role.Button
+                            testTag = "chat_location_card"
+                        }.padding(start = 10.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.LocationOn,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.chat_location_card_label),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                CoordinatesLine(coordinates)
                 Text(
-                    text = stringResource(R.string.chat_location_card_label),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    text = accuracy,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.height(2.dp))
-            CoordinatesLine(coordinates)
-            Text(
-                text = accuracy,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        IconButton(onClick = onCopy, modifier = Modifier.testTag("chat_location_copy")) {
-            Icon(
-                Icons.Filled.ContentCopy,
-                contentDescription = stringResource(R.string.chat_location_copy),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
+            IconButton(onClick = onCopy, modifier = Modifier.testTag("chat_location_copy")) {
+                Icon(
+                    Icons.Filled.ContentCopy,
+                    contentDescription = stringResource(R.string.chat_location_copy),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }

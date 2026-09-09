@@ -1,7 +1,9 @@
 package app.getknit.knit.ui.theme
 
 import android.os.Build
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberPlatformOverscrollFactory
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -151,9 +153,19 @@ fun KnitTheme(
     // LocalKnitColors is keyed on darkTheme and NOT on dynamicColor: the semantic green is fixed in
     // every scheme (see KnitSemanticColors), and pairing it with onPositive by mode keeps the two
     // legible together in all four combinations.
+    // LocalOverscrollFactory is provided for the same reason: the stretch/glow that every list draws when
+    // it runs out of content is the last colour in the app that came from neither KnitTheme nor the XML
+    // theme. Compose Foundation hardcodes it — AndroidOverscroll.android.kt's DefaultGlowColor is
+    // Color(0xFF666666) — and hands it to EdgeEffect.setColor. From API 31 the effect is the stretch, which
+    // ignores setColor entirely, so this is only ever visible on 29-30; those are the two releases minSdk
+    // still carries, and a flat grey glow under a coral list is exactly the fallthrough the colour-role
+    // sweep was about. primary is the role the platform's own themes pointed colorEdgeEffect at.
+    // Deliberately NOT gated on LocalReduceMotion, unlike everything in KnitMotion: overscroll tracks the
+    // finger 1:1, and the platform's own RecyclerView keeps stretching at animator scale 0.
     CompositionLocalProvider(
         LocalReduceMotion provides rememberReduceMotion(),
         LocalKnitColors provides if (darkTheme) DarkSemanticColors else LightSemanticColors,
+        LocalOverscrollFactory provides rememberPlatformOverscrollFactory(glowColor = colorScheme.primary),
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

@@ -1,6 +1,5 @@
 package app.getknit.knit.ui.components
 
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -13,6 +12,7 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -79,7 +79,9 @@ fun GroupAvatar(
                     if (onClick != null) {
                         Modifier.clickable(
                             interactionSource = interaction,
-                            indication = LocalIndication.current,
+                            // See Avatar: the ripple takes the glyph's own colour rather than whatever
+                            // content colour the surrounding row happens to carry.
+                            indication = ripple(color = MaterialTheme.colorScheme.onSecondaryContainer),
                             onClickLabel = onClickLabel,
                             role = Role.Button,
                             onClick = onClick,

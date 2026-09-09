@@ -20,9 +20,11 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,48 +79,54 @@ fun LinkPreviewCard(
         return
     }
     val description = stringResource(R.string.chat_link_card_desc, card.title, card.host)
-    Column(
-        modifier =
-            modifier
-                .padding(vertical = 2.dp)
-                .width(LINK_CARD_WIDTH)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .combinedClickable(
-                    onClickLabel = stringResource(R.string.chat_open_link),
-                    onClick = onOpen,
-                    onLongClick = onLongClick,
-                )
-                // After the clickable, so the action survives and the texts merge into one sentence.
-                .clearAndSetSemantics {
-                    contentDescription = description
-                    role = Role.Button
-                    testTag = "chat_link_card"
-                },
-    ) {
-        if (card.hasImage) {
-            CardPicture(LinkCardImage(hash, key))
-        }
-        Column(modifier = Modifier.padding(10.dp)) {
-            Text(
-                text = card.title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            card.description?.let { text ->
-                Spacer(Modifier.height(2.dp))
+    // The card paints its own container, so it has to carry the matching content colour too. Without
+    // this the ripple and the title inherit the *bubble's* content colour — which on an outgoing
+    // message is onPrimaryContainer, a role belonging to a surface this card doesn't draw. The
+    // description and host keep their explicit onSurfaceVariant: that is real de-emphasis against it.
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+        Column(
+            modifier =
+                modifier
+                    .padding(vertical = 2.dp)
+                    .width(LINK_CARD_WIDTH)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .combinedClickable(
+                        onClickLabel = stringResource(R.string.chat_open_link),
+                        onClick = onOpen,
+                        onLongClick = onLongClick,
+                    )
+                    // After the clickable, so the action survives and the texts merge into one sentence.
+                    .clearAndSetSemantics {
+                        contentDescription = description
+                        role = Role.Button
+                        testTag = "chat_link_card"
+                    },
+        ) {
+            if (card.hasImage) {
+                CardPicture(LinkCardImage(hash, key))
+            }
+            Column(modifier = Modifier.padding(10.dp)) {
                 Text(
-                    text = text,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
+                    text = card.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                card.description?.let { text ->
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                HostLine(card.host)
             }
-            Spacer(Modifier.height(4.dp))
-            HostLine(card.host)
         }
     }
 }
@@ -151,27 +159,29 @@ private fun HiddenCard(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier =
-            modifier
-                .padding(vertical = 2.dp)
-                .width(LINK_CARD_WIDTH)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .combinedClickable(onClick = onReveal, onLongClick = onLongClick)
-                .padding(vertical = 20.dp, horizontal = 12.dp)
-                .testTag("chat_link_card_hidden"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(Icons.Filled.VisibilityOff, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = stringResource(R.string.moderation_link_hidden),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+    // See LinkPreviewCard: the card paints its own container, so it carries the content colour to match.
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) {
+        Column(
+            modifier =
+                modifier
+                    .padding(vertical = 2.dp)
+                    .width(LINK_CARD_WIDTH)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .combinedClickable(onClick = onReveal, onLongClick = onLongClick)
+                    .padding(vertical = 20.dp, horizontal = 12.dp)
+                    .testTag("chat_link_card_hidden"),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(Icons.Filled.VisibilityOff, contentDescription = null)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.moderation_link_hidden),
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 

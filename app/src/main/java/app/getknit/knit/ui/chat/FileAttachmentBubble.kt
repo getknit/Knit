@@ -21,9 +21,11 @@ import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -75,67 +77,70 @@ fun FileAttachmentBubble(
             if (ready) null else stringResource(R.string.chat_file_loading),
         ).joinToString(SEPARATOR)
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier =
-            Modifier
-                .padding(vertical = 2.dp)
-                .width(BUBBLE_WIDTH)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .combinedClickable(
-                    enabled = ready,
-                    onClickLabel = stringResource(R.string.chat_file_save),
-                    onClick = onSave,
-                    onLongClick = onLongClick,
-                ).padding(10.dp)
-                // One node, one sentence: the icon is decorative and the lines are halves of the same label,
-                // so TalkBack reads "report.pdf, 1.4 MB · PDF" rather than walking three separate nodes.
-                .clearAndSetSemantics {
-                    contentDescription = listOfNotNull(label, detail.ifEmpty { null }, warning).joinToString(", ")
-                },
-    ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.size(ICON_SLOT),
+    // The card paints its own container, so it has to carry the matching content colour too. Without
+    // this the ripple, the filename and the icon all inherit the *bubble's* content colour — which on
+    // an outgoing message is onPrimaryContainer, a role belonging to a surface this card doesn't draw.
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier =
+                Modifier
+                    .padding(vertical = 2.dp)
+                    .width(BUBBLE_WIDTH)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .combinedClickable(
+                        enabled = ready,
+                        onClickLabel = stringResource(R.string.chat_file_save),
+                        onClick = onSave,
+                        onLongClick = onLongClick,
+                    ).padding(10.dp)
+                    // One node, one sentence: the icon is decorative and the lines are halves of the same label,
+                    // so TalkBack reads "report.pdf, 1.4 MB · PDF" rather than walking three separate nodes.
+                    .clearAndSetSemantics {
+                        contentDescription = listOfNotNull(label, detail.ifEmpty { null }, warning).joinToString(", ")
+                    },
         ) {
-            if (ready) {
-                Icon(
-                    fileIconFor(mime, name),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.size(ICON_SLOT),
+            ) {
+                if (ready) {
+                    Icon(
+                        fileIconFor(mime, name),
+                        contentDescription = null,
+                    )
+                } else {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
             }
-        }
-        Column(
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(start = 10.dp),
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (detail.isNotEmpty()) {
+            Column(
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(start = 10.dp),
+            ) {
                 Text(
-                    text = detail,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            }
-            if (warning != null) {
-                Text(
-                    text = warning,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (detail.isNotEmpty()) {
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (warning != null) {
+                    Text(
+                        text = warning,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }

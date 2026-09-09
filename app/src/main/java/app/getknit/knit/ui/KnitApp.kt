@@ -53,6 +53,7 @@ import app.getknit.knit.ui.relay.InternetRelayScreen
 import app.getknit.knit.ui.requests.MessageRequestsScreen
 import app.getknit.knit.ui.review.RateReviewDialog
 import app.getknit.knit.ui.review.ReviewPromptInbox
+import app.getknit.knit.ui.settings.SettingsScreen
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.ShareTargetScreen
 import app.getknit.knit.ui.theme.KnitMotion
@@ -67,6 +68,7 @@ private object Routes {
     const val ONBOARDING = "onboarding"
     const val CHAT_LIST = "chatlist"
     const val CONTACTS = "contacts"
+    const val SETTINGS = "settings"
     const val PROFILE = "profile"
     const val DIAGNOSTICS = "diagnostics"
     const val CRASH_LOG = "crash"
@@ -272,7 +274,7 @@ fun KnitApp(startRoute: String? = null) {
             ChatListScreen(
                 onOpenConversation = { id -> navController.navigate(Routes.chat(id)) },
                 onNewMessage = { navController.navigate(Routes.CONTACTS) },
-                onOpenProfile = { navController.navigate(Routes.PROFILE) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
                 onOpenBlockedUsers = { navController.navigate(Routes.BLOCKED_USERS) },
                 onOpenMessageRequests = { navController.navigate(Routes.MESSAGE_REQUESTS) },
@@ -378,16 +380,20 @@ fun KnitApp(startRoute: String? = null) {
                 onLeft = { navController.popBackStack(Routes.CHAT_LIST, inclusive = false) },
             )
         }
-        composable(Routes.PROFILE) {
-            ProfileScreen(
+        composable(Routes.SETTINGS) {
+            SettingsScreen(
                 onBack = { navController.popBackStack() },
+                onOpenProfile = { navController.navigate(Routes.PROFILE) },
                 onOpenRelays = { navController.navigate(Routes.INTERNET_RELAYS) },
                 onOpenLora = { navController.navigate(Routes.LORA_RADIO) },
             )
         }
+        composable(Routes.PROFILE) {
+            ProfileScreen(onBack = { navController.popBackStack() })
+        }
         // The Internet-relay plane's editor exists only in builds that introduce the feature — the route
         // is not registered at all when it is dark, so nothing (a restored back stack, a future deep
-        // link) can reach a screen whose switch would be inert anyway. Profile hides its row on the same
+        // link) can reach a screen whose switch would be inert anyway. Settings hides its row on the same
         // flag, so nothing navigates here. See app/build.gradle.kts for what INTERNET_PLANE gates.
         if (BuildConfig.INTERNET_PLANE) {
             composable(Routes.INTERNET_RELAYS) {
@@ -395,7 +401,7 @@ fun KnitApp(startRoute: String? = null) {
             }
         }
         // The LoRa radio screen exists only in builds that introduce the feature; the route is not
-        // registered when the flag is off, and Profile hides its row on the same flag.
+        // registered when the flag is off, and Settings hides its row on the same flag.
         if (BuildConfig.LORA_PLANE) {
             composable(Routes.LORA_RADIO) {
                 LoraRadioScreen(onBack = { navController.popBackStack() })

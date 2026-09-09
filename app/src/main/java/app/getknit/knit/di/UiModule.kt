@@ -19,6 +19,7 @@ import app.getknit.knit.ui.profile.ProfileDetailsViewModel
 import app.getknit.knit.ui.profile.ProfileViewModel
 import app.getknit.knit.ui.relay.InternetRelayViewModel
 import app.getknit.knit.ui.requests.MessageRequestsViewModel
+import app.getknit.knit.ui.settings.SettingsViewModel
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
@@ -68,8 +69,9 @@ val uiModule =
         viewModel { ContactsViewModel(get(), get(), get(), get(), get(), get()) }
         viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
         viewModel { CrashLogViewModel(get()) }
+        viewModel { ProfileViewModel(get(), get(), get(), get()) }
         viewModel {
-            ProfileViewModel(get(), get(), get(), get(), get<RelayStatusRepository>().facts, get<LoraStatusRepository>().facts)
+            SettingsViewModel(get(), get(), get<RelayStatusRepository>().facts, get<LoraStatusRepository>().facts)
         }
         // ProfileDetailsViewModel takes the tapped peer's node id as a runtime param.
         viewModel { params -> ProfileDetailsViewModel(params.get(), get(), get(), get(), get()) }

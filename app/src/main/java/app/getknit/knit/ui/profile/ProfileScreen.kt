@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,22 +38,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -66,21 +60,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
-import app.getknit.knit.mesh.lora.BoardBattery
-import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.components.Avatar
-import app.getknit.knit.ui.isIgnoringBatteryOptimizations
 import app.getknit.knit.ui.preview.KnitPreview
-import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
-import app.getknit.knit.ui.theme.DYNAMIC_COLOR_SUPPORTED
 import org.koin.androidx.compose.koinViewModel
 
 /** UI-local projection of [ProfileViewModel]'s per-field flows for the stateless content. */
@@ -91,20 +76,17 @@ internal data class ProfileFormState(
     val alias: String,
     val aliasMore: String = "",
     val avatarHash: String?,
-    val contentFilteringEnabled: Boolean,
-    val linkPreviewsEnabled: Boolean = false,
     val openToChat: Boolean = false,
-    val dynamicColor: Boolean = false,
-    val relay: RelaySummary,
-    val lora: LoraSummary,
     val isDirty: Boolean,
 )
 
+/**
+ * Your own profile: the photo, name, status and availability that peers see. Reached from the header row
+ * at the top of Settings; app settings themselves live there, not here.
+ */
 @Composable
 fun ProfileScreen(
     onBack: () -> Unit,
-    onOpenRelays: () -> Unit = {},
-    onOpenLora: () -> Unit = {},
     viewModel: ProfileViewModel = koinViewModel(),
 ) {
     val name by viewModel.displayName.collectAsStateWithLifecycle()
@@ -114,12 +96,7 @@ fun ProfileScreen(
     val aliasMore by viewModel.aliasMore.collectAsStateWithLifecycle()
     val avatarHash by viewModel.avatarHash.collectAsStateWithLifecycle()
     val cropTarget by viewModel.cropTarget.collectAsStateWithLifecycle()
-    val contentFilteringEnabled by viewModel.contentFilteringEnabled.collectAsStateWithLifecycle()
-    val linkPreviewsEnabled by viewModel.linkPreviewsEnabled.collectAsStateWithLifecycle()
     val openToChat by viewModel.openToChat.collectAsStateWithLifecycle()
-    val dynamicColor by viewModel.dynamicColor.collectAsStateWithLifecycle()
-    val relay by viewModel.relaySummary.collectAsStateWithLifecycle()
-    val lora by viewModel.loraSummary.collectAsStateWithLifecycle()
     val isDirty by viewModel.isDirty.collectAsStateWithLifecycle()
 
     // Navigate back only once Save has finished persisting (the write outlives this composition because
@@ -142,7 +119,6 @@ fun ProfileScreen(
         )
     }
 
-    val context = LocalContext.current
     ProfileScreenContent(
         form =
             ProfileFormState(
@@ -152,33 +128,21 @@ fun ProfileScreen(
                 alias = alias,
                 aliasMore = aliasMore,
                 avatarHash = avatarHash,
-                contentFilteringEnabled = contentFilteringEnabled,
-                linkPreviewsEnabled = linkPreviewsEnabled,
                 openToChat = openToChat,
-                dynamicColor = dynamicColor,
-                relay = relay,
-                lora = lora,
                 isDirty = isDirty,
             ),
-        batteryExempt = rememberBatteryExempt(),
         onBack = onBack,
         onNameChange = viewModel::setDisplayName,
         onNameCommit = viewModel::commitDisplayName,
         onStatusChange = viewModel::setStatus,
         onStatusCommit = viewModel::commitStatus,
-        onToggleContentFiltering = viewModel::setContentFilteringEnabled,
-        onToggleLinkPreviews = viewModel::setLinkPreviewsEnabled,
         onToggleOpenToChat = viewModel::setOpenToChat,
-        onToggleDynamicColor = viewModel::setDynamicColor,
-        onOpenRelays = onOpenRelays,
-        onOpenLora = onOpenLora,
         onPickPhoto = {
             picker.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
             )
         },
         onClearPhoto = viewModel::clearAvatar,
-        onAllowBattery = { requestIgnoreBatteryOptimizations(context) },
         onSave = viewModel::save,
     )
 }
@@ -187,35 +151,21 @@ fun ProfileScreen(
 @Composable
 internal fun ProfileScreenContent(
     form: ProfileFormState,
-    batteryExempt: Boolean,
     onBack: () -> Unit,
     onNameChange: (String) -> Unit,
     onNameCommit: () -> Unit,
     onStatusChange: (String) -> Unit,
     onStatusCommit: () -> Unit,
-    onToggleContentFiltering: (Boolean) -> Unit,
-    onToggleLinkPreviews: (Boolean) -> Unit = {},
     onToggleOpenToChat: (Boolean) -> Unit = {},
-    onToggleDynamicColor: (Boolean) -> Unit = {},
-    onOpenRelays: () -> Unit,
-    onOpenLora: () -> Unit = {},
-    // Whether the Internet-relay plane is introduced at all in this build. A parameter rather than a
-    // bare BuildConfig read so the hidden case is previewable and testable; see app/build.gradle.kts.
-    showInternetRelays: Boolean = BuildConfig.INTERNET_PLANE,
-    // Same, for the LoRa plane.
-    showLoraRadio: Boolean = BuildConfig.LORA_PLANE,
-    // Whether the platform can do wallpaper colours at all (API 31+). A parameter for the same reason as
-    // the two above: the hidden case stays previewable and testable rather than depending on the device.
-    showDynamicColor: Boolean = DYNAMIC_COLOR_SUPPORTED,
     onPickPhoto: () -> Unit,
     onClearPhoto: () -> Unit,
-    onAllowBattery: () -> Unit,
     onSave: () -> Unit,
 ) {
     Scaffold(
+        modifier = Modifier.testTag("screen_profile"),
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
+                title = { Text(stringResource(R.string.profile_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
@@ -295,50 +245,10 @@ internal fun ProfileScreenContent(
 
             // A profile field like the name and status above it (peers see it on your profile), but a switch:
             // persisted on toggle, not on Save, since that write is what republishes the profile.
-            ToggleRow(
-                title = stringResource(R.string.settings_open_to_chat_title),
-                subtitle = stringResource(R.string.settings_open_to_chat_subtitle),
+            OpenToChatRow(
                 enabled = form.openToChat,
                 onToggle = onToggleOpenToChat,
-                modifier = Modifier.testTag("profile_open_to_chat"),
             )
-
-            ToggleRow(
-                title = stringResource(R.string.settings_content_filtering_title),
-                subtitle = stringResource(R.string.settings_content_filtering_subtitle),
-                enabled = form.contentFilteringEnabled,
-                onToggle = onToggleContentFiltering,
-            )
-
-            // Hidden rather than disabled below API 31, matching the two plane rows: a switch that can
-            // never move needs a reason next to it, and there is nowhere here to put one.
-            if (showDynamicColor) {
-                ToggleRow(
-                    title = stringResource(R.string.settings_dynamic_color_title),
-                    subtitle = stringResource(R.string.settings_dynamic_color_subtitle),
-                    enabled = form.dynamicColor,
-                    onToggle = onToggleDynamicColor,
-                    modifier = Modifier.testTag("profile_dynamic_color"),
-                )
-            }
-
-            // Link previews are the one other thing that uses the Internet, so they ship under the same build
-            // switch as the relay plane; the subtitle carries the disclosure that would otherwise need a sheet.
-            if (showInternetRelays) {
-                ToggleRow(
-                    title = stringResource(R.string.settings_link_previews_title),
-                    subtitle = stringResource(R.string.settings_link_previews_subtitle),
-                    enabled = form.linkPreviewsEnabled,
-                    onToggle = onToggleLinkPreviews,
-                    modifier = Modifier.testTag("profile_link_previews"),
-                )
-            }
-
-            if (showInternetRelays) InternetRelayRow(summary = form.relay, onClick = onOpenRelays)
-
-            if (showLoraRadio) LoraRadioRow(summary = form.lora, onClick = onOpenLora)
-
-            BatteryOptimizationRow(exempt = batteryExempt, onAllow = onAllowBattery)
 
             Button(
                 onClick = onSave,
@@ -432,34 +342,33 @@ private fun CharCounter(
 }
 
 /**
- * A titled switch row — the open-to-chat flag and on-device content moderation (abusive-text +
- * explicit-image filtering) share it.
+ * The open-to-chat flag as a titled switch row. The one switch on this screen: it is a profile field
+ * peers read off your card (ADR 2026-09.74fq), not an app setting, so it stays beside the name and
+ * status it travels with rather than moving to Settings.
  */
 @Composable
-private fun ToggleRow(
-    title: String,
-    subtitle: String,
+private fun OpenToChatRow(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     Row(
         modifier =
-            modifier
+            Modifier
                 .fillMaxWidth()
                 // One toggle target: the row owns the switch so a screen reader announces the title +
                 // subtitle as the label with an on/off state, instead of an unlabelled switch node.
                 .toggleable(value = enabled, onValueChange = onToggle, role = Role.Switch)
-                .padding(top = 8.dp),
+                .padding(top = 8.dp)
+                .testTag("profile_open_to_chat"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = title,
+                text = stringResource(R.string.profile_open_to_chat_title),
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = subtitle,
+                text = stringResource(R.string.profile_open_to_chat_subtitle),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -467,175 +376,6 @@ private fun ToggleRow(
         Spacer(Modifier.width(12.dp))
         // null handler: the row's toggleable owns the interaction (avoids a duplicate focus stop).
         Switch(checked = enabled, onCheckedChange = null)
-    }
-}
-
-/**
- * Entry point to the Internet (spool) plane's own screen, with its current state as the subtitle.
- *
- * A navigating row rather than the switch it used to be: the switch alone was `BuildConfig.DEBUG`-gated,
- * because the app seeds a default relay and a release user who could enable the plane but not edit the
- * list would be stuck with an endpoint they could not remove. The editor lives behind this row, which is
- * what makes the control shippable.
- */
-@Composable
-private fun InternetRelayRow(
-    summary: RelaySummary,
-    onClick: () -> Unit,
-) {
-    // "None added" and "none in use" both mean nothing crosses the plane, but they ask different things
-    // of the user — add a relay, or switch one back on — so the empty list keeps its own line.
-    val subtitle =
-        when {
-            !summary.enabled -> stringResource(R.string.relays_summary_off)
-            summary.configured == 0 -> stringResource(R.string.relays_summary_none)
-            summary.active == 0 -> stringResource(R.string.relays_summary_none_active)
-            else -> stringResource(R.string.relays_summary_on, summary.connected, summary.active)
-        }
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick, role = Role.Button)
-                .padding(top = 8.dp)
-                .testTag("profile_relays"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.relays_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/** Entry point to the LoRa radio screen, with its current state as the subtitle. */
-@Composable
-private fun LoraRadioRow(
-    summary: LoraSummary,
-    onClick: () -> Unit,
-) {
-    val subtitle =
-        when {
-            !summary.enabled -> {
-                stringResource(R.string.lora_summary_off)
-            }
-
-            summary.plane == LoraPlane.Live && summary.boardName != null -> {
-                loraConnectedSubtitle(summary.boardName, summary.battery)
-            }
-
-            summary.boardName != null -> {
-                stringResource(R.string.lora_summary_disconnected, summary.boardName)
-            }
-
-            else -> {
-                stringResource(R.string.lora_summary_connecting)
-            }
-        }
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick, role = Role.Button)
-                .padding(top = 8.dp)
-                .testTag("profile_lora"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.lora_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/** "On · <board> · connected", with the board's battery appended once it has reported one. */
-@Composable
-private fun loraConnectedSubtitle(
-    boardName: String,
-    battery: BoardBattery?,
-): String =
-    when {
-        battery == null -> stringResource(R.string.lora_summary_connected, boardName)
-        battery.percent != null -> stringResource(R.string.lora_summary_connected_battery, boardName, battery.percent)
-        else -> stringResource(R.string.lora_summary_connected_powered, boardName)
-    }
-
-/**
- * Whether the app is currently exempt from battery optimization, refreshed on every screen resume.
- * Lives in the stateful wrapper (not [BatteryOptimizationRow]) because the `PowerManager` read is not
- * available to the preview renderer.
- */
-@Composable
-private fun rememberBatteryExempt(): Boolean {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var exempt by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
-
-    DisposableEffect(lifecycleOwner) {
-        val observer =
-            LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME) {
-                    exempt = isIgnoringBatteryOptimizations(context)
-                }
-            }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    return exempt
-}
-
-/** Shows whether the app is exempt from battery optimization, with an "allow" affordance when not. */
-@Composable
-private fun BatteryOptimizationRow(
-    exempt: Boolean,
-    onAllow: () -> Unit,
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text =
-                if (exempt) {
-                    stringResource(R.string.battery_allowed)
-                } else {
-                    stringResource(R.string.battery_restricted)
-                },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-        if (!exempt) {
-            TextButton(onClick = onAllow) {
-                Text(stringResource(R.string.battery_allow_button))
-            }
-        }
     }
 }
 
@@ -651,31 +391,11 @@ fun CharCounterPreview() =
 
 @Preview(showBackground = true)
 @Composable
-fun ToggleRowPreview() =
+fun OpenToChatRowPreview() =
     KnitPreview {
         Column {
-            ToggleRow(
-                title = stringResource(R.string.settings_open_to_chat_title),
-                subtitle = stringResource(R.string.settings_open_to_chat_subtitle),
-                enabled = true,
-                onToggle = {},
-            )
-            ToggleRow(
-                title = stringResource(R.string.settings_content_filtering_title),
-                subtitle = stringResource(R.string.settings_content_filtering_subtitle),
-                enabled = false,
-                onToggle = {},
-            )
-        }
-    }
-
-@Preview(showBackground = true)
-@Composable
-fun BatteryOptimizationRowPreview() =
-    KnitPreview {
-        Column {
-            BatteryOptimizationRow(exempt = true, onAllow = {})
-            BatteryOptimizationRow(exempt = false, onAllow = {})
+            OpenToChatRow(enabled = true, onToggle = {})
+            OpenToChatRow(enabled = false, onToggle = {})
         }
     }
 
@@ -692,23 +412,16 @@ fun ProfileScreenPreview() =
                     alias = "GentlyRustlingRabbit",
                     aliasMore = "QuietlyBoldCedar",
                     avatarHash = null,
-                    contentFilteringEnabled = true,
                     openToChat = true,
-                    relay = RelaySummary(),
-                    lora = LoraSummary(),
                     isDirty = true,
                 ),
-            batteryExempt = false,
             onBack = {},
             onNameChange = {},
             onNameCommit = {},
             onStatusChange = {},
             onStatusCommit = {},
-            onToggleContentFiltering = {},
-            onOpenRelays = {},
             onPickPhoto = {},
             onClearPhoto = {},
-            onAllowBattery = {},
             onSave = {},
         )
     }
@@ -727,22 +440,15 @@ fun ProfileScreenNewUserPreview() =
                     alias = "GentlyRustlingRabbit",
                     aliasMore = "QuietlyBoldCedar",
                     avatarHash = null,
-                    contentFilteringEnabled = true,
-                    relay = RelaySummary(),
-                    lora = LoraSummary(),
                     isDirty = false,
                 ),
-            batteryExempt = true,
             onBack = {},
             onNameChange = {},
             onNameCommit = {},
             onStatusChange = {},
             onStatusCommit = {},
-            onToggleContentFiltering = {},
-            onOpenRelays = {},
             onPickPhoto = {},
             onClearPhoto = {},
-            onAllowBattery = {},
             onSave = {},
         )
     }

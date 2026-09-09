@@ -119,7 +119,7 @@ import org.koin.androidx.compose.koinViewModel
 fun ChatListScreen(
     onOpenConversation: (conversationId: String) -> Unit,
     onNewMessage: () -> Unit,
-    onOpenProfile: () -> Unit,
+    onOpenSettings: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenBlockedUsers: () -> Unit,
     onOpenMessageRequests: () -> Unit,
@@ -143,7 +143,7 @@ fun ChatListScreen(
         now = now,
         onOpenConversation = onOpenConversation,
         onNewMessage = onNewMessage,
-        onOpenProfile = onOpenProfile,
+        onOpenSettings = onOpenSettings,
         onOpenDiagnostics = onOpenDiagnostics,
         onOpenBlockedUsers = onOpenBlockedUsers,
         onOpenMessageRequests = onOpenMessageRequests,
@@ -206,7 +206,7 @@ internal fun ChatListScreenContent(
     now: Long,
     onOpenConversation: (conversationId: String) -> Unit,
     onNewMessage: () -> Unit,
-    onOpenProfile: () -> Unit,
+    onOpenSettings: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenBlockedUsers: () -> Unit,
     onOpenMessageRequests: () -> Unit,
@@ -279,7 +279,7 @@ internal fun ChatListScreenContent(
                                 leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                                 onClick = {
                                     menuOpen = false
-                                    onOpenProfile()
+                                    onOpenSettings()
                                 },
                             )
                             DropdownMenuItem(
@@ -938,7 +938,7 @@ fun ChatListScreenPopulatedPreview() =
             now = PREVIEW_NOW,
             onOpenConversation = {},
             onNewMessage = {},
-            onOpenProfile = {},
+            onOpenSettings = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
@@ -966,7 +966,7 @@ fun ChatListScreenRadioWarningPreview() =
             now = PREVIEW_NOW,
             onOpenConversation = {},
             onNewMessage = {},
-            onOpenProfile = {},
+            onOpenSettings = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
@@ -989,7 +989,7 @@ fun ChatListScreenLoadingPreview() =
             now = PREVIEW_NOW,
             onOpenConversation = {},
             onNewMessage = {},
-            onOpenProfile = {},
+            onOpenSettings = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
@@ -1030,7 +1030,7 @@ fun ChatListScreenFirstRunPreview() =
             now = PREVIEW_NOW,
             onOpenConversation = {},
             onNewMessage = {},
-            onOpenProfile = {},
+            onOpenSettings = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
@@ -1059,7 +1059,7 @@ fun ChatListScreenQuietPreview() =
             now = PREVIEW_NOW,
             onOpenConversation = {},
             onNewMessage = {},
-            onOpenProfile = {},
+            onOpenSettings = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},

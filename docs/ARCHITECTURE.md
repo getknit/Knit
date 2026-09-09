@@ -640,7 +640,7 @@ that budget is a purely local knob that can differ per node without breaking cue
 ## 12. UI layer (`ui/`)
 
 - **Compose + Material 3, Navigation Compose.** `KnitApp` hosts a `NavHost` with routes
-  `onboarding`, `chatlist`, `contacts`, `profile`, and `chat/{conversationId}` (the conversation id
+  `onboarding`, `chatlist`, `contacts`, `settings`, `profile`, and `chat/{conversationId}` (the conversation id
   is the Nearby room, a peer node id, or a `g-…` group id; it defaults to `Conversations.NEARBY`), plus
   group details, diagnostics, blocked-users, donate, and an offline app-share flow. Start destination is
   `chatlist` if permissions are granted, else `onboarding`. `MeshService` is started by a
@@ -649,14 +649,18 @@ that budget is a purely local knob that can differ per node without breaking cue
   - `OnboardingScreen` — rationale + `RequestMultiplePermissions` + battery-opt prompt.
   - `ChatListScreen` — one row per conversation (always-present Nearby room + DM threads with
     messages), each with a leading visual (room icon vs. peer `Avatar`), last-message preview,
-    relative time, and an unread `Badge`; a FAB opens Contacts, an overflow menu opens Profile.
+    relative time, and an unread `Badge`; a FAB opens Contacts, an overflow menu opens Settings.
   - `ContactsScreen` — the new-DM picker; lists known peers ∪ live neighbors − self (so you can
     message a neighbor before their profile arrives), online-first; tapping opens `chat/{nodeId}`.
   - `ChatScreen` — a `LazyColumn` of bubbles with reactions, image attachments (Coil + animated
     decoder for GIF/WebP), `@`-mention highlighting and typeahead, auto-scroll, and an IME-padded
     input.
-  - `ProfileScreen` — name/status fields, avatar via photo picker + Coil, node id, battery-opt row;
-    key verification (safety number / QR) via `ProfileDetailsScreen`.
+  - `SettingsScreen` — what the overflow menu opens: a profile header row into `ProfileScreen`, the
+    content-filtering / Material You / link-preview switches, the rows that hand off to the
+    Internet-relay and LoRa screens, and the battery-opt row.
+  - `ProfileScreen` — your own profile behind that header row: avatar via photo picker + Coil,
+    name/status fields, node id, alias, and the open-to-chat flag, with one Save for the two text
+    fields; key verification (safety number / QR) of a *peer* is `ProfileDetailsScreen`.
   - **Also:** `GroupDetailsScreen` (roster / rename / photo / leave), `DiagnosticsScreen` (transport
     health, per-radio Bluetooth/Wi-Fi-Aware status, mesh metrics + store-and-forward digest),
     `BlockedUsersScreen`, `DonateScreen`, and a `ShareTargetScreen` / invite flow that shares the APK
@@ -686,7 +690,7 @@ A typed foreground service (`connectedDevice`) hosts `MeshManager` so the mesh s
 - All cleaned up in `onDestroy` (including `MeshManager.stop()`, which cancels pending relays). The
   message notification channels are registered up front in `KnitApplication` so they appear in system
   settings before the first notification. Battery optimization is surfaced in onboarding and the
-  profile screen (`ui/Battery.kt`).
+  settings screen (`ui/Battery.kt`).
 
 ## 14. Encryption posture
 
@@ -776,7 +780,7 @@ names a mime to whichever neighbour pulls the bytes.
 
 **Trust & verification.** Peer keys are pinned **trust-on-first-use** into `PeerEntity.pubKey`; if a
 peer's advertised key later changes, it's adopted (so comms continue) but `PeerEntity.verified` is
-reset and the change is flagged. Users confirm a key out of band on the profile screen — comparing the
+reset and the change is flagged. Users confirm a key out of band on the peer's profile screen — comparing the
 `SafetyNumber` (a Signal-style fingerprint derived symmetrically from both identities) or scanning the
 peer's identity **QR** (`VerifyPayload` + ZXing) — which sets `verified` and shows a badge.
 

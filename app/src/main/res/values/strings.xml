@@ -358,8 +358,11 @@
         <item quantity="other">%d unread messages</item>
     </plurals>
 
-    <!-- Settings (your own profile) -->
+    <!-- Settings, and your own profile behind the header row at the top of it. Two screens, so two titles;
+         `profile_details_title` below is a third thing again, the read-only view of somebody else. The
+         open-to-chat pair is `profile_`, not `settings_`, because it is a field peers read off your card. -->
     <string name="settings_title">Settings</string>
+    <string name="profile_title">Profile</string>
     <string name="profile_display_name_label">Display name</string>
     <string name="profile_status_label">Status</string>
     <string name="profile_node_id">Node ID: %1$s</string>
@@ -371,8 +374,8 @@
     <string name="profile_avatar_crop_desc">Adjust profile photo</string>
     <string name="profile_change_photo_desc">Change profile photo</string>
     <string name="profile_remove_photo_desc">Remove profile photo</string>
-    <string name="settings_open_to_chat_title">Open to chat</string>
-    <string name="settings_open_to_chat_subtitle">Let people nearby know you\'re up for a conversation. You\'ll both get a nudge when you\'re near each other.</string>
+    <string name="profile_open_to_chat_title">Open to chat</string>
+    <string name="profile_open_to_chat_subtitle">Let people nearby know you\'re up for a conversation. You\'ll both get a nudge when you\'re near each other.</string>
     <string name="settings_content_filtering_title">Content filtering</string>
     <string name="settings_content_filtering_subtitle">Hide explicit images and abusive messages you receive from others</string>
     <string name="settings_dynamic_color_title">Dynamic colors</string>

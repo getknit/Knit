@@ -99,6 +99,10 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun profile() = audit(route = "profile") { awaitTag("profile_name") }
 
+    // Anchored on the header row rather than the Scaffold tag: `screen_settings` exists from the first
+    // frame, before the header's DataStore read lands, so it would audit a half-empty screen.
+    @Test fun settings() = audit(route = "settings") { awaitTag("settings_profile_row") }
+
     // The seeded build latches the toxicity model (DemoSeeder.seedLatchedModel), so this audits the
     // poison-pill row and its error-tinted copy too, not just the metrics list.
     @Test fun diagnostics() = audit(route = "diagnostics") { awaitText("Maya Okonkwo") }

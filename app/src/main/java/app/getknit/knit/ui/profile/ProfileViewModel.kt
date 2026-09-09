@@ -8,16 +8,11 @@ import androidx.lifecycle.viewModelScope
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AvatarStore
 import app.getknit.knit.data.BlobRepository
-import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.mesh.lora.BoardBattery
-import app.getknit.knit.mesh.lora.LoraFacts
-import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.normalizeSingleLine
 import app.getknit.knit.ui.util.computeAvatarCrop
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,38 +21,14 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-
-/** The LoRa plane, as the Profile row summarises it before handing off to its own screen. */
-data class LoraSummary(
-    val enabled: Boolean = false,
-    val boardName: String? = null,
-    /** The live link, so the row can say "connected" rather than only "on". */
-    val plane: LoraPlane = LoraPlane.Off,
-    /** The connected board's battery, once it has reported one. */
-    val battery: BoardBattery? = null,
-)
-
-/** The Internet-relay plane, as the Profile row summarises it before handing off to its own screen. */
-data class RelaySummary(
-    val enabled: Boolean = false,
-    val configured: Int = 0,
-    val active: Int = 0,
-    val connected: Int = 0,
-)
 
 class ProfileViewModel(
     private val settings: SettingsStore,
     identity: Identity,
     private val avatars: AvatarStore,
     private val blobs: BlobRepository,
-    // The facts flow, not the repository: the production flow polls forever, and a `runTest` virtual
-    // clock makes its `delay` instant, so a ViewModel test that drives this with `advanceUntilIdle()`
-    // would spin. Taking the flow lets a test supply a finite one.
-    relayFacts: Flow<RelayFacts>,
-    loraFacts: Flow<LoraFacts>,
 ) : ViewModel() {
     val nodeId = MutableStateFlow("")
 
@@ -106,46 +77,14 @@ class ProfileViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**
-     * Whether on-device content moderation is enabled. A Switch can bind straight to the DataStore flow
-     * (unlike a TextField — see the editable-text note above), since toggling has no per-keystroke lag.
-     */
-    val contentFilteringEnabled: StateFlow<Boolean> =
-        settings.contentFilteringEnabled
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
-
-    /** Whether links this device sends carry a preview card (off by default — see the store's KDoc). Bound like the switch above. */
-    val linkPreviewsEnabled: StateFlow<Boolean> =
-        settings.linkPreviewsEnabled
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    /**
-     * The "open to chat" profile flag. Bound to the DataStore flow like [contentFilteringEnabled] and
-     * persisted on toggle rather than on Save: a switch has no keystroke lag to absorb, and the write is what
-     * republishes the profile (`MeshManager.watchProfileChanges`) and arms the nearby cue.
+     * The "open to chat" profile flag. A Switch can bind straight to the DataStore flow (unlike a
+     * TextField — see the editable-text note above), and it is persisted on toggle rather than on Save:
+     * a switch has no keystroke lag to absorb, and the write is what republishes the profile
+     * (`MeshManager.watchProfileChanges`) and arms the nearby cue.
      */
     val openToChat: StateFlow<Boolean> =
         settings.openToChat
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    /** Whether to colour the app from the wallpaper. Off by default; hidden entirely below API 31. */
-    val dynamicColor: StateFlow<Boolean> =
-        settings.dynamicColor
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    /**
-     * Summary of the Internet (spool) plane for the row that navigates to its own screen — the switch
-     * itself lives there now, with the relay-list editor it needs to be actionable.
-     */
-    val relaySummary: StateFlow<RelaySummary> =
-        relayFacts
-            .map { RelaySummary(it.enabled, it.configured, it.active, it.connected) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RelaySummary())
-
-    /** Summary of the LoRa plane for the Profile row that navigates to its own screen: settings + the live link. */
-    val loraSummary: StateFlow<LoraSummary> =
-        combine(settings.loraEnabled, settings.loraDeviceName, loraFacts) { enabled, name, lora ->
-            LoraSummary(enabled, name, lora.plane, lora.battery)
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LoraSummary())
 
     init {
         viewModelScope.launch {
@@ -205,20 +144,8 @@ class ProfileViewModel(
         _status.value = normalizeSingleLine(_status.value)
     }
 
-    fun setContentFilteringEnabled(value: Boolean) {
-        viewModelScope.launch { settings.setContentFilteringEnabled(value) }
-    }
-
-    fun setLinkPreviewsEnabled(value: Boolean) {
-        viewModelScope.launch { settings.setLinkPreviewsEnabled(value) }
-    }
-
     fun setOpenToChat(value: Boolean) {
         viewModelScope.launch { settings.setOpenToChat(value) }
-    }
-
-    fun setDynamicColor(value: Boolean) {
-        viewModelScope.launch { settings.setDynamicColor(value) }
     }
 
     // The picked image awaiting crop. Held here (not in SavedStateHandle — a Bitmap is large and not

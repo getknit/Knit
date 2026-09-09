@@ -9,8 +9,7 @@ import org.junit.runner.RunWith
  * Black-box coverage of the chat-list **overflow menu** and the screens behind it. The menu is a real
  * `DropdownMenu` popup window, and its destinations (Add contact / Diagnostics / Blocked / Donate) have no
  * in-process Compose test today — this is their only black-box coverage. Each is opened through the menu
- * and asserted by a stable screen `testTag` (Settings reuses its existing `profile_name` field); Back
- * returns to the seeded chat list.
+ * and asserted by its own stable screen `testTag`; Back returns to the seeded chat list.
  *
  * "Install offline" (`share_app_menu`) opens a system share chooser rather than navigating in-app
  * (`ChatListScreen.onShareApp` → APK-merge chooser), so it's only asserted present in the menu, not driven.
@@ -31,7 +30,7 @@ class OverflowNavigationUiAutomatorTest : SeededUiAutomatorTest() {
     }
 
     @Test
-    fun overflow_opensSettings() = openThenBack(R.string.settings_title, destTag = "profile_name")
+    fun overflow_opensSettings() = openThenBack(R.string.settings_title, destTag = "screen_settings")
 
     @Test
     fun overflow_opensAddContact() = openThenBack(R.string.add_contact_title, destTag = "screen_add_contact")

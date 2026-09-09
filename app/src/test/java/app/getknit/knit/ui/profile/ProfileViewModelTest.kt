@@ -5,10 +5,8 @@ package app.getknit.knit.ui.profile
 import app.getknit.knit.TextLimits
 import app.getknit.knit.data.AvatarStore
 import app.getknit.knit.data.BlobRepository
-import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
-import app.getknit.knit.mesh.lora.LoraFacts
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -45,12 +43,7 @@ class ProfileViewModelTest {
     private val nameFlow = MutableStateFlow("Alice")
     private val statusFlow = MutableStateFlow("Hiking")
     private val avatarHashFlow = MutableStateFlow<String?>(null)
-    private val filteringFlow = MutableStateFlow(true)
     private val openToChatFlow = MutableStateFlow(false)
-    private val dynamicColorFlow = MutableStateFlow(false)
-    private val spoolEnabledFlow = MutableStateFlow(false)
-    private val spoolUrlsFlow = MutableStateFlow(emptySet<String>())
-    private val activeSpoolUrlsFlow = MutableStateFlow(emptySet<String>())
 
     @Before
     fun setUp() {
@@ -59,13 +52,7 @@ class ProfileViewModelTest {
         every { settings.displayName } returns nameFlow
         every { settings.status } returns statusFlow
         every { settings.ownAvatarHash } returns avatarHashFlow
-        every { settings.contentFilteringEnabled } returns filteringFlow
-        every { settings.linkPreviewsEnabled } returns linkPreviewsFlow
         every { settings.openToChat } returns openToChatFlow
-        every { settings.dynamicColor } returns dynamicColorFlow
-        every { settings.spoolEnabled } returns spoolEnabledFlow
-        every { settings.spoolUrls } returns spoolUrlsFlow
-        every { settings.activeSpoolUrls } returns activeSpoolUrlsFlow
     }
 
     @After
@@ -73,22 +60,7 @@ class ProfileViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private val linkPreviewsFlow = MutableStateFlow(false)
-
-    /** Off until the user says otherwise, and a toggle writes straight through to the store. */
-    @Test
-    fun linkPreviewsMirrorTheStoreAndPersistOnToggle() =
-        runTest {
-            val vm = vm()
-            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.linkPreviewsEnabled.collect {} }
-            assertFalse(vm.linkPreviewsEnabled.value)
-            linkPreviewsFlow.value = true
-            assertTrue(vm.linkPreviewsEnabled.value)
-            vm.setLinkPreviewsEnabled(false)
-            coVerify { settings.setLinkPreviewsEnabled(false) }
-        }
-
-    private fun vm() = ProfileViewModel(settings, identity, avatars, blobs, MutableStateFlow(RelayFacts()), MutableStateFlow(LoraFacts()))
+    private fun vm() = ProfileViewModel(settings, identity, avatars, blobs)
 
     /** The switch binds straight to the store (no keystroke lag to absorb) and persists on toggle, not on Save. */
     @Test
@@ -105,22 +77,6 @@ class ProfileViewModelTest {
             vm.setOpenToChat(false)
             advanceUntilIdle()
             coVerify { settings.setOpenToChat(false) }
-        }
-
-    @Test
-    fun dynamicColorMirrorsTheStoreAndPersistsOnToggle() =
-        runTest {
-            val vm = vm()
-            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.dynamicColor.collect {} }
-            advanceUntilIdle()
-            assertFalse(vm.dynamicColor.value)
-            dynamicColorFlow.value = true
-            advanceUntilIdle()
-            assertTrue(vm.dynamicColor.value)
-
-            vm.setDynamicColor(false)
-            advanceUntilIdle()
-            coVerify { settings.setDynamicColor(false) }
         }
 
     @Test

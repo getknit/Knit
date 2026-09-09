@@ -21,8 +21,8 @@ custody, and on-device content moderation.
 ## Architecture in one screen
 
 ```
-ui/            Compose screens (onboarding, chatlist, chat, contacts, addcontact, verify, profile, group,
-               diagnostics, blocked, share, donate) + ViewModels (Koin koinViewModel()) · KnitApp (Navigation
+ui/            Compose screens (onboarding, chatlist, chat, contacts, addcontact, verify, settings,
+               profile, group, diagnostics, blocked, share, donate) + ViewModels (Koin koinViewModel()) · KnitApp (Navigation
                Compose; the `getknit.app/c` / `knit://c` contact-link deep links land in ui/addcontact)
 contacts/      ContactCards (mints this device's signed contact link) · ContactImporter (the import rules:
                pin + accept, never verify; relay hints shown, never applied) — docs/CONTACT_CARD.md

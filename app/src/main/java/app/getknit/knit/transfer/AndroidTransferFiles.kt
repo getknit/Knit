@@ -10,6 +10,7 @@ import android.os.storage.StorageManager
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import androidx.core.net.toUri
 import app.getknit.knit.mesh.protocol.AttachmentName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -33,7 +34,7 @@ class AndroidTransferFiles(
 
     override suspend fun openSource(uri: String): TransferSource? =
         withContext(Dispatchers.IO) {
-            val parsed = Uri.parse(uri)
+            val parsed = uri.toUri()
             if (parsed.scheme == ContentResolver.SCHEME_FILE) fileSource(parsed) else contentSource(parsed)
         }
 

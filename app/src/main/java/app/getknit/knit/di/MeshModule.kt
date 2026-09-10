@@ -168,7 +168,7 @@ val meshModule =
         single {
             val settings = get<SettingsStore>()
             LoraMeshTransport(
-                selfId = { get<app.getknit.knit.identity.Identity>().nodeId() },
+                selfId = { get<Identity>().nodeId() },
                 link = get(),
                 // The three per-plane switches are folded first so the whole config stays inside `combine`'s
                 // typed five-flow arity — the same fold ChatListViewModel/ChatViewModel make for the same reason.

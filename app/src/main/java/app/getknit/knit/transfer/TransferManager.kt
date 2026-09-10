@@ -21,6 +21,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
+import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
@@ -518,7 +519,7 @@ class TransferManager(
                 }
                 val sink = createSinkOrFail(l)
                 transition(l, TransferPhase.Transferring)
-                val ok = receiveOrDiscard(l, socket, sink)
+                val ok = receiveOrDiscard(l, socket.getInputStream(), sink)
                 TransferStream.writeVerdict(socket.getOutputStream(), ok)
                 if (ok) {
                     sink.commit()
@@ -554,11 +555,11 @@ class TransferManager(
     /** The stream into [sink]; whatever stops it short throws on, after the half-written file is thrown away. */
     private suspend fun receiveOrDiscard(
         l: Live,
-        socket: Socket,
+        input: InputStream,
         sink: TransferSink,
     ): Boolean =
         try {
-            TransferStream.receive(socket.getInputStream(), sink.stream(), l.state.id, l.state.size, checkNotNull(l.key), progress(l))
+            TransferStream.receive(input, sink.stream(), l.state.id, l.state.size, checkNotNull(l.key), progress(l))
         } catch (e: IOException) {
             sink.discard()
             throw e

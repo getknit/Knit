@@ -158,8 +158,9 @@ class MeshManager(
     // refuses with NO_BOARD, which is what every test and every board-less build wants.
     private val publicChannel: suspend (body: String) -> PublicPostRefusal? = { PublicPostRefusal.NO_BOARD },
     // A sealed CTL_TRANSFER landed (transfer/TransferManager.onSignal): direct-transfer signaling, late-bound
-    // like publicChannel because the manager sends through this class. The default admits nothing.
-    private val onTransferSignal: suspend (senderId: String, payload: TransferPayload, sentAt: Long) -> Boolean = { _, _, _ -> false },
+    // like publicChannel because the manager sends through this class. The default admits nothing. Not a
+    // property: the only reader is [pipeline]'s initializer, which hands it straight to onTransferCtl.
+    onTransferSignal: suspend (senderId: String, payload: TransferPayload, sentAt: Long) -> Boolean = { _, _, _ -> false },
 ) : MeshController,
     TransferSignals,
     ProfileFrameSource,

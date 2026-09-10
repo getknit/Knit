@@ -134,6 +134,12 @@ exclude:
   - name: ConvertLongToDuration
   # Room entities and wire DTOs hold ByteArray by necessity; they are never compared by value.
   - name: ArrayInDataClass
+  # `val MaterialTheme.knitColors` reads beside `MaterialTheme.colorScheme.x` on purpose, so a call site
+  # changes by one word — the receiver is the discovery surface, not an input. Scoped to ui/theme so a
+  # genuinely dead receiver anywhere else still reports.
+  - name: UnusedReceiverParameter
+    paths:
+      - app/src/main/java/app/getknit/knit/ui/theme
   # Compound status strings ("%1$d nearby · %2$d linked") are not plural candidates in English.
   - name: AndroidLintPluralsCandidate
   # Dependency pins are load-bearing for F-Droid's byte-for-byte rebuild — see

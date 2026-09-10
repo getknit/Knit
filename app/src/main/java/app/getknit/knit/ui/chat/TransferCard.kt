@@ -2,7 +2,6 @@ package app.getknit.knit.ui.chat
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.text.format.Formatter
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -31,6 +30,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import app.getknit.knit.R
 import app.getknit.knit.data.message.TransferPhase
 import app.getknit.knit.mesh.protocol.TransferPayload
@@ -215,7 +215,7 @@ internal fun openSavedFile(
     runCatching {
         context.startActivity(
             Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(Uri.parse(uri), mime ?: "*/*")
+                setDataAndType(uri.toUri(), mime ?: "*/*")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             },
         )

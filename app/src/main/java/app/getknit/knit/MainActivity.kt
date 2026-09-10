@@ -44,7 +44,6 @@ class MainActivity : ComponentActivity() {
     // The theme flags, already warmed by KnitApplication so the first composition reads a settled value.
     private val themePrefs: ThemePreferences by inject()
 
-    @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

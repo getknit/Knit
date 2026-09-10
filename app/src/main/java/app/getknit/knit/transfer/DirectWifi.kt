@@ -68,10 +68,7 @@ data class GroupAddress(
 class HostedGroup(
     val addresses: List<GroupAddress>,
     val frequencyMhz: Int,
-) {
-    /** The first address, for logging and for anything that just needs one name for this group. */
-    val ownerAddress: InetAddress get() = addresses.first().address
-}
+)
 
 /** A group this device has joined: where the host listens (IPv4, or a scoped IPv6 link-local). */
 class JoinedGroup(

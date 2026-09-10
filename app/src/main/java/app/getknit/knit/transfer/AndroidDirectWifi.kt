@@ -254,7 +254,7 @@ class AndroidDirectWifi(
      * receiver arrived on, and listens on both.
      */
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    private fun ipv6LinkLocalSupported(): Boolean = p2p?.isGroupOwnerIPv6LinkLocalAddressProvided() == true
+    private fun ipv6LinkLocalSupported(): Boolean = p2p?.isGroupOwnerIPv6LinkLocalAddressProvided == true
 
     // ---- the platform's callbacks as suspend calls ----
 

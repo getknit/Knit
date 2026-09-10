@@ -178,7 +178,7 @@ object TransferStream {
             val len = data.readInt()
             // Bounded before it is trusted: the buffers are one chunk wide, and a chunk that claims more
             // plaintext than the transfer has left is refused rather than opened.
-            if (len < 0 || len > CHUNK_BYTES || got + len > expectedSize) return false
+            if (len !in 0..CHUNK_BYTES || got + len > expectedSize) return false
             data.readFully(sealed, 0, len + GCM_TAG_BYTES)
             mac.update(sealed, 0, len + GCM_TAG_BYTES)
             val last = got + len >= expectedSize

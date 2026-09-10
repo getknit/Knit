@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 11,
-    "identityHash": "350606fc126716bf7be5f54f586b332d",
+    "identityHash": "7b5ce4f65ef204f92719f8ba3d68cd81",
     "entities": [
       {
         "tableName": "messages",
@@ -1288,7 +1288,7 @@
       },
       {
         "tableName": "drafts",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversationId` TEXT NOT NULL, `text` TEXT NOT NULL, PRIMARY KEY(`conversationId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversationId` TEXT NOT NULL, `text` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))",
         "fields": [
           {
             "fieldPath": "conversationId",
@@ -1300,6 +1300,12 @@
             "fieldPath": "text",
             "columnName": "text",
             "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
             "notNull": true
           }
         ],
@@ -1313,7 +1319,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '350606fc126716bf7be5f54f586b332d')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '7b5ce4f65ef204f92719f8ba3d68cd81')"
     ]
   }
 }

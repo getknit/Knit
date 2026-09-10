@@ -45,9 +45,9 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v12) creates and opens from the exported JSON`() =
+    fun `the current schema (v11) creates and opens from the exported JSON`() =
         runTest {
-            val version = 12 // KnitDatabase @Database(version = 12) — bump alongside the DB (its retention is CLASS,
+            val version = 11 // KnitDatabase @Database(version = 11) — bump alongside the DB (its retention is CLASS,
             // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
             helper.createDatabase(version).close()
         }
@@ -447,31 +447,14 @@ class KnitDatabaseMigrationTest {
                     assertEquals(0L, s.getLong(0))
                 }
                 // One row per thread, replaced in place — a second draft for the same chat is not a second row.
-                c.execSQL("INSERT INTO drafts (conversationId, text) VALUES ('peer-1','half a sen')")
-                c.execSQL("INSERT OR REPLACE INTO drafts (conversationId, text) VALUES ('peer-1','half a sentence')")
+                c.execSQL("INSERT INTO drafts (conversationId, text, updatedAt) VALUES ('peer-1','half a sen',1)")
+                c.execSQL(
+                    "INSERT OR REPLACE INTO drafts (conversationId, text, updatedAt) VALUES ('peer-1','half a sentence',2)",
+                )
                 c.prepare("SELECT COUNT(*), MAX(text) FROM drafts").use { s ->
                     assertTrue(s.step())
                     assertEquals(1L, s.getLong(0))
                     assertEquals("half a sentence", s.getText(1))
-                }
-            }
-        }
-
-    @Test
-    fun `migrate 11 to 12 keeps an existing draft and stamps it with a zero it cannot know`() =
-        runTest {
-            // The upgrade a lab device actually made: a v11 database with a draft already in it, written
-            // before anything recorded *when* a draft was written.
-            helper.createDatabase(11).use { c ->
-                c.execSQL("INSERT INTO drafts (conversationId, text) VALUES ('peer-1','half a sentence')")
-            }
-            helper.runMigrationsAndValidate(12, listOf(KnitMigrations.MIGRATION_11_12)).use { c ->
-                c.prepare("SELECT text, updatedAt FROM drafts WHERE conversationId = 'peer-1'").use { s ->
-                    assertTrue(s.step())
-                    assertEquals("the draft survives the bump", "half a sentence", s.getText(0))
-                    // 0, not a backfilled "now": nothing recorded when it was typed, and a 0 just loses the
-                    // chat list's preview line to the thread's last message.
-                    assertEquals(0L, s.getLong(1))
                 }
             }
         }

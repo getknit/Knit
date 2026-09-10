@@ -27,8 +27,8 @@ SQLCipher is that its content is not for whoever gets hold of the device, and a 
 private for being unsent. The DataStore holds settings, watermarks and blocked ids: none of it is content,
 and a preferences file is plaintext on disk. So: a `drafts` table, `conversationId` primary key, `text` —
 DB **v11**, `KnitMigrations.MIGRATION_10_11`, an empty table on arrival with nothing to backfill because no
-draft can predate it — and `updatedAt` beside them at **v12**, `MIGRATION_11_12` (why two bumps: the trap
-at the bottom of this file).
+draft can predate it — and `updatedAt` beside them, which was briefly its own **v12** bump for the reason
+the trap at the bottom of this file sets out, and is now part of v11 (see the amendment).
 
 The row carries `updatedAt` — our own clock, one reader, the chat list below. No expiry, though: a sentence
 left in a chat is still that sentence a month later, which is what every other messenger does with one.
@@ -103,7 +103,7 @@ hand-over — nothing is persisted before the screen takes the stored draft, the
 accepted send drops the row and a blocked send keeps it. `ChatListViewModelTest` pins the preview rule from
 both sides (a newer draft speaks for the row; a message landing after it takes the line back, with
 `lastPreview`/`lastMessageAt` untouched throughout) and `ChatListScreenContentTest` that the words reach the
-row's description. `KnitDatabaseMigrationTest` covers v10 → v11 and v11 → v12.
+row's description. `KnitDatabaseMigrationTest` covers v10 → v11 and the way back down from v12.
 
 A trap for whoever adds the next flow to that list: `ChatListViewModel`'s outer combine is at the typed
 five-flow arity, so `drafts.all` rides inside `ListBundle` — and a **relaxed mock** of it hands back a Flow
@@ -140,3 +140,27 @@ A gotcha that cost a red test run and is not specific to drafts: `advanceUntilId
 *or* on `testScheduler` — runs only **foreground** work, so a coroutine launched on `backgroundScope`
 (which is how you model an application scope in a test) never runs and every assertion reads an empty
 store. `testScheduler.advanceTimeBy(...)` does run it.
+
+## Amended 2026-09-10 — the two bumps were folded back into one
+
+The trap above is still exactly why v12 was minted, and the rule it produced (`context/testing.md`: keep the
+version count down while a branch is unreleased) still stands. What changed is that the branch had not
+merged yet, so the second bump did not have to survive: `drafts.updatedAt` now rides in
+`MIGRATION_10_11`'s `CREATE TABLE`, `MIGRATION_11_12` is gone, and `12.json` with it. No released build ever
+held either version — 2.5.0 shipped v10 — so only the lab drawer was ever exposed.
+
+Folding it back is the same trap in the other direction, and needs its own answer. A device that had already
+installed v12 holds a `user_version` *above* the app's, which Room throws on at every open rather than
+shrugging off, and the only way out without one is a wipe. The answer was a temporary `Migration(12, 11)`,
+registered in `ALL` long enough to walk the lab fleet down and then deleted — Room takes a descending path,
+and this one moved nothing, because the v12 and flattened-v11 schemas are identical. Two facts made it a
+no-op rather than a rewrite, and both are the reusable part: Room computes its identity hash from schema
+*content* rather than the version number, so the retired `12.json` and the regenerated `11.json` both hash to
+`7b5ce4f6…` and the devices' stored hash was already right; and `DraftEntity.updatedAt` declares no
+`@ColumnInfo(defaultValue = …)`, so Room never compared the `DEFAULT 0` a v12 device's `ALTER TABLE` left
+behind against the bare column a fresh v11 creates. Verified on the P7 and P9 before removal (history,
+custody rows and a converged digest all intact); the P8's database predated v11 entirely and took the
+ordinary v10 → v11 path.
+
+One line above is now historical: regenerating the v11 JSON reproduces `7b5ce4f6…`, not the `350606fc…` that
+identified the old two-column shape.

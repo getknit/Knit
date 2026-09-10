@@ -60,12 +60,21 @@ before "simplifying":
   case here runs inside `runTest { }` — and `Migration.migrate` is suspend too (`KnitMigrations`). **DB v1 is the frozen launch baseline** — there is **no** destructive fallback: from
   v1 forward every `@Database` bump MUST add a tested `Migration` to `KnitMigrations` (`data/KnitMigrations.kt`,
   appended to `ALL`) and a from→to case to `KnitDatabaseMigrationTest` — a missing migration throws at
-  open time (caught here in CI), never silently wipes. The DB is at **v10** today, with nine migrations
-  (`MIGRATION_1_2` … `MIGRATION_9_10`) and a `KnitDatabaseMigrationTest` case for each, plus a current-schema
-  smoke test whose hardcoded `version` must be bumped by hand. Keep the version count down while a branch is
+  open time (caught here in CI), never silently wipes. The DB is at **v11** today, with ten migrations
+  (`MIGRATION_1_2` … `MIGRATION_10_11`) and a `KnitDatabaseMigrationTest` case for each, plus a current-schema
+  smoke test whose hardcoded `version` must be bumped by hand — as must `SqlCipherDriverUpgradeTest`'s
+  `CURRENT_VERSION`, which has now gone stale twice. Keep the version count down while a branch is
   unreleased — fold its schema churn into one bump before merging, the way `MIGRATION_9_10` carries the whole
-  LoRa bridge — because a shipped migration can never be merged away afterwards, and a branch that mints its
-  own numbers strands every lab device the moment it opens a database from the other branch. A bump need not
+  LoRa bridge and `MIGRATION_10_11` the whole drafts feature — because a shipped migration can never be merged
+  away afterwards, and a branch that mints its own numbers strands every lab device the moment it opens a
+  database from the other branch.
+  **Folding a bump the lab has already installed needs a way back down.** `drafts.updatedAt` was briefly its
+  own v12; collapsing it into v11 left the test phones holding a database whose `user_version` was *higher*
+  than the app's, which Room throws on at every open rather than shrugging off. The way back is a registered
+  downgrade `Migration(higher, lower)` — Room takes a descending path — and when the fold changed no columns
+  its body is empty, because Room hashes schema *content* rather than version numbers, so only the stamp
+  moves. Ship it, install across the fleet, then delete it; the alternative is wiping the drawer. The v12 → v11
+  shim did exactly that on 2026-09-10 and is gone. A bump need not
   add columns: `MIGRATION_9_10` also re-indexes `messages` without moving a row, and its case asserts the
   index *shape* via `PRAGMA index_info` because column order is what decides whether SQLite can skip a sort. `EXPLAIN QUERY PLAN` is **not** reachable from these
   tests — the Android driver routes only `SEL`/`PRA`/`WIT` prefixes as row-returning, and Room 3 dropped

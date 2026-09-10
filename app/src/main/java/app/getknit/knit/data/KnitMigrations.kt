@@ -289,31 +289,9 @@ object KnitMigrations {
             override suspend fun migrate(connection: SQLiteConnection) {
                 connection.execSQL(
                     "CREATE TABLE IF NOT EXISTS `drafts` " +
-                        "(`conversationId` TEXT NOT NULL, `text` TEXT NOT NULL, PRIMARY KEY(`conversationId`))",
+                        "(`conversationId` TEXT NOT NULL, `text` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`conversationId`))",
                 )
-            }
-        }
-
-    /**
-     * v11 → v12: one `drafts.updatedAt` column — our own clock when a draft was last written. The chat list
-     * compares it against the thread's newest message to decide whether the row reads "Draft: …", which is
-     * the column's only reader.
-     *
-     * It is a second bump for one feature because v11 had already been installed before the column turned
-     * out to be needed. Adding it to v11 in place left those devices holding a v11 database whose identity
-     * hash no longer matched the app's — which Room reports as "you've changed schema but forgot to update
-     * the version number", at every launch, with no migration path out of it because the version *did*
-     * match. Two bumps and two migrations; no wipe.
-     *
-     * `DEFAULT 0` on the existing rows, matching MIGRATION_9_10's flags: a draft written before this column
-     * has no recorded time, and 0 is the honest value — it simply never wins the preview line from the
-     * thread's last message. Additive; the SQL must stay byte-equivalent to what Room generates for
-     * `app/schemas/**/12.json`.
-     */
-    val MIGRATION_11_12 =
-        object : Migration(11, 12) {
-            override suspend fun migrate(connection: SQLiteConnection) {
-                connection.execSQL("ALTER TABLE `drafts` ADD COLUMN `updatedAt` INTEGER NOT NULL DEFAULT 0")
             }
         }
 
@@ -330,6 +308,5 @@ object KnitMigrations {
             MIGRATION_8_9,
             MIGRATION_9_10,
             MIGRATION_10_11,
-            MIGRATION_11_12,
         )
 }

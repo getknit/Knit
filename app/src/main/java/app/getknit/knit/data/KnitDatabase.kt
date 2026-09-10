@@ -100,20 +100,19 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
     //     bounded newest-first window instead of the whole conversation. Migrated by
     //     KnitMigrations.MIGRATION_9_10.
     // v11: one `drafts` table — the text left unsent in a thread's composer, keyed by conversation id, so
-    //     leaving the chat screen no longer throws it away. Purely local: a draft is never framed, never
-    //     enters custody, and no digest folds over it. It sits in this database rather than the settings
-    //     DataStore because it is message text the user wrote, and the reason `messages` is encrypted at
-    //     rest is the same reason the sentence they were still writing should be; migrated by
-    //     KnitMigrations.MIGRATION_10_11.
-    // v12: one `drafts.updatedAt` column — our own clock when the draft was last written, which the chat
-    //     list compares against the thread's newest message to decide whether the row reads "Draft: …".
-    //     A second bump for one feature, deliberately: v11 was already installed on lab devices when the
-    //     column turned out to be needed, and folding it into v11 left those phones with a v11 database
-    //     Room refused to open (same version, different identity hash — a crash at every launch, no
-    //     migration path). 0 on every pre-upgrade row, which is honest: nothing recorded when those drafts
-    //     were typed, and a 0 simply loses the preview line to the thread's last message; migrated by
-    //     KnitMigrations.MIGRATION_11_12.
-    version = 12,
+    //     leaving the chat screen no longer throws it away, with `updatedAt` recording our own clock when
+    //     the row was last written (the chat list compares it against the thread's newest message to decide
+    //     whether the row reads "Draft: …"). Purely local: a draft is never framed, never enters custody,
+    //     and no digest folds over it. It sits in this database rather than the settings DataStore because
+    //     it is message text the user wrote, and the reason `messages` is encrypted at rest is the same
+    //     reason the sentence they were still writing should be; migrated by KnitMigrations.MIGRATION_10_11.
+    //
+    //     `updatedAt` briefly had a v12 bump of its own, minted while this branch was unreleased and folded
+    //     back in before it reached main (`testing.md`: keep the version count down while a branch is
+    //     unreleased, because a shipped migration can never be merged away afterwards). The lab devices that
+    //     had already taken v12 were walked back down by a temporary Migration(12, 11), removed once the
+    //     fleet was on this schema; no released build ever held v12 (2.5.0 shipped v10).
+    version = 11,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without

@@ -202,6 +202,7 @@ private fun failedText(reason: Int?): Int =
         TransferPayload.REASON_JOIN_FAILED -> R.string.chat_transfer_failed_join
         TransferPayload.REASON_NO_SPACE -> R.string.chat_transfer_failed_no_space
         TransferPayload.REASON_TIMEOUT -> R.string.chat_transfer_failed_timeout
+        TransferPayload.REASON_FOREGROUND -> R.string.chat_transfer_failed_background
         else -> R.string.chat_transfer_failed
     }
 

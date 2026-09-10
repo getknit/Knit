@@ -20,6 +20,12 @@ enum class TransferRefusal {
     /** Something else — a hotspot, screen mirroring, a foreign group — already holds Wi-Fi Direct. */
     Hotspot,
 
+    /**
+     * The platform refused because Knit is not on screen. Below API 33 Wi-Fi Direct is gated on the
+     * *location* AppOp, which a foreground-only grant does not satisfy from the background.
+     */
+    Background,
+
     /** The offer being answered is no longer open (expired, cancelled, already answered). */
     Gone,
 }

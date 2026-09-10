@@ -159,6 +159,7 @@
     <string name="chat_transfer_no_session">Knit couldn\'t reach them to offer the file</string>
     <string name="chat_transfer_no_space">Not enough free space for that file</string>
     <string name="chat_transfer_hotspot">Turn off your hotspot or screen sharing first</string>
+    <string name="chat_transfer_background">Keep Knit on screen to share a file on this version of Android</string>
     <string name="chat_transfer_gone">That offer is no longer open</string>
     <string name="chat_transfer_incoming">Wants to send you this file</string>
     <string name="chat_transfer_offered">Waiting for them to accept</string>
@@ -183,6 +184,7 @@
     <string name="chat_transfer_failed_join">Failed — couldn\'t connect over Wi-Fi Direct</string>
     <string name="chat_transfer_failed_no_space">Failed — not enough free space</string>
     <string name="chat_transfer_failed_timeout">Failed — no connection was made in time</string>
+    <string name="chat_transfer_failed_background">Failed — Knit must be on screen to share on this phone</string>
     <string name="chat_transfer_interrupted">Interrupted</string>
     <string name="chat_transfer_no_app">No app can open this file</string>
 

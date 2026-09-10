@@ -67,5 +67,6 @@ fun transferRefusalMessage(refusal: TransferRefusal): Int =
         TransferRefusal.NoSession -> R.string.chat_transfer_no_session
         TransferRefusal.NoSpace -> R.string.chat_transfer_no_space
         TransferRefusal.Hotspot -> R.string.chat_transfer_hotspot
+        TransferRefusal.Background -> R.string.chat_transfer_background
         TransferRefusal.Gone -> R.string.chat_transfer_gone
     }

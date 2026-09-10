@@ -46,6 +46,7 @@ class TransferManagerTest {
             joinWindowMs = 600,
             joinAttemptMs = 50,
             joinRetryDelayMs = 30,
+            readyGraceMs = 20,
             tcpConnectMs = 500,
             tcpConnectTries = 5,
             tcpConnectRetryMs = 50,
@@ -65,11 +66,14 @@ class TransferManagerTest {
     ) {
         var nearby = true
 
+        /** A snapshot: the managers append from their own threads while a case scans for a phase. */
+        private fun snapshot(): List<MessageEntity> = synchronized(rows) { rows.toList() }
+
         fun record(id: String): TransferRecord? =
-            rows.lastOrNull { it.id == TransferRecord.rowId(id) }?.let { TransferRecord.decode(it.body) }
+            snapshot().lastOrNull { it.id == TransferRecord.rowId(id) }?.let { TransferRecord.decode(it.body) }
 
         fun phases(id: String): List<TransferPhase> =
-            rows
+            snapshot()
                 .filter {
                     it.id == TransferRecord.rowId(id)
                 }.mapNotNull { TransferRecord.decode(it.body)?.phase }
@@ -371,6 +375,44 @@ class TransferManagerTest {
                 TransferStream.writeVerdict(s.getOutputStream(), true)
             }
             awaitPhase(a, id, TransferPhase.Done)
+        }
+
+    @Test
+    fun aReceiverThatArrivesOverIpv6StillGetsTheFile() =
+        runBlocking {
+            val (a, b) = pair()
+            a.withClip()
+            // A receiver on Android 13+ may join with IPv6 link-local provisioning and hold no IPv4 at all;
+            // the host binds every address its group interface carries, so it turns up on the other listener.
+            b.wifi.joinOverIpv6 = true
+            val id = offer(a)
+            awaitIncoming(b, id)
+            assertNull(b.manager.accept(id))
+            awaitPhase(a, id, TransferPhase.Done)
+            awaitPhase(b, id, TransferPhase.Done)
+            assertArrayEquals(
+                payload,
+                b.files.sinks
+                    .single()
+                    .buffer
+                    .toByteArray(),
+            )
+        }
+
+    @Test
+    fun aGroupRefusedForBeingOffScreenIsRecordedAsSuch() =
+        runBlocking {
+            val (a, b) = pair()
+            a.withClip()
+            a.wifi.hostFails = true
+            a.wifi.hostRefusal = TransferRefusal.Background
+            val id = offer(a)
+            awaitIncoming(b, id)
+            assertNull(b.manager.accept(id))
+            awaitPhase(a, id, TransferPhase.Failed)
+            // Not "this phone can't do Wi-Fi Direct": the user can fix this one by opening Knit.
+            assertEquals(TransferPayload.REASON_FOREGROUND, a.record(id)!!.reason)
+            await("alice hands the radio back") { a.wifi.released.isNotEmpty() }
         }
 
     @Test

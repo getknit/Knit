@@ -52,14 +52,28 @@ data class GroupCredentials(
     }
 }
 
-/** A group this device is hosting: its own address on the group interface, and the subnet clients arrive from. */
-class HostedGroup(
-    val ownerAddress: InetAddress,
+/** One address the group interface carries, and the subnet it defines. */
+data class GroupAddress(
+    val address: InetAddress,
     val prefixLength: Int,
-    val frequencyMhz: Int,
 )
 
-/** A group this device has joined: where the host listens. */
+/**
+ * A group this device is hosting. [addresses] is every address its own group interface carries — an IPv4
+ * group-owner address, and the IPv6 link-local the kernel puts on any interface. The listener binds all of
+ * them and admits only clients arriving from one of their subnets, because which family a client turns up
+ * on is the *client's* choice: a receiver on Android 13+ may join with IPv6 link-local provisioning and
+ * never take a DHCP lease at all.
+ */
+class HostedGroup(
+    val addresses: List<GroupAddress>,
+    val frequencyMhz: Int,
+) {
+    /** The first address, for logging and for anything that just needs one name for this group. */
+    val ownerAddress: InetAddress get() = addresses.first().address
+}
+
+/** A group this device has joined: where the host listens (IPv4, or a scoped IPv6 link-local). */
 class JoinedGroup(
     val ownerAddress: InetAddress,
 )
@@ -94,6 +108,13 @@ interface DirectWifi {
 
     /** Leaves/removes whatever group is up and hands the radio back. Idempotent; called from every terminal path. */
     suspend fun release()
+
+    /**
+     * Removes a group *this app* left on air — what a crash or a force-stop mid-transfer leaves behind, since
+     * nothing runs [release] then. Safe at any time and cheap when there is nothing to do: it never lends the
+     * radio out, never touches a group it did not name, and stands aside while a transfer holds the radio.
+     */
+    suspend fun sweep() {}
 }
 
 /** Whether this address shares the first [prefixLength] bits with [network] — the "came in over the group" gate. */

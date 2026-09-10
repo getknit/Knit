@@ -15,6 +15,7 @@ import app.getknit.knit.di.startDemoDirectorIfEnabled
 import app.getknit.knit.di.uiModule
 import app.getknit.knit.moderation.MlTextModerator
 import app.getknit.knit.notifications.Notifier
+import app.getknit.knit.transfer.DirectWifi
 import app.getknit.knit.ui.image.BlobFetcher
 import app.getknit.knit.ui.image.BlobKeyer
 import app.getknit.knit.ui.image.LinkCardFetcher
@@ -93,6 +94,15 @@ class KnitApplication :
             koinApp.koin.get<SettingsStore>().seedDefaultSpools(resources.getStringArray(R.array.default_spools).toList())
         }
 
+        // Clear a Wi-Fi Direct group a previous run left on air. Nothing removes one when the process dies
+        // mid-transfer, and a live group both beacons our credentials and keeps Wi-Fi Aware off the radio.
+        // Cheap when there is nothing to find (a binder and one query), never touches a group it did not
+        // name, and held back past the cold-start window like the warm-up above.
+        koinApp.koin.get<CoroutineScope>().launch {
+            delay(SWEEP_DELAY_MS)
+            runCatching { koinApp.koin.get<DirectWifi>().sweep() }
+        }
+
         // Demo-screenshot mode (`-PseedDemo=true`): fill the DB with a realistic conversation history so
         // the app renders populated on an emulator. Debug-only — the seeder lives in `src/debug`, so this is
         // a no-op in release (see the per-variant di/DemoWiring). Off by default even in debug.
@@ -124,5 +134,8 @@ class KnitApplication :
     private companion object {
         /** How long the toxicity warm-up waits out the cold-start window before it starts loading. */
         const val WARMUP_DELAY_MS = 5_000L
+
+        /** The same courtesy for the leftover-group sweep: a stale group has waited this long already. */
+        const val SWEEP_DELAY_MS = 8_000L
     }
 }

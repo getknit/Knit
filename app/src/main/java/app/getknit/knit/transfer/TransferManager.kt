@@ -22,9 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketTimeoutException
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -61,10 +59,27 @@ data class TransferTimings(
     val readyWaitMs: Long = 45_000L,
     val groupUpMs: Long = 15_000L,
     val hostWindowMs: Long = 90_000L,
-    val joinStartDelayMs: Long = 3_000L,
+    /**
+     * How long the receiver sits on a READY before it reaches for the radio. It exists so the client does not
+     * scan for a group the host has not stood up yet, and it is sized against what the host actually costs:
+     * its own settle plus ~650 ms of `createGroup`. This delay and the settle are serial on the receiver, so
+     * together they should land it just *after* the host is up, not seconds later.
+     */
+    val joinStartDelayMs: Long = 1_000L,
     val joinWindowMs: Long = 75_000L,
     val joinAttemptMs: Long = 20_000L,
     val joinRetryDelayMs: Long = 2_000L,
+    /**
+     * The pause between sending READY and lending the radio out to host the group.
+     *
+     * It exists because "sent" is not "delivered": the fast plane returns once a frame is queued, and
+     * hosting pauses Wi-Fi Aware, which closes the very socket the frame is draining through. Observed on a
+     * Pixel 7 — the READY (two fragments) was written at 23:38:46.377 and the Aware link went down at
+     * 23:38:46.394, seventeen milliseconds later; the receiver never saw it, sat out its READY wait and both
+     * ends failed on a timeout. It survived eleven runs before it lost the twelfth. Bluetooth cannot cover
+     * it, since a frame the fast plane has already accepted is not re-queued for another plane.
+     */
+    val readyGraceMs: Long = 500L,
     val tcpConnectMs: Int = 5_000,
     val tcpConnectTries: Int = 5,
     val tcpConnectRetryMs: Long = 1_000L,
@@ -118,7 +133,7 @@ class TransferManager(
 
         @Volatile var lastPublishAt: Long = 0L
 
-        @Volatile var server: ServerSocket? = null
+        @Volatile var listener: TransferListener? = null
 
         @Volatile var socket: Socket? = null
     }
@@ -387,6 +402,8 @@ class TransferManager(
             fail(l, TransferPayload.REASON_CONNECTION, tellPeer = false)
             return
         }
+        // Let the READY actually leave before the radio is taken away — see readyGraceMs.
+        delay(timings.readyGraceMs)
         l.job = scope.launch { hostAndSend(l) }
     }
 
@@ -446,12 +463,17 @@ class TransferManager(
         try {
             withContext(io) {
                 val group = wifi.host(checkNotNull(l.credentials), timings.groupUpMs)
-                log("xfer ${l.state.id} hosting ${l.credentials?.ssid} go=${group.ownerAddress.hostAddress} freq=${group.frequencyMhz}")
-                val server = ServerSocket().also { l.server = it }
-                server.receiveBufferSize = SOCKET_BUFFER_BYTES
-                server.bind(InetSocketAddress(group.ownerAddress, l.port), 1)
-                val socket = acceptClient(l, server, group) ?: throw TransferTimeout()
-                server.close()
+                log(
+                    "xfer ${l.state.id} hosting ${l.credentials?.ssid} " +
+                        "on ${group.addresses.joinToString { it.address.hostAddress.orEmpty() }} freq=${group.frequencyMhz}",
+                )
+                val listener =
+                    TransferListener(group, l.port, io, clock, timings.hostWindowMs, timings.soTimeoutMs) {
+                        log("xfer ${l.state.id} $it")
+                    }
+                l.listener = listener
+                listener.bind(SOCKET_BUFFER_BYTES)
+                val socket = listener.accept(checkNotNull(l.key), l.state.id) ?: throw TransferTimeout()
                 l.socket = socket
                 transition(l, TransferPhase.Transferring)
                 val source = files.openSource(checkNotNull(l.sourceUri)) ?: throw IOException("source is gone")
@@ -472,48 +494,12 @@ class TransferManager(
             failure = TransferPayload.REASON_TIMEOUT
         } catch (e: DirectWifiException) {
             log("xfer ${l.state.id} host failed: ${e.message}")
-            failure = TransferPayload.REASON_JOIN_FAILED
+            failure = reasonFor(e)
         } catch (e: IOException) {
             log("xfer ${l.state.id} send failed: $e")
             failure = TransferPayload.REASON_CONNECTION
         } finally {
             finish(l, failure)
-        }
-    }
-
-    /** Waits for the one client whose proof names this transfer, ignoring anything else that dials the port. */
-    private fun acceptClient(
-        l: Live,
-        server: ServerSocket,
-        group: HostedGroup,
-    ): Socket? {
-        val deadline = clock() + timings.hostWindowMs
-        while (true) {
-            val remaining = deadline - clock()
-            if (remaining <= 0) return null
-            server.soTimeout = remaining.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            val socket =
-                try {
-                    server.accept()
-                } catch (_: SocketTimeoutException) {
-                    return null
-                }
-            if (admit(l, socket, group)) return socket
-            socket.close()
-        }
-    }
-
-    private fun admit(
-        l: Live,
-        socket: Socket,
-        group: HostedGroup,
-    ): Boolean {
-        if (!socket.inetAddress.inPrefix(group.ownerAddress, group.prefixLength)) return false
-        socket.soTimeout = timings.soTimeoutMs
-        return try {
-            TransferStream.readProof(socket.getInputStream(), checkNotNull(l.key), l.state.id)
-        } catch (_: IOException) {
-            false
         }
     }
 
@@ -549,7 +535,7 @@ class TransferManager(
             failure = TransferPayload.REASON_NO_SPACE
         } catch (e: DirectWifiException) {
             log("xfer ${l.state.id} join failed: ${e.message}")
-            failure = TransferPayload.REASON_JOIN_FAILED
+            failure = reasonFor(e)
         } catch (e: IOException) {
             log("xfer ${l.state.id} receive failed: $e")
             failure = TransferPayload.REASON_CONNECTION
@@ -557,6 +543,10 @@ class TransferManager(
             finish(l, failure)
         }
     }
+
+    /** A radio refusal the user can act on keeps its own outcome code; everything else is a failed link. */
+    private fun reasonFor(e: DirectWifiException): Int =
+        if (e.refusal == TransferRefusal.Background) TransferPayload.REASON_FOREGROUND else TransferPayload.REASON_JOIN_FAILED
 
     private suspend fun createSinkOrFail(l: Live): TransferSink =
         files.createSink(l.state.name, l.state.mime, l.state.size) ?: throw NoSpace()
@@ -647,7 +637,8 @@ class TransferManager(
     }
 
     private fun closeSockets(l: Live) {
-        runCatching { l.server?.close() }
+        l.listener?.close()
+        l.listener = null
         runCatching { l.socket?.close() }
     }
 

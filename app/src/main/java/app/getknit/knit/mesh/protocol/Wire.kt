@@ -582,6 +582,7 @@ data class TransferPayload(
         const val REASON_CORRUPT = 6
         const val REASON_CONNECTION = 7
         const val REASON_NO_SPACE = 8
+        const val REASON_FOREGROUND = 9
     }
 }
 

@@ -33,7 +33,12 @@ class FakeDirectWifi(
     /** How many join attempts fail before one succeeds (Int.MAX_VALUE = never). */
     var joinFailures = 0
     var joinDelayMs = 0L
+    var hostRefusal: TransferRefusal = TransferRefusal.Hotspot
+
+    /** Which loopback family the receiver dials — the stand-in for a client that took an IPv6 link-local. */
+    var joinOverIpv6 = false
     val released = Collections.synchronizedList(mutableListOf<Unit>())
+    val swept = Collections.synchronizedList(mutableListOf<Unit>())
 
     override fun refusal(): TransferRefusal? = refusal
 
@@ -42,8 +47,12 @@ class FakeDirectWifi(
         timeoutMs: Long,
     ): HostedGroup {
         log.note("host")
-        if (hostFails) throw DirectWifiException("host refused", TransferRefusal.Hotspot)
-        return HostedGroup(InetAddress.getLoopbackAddress(), prefixLength = 8, frequencyMhz = 5180)
+        if (hostFails) throw DirectWifiException("host refused", hostRefusal)
+        // Both loopback families, as a real group interface carries both — the listener binds each.
+        return HostedGroup(
+            listOf(GroupAddress(V4, prefixLength = 8), GroupAddress(V6, prefixLength = 128)),
+            frequencyMhz = 5180,
+        )
     }
 
     override suspend fun join(
@@ -56,12 +65,22 @@ class FakeDirectWifi(
             if (joinFailures != Int.MAX_VALUE) joinFailures -= 1
             throw DirectWifiException("no group formed")
         }
-        return JoinedGroup(InetAddress.getLoopbackAddress())
+        return JoinedGroup(if (joinOverIpv6) V6 else V4)
     }
 
     override suspend fun release() {
         log.note("release")
         released += Unit
+    }
+
+    override suspend fun sweep() {
+        log.note("sweep")
+        swept += Unit
+    }
+
+    private companion object {
+        val V4: InetAddress = InetAddress.getByName("127.0.0.1")
+        val V6: InetAddress = InetAddress.getByName("::1")
     }
 }
 

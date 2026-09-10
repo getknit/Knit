@@ -120,9 +120,13 @@ peer is in radio range, or every *nearby* surface in the app inherits the claim.
 
 ## Wi-Fi Aware availability flaps, and may be absent entirely
 
-`WifiAwareManager.isAvailable()` goes false when Wi-Fi is off or Wi-Fi Direct / SoftAP / hotspot seizes
-the radio; the transport watches `ACTION_WIFI_AWARE_STATE_CHANGED`, flips `health` to `Degraded`, tears
-links down, and re-attaches on recovery. `PackageManager.FEATURE_WIFI_AWARE` can be missing outright
+`WifiAwareManager.isAvailable()` goes false when Wi-Fi is off or **another app's** Wi-Fi Direct / SoftAP /
+hotspot seizes the radio; the transport watches `ACTION_WIFI_AWARE_STATE_CHANGED`, flips `health` to
+`Degraded`, tears links down, and re-attaches on recovery. **It does not go false for our own P2P.** Since
+Android 12 `HalDeviceManager` gives same-app interface requests equal priority, so they never evict each
+other: Knit's own `createGroup` returns `BUSY` while our Aware session is attached, and `isAvailable()`
+stays true throughout. There is no edge to react to, which is why the direct-transfer path pauses this
+transport by hand (`MeshTransport.pause`/`resume`, `context/direct-transfer.md`, ADR 2026-09.wtmz). `PackageManager.FEATURE_WIFI_AWARE` can be missing outright
 (some budget/older + certain Samsung models) — but the **Bluetooth LE plane still meshes** on those
 devices, since `CompositeMeshTransport` merges whichever radios are present, so the UI shows the
 "unsupported" state only when *neither* Wi-Fi Aware nor BLE hardware exists

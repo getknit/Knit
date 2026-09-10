@@ -32,6 +32,8 @@ document:
   until you pick one, and the choice appears on Android 12 or newer.
 - A message you start typing and don't send is still there when you come back to that chat, and the chat
   list shows it as "Draft:" until you send it. Every chat keeps its own.
+- Send someone nearby a file that is too big to attach, from the menu in a direct message. The two phones
+  connect to each other over Wi-Fi for the transfer, and the file arrives in their Downloads folder.
 
 ### Changed
 

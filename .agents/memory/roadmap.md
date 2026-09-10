@@ -54,6 +54,20 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **Direct file transfer's follow-ons** (ADR 2026-09.wtmz, `context/direct-transfer.md`). Shipped as a
+  DM-only overflow item; four things were named and left. **The APK entry point** is one call away —
+  `TransferManager.offer(peerId, prepareKnitApk(context).toString())`, since `ui/invite/ShareApk.kt` already
+  stages the installable APK — and is held back only because handing someone an APK deserves its own
+  thinking about what the receiving side says. **Receiver-side content screening**: nothing looks inside the
+  file, which the consent sheet states plainly rather than papering over; the moderation pipeline is built
+  for 8 MiB attachments in the blob store, not for a gigabyte in Downloads. **A 2.4 GHz re-host** if a
+  screen-off client's throughput ever collapses (it did not — screen-off costs about 3%). **The API 30-32
+  background `createGroup` gap**, surfaced as `TransferRefusal.Background` and never seen run: the lab has
+  no device below 33. Also unbuilt: a progress or completion notification, which needs a seam out of the
+  deliberately-pure `TransferManager`, and a chat-list preview for a *pending* offer, which
+  `ChatListViewModel` declines by the same rule that keeps notices out (ADR 2026-09.7uqe decision 4 took the
+  narrow exception it needed and no more).
+
 - **Location sharing beyond the one-shot pin** (ADR 2026-09.tss4 — a `geo:` line in the body, read only
   between the pin tap and the send). Three follow-ons were named and left: **live location** (a stream of
   positions with a stop control — every one is a message today, so it needs a rule for superseding the last

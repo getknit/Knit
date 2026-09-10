@@ -48,6 +48,13 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   never fetches, both ends screen the card's picture and text into one verdict, and the fetch is gated on
   `net/InternetGate` (a validated route, never the NAN link), bound to that `Network`, https-only, with a
   private-address DNS guard. `okhttp3` stays confined to the two files `rules/mesh.md` names.
+- **When touching `transfer/`, `MeshTransport.pause`/`resume`, or anything that hands the Wi-Fi radio to a
+  second role:** READ `.agents/context/direct-transfer.md` — a large file goes to one nearby contact over a
+  Wi-Fi Direct group the two phones raise, never over the mesh and never custodied (ADR 2026-09.wtmz, the
+  seal 2026-09.37ce, the surfaces 2026-09.7uqe). `TransferManager`/`TransferStream` are pure behind the
+  `DirectWifi`/`TransferFiles`/`TransferSignals` seams, and `AndroidDirectWifi` is the one
+  `android.net.wifi.p2p` importer. Wi-Fi Aware does **not** yield to our own P2P on Android 12+, so it must
+  be paused explicitly — that is what `pause`/`resume` are for.
 - **When touching `location/`, the composer's "Send location" pin, or anything that reads the device's
   position:** READ ADR 2026-09.tss4. A shared position is a `geo:` line in the message body (no wire field,
   no capability bit); it is read only between the pin tap and the send, by `ChatViewModel.startLocation`,

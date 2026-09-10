@@ -52,6 +52,12 @@ linkpreview/   sender-side link previews (ADR 2026-09.n752): LinkPreviewService 
                to the validated network, private-address DNS guard) · OpenGraphParser / LinkPreviewPolicy /
                PublicAddressPolicy (pure) · PreviewImage; the card itself is protocol/LinkPreviewBlob, an
                attachment kind under its own MIME, decoded on receive by data/LinkCardStore
+transfer/      direct file transfer (ADR 2026-09.wtmz, context/direct-transfer.md): TransferManager (the whole
+               state machine, pure) · TransferStream (the sealed byte protocol, pure) · TransferListener
+               (one ServerSocket per group address) over the DirectWifi/TransferFiles/TransferSignals seams
+               · AndroidDirectWifi (the ONLY android.net.wifi.p2p importer; hosts the group and pauses
+               Wi-Fi Aware, which does not yield to it on its own) · AndroidTransferFiles (Downloads/Knit).
+               The bytes never touch the mesh and are never custodied; the mesh carries only CTL_TRANSFER
 net/           InternetGate + AndroidInternetGate — "is the default network a validated route to the
                Internet?", the one ConnectivityManager user outside the NAN data path
 location/      "Send location" (ADR 2026-09.tss4): GeoUri (the `geo:` body token — format/parse/strip/describe,
@@ -92,6 +98,6 @@ frames.
 
 - Subsystem deep-dives: `context/mesh-transport.md` (radios), `context/wire-format.md` (CBOR wire),
   `context/store-and-forward.md` (custody), `context/e2e-encryption.md` (crypto),
-  `context/toolchain.md` (build).
+  `context/direct-transfer.md` (large files, off the mesh), `context/toolchain.md` (build).
 - Design docs under `docs/`: `ARCHITECTURE.md`, `ARCHITECTURE_REVIEW.md`, `WIRE_COMPAT.md`,
   `NAN_CONCURRENCY_REAUDIT.md`, `DIGEST_PULL_REATTACH.md`, `CONTENT_MODERATION.md`.

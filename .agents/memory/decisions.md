@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-109 decisions.
+112 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -90,6 +90,7 @@ carries; never renumber an old one.
 | [067](decisions/067-a-dedicated-lora-frequency-is-a-debug-only-second-bargain.md) | A dedicated LoRa frequency is a debug-only second bargain, and it is the *politeness* ceiling it lifts | lora, airtime, debug |
 | [2026-09.26q3](decisions/2026-09-26q3-the-meshtastic-room-is-a-local-mirror-of-the-bound-board-s-slot-0.md) | The Meshtastic room is a local mirror of the bound board's slot 0 | lora, meshtastic, mesh |
 | [2026-09.2ajk](decisions/2026-09-2ajk-lora-reach-is-relay-reach.md) | LoRa reach is relay reach, and a custody re-serve is not presence | lora, mesh, ui |
+| [2026-09.37ce](decisions/2026-09-37ce-a-direct-transfer-s-bytes-are-sealed.md) | A direct transfer's bytes are sealed, not just sent over WPA2 | transfer, crypto |
 | [2026-09.3yje](decisions/2026-09-3yje-the-open-to-chat-cue-introduces-strangers-only.md) | The open-to-chat cue introduces strangers only, gated on a two-way exchange | notifications, presence, data |
 | [2026-09.5bqu](decisions/2026-09-5bqu-the-lora-plane-is-fully-quiescent-until-a-board-is-configured.md) | The LoRa plane is fully quiescent until a board is configured | lora, mesh, performance |
 | [2026-09.5dt2](decisions/2026-09-5dt2-a-queued-lora-frame-is-re-asked-the-gates-it-passed-at-enqueue.md) | A queued LoRa frame is re-asked the gates it passed at enqueue | lora, airtime |
@@ -99,6 +100,7 @@ carries; never renumber an old one.
 | [2026-09.74fq](decisions/2026-09-74fq-open-to-chat-is-a-carried-profile-flag.md) | Open to chat is a carried profile flag, and the nearby cue is batched with per-person and hourly cooldowns | profile, wire, notifications, ui |
 | [2026-09.7c8n](decisions/2026-09-7c8n-gossip-pays-for-its-own-air.md) | Gossip pays for its own air, and a backfill round skips what it cannot afford | lora, airtime, reliability |
 | [2026-09.7r4d](decisions/2026-09-7r4d-a-post-typed-in-the-bridged-room-is-the-same-frame-with-no-speaker.md) | A post typed in the bridged room is the same frame with no speaker | lora, meshtastic, mesh |
+| [2026-09.7uqe](decisions/2026-09-7uqe-a-file-offer-is-an-event-of-its-own.md) | A file offer is an event of its own, not a line in the chat | transfer, ui, notifications |
 | [2026-09.9469](decisions/2026-09-9469-a-post-to-the-meshtastic-room-carries-no-author-name.md) | A post to the Meshtastic room carries no author name | lora, meshtastic, privacy |
 | [2026-09.995c](decisions/2026-09-995c-a-peer-rename-notice-stores-both-names.md) | A peer rename notice stores both names | ui, data |
 | [2026-09.9dnk](decisions/2026-09-9dnk-the-wedge-watchdog-s-tier-1-responder-refresh-is-capped-per-episode.md) | The wedge watchdog's Tier-1 responder refresh is capped per episode | mesh, nan, recovery |
@@ -124,6 +126,7 @@ carries; never renumber an old one.
 | [2026-09.ursc](decisions/2026-09-ursc-the-nearby-room-says-when-lora-airtime-is-spent.md) | The Nearby room says when LoRa airtime is spent | lora, ui |
 | [2026-09.v5ck](decisions/2026-09-v5ck-light-and-dark-are-a-per-app-night-mode.md) | Light and dark are a per-app night mode | ui, theme, settings |
 | [2026-09.v66c](decisions/2026-09-v66c-reactions-are-an-open-emoji-set-with-a-receive-side-length-cap.md) | Reactions are an open emoji set with a receive-side length cap | wire, ui, limits |
+| [2026-09.wtmz](decisions/2026-09-wtmz-a-large-file-goes-off-the-mesh.md) | A large file goes off the mesh, over a Wi-Fi group the two phones raise | transfer, mesh, wifi |
 | [2026-09.wuqj](decisions/2026-09-wuqj-an-alias-is-a-word-encoded-digest-prefix-that-grows-when-matched.md) | An alias is a word-encoded digest prefix that grows when matched | identity, ui, security |
 | [2026-09.x52a](decisions/2026-09-x52a-the-meshtastic-room-is-a-switch.md) | The Meshtastic room is a switch, and off means unread | lora, ui, settings |
 | [2026-09.xdm2](decisions/2026-09-xdm2-a-queued-snapshot-is-replaced-by-its-own-newer-copy.md) | A queued snapshot is replaced by its own newer copy | lora, airtime, mesh |

@@ -142,6 +142,7 @@ class ChatViewModelTest {
     private val linkPreviewsEnabledFlow = MutableStateFlow(false)
     private val publicConsentFlow = MutableStateFlow(false)
     private val locationConsentFlow = MutableStateFlow(false)
+    private val transferConsentFlow = MutableStateFlow(false)
 
     @Before
     fun setUp() {
@@ -176,6 +177,7 @@ class ChatViewModelTest {
         every { linkPreviews.online } returns onlineFlow
         every { settings.linkPreviewsEnabled } returns linkPreviewsEnabledFlow
         every { settings.locationShareConsented } returns locationConsentFlow
+        every { settings.directTransferConsented } returns transferConsentFlow
         every { transfers.states } returns transfersFlow
     }
 
@@ -1786,7 +1788,7 @@ class ChatViewModelTest {
             assertTrue(dm.state.value.canSendFile)
         }
 
-    // --- direct Wi-Fi transfer of a large file (transfer/TransferManager) ---
+    // --- direct file transfer (transfer/TransferManager) ---
 
     private fun transferRow(
         phase: TransferPhase,
@@ -1899,6 +1901,7 @@ class ChatViewModelTest {
             val events = mutableListOf<Int>()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
             coEvery { transfers.accept("t1") } returns TransferRefusal.NoSpace
+            transferConsentFlow.value = true
 
             vm.acceptTransfer("t1")
             vm.declineTransfer("t1")
@@ -1908,6 +1911,90 @@ class ChatViewModelTest {
             assertEquals(listOf(R.string.chat_transfer_no_space), events)
             coVerify { transfers.decline("t1") }
             coVerify { transfers.cancel("t1") }
+        }
+
+    /**
+     * The disclosure is read once per device, on whichever side gets there first, and the tap it interrupted
+     * finishes itself afterwards — the picker here, the accept in the case below.
+     */
+    @Test
+    fun theFirstDirectTransferReadsTheDisclosureAndThenOpensThePicker() =
+        runTest {
+            stubDm("bob")
+            coEvery { peers.find("bob") } returns peer("bob", "Bob", capabilities = Protocol.LOCAL_CAPABILITIES)
+            mesh.neighbors.value = setOf(Peer("bob"))
+            val vm = vm("bob")
+            val pickers = mutableListOf<Unit>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.transferPickerNeeded.collect { pickers += it } }
+
+            vm.sendFileDirectly()
+            advanceUntilIdle()
+            assertEquals(TransferConsent(incoming = false), vm.showTransferConsent.value)
+            assertTrue("nothing opens until it is read", pickers.isEmpty())
+
+            vm.acceptTransferConsent()
+            advanceUntilIdle()
+            assertNull(vm.showTransferConsent.value)
+            coVerify(exactly = 1) { settings.acceptDirectTransferConsent() }
+            assertEquals(1, pickers.size)
+
+            transferConsentFlow.value = true
+            vm.sendFileDirectly()
+            advanceUntilIdle()
+            assertNull("read once, never again", vm.showTransferConsent.value)
+            assertEquals(2, pickers.size)
+        }
+
+    @Test
+    fun theDisclosureStandsInFrontOfAnAcceptAndCarriesItOnceRead() =
+        runTest {
+            stubDm("bob")
+            val vm = vm("bob")
+
+            vm.acceptTransfer("t1")
+            advanceUntilIdle()
+            assertEquals(TransferConsent(incoming = true, transferId = "t1"), vm.showTransferConsent.value)
+            coVerify(exactly = 0) { transfers.accept(any()) }
+
+            vm.acceptTransferConsent()
+            advanceUntilIdle()
+            assertNull(vm.showTransferConsent.value)
+            coVerify(exactly = 1) { transfers.accept("t1") }
+        }
+
+    @Test
+    fun dismissingTheDisclosureRecordsNothingAndAnswersNothing() =
+        runTest {
+            stubDm("bob")
+            val vm = vm("bob")
+
+            vm.acceptTransfer("t1")
+            advanceUntilIdle()
+            vm.dismissTransferConsent()
+            advanceUntilIdle()
+
+            assertNull(vm.showTransferConsent.value)
+            coVerify(exactly = 0) { settings.acceptDirectTransferConsent() }
+            coVerify(exactly = 0) { transfers.accept(any()) }
+        }
+
+    /** A thread that cannot take a file says so where the user tapped, rather than after a file is chosen. */
+    @Test
+    fun aThreadThatCannotTakeAFileIsRefusedBeforeTheDisclosure() =
+        runTest {
+            coEvery { groups.find(GROUP) } returns group(GROUP, members = listOf("me", "sam"))
+            val vm = vm(GROUP)
+            val events = mutableListOf<Int>()
+            val pickers = mutableListOf<Unit>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.transferPickerNeeded.collect { pickers += it } }
+
+            vm.sendFileDirectly()
+            advanceUntilIdle()
+
+            assertEquals(listOf(R.string.chat_transfer_needs_dm), events)
+            assertNull(vm.showTransferConsent.value)
+            assertTrue(pickers.isEmpty())
         }
 
     /** One member on an old build is one person who cannot read the message, so the group send is refused. */

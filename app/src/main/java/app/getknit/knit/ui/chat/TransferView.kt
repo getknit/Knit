@@ -1,5 +1,7 @@
 package app.getknit.knit.ui.chat
 
+import android.content.Context
+import androidx.annotation.StringRes
 import app.getknit.knit.R
 import app.getknit.knit.data.FileTypes
 import app.getknit.knit.data.message.MessageEntity
@@ -70,3 +72,83 @@ fun transferRefusalMessage(refusal: TransferRefusal): Int =
         TransferRefusal.Background -> R.string.chat_transfer_background
         TransferRefusal.Gone -> R.string.chat_transfer_gone
     }
+
+/**
+ * A direct-transfer row's one-line stand-in in the chat list, or null when the row's body is not a record
+ * this build reads.
+ *
+ * These rows are the one status-notice kind the list shows. Everything else with a `kind` is a notice *about*
+ * the thread — a rename, a key change — whose sender is the event's subject rather than an author. A transfer
+ * is the opposite: one of the two people offered a file and the other answered, which is a conversation, and
+ * on a quiet thread it is the most consequential thing in it.
+ */
+fun transferPreview(
+    context: Context,
+    row: MessageEntity,
+    live: Map<String, TransferState>,
+): String? {
+    val view = transferViewFor(row, live) ?: return null
+    return context.getString(transferPreviewText(view), view.name)
+}
+
+/**
+ * Which sentence a transfer row gets, as a format string taking the file name.
+ *
+ * Written from the reader's side rather than the author's, which is why the list must not put its "You: "
+ * prefix in front of one: the sender's own row for a refused offer reads "They declined clip.mp4", and
+ * "You: They declined clip.mp4" would name the wrong person twice over. Most states read the same from both
+ * ends; the ones that do not are the ones where the two people did different things.
+ */
+@StringRes
+fun transferPreviewText(view: TransferView): Int =
+    when {
+        // A record left non-terminal by a process death outranks whatever phase it froze at: the chat list is
+        // exactly where a transfer that says "Sending…" three days on would go unnoticed.
+        view.interrupted -> {
+            R.string.chat_list_preview_transfer_interrupted
+        }
+
+        view.phase == TransferPhase.Offered -> {
+            pick(view, R.string.chat_list_preview_transfer_offered, R.string.chat_list_preview_transfer_incoming)
+        }
+
+        view.phase == TransferPhase.Connecting -> {
+            pick(
+                view,
+                R.string.chat_list_preview_transfer_connecting_send,
+                R.string.chat_list_preview_transfer_connecting_receive,
+            )
+        }
+
+        view.phase == TransferPhase.Transferring -> {
+            pick(view, R.string.chat_list_preview_transfer_sending, R.string.chat_list_preview_transfer_receiving)
+        }
+
+        view.phase == TransferPhase.Done -> {
+            pick(view, R.string.chat_list_preview_transfer_sent, R.string.chat_list_preview_transfer_received)
+        }
+
+        view.phase == TransferPhase.Declined -> {
+            pick(view, R.string.chat_list_preview_transfer_declined, R.string.chat_list_preview_transfer_declined_by_you)
+        }
+
+        view.phase == TransferPhase.Expired -> {
+            R.string.chat_list_preview_transfer_expired
+        }
+
+        view.phase == TransferPhase.Cancelled -> {
+            R.string.chat_list_preview_transfer_cancelled
+        }
+
+        else -> {
+            pick(view, R.string.chat_list_preview_transfer_failed_send, R.string.chat_list_preview_transfer_failed_receive)
+        }
+    }
+
+/** [mine] when this phone offered the file, [theirs] when the other end did. */
+@StringRes
+private fun pick(
+    view: TransferView,
+    @StringRes mine: Int,
+    @StringRes theirs: Int,
+): Int = if (view.outgoing) mine else theirs

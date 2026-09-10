@@ -102,6 +102,7 @@ import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.components.RoomAvatar
 import app.getknit.knit.ui.components.skeletonBlockColor
 import app.getknit.knit.ui.components.skeletonPulseAlpha
+import app.getknit.knit.ui.icons.KnitIcons
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.invite.ShareKnitDialog
 import app.getknit.knit.ui.invite.ShareStorageException
@@ -572,14 +573,33 @@ internal fun ConversationListItem(
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Spacer(Modifier.height(2.dp))
-                Text(
-                    text = preview,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontStyle = if (row.draft != null) FontStyle.Italic else null,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // The feature's own mark, the same one the "Send a file directly" menu item carries, so a
+                    // transfer reads as a transfer wherever it appears. A leading Icon rather than an emoji in
+                    // the string (the way 📷/📎 previews do it): no emoji looks like this glyph, and one in the
+                    // line would also be read aloud — "satellite antenna" — inside the row's spoken summary.
+                    // Outside the Text so it survives the ellipsis; the sentence is what should truncate.
+                    // Never over a draft, which speaks for the row in place of the preview entirely.
+                    if (row.previewIsTransfer && row.draft == null) {
+                        Icon(
+                            imageVector = KnitIcons.DirectTransfer,
+                            // Decorative: the line beside it already says a file is on the move.
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = preview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontStyle = if (row.draft != null) FontStyle.Italic else null,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
             }
             Spacer(Modifier.width(12.dp))
             Column(horizontalAlignment = Alignment.End) {

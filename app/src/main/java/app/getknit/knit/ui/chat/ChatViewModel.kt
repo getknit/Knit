@@ -294,6 +294,16 @@ data class TypingPeer(
     val avatarHash: String?,
 )
 
+/**
+ * A direct-transfer disclosure waiting to be read, and the tap it stands in front of: [transferId] is the
+ * offer to accept once it is read, or null when the user was on their way to the file picker. Held rather
+ * than re-derived because the sheet outlives the tap that raised it.
+ */
+data class TransferConsent(
+    val incoming: Boolean,
+    val transferId: String? = null,
+)
+
 data class ChatUiState(
     val rows: List<ChatRow> = emptyList(),
     val neighborCount: Int = 0,
@@ -1690,7 +1700,59 @@ class ChatViewModel(
         }
     }
 
-    // --- direct Wi-Fi transfer of a large file (transfer/TransferManager) ---
+    // --- direct file transfer (transfer/TransferManager) ---
+
+    private val _showTransferConsent = MutableStateFlow<TransferConsent?>(null)
+
+    /** The direct-transfer disclosure on screen, and what it is standing in front of, or null. See [sendFileDirectly]. */
+    val showTransferConsent: StateFlow<TransferConsent?> = _showTransferConsent.asStateFlow()
+
+    private val _transferPickerNeeded = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * Fires once the disclosure stands accepted and a file may be picked. The screen answers it by opening the
+     * document picker, which is a composable's job — the same hand-off [locationPermissionNeeded] makes.
+     */
+    val transferPickerNeeded: SharedFlow<Unit> = _transferPickerNeeded.asSharedFlow()
+
+    /**
+     * The overflow item was tapped. Refuse here rather than after the picker: somebody who hunts down a 2 GB
+     * video and is only then told this thread cannot take one has been made to work for nothing. Then the
+     * disclosure, once per device, and then the picker.
+     */
+    fun sendFileDirectly() {
+        viewModelScope.launch {
+            refusalForTransfer()?.let {
+                _events.tryEmit(it)
+                return@launch
+            }
+            if (settings.directTransferConsented.first()) {
+                _transferPickerNeeded.tryEmit(Unit)
+            } else {
+                _showTransferConsent.value = TransferConsent(incoming = false)
+            }
+        }
+    }
+
+    /**
+     * Records the disclosure, lowers it and carries on to whatever raised it — the picker on this side, the
+     * offer being answered on the other. One tap does both, as [acceptLocationConsent] does: the sheet's
+     * button says what the tap behind it said.
+     */
+    fun acceptTransferConsent() {
+        val request = _showTransferConsent.value ?: return
+        viewModelScope.launch {
+            settings.acceptDirectTransferConsent()
+            _showTransferConsent.value = null
+            val id = request.transferId
+            if (id == null) _transferPickerNeeded.tryEmit(Unit) else startAccept(id)
+        }
+    }
+
+    /** Lowers the disclosure without recording anything, so the next attempt asks again. */
+    fun dismissTransferConsent() {
+        _showTransferConsent.value = null
+    }
 
     /** Offers the file at [uri] to this DM's peer over a one-shot Wi-Fi Direct link; the bytes never ride the mesh. */
     fun offerTransfer(uri: Uri) {
@@ -1722,8 +1784,22 @@ class ChatViewModel(
         return null
     }
 
+    /**
+     * Answers an incoming offer. Accepting is the moment this phone's radio changes hands and a file starts
+     * arriving in shared storage, so on the first direct transfer it reads the disclosure first.
+     */
     fun acceptTransfer(id: String) {
-        viewModelScope.launch { transfers.accept(id)?.let { _events.tryEmit(transferRefusalMessage(it)) } }
+        viewModelScope.launch {
+            if (settings.directTransferConsented.first()) {
+                startAccept(id)
+            } else {
+                _showTransferConsent.value = TransferConsent(incoming = true, transferId = id)
+            }
+        }
+    }
+
+    private suspend fun startAccept(id: String) {
+        transfers.accept(id)?.let { _events.tryEmit(transferRefusalMessage(it)) }
     }
 
     fun declineTransfer(id: String) {

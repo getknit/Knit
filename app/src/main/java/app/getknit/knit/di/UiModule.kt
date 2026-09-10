@@ -65,6 +65,7 @@ val uiModule =
                 get(),
                 get(),
                 get(),
+                get<TransferManager>(),
                 get<RelayStatusRepository>().facts,
                 get<LoraStatusRepository>().facts,
                 androidContext(),

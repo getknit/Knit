@@ -175,6 +175,7 @@ class DebugBridgeReceiver :
     private val lora: app.getknit.knit.mesh.lora.LoraMeshTransport by inject()
     private val loraLink: app.getknit.knit.mesh.lora.MeshtasticLink by inject()
     private val transfers: TransferManager by inject()
+    private val directWifi: app.getknit.knit.transfer.DirectWifi by inject()
 
     override fun onReceive(
         context: Context,
@@ -1343,13 +1344,23 @@ class DebugBridgeReceiver :
     ): JSONObject = JSONObject().put("status", status).put("message", message)
 
     /**
-     * Drives a direct Wi-Fi file transfer headless (transfer/TransferManager) so two lab phones can run one
+     * Drives a direct file transfer headless (transfer/TransferManager) so two lab phones can run one
      * without touching a screen: `--es to <nodeId> --es path <file>` offers the file at `path` to that peer;
-     * `--es accept|decline|cancel <transferId>` answers one; no extras dumps every live transfer, plus the
-     * transfer rows of `--es conv <peerId>` when given. The file path is read as the app itself (push it with
-     * `run-as`), and the signaling, the Wi-Fi Direct group and the bytes then go exactly as a tap would send them.
+     * `--es accept|decline|cancel <transferId>` answers one; `--ez sweep true` clears a group a dead process
+     * left on air; no extras dumps every live transfer and the radio's current refusal, plus the transfer rows
+     * of `--es conv <peerId>` when given. The file path is read as the app itself (push it with `run-as`), and
+     * the signaling, the Wi-Fi Direct group and the bytes then go exactly as a tap would send them.
+     *
+     * The `refusal` in the dump is the field worth having on a device: every gate in [DirectWifi.refusal] fails
+     * a transfer before the radio is ever touched, and from outside they are indistinguishable from a peer that
+     * simply never answered. Note that the disclosure sheet is a UI gate only — accepting an offer through this
+     * bridge steps around it, exactly as it steps around the picker.
      */
     private suspend fun handleXfer(intent: Intent): JSONObject {
+        if (intent.getBooleanExtra("sweep", false)) {
+            directWifi.sweep()
+            return reply("ok", "swept")
+        }
         intent.getStringExtra("accept")?.let { id ->
             val refusal = transfers.accept(id)
             return reply(if (refusal == null) "ok" else "refused", "accept $id: ${refusal ?: "started"}")
@@ -1392,7 +1403,11 @@ class DebugBridgeReceiver :
                 .filter { it.kind == MessageEntity.KIND_FILE_TRANSFER }
                 .forEach { row -> rows.put(JSONObject().put("id", row.id).put("sentAt", row.sentAt).put("record", row.body)) }
         }
-        return JSONObject().put("status", "ok").put("live", live).put("rows", rows)
+        return JSONObject()
+            .put("status", "ok")
+            .put("refusal", directWifi.refusal()?.name ?: JSONObject.NULL)
+            .put("live", live)
+            .put("rows", rows)
     }
 
     /**

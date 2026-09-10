@@ -146,20 +146,20 @@
     <string name="chat_file_peer_too_old">They need a newer version of Knit to receive files</string>
 
     <!-- Direct file transfer (transfer/): a large file over a one-shot Wi-Fi Direct link, never through the mesh -->
-    <string name="chat_send_large_file">Send a large file</string>
-    <string name="chat_transfer_needs_dm">Open a direct message to send a large file</string>
-    <string name="chat_transfer_peer_too_old">They need a newer version of Knit to receive large files</string>
-    <string name="chat_transfer_peer_not_nearby">They need to be nearby to receive a large file</string>
-    <string name="chat_transfer_wifi_off">Turn on Wi-Fi to transfer a large file</string>
-    <string name="chat_transfer_no_wifi_direct">This phone can\'t make a Wi-Fi Direct connection</string>
+    <string name="chat_send_large_file">Direct file send</string>
+    <string name="chat_transfer_needs_dm">Direct transfers work in a one-to-one chat</string>
+    <string name="chat_transfer_peer_too_old">They need a newer version of Knit for direct transfers</string>
+    <string name="chat_transfer_peer_not_nearby">They have to be nearby, since the file goes straight from phone to phone</string>
+    <string name="chat_transfer_wifi_off">Turn on Wi-Fi to send a file directly</string>
+    <string name="chat_transfer_no_wifi_direct">This phone can\'t make a direct Wi-Fi connection</string>
     <string name="chat_transfer_permission">Knit needs the nearby devices permission to transfer a file</string>
-    <string name="chat_transfer_busy">Another transfer is still in progress</string>
+    <string name="chat_transfer_busy">Another transfer is still running</string>
     <string name="chat_transfer_unreadable">Knit couldn\'t read that file</string>
     <string name="chat_transfer_too_large">That file is too large to send</string>
     <string name="chat_transfer_no_session">Knit couldn\'t reach them to offer the file</string>
     <string name="chat_transfer_no_space">Not enough free space for that file</string>
     <string name="chat_transfer_hotspot">Turn off your hotspot or screen sharing first</string>
-    <string name="chat_transfer_background">Keep Knit on screen to share a file on this version of Android</string>
+    <string name="chat_transfer_background">Keep Knit on screen to send a file directly on this version of Android</string>
     <string name="chat_transfer_gone">That offer is no longer open</string>
     <string name="chat_transfer_incoming">Wants to send you this file</string>
     <string name="chat_transfer_offered">Waiting for them to accept</string>
@@ -181,12 +181,20 @@
     <string name="chat_transfer_failed">Failed</string>
     <string name="chat_transfer_failed_corrupt">Failed — the file didn\'t arrive intact</string>
     <string name="chat_transfer_failed_connection">Failed — the Wi-Fi link dropped</string>
-    <string name="chat_transfer_failed_join">Failed — couldn\'t connect over Wi-Fi Direct</string>
+    <string name="chat_transfer_failed_join">Failed — the direct Wi-Fi link never came up</string>
     <string name="chat_transfer_failed_no_space">Failed — not enough free space</string>
     <string name="chat_transfer_failed_timeout">Failed — no connection was made in time</string>
-    <string name="chat_transfer_failed_background">Failed — Knit must be on screen to share on this phone</string>
+    <string name="chat_transfer_failed_background">Failed — Knit must be on screen to send a file directly on this phone</string>
     <string name="chat_transfer_interrupted">Interrupted</string>
     <string name="chat_transfer_no_app">No app can open this file</string>
+    <string name="chat_transfer_consent_title_send">Send a file directly?</string>
+    <string name="chat_transfer_consent_title_receive">Receive this file?</string>
+    <string name="chat_transfer_consent_can_title">How it works</string>
+    <string name="chat_transfer_consent_can_body">Knit creates a private, encrypted Wi‑Fi connection between your phones. The file does not travel through the mesh, and other phones do not store or forward it.</string>
+    <string name="chat_transfer_consent_cannot_title">While the file transfers</string>
+    <string name="chat_transfer_consent_cannot_body">Knit pauses its Wi‑Fi mesh connection, so other messages may be delayed. Keep both phones nearby until the transfer finishes.</string>
+    <string name="chat_transfer_consent_scope_send">The file is encrypted while it travels. They will see its name and size before deciding whether to receive it, and either of you can stop the transfer at any time.</string>
+    <string name="chat_transfer_consent_scope_receive">The file is encrypted while it travels, then saved normally in your Downloads folder without Knit’s encryption. Knit does not scan files for harmful content, so only accept files you trust.</string>
 
     <!-- Voice notes -->
     <string name="chat_voice_record">Hold to record a voice message</string>
@@ -396,6 +404,27 @@
     <string name="chat_list_preview_file">📎 %1$s</string>
     <string name="chat_list_preview_link">🔗 Link</string>
     <string name="chat_list_preview_location">📍 Location</string>
+
+    <!-- Chat-list previews for a direct-transfer row: phrased from the reader's side, so the list never
+         prefixes them with "You:". One per state the card can draw, plus the two that read differently
+         depending on which end you are. No emoji marker, unlike the previews above: the row draws the
+         feature's own mark (KnitIcons.DirectTransfer) beside the line instead, so the list and the menu
+         item show the same glyph. -->
+    <string name="chat_list_preview_transfer_offered">Offered %1$s</string>
+    <string name="chat_list_preview_transfer_incoming">Wants to send you %1$s</string>
+    <string name="chat_list_preview_transfer_connecting_send">Connecting to send %1$s</string>
+    <string name="chat_list_preview_transfer_connecting_receive">Connecting to receive %1$s</string>
+    <string name="chat_list_preview_transfer_sending">Sending %1$s</string>
+    <string name="chat_list_preview_transfer_receiving">Receiving %1$s</string>
+    <string name="chat_list_preview_transfer_sent">Sent %1$s</string>
+    <string name="chat_list_preview_transfer_received">Received %1$s</string>
+    <string name="chat_list_preview_transfer_declined">They declined %1$s</string>
+    <string name="chat_list_preview_transfer_declined_by_you">You declined %1$s</string>
+    <string name="chat_list_preview_transfer_expired">No answer about %1$s</string>
+    <string name="chat_list_preview_transfer_cancelled">Cancelled %1$s</string>
+    <string name="chat_list_preview_transfer_failed_send">Couldn\'t send %1$s</string>
+    <string name="chat_list_preview_transfer_failed_receive">Couldn\'t receive %1$s</string>
+    <string name="chat_list_preview_transfer_interrupted">Stopped partway through %1$s</string>
     <string name="chat_attachment_with_size">%1$s · %2$s</string>
     <string name="chat_list_preview_with_sender">%1$s: %2$s</string>
     <plurals name="chat_list_unread_count">

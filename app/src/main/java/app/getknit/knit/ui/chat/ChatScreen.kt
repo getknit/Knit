@@ -57,6 +57,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -69,6 +70,7 @@ import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.maxLength
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Reply
@@ -215,6 +217,7 @@ import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.components.RoomAvatar
 import app.getknit.knit.ui.components.skeletonBlockColor
 import app.getknit.knit.ui.components.skeletonPulseAlpha
+import app.getknit.knit.ui.icons.KnitIcons
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.openLocation
 import app.getknit.knit.ui.openLocationSettings
@@ -278,6 +281,7 @@ fun ChatScreen(
     val showPublicConsent by viewModel.showPublicConsent.collectAsStateWithLifecycle()
     val stagedLocation by viewModel.stagedLocation.collectAsStateWithLifecycle()
     val showLocationConsent by viewModel.showLocationConsent.collectAsStateWithLifecycle()
+    val showTransferConsent by viewModel.showTransferConsent.collectAsStateWithLifecycle()
     val voiceRecording by viewModel.voiceRecording.collectAsStateWithLifecycle()
     val voicePlayback by viewModel.voicePlayback.collectAsStateWithLifecycle()
     val recentReactions by viewModel.recentReactions.collectAsStateWithLifecycle()
@@ -313,12 +317,16 @@ fun ChatScreen(
             uri?.let(viewModel::attachFile)
         }
 
-    // The same picker for a large file, which goes to the peer over a one-shot Wi-Fi Direct link rather than
-    // as an attachment: any size, never the mesh, never the blob store (transfer/TransferManager).
+    // The same picker for a direct transfer, which goes to the peer over a one-shot Wi-Fi Direct link rather
+    // than as an attachment: any size, never the mesh, never the blob store (transfer/TransferManager). It is
+    // opened by the ViewModel rather than the tap, so the thread's refusals and the disclosure come first.
     val largeFilePicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri?.let(viewModel::offerTransfer)
         }
+    LaunchedEffect(Unit) {
+        viewModel.transferPickerNeeded.collect { largeFilePicker.launch(arrayOf(ANY_MIME)) }
+    }
 
     // Where a received file goes: the user names the destination and Knit streams the decrypted bytes into
     // it. There is no "open" counterpart, deliberately — handing another app a readable copy would mean
@@ -533,7 +541,10 @@ fun ChatScreen(
             // that before they save one rather than after. Everything else saves straight away.
             if (FileTypes.isRisky(mime, name)) riskyFile = pending else startSave(pending)
         },
-        onSendLargeFile = { largeFilePicker.launch(arrayOf(ANY_MIME)) },
+        onSendFileDirectly = viewModel::sendFileDirectly,
+        showTransferConsent = showTransferConsent,
+        onAcceptTransferConsent = viewModel::acceptTransferConsent,
+        onDismissTransferConsent = viewModel::dismissTransferConsent,
         onAcceptTransfer = viewModel::acceptTransfer,
         onDeclineTransfer = viewModel::declineTransfer,
         onCancelTransfer = viewModel::cancelTransfer,
@@ -673,7 +684,10 @@ internal fun ChatScreenContent(
     onFileClick: () -> Unit = {},
     onSaveFile: (hash: String, key: String?, name: String?, mime: String?) -> Unit = { _, _, _, _ -> },
     // A large file over a direct Wi-Fi link (DM only): the menu item, and the card's answers.
-    onSendLargeFile: () -> Unit = {},
+    onSendFileDirectly: () -> Unit = {},
+    showTransferConsent: TransferConsent? = null,
+    onAcceptTransferConsent: () -> Unit = {},
+    onDismissTransferConsent: () -> Unit = {},
     onAcceptTransfer: (id: String) -> Unit = {},
     onDeclineTransfer: (id: String) -> Unit = {},
     onCancelTransfer: (id: String) -> Unit = {},
@@ -976,15 +990,15 @@ internal fun ChatScreenContent(
                                         },
                                     )
                                 } else {
-                                    // A large file rides a one-shot Wi-Fi Direct link, not the mesh, so it is a
-                                    // DM affair: one peer, in range, running a build that answers.
+                                    // A direct transfer rides a one-shot Wi-Fi Direct link, not the mesh, so it is
+                                    // a DM affair: one peer, in range, running a build that answers.
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.chat_send_large_file)) },
-                                        leadingIcon = { Icon(Icons.Filled.AttachFile, contentDescription = null) },
+                                        leadingIcon = { Icon(KnitIcons.DirectTransfer, contentDescription = null) },
                                         modifier = Modifier.testTag("chat_send_large_file"),
                                         onClick = {
                                             headerMenuOpen = false
-                                            onSendLargeFile()
+                                            onSendFileDirectly()
                                         },
                                     )
                                     DropdownMenuItem(
@@ -1418,6 +1432,19 @@ internal fun ChatScreenContent(
         }
     }
 
+    showTransferConsent?.let { request ->
+        ModalBottomSheet(
+            onDismissRequest = onDismissTransferConsent,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            DirectTransferConsentBody(
+                incoming = request.incoming,
+                onAccept = onAcceptTransferConsent,
+                onDecline = onDismissTransferConsent,
+            )
+        }
+    }
+
     relayMarkerExplained?.let { cause ->
         // The peer's name makes the fallback concrete ("arrives when you and Ana are in range") rather
         // than abstract; in the room and in groups the title is already the collective noun.
@@ -1690,6 +1717,59 @@ private fun LocationConsentBody(
                 onClick = onAccept,
                 modifier = Modifier.testTag("chat_location_consent_accept"),
             ) { Text(stringResource(R.string.chat_location_consent_accept)) }
+        }
+    }
+}
+
+/**
+ * The first-use disclosure behind a direct file transfer, shown once per device on whichever side reaches it
+ * first: how the file travels, what it costs while it does, and the one line that differs by role — what the
+ * sender still controls, and where the receiver's copy lands.
+ *
+ * It exists because a direct transfer breaks the rules the rest of Knit taught the user. Everything else here
+ * is small, sealed and carried by the mesh; this leaves the mesh entirely, takes the Wi-Fi radio with it, and
+ * ends with a file sitting in shared storage that Knit never looked inside. Decline first, accept second.
+ */
+@Composable
+private fun DirectTransferConsentBody(
+    incoming: Boolean,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Column(
+        // Scrollable, unlike the two sheets above: this one has the most to say, and on a short screen or at
+        // a large font scale its buttons would otherwise sit below the bottom of the window with no way to
+        // reach them. A disclosure whose "Continue" cannot be tapped is worse than no disclosure.
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        val title = if (incoming) R.string.chat_transfer_consent_title_receive else R.string.chat_transfer_consent_title_send
+        Text(stringResource(title), style = MaterialTheme.typography.headlineSmall)
+        Text(stringResource(R.string.chat_transfer_consent_can_title), style = MaterialTheme.typography.titleSmall)
+        Text(stringResource(R.string.chat_transfer_consent_can_body), style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.chat_transfer_consent_cannot_title), style = MaterialTheme.typography.titleSmall)
+        Text(stringResource(R.string.chat_transfer_consent_cannot_body), style = MaterialTheme.typography.bodyMedium)
+        val scope = if (incoming) R.string.chat_transfer_consent_scope_receive else R.string.chat_transfer_consent_scope_send
+        Text(
+            text = stringResource(scope),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(onClick = onDecline) { Text(stringResource(R.string.chat_transfer_consent_decline)) }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = onAccept,
+                modifier = Modifier.testTag("chat_transfer_consent_accept"),
+            ) { Text(stringResource(R.string.chat_transfer_consent_accept)) }
         }
     }
 }

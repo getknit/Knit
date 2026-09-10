@@ -30,8 +30,11 @@ import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.meshNodeLabel
+import app.getknit.knit.transfer.TransferManager
+import app.getknit.knit.transfer.TransferState
 import app.getknit.knit.ui.chat.DeliveryStatus
 import app.getknit.knit.ui.chat.messagePreview
+import app.getknit.knit.ui.chat.transferPreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -43,10 +46,18 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
+ * Whether a message may stand as its thread's last one — its preview line, its time, its place in the list.
+ * Status notices may not; a direct-transfer row is the exception, for the reasons `rowFor` sets out.
+ */
+private val MessageEntity.speaksForTheRow: Boolean
+    get() = !isStatusNotice || kind == MessageEntity.KIND_FILE_TRANSFER
+
+/**
  * One row in the conversation list: the [Conversations.NEARBY] broadcast room ([isRoom] true), a
  * group chat ([isGroup] true, keyed by the group id, [title] is the group name, [avatarHash] its photo
  * or null for the glyph), or a 1:1 DM keyed by the peer's node id with the peer's [title]/[avatarHash].
- * [lastPreview]/[lastMessageAt] are null when the conversation has no messages yet.
+ * [lastPreview]/[lastMessageAt] are null when the conversation has no messages yet, and a status notice
+ * speaks for neither — except a direct-transfer row, which does both (see `rowFor`).
  *
  * [lastStatus] is how far that last message got, and is non-null **only when the last message is one of
  * ours** — the row's delivery tick. A thread whose newest message arrived from someone else (or which has
@@ -61,6 +72,9 @@ data class ConversationRow(
     val isRoom: Boolean,
     val isGroup: Boolean,
     val lastPreview: String?,
+    // Whether [lastPreview] is a direct transfer's line, so the row draws the feature's mark beside it
+    // rather than an emoji. The glyph itself stays in the UI layer; this only says which line it belongs to.
+    val previewIsTransfer: Boolean = false,
     val lastMessageAt: Long?,
     val unreadCount: Int,
     val lastStatus: DeliveryStatus? = null,
@@ -116,6 +130,9 @@ class ChatListViewModel(
     meshManager: MeshController,
     private val groups: GroupRepository,
     private val drafts: DraftRepository,
+    // Live direct-transfer state, for the one thing the persisted row cannot say: a record left non-terminal
+    // by a process death. The chat card folds the same two sources the same way (`transferViewFor`).
+    transfers: TransferManager,
     // The facts flow rather than the repository, for the reason spelled out on ChatViewModel's copy of this
     // parameter: the production flow is an infinite poller, which a test driving this VM with
     // `advanceUntilIdle()` could never let go idle.
@@ -137,6 +154,7 @@ class ChatListViewModel(
         val groups: List<GroupEntity>,
         val accepted: Set<String>,
         val drafts: Map<String, DraftEntity>,
+        val transfers: Map<String, TransferState>,
     )
 
     // Neighbor count + radio health + the (already-dismissal-aware) banner + Internet-plane state, folded
@@ -153,15 +171,20 @@ class ChatListViewModel(
         val loraRoom: Boolean,
     )
 
+    // Paired before the combine below rather than added to it: that combine sits on the typed five-flow
+    // overload on purpose, and a sixth argument would drop it onto the untyped vararg one.
+    private val draftsAndTransfers =
+        combine(drafts.all, transfers.states) { draftRows, live -> draftRows to live }
+
     private val messagesAndBlocks =
         combine(
             messages.observeMessages(), // ORDER BY sentAt ASC -> newest is last()
             settings.blockedNodeIds,
             groups.observeGroups(),
             settings.acceptedConversations,
-            drafts.all,
-        ) { msgs, blocked, groupList, accepted, draftRows ->
-            ListBundle(msgs.filter { it.senderId !in blocked }, blocked, groupList, accepted, draftRows)
+            draftsAndTransfers,
+        ) { msgs, blocked, groupList, accepted, (draftRows, live) ->
+            ListBundle(msgs.filter { it.senderId !in blocked }, blocked, groupList, accepted, draftRows, live)
         }
 
     // Radio-off banner: which warning the per-radio statuses imply, and whether the user has dismissed it.
@@ -256,12 +279,18 @@ class ChatListViewModel(
                 discriminator: String? = null,
                 isBridged: Boolean = false,
             ): ConversationRow {
-                // Status notices are invisible to this list, entirely: they are not the thread's "last
-                // message", so they never become its preview and never re-sort it to the top. A contact
-                // renaming themselves is worth a line inside the thread and is not worth reordering
-                // someone's chat list — and a notice's senderId is the event's *subject* rather than an
-                // author, so treating one as the last message would also mis-attribute the preview.
-                val last = threadMsgs.lastOrNull { !it.isStatusNotice }
+                // Status notices are invisible to this list: they are not the thread's "last message", so
+                // they never become its preview and never re-sort it to the top. A contact renaming
+                // themselves is worth a line inside the thread and is not worth reordering someone's chat
+                // list — and a notice's senderId is the event's *subject* rather than an author, so treating
+                // one as the last message would also mis-attribute the preview.
+                //
+                // A direct transfer is the exception, and both halves of that reasoning are why. Its sender
+                // really is the author (whoever offered the file), and an offer or a gigabyte arriving is
+                // not a footnote about the thread — it is the thread. So it speaks for the row and carries
+                // its time. It still earns no delivery tick and no unread count: nothing was sent anywhere
+                // on the mesh, and the card in the thread is the thing that wants answering.
+                val last = threadMsgs.lastOrNull { it.speaksForTheRow }
                 val lastReadAt = lastReadAll[conversationId] ?: 0L
                 // A draft only speaks for the row while it is the newest thing in the thread. Once a message
                 // lands after it — ours or theirs — the conversation has moved on and the preview says so;
@@ -288,13 +317,15 @@ class ChatListViewModel(
                 // the filter on `last` above and kept anyway — the two express different rules, and this
                 // one is what guarantees no notice can ever grow a delivery tick.
                 val mineLast = last?.takeIf { it.isOurs() && !it.isStatusNotice }
+                val transferLine = transferLineFor(last, bundle.transfers)
                 return ConversationRow(
                     id = conversationId,
                     title = title,
                     avatarHash = avatarHash,
                     isRoom = isRoom,
                     isGroup = isGroup,
-                    lastPreview = last?.let { previewFor(it, directory, me, isDm = !isRoom && !isGroup) },
+                    lastPreview = previewLineFor(last, transferLine, directory, me, isDm = !isRoom && !isGroup),
+                    previewIsTransfer = transferLine != null,
                     lastMessageAt = last?.sentAt,
                     draft = draft,
                     unreadCount = unread,
@@ -420,6 +451,29 @@ class ChatListViewModel(
             ?.takeIf { it != RadioWarning.AllRadiosOff }
             ?.let { dismissed.value = it }
     }
+
+    /**
+     * The row's preview line: the transfer's own sentence when [transferLine] resolved one, else the
+     * "Sender: body" form. Its own function so `rowFor` keeps its complexity budget for the list's rules.
+     */
+    private fun previewLineFor(
+        last: MessageEntity?,
+        transferLine: String?,
+        directory: PeerDirectory,
+        me: String?,
+        isDm: Boolean,
+    ): String? = transferLine ?: last?.let { previewFor(it, directory, me, isDm) }
+
+    /**
+     * The transfer line for [last], or null when it is not a transfer row this build can read. Resolved
+     * apart from [previewFor] because it takes no "You: " prefix — it already says who did what ("They
+     * declined clip.mp4"), and a prefix would name the wrong person — and because the row needs to know it
+     * chose this line, to draw the feature's mark beside it.
+     */
+    private fun transferLineFor(
+        last: MessageEntity?,
+        live: Map<String, TransferState>,
+    ): String? = last?.takeIf { it.kind == MessageEntity.KIND_FILE_TRANSFER }?.let { transferPreview(context, it, live) }
 
     /**
      * "Sender: body" preview, mirroring how ChatViewModel resolves names and labels own messages.

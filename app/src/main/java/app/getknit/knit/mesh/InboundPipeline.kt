@@ -2417,7 +2417,8 @@ class InboundPipeline(
         val admitted = onTransferCtl(env.senderId, payload, env.sentAt)
         if (admitted && payload.phase == TransferPayload.PHASE_OFFER) {
             val size = payload.size?.let { " (${TransferSizes.short(it)})" }.orEmpty()
-            notifyWithBody(env, env.senderId, "\uD83D\uDCCE Wants to send ${payload.name}$size")
+            // Its own mark, not the attachment paperclip: a direct transfer is the other kind of file.
+            notifyWithBody(env, env.senderId, "\uD83D\uDCE1 Wants to send you ${payload.name}$size")
         }
     }
 

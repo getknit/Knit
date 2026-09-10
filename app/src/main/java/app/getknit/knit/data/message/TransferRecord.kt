@@ -51,8 +51,12 @@ data class TransferRecord(
 
     /**
      * The chat row for this record in the DM with [peerId]: a status-notice-shaped row (`received = true`, no
-     * tick, out of unread counts and previews) whose sender is whoever offered the file. The id is
-     * deterministic per transfer, so every phase change is an upsert of the same row.
+     * tick, out of unread counts) whose sender is whoever offered the file. The id is deterministic per
+     * transfer, so every phase change is an upsert of the same row — and [sentAt] stays the offer's time
+     * through all of them, so a thread does not jump up the chat list each time a phase turns over.
+     *
+     * It is the one notice kind the chat list *does* preview: unlike a rename, its sender is a real author
+     * and its subject is the conversation itself (`ui/chat/transferPreview`).
      */
     fun toEntity(
         peerId: String,

@@ -98,7 +98,20 @@ class ChatListViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = ChatListViewModel(messages, peers, settings, identity, mesh, groups, drafts, relayFlow, loraFlow, context)
+    private fun vm() =
+        ChatListViewModel(
+            messages,
+            peers,
+            settings,
+            identity,
+            mesh,
+            groups,
+            drafts,
+            mockk(relaxed = true) { every { states } returns MutableStateFlow(emptyMap()) },
+            relayFlow,
+            loraFlow,
+            context,
+        )
 
     @Test
     fun theRadioRoomIsHiddenOutrightWhenTheUserSwitchesItOff() =

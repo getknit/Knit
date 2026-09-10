@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
@@ -55,6 +56,7 @@ class ChatScreenContentTest {
     private var files = 0
     private var clearedLocations = 0
     private var accepts = 0
+    private var consentsAccepted = 0
 
     private fun content(
         input: String,
@@ -64,6 +66,7 @@ class ChatScreenContentTest {
         linkPreviewLoading: Boolean = false,
         stagedLocation: ChatViewModel.StagedLocation? = null,
         onDraftChanged: (String) -> Unit = {},
+        showTransferConsent: TransferConsent? = null,
         onLoadOlder: () -> Unit = {},
     ): @androidx.compose.runtime.Composable () -> Unit =
         {
@@ -87,6 +90,8 @@ class ChatScreenContentTest {
                     onCameraClick = { cameras++ },
                     onFileClick = { files++ },
                     onAcceptTransfer = { accepts++ },
+                    showTransferConsent = showTransferConsent,
+                    onAcceptTransferConsent = { consentsAccepted++ },
                     onClearAttachment = {},
                     onReceiveImage = {},
                     onTyping = {},
@@ -168,6 +173,33 @@ class ChatScreenContentTest {
         compose.onAllNodesWithTag("transfer_card").assertCountEquals(2)
         compose.onAllNodesWithTag("transfer_open").assertCountEquals(1)
         compose.onAllNodesWithTag("transfer_accept").assertCountEquals(0)
+    }
+
+    /**
+     * The disclosure reaches the screen, takes its receiving-end wording, and its button answers.
+     *
+     * Matched by text rather than by tag: a `ModalBottomSheet` composes in its own window, which is also why
+     * `uiautomator` cannot see the tag either. The scroll to the button is as much the point as the click —
+     * Robolectric's default screen is 320×470, shorter than this sheet's copy, which is exactly the phone on
+     * which an unscrollable sheet would strand its own Continue button.
+     */
+    @Test
+    fun theDirectTransferDisclosureTakesItsReceivingWordingAndItsButtonAnswers() {
+        compose.setContent(
+            content(input = "", showTransferConsent = TransferConsent(incoming = true, transferId = "t1")),
+        )
+
+        compose.onNodeWithText("Receive this file?").assertIsDisplayed()
+        compose.onNodeWithText("How it works").assertIsDisplayed()
+        // The sender's half of the sheet stays out of a receiver's copy.
+        compose.onNodeWithText("Send a file directly?").assertDoesNotExist()
+        compose
+            .onNodeWithText("Knit will save the file in your Downloads folder", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+
+        compose.onNodeWithText("Continue").performScrollTo().performClick()
+        assertEquals(1, consentsAccepted)
     }
 
     /** A thread of [count] rows, newest last, in the oldest-first shape the ViewModel emits. */

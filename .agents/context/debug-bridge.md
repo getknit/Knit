@@ -91,6 +91,25 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   Meshtastic admin API (the headless "Set up Knit channel") and binds the plane to the slot it lands in —
   run it on both phones so the boards converge. All need the plane enabled and the board Ready. (New action
   = add to BOTH the `when` and the debug manifest `<intent-filter>`.)
+- `…debug.XFER` — drives a **direct file transfer** (`transfer/TransferManager`: a whole file over a one-shot
+  Wi-Fi Direct link, never the mesh), the only way to run one on a locked lab device. `--es to <peerNodeId>
+  --es path <file the app can read>` offers a file, `--es accept|decline|cancel <transferId>` answers one,
+  `--ez sweep true` clears a group a dead process left on air, and no extras dumps `refusal` plus every live
+  transfer — add `--es conv <peerId>` for that thread's `xfer:` rows. Stage the file the SENDIMG way (`run-as`
+  into the app's own storage): scoped storage means the app cannot read a `/sdcard` path. The bridge steps
+  around the file picker **and the first-use disclosure sheet**, so a phone nobody has driven by hand still
+  transfers.
+  - **Read `refusal` first when nothing happens.** `WifiOff`, `Hotspot`, `Permission`, `NoWifiDirect`,
+    `Background` and `Busy` each fail the transfer before the radio is touched, and from outside all six look
+    the same as a peer that never answered. Both ends also need `CAP_DIRECT_TRANSFER` pinned for each other
+    (`…debug.STATE`), and both need to be in range at accept time, not just at offer time.
+  - The trial oracle is logcat under `KnitTransfer` — `xfer <id> …` lines carry the group frequency, every
+    address bound, and `done bytes= ms= MB/s=` — plus `sha256sum` on the receiver's
+    `/sdcard/Download/Knit/<name>`. Expect the accept→first-byte gap to be a few seconds: most of it is the
+    framework's own `connect()`, not ours.
+  - A force-stop mid-transfer really does strand a group on air (`dumpsys wifip2p` shows
+    `curState=GroupCreatedState` with the app dead). `--ez sweep true` is the same sweep the app runs 8 s into
+    launch, on demand — the way to prove a leftover is gone without waiting out a restart.
 - `…debug.RATCHET` — dumps the **DM ratchet's per-peer state** and, with `--es reset <peerNodeId>`, forces a
   session reset past the heuristic that guards it. Exists because every gate in the recovery path returns
   *silently*: a peer we hold no prekey for (`peerPrekeyPinned:false` — a reset from this side is impossible
@@ -168,7 +187,8 @@ header row, which opens the profile editor), `settings_theme_mode` (the System/L
 control; API 31+ only, absent below), `settings_relays`, `settings_lora`, `chat_group_avatar`
 (opens group details), plus screen-root tags on the otherwise-untagged destinations — `screen_settings`,
 `screen_profile`, `screen_diagnostics`, `screen_blocked_users`, `screen_add_contact`, `screen_donate`,
-`screen_share_target`, `screen_profile_details`.
+`screen_share_target`, `screen_profile_details`, plus the direct-transfer card's `transfer_card`,
+`transfer_accept`, `transfer_decline`, `transfer_cancel` and `transfer_open`.
 Use these when you must drive the real UI; add more with the same snake_case, screen-prefixed convention.
 
 **Popups don't inherit `testTagsAsResourceId`.** A Compose `DropdownMenu` / `AlertDialog` renders in a
@@ -177,6 +197,10 @@ separate window whose semantics root is *not* the `KnitApp` node that sets `test
 popup contents by their **text** (menu items, dialog titles) or **class** (an editable field is
 `android.widget.EditText`) instead — and match a confirm button by *exact* text when its label is a
 substring of the dialog title (e.g. the "Block" button under a "Block this person?" title).
+
+The same holds for a `ModalBottomSheet`, which is where the consent disclosures live: `chat_send_large_file`
+(an overflow item) and `chat_transfer_consent_accept` (the direct-transfer sheet) are tagged in source but do
+**not** reach `uiautomator dump`. Drive those by their text, or skip them entirely — `…debug.XFER` does.
 
 ## Cold-start navigation
 

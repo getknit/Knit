@@ -302,6 +302,15 @@ class SettingsStore(
     val locationShareConsented: Flow<Boolean> = dataStore.data.map { it[KEY_LOCATION_SHARE_CONSENTED] ?: false }
 
     /**
+     * Whether the user has read the direct-transfer disclosure. The sheet behind it explains that a direct
+     * transfer leaves the mesh entirely: the two phones raise a Wi-Fi link of their own, the file crosses it
+     * whole, and Knit keeps no copy of it. Shown once per device rather than once per role — the same facts
+     * hold whichever end you are — and, like [locationShareConsented], nothing happens on the strength of it
+     * until the user picks a file or accepts an offer.
+     */
+    val directTransferConsented: Flow<Boolean> = dataStore.data.map { it[KEY_DIRECT_TRANSFER_CONSENTED] ?: false }
+
+    /**
      * Whether the user has dismissed the Nearby room's "never sent over the Internet" notice. Sticky by
      * design: the notice states a permanent structural fact (the room is not scope-eligible, spec §4.4),
      * so it is the one relay notice that will never retire itself — a dismissal that came back on the next
@@ -631,6 +640,9 @@ class SettingsStore(
     /** Records that the user accepted the disclosure behind [locationShareConsented]. */
     suspend fun acceptLocationShareConsent() = dataStore.edit { it[KEY_LOCATION_SHARE_CONSENTED] = true }
 
+    /** Records that the user accepted the disclosure behind [directTransferConsented]. */
+    suspend fun acceptDirectTransferConsent() = dataStore.edit { it[KEY_DIRECT_TRANSFER_CONSENTED] = true }
+
     /**
      * Seeds the shipped default spools (`res/values/spools.xml`) into [spoolUrls] exactly once, marking
      * the install as seeded so a **removal sticks**. A default the app kept re-adding would not be a
@@ -755,6 +767,7 @@ class SettingsStore(
         val KEY_SPOOL_CONSENTED = booleanPreferencesKey("spool_consented")
         val KEY_MESHTASTIC_POST_CONSENTED = booleanPreferencesKey("meshtastic_post_consented")
         val KEY_LOCATION_SHARE_CONSENTED = booleanPreferencesKey("location_share_consented")
+        val KEY_DIRECT_TRANSFER_CONSENTED = booleanPreferencesKey("direct_transfer_consented")
         val KEY_RELAY_ROOM_NOTICE_DISMISSED = booleanPreferencesKey("relay_room_notice_dismissed")
         val KEY_LORA_ENABLED = booleanPreferencesKey("lora_enabled")
         val KEY_LORA_DM_ENABLED = booleanPreferencesKey("lora_dm_enabled")

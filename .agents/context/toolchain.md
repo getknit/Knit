@@ -1,7 +1,7 @@
 # Toolchain (bleeding-edge — do not "fix" these without reading why)
 
-This project intentionally runs on very new tooling (AGP 9.4.0, Gradle 9.7.1, Kotlin 2.4.10,
-Compose BOM 2026.08.00, compileSdk 37.1). That forces several non-obvious choices. **Read this before
+This project intentionally runs on very new tooling (AGP 9.4.0, Gradle 9.7.1, Kotlin 2.4.20,
+Compose BOM 2026.09.00, compileSdk 37.1). That forces several non-obvious choices. **Read this before
 changing build config, dependencies, or the DI graph.**
 
 ## compileSdk is what gates AAR upgrades — check `minCompileSdk`, not the version number
@@ -42,10 +42,10 @@ literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reprod
   (dagger#5083 / #5099). Koin is pure-Kotlin runtime DI with no Gradle plugin / no annotation
   processor, so it can't be broken by AGP. Koin is started in `KnitApplication`; modules live in
   `app/src/main/java/app/getknit/knit/di/`.
-- **Built-in Kotlin is overridden to 2.4.10, not AGP's bundled 2.2.10.** AGP 9.4.0 ships KGP 2.2.10,
+- **Built-in Kotlin is overridden to 2.4.20, not AGP's bundled 2.2.10.** AGP 9.4.0 ships KGP 2.2.10,
   whose Kotlin-2.2 compiler cannot read class metadata produced by Kotlin 2.4 (this is what used to
-  pin Coil to 3.3.0). The root `build.gradle.kts` puts KGP 2.4.10 on the buildscript classpath
-  (`classpath(libs.kotlin.gradle.plugin)`) so built-in Kotlin compiles with 2.4.10 — a supported combo
+  pin Coil to 3.3.0). The root `build.gradle.kts` puts KGP 2.4.20 on the buildscript classpath
+  (`classpath(libs.kotlin.gradle.plugin)`) so built-in Kotlin compiles with 2.4.20 — a supported combo
   (Kotlin 2.4 requires AGP 9.1+ per Google's AGP/Kotlin matrix). **Bumping AGP does not move Kotlin**:
   the 9.4 line we now build on still bundles it (9.3 did too), so the override — not an AGP bump — is
   the lever. Keep KGP and the `ksp` version in lockstep with `kotlin`; KSP adopted independent (KSP2)
@@ -70,9 +70,10 @@ literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK` and the F-Droid-image reprod
   bumping anything that could pull in a newer Kotlin stdlib.
 - **Stable releases only**, with one standing exception: `detekt` 2.0.0-alpha.x, because the 1.23.x
   stable line cannot run on Gradle 9 at all. So `cameraX` stays on 1.6.2 (1.7.0 is alpha), `datastore`
-  on 1.2.1 (1.3.0 is alpha), `robolectric` on the 4.16.x line (4.17 is beta), `lifecycle` on 2.11.0
-  (2.12.0 is alpha), `activity-compose` on 1.13.0 (1.14.0 is alpha), and AGP on 9.4.0 (9.5.0 is alpha).
-  `navigation-compose` was held at 2.9.8 by this rule until 2.10.0 went stable.
+  on 1.2.1 (1.3.0 is alpha), `lifecycle` on 2.11.0 (2.12.0 is alpha), `activity-compose` on 1.13.0
+  (1.14.0 is alpha), `kotlinx-serialization` on 1.11.0 (1.12.0 is an RC), and AGP on 9.4.0 (9.5.0 is
+  alpha). `navigation-compose` was held at 2.9.8 by this rule until 2.10.0 went stable, `robolectric`
+  at 4.16.1 until 4.17 did, and `benchmark` at 1.5.0-rc02 until 1.5.0 did.
 
 ## Kotlin warnings are errors (`allWarningsAsErrors`)
 
@@ -147,13 +148,14 @@ rule in `rules/build-and-test.md` after any Kover bump.
 
 ## Room 3 (`androidx.room3`) and its Gradle plugin
 
-Room is **`androidx.room3:room3-*` 3.0.2**, not `androidx.room` — Room 3 is a new group and a new package,
+Room is **`androidx.room3:room3-*` 3.0.3**, not `androidx.room` — Room 3 is a new group and a new package,
 not a version bump. Imports are `androidx.room3.*`; `androidx.sqlite.*` did **not** move. Consequences worth
 knowing before you touch the data layer:
 
 - **There is no `openHelperFactory`.** Room 3 deletes the SupportSQLite layer from the core API, so
   `setDriver(SQLiteDriver)` is the only seam for a custom engine. SQLCipher rides in as
-  `SQLCipherDriver` (`net.zetetic:sqlcipher-android` 4.18.0, the release that added it) — see ADR 065.
+  `SQLCipherDriver` (`net.zetetic:sqlcipher-android` 4.19.0; 4.18.0 was the release that added it) — see
+  ADR 065.
   That is why Room 3 and SQLCipher move together; neither can be bumped past the other alone.
 - **There is no `room3-ktx`.** `withWriteTransaction` / `useWriterConnection` / `immediateTransaction` are in
   `room3-runtime`. `androidx.room.withTransaction` is gone; `withWriteTransaction` is its replacement and is

@@ -24,7 +24,7 @@
 
 `app/src/test/java/app/getknit/knit/data/` runs the **real** DAO SQL — the eviction/orphan/GC queries the
 `FakeForwardDao`/`FakeReactionDao` only *mirror* (finding #5 in `docs/ARCHITECTURE_REVIEW.md`) — on the JVM
-under Robolectric 4.16, plus a `MigrationTestHelper` harness. They run inside the normal
+under Robolectric 4.17, plus a `MigrationTestHelper` harness. They run inside the normal
 `:app:testDebugUnitTest` (and CI `test:unit`), no device. The wiring is non-obvious and load-bearing — read
 before "simplifying":
 
@@ -43,8 +43,16 @@ before "simplifying":
 - **`robolectric.properties` forces `application=android.app.Application`.** The real `KnitApplication.onCreate`
   starts Koin, whose static `GlobalContext` isn't reset between tests → `KoinApplicationAlreadyStartedException`
   on the 2nd test. DAO tests bypass Koin, so a plain Application is correct. `sdk=36` deliberately trails
-  compileSdk 37.1 — Robolectric 4.16.x has no android-all runtime above 36; raise it with Robolectric, not
-  with compileSdk.
+  compileSdk 37.1. Robolectric 4.17 *does* ship a 37 runtime, but **`sdk=37` still fails**: API 37 drops
+  `android.hardware.input.InputManager.getInstance()`, which Espresso calls from `onIdle`, so every
+  Compose-UI Robolectric test throws (233 of them, measured). Re-test when compose-ui-test/Espresso
+  catch up.
+- **Robolectric 4.17 needs JPMS `--add-opens` flags.** `testOptions.unitTests.all { jvmArgs(...) }` in
+  `app/build.gradle.kts` carries Robolectric's published JDK-17+ list verbatim. Without it *every*
+  Robolectric test dies in `setUpApplicationState` with "Failed to interact with raw FileDescriptor
+  internals" — `AndroidInterceptors` reflects into `jdk.internal.access`, which `java.base` does not open
+  to the unnamed module. 4.16.x needed none of it; SDK 37's `ApplicationSharedMemory` is what walks into
+  the interceptor. Diff the list against robolectric.org/getting-started on the next bump.
 - **`exportSchema = true`** on `KnitDatabase` + the Room 3 Gradle plugin's
   `room3 { schemaDirectory("$projectDir/schemas") }` emit
   `app/schemas/app.getknit.knit.data.KnitDatabase/<version>.json` (checked in). Regenerate by clearing

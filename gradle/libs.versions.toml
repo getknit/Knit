@@ -12,22 +12,23 @@ espressoCore = "3.7.0"
 # fits; 2.12.0 is alpha.
 lifecycle = "2.11.0"
 activityCompose = "1.13.0"
-# 2.10.0 went stable (it was rc when navigation was last pinned). Its Android artifact is the KMP
+# The 2.10.x line is stable (2.9.8 was the hold-point before it). Its Android artifact is the KMP
 # `navigation-compose-android` AAR, minCompileSdk=37 / minAGP 9.1.0 — cleared by compileSdk 37.1 and
-# AGP 9.4.0. It declares androidx.compose.* 1.10.5 floors, well under the Compose BOM's 1.12.0.
-navigationCompose = "2.10.0"
-kotlin = "2.4.10"
-# Compose UI 1.12.0 / Material3 1.4.0. UI 1.12.0's AAR sets minCompileSdk=37, which compileSdk 37.1 clears.
-composeBom = "2026.08.00"
+# AGP 9.4.0. It declares androidx.compose.* 1.10.5 floors, well under the Compose BOM's 1.12.1.
+navigationCompose = "2.10.1"
+kotlin = "2.4.20"
+# Compose UI 1.12.1 / Material3 1.4.0. UI 1.12.1's AAR sets minCompileSdk=37, which compileSdk 37.1 clears.
+# 2026.09.00 is a pure Compose 1.12.0 → 1.12.1 patch — material3 and material-icons-extended are unmoved.
+composeBom = "2026.09.00"
 # KSP adopted independent (KSP2) versioning at 2.3.0 — no longer the old <kotlin>-<ksp> scheme. It is
 # decoupled from the compiler and supports Kotlin 2.2+, so this single version tracks Kotlin 2.4.x.
-ksp = "2.3.11"
+ksp = "2.3.12"
 # Room 3 — a different group and package (`androidx.room3` / `androidx.room3:room3-*`), not a version bump of
 # `androidx.room`. It deletes the SupportSQLite layer from the core API, so `openHelperFactory` is gone and
 # `setDriver(SQLiteDriver)` is the only seam for a custom engine — which is why this waited on SQLCipher
 # 4.18.0's SQLCipherDriver. room3-runtime's AAR is minCompileSdk 34 / minAgp 8.1.1, well under our gate.
 # There is no `room3-ktx`: `withWriteTransaction` and friends live in room3-runtime.
-room3 = "3.0.2"
+room3 = "3.0.3"
 # SQLCipher for Android: at-rest encryption for the Room DB. Native .so plus (since 4.18.0) a kotlin-stdlib
 # 2.2.10 floor — that direction is harmless, since a Kotlin 2.4 compiler reads 2.2 metadata fine; the hazard
 # is only the reverse (an older compiler reading Kotlin-2.4 metadata, which is what used to pin Coil). Its
@@ -36,7 +37,9 @@ room3 = "3.0.2"
 # win. sqlite 2.7.0's AAR is minCompileSdk 34, so it changes nothing about the SDK gate. Its .so are
 # 16 KB-page-aligned on all four ABIs (`readelf -lW` → LOAD align 0x4000), the same requirement that pins
 # litert to 1.4.x. 4.18.0 is also what supplies SQLCipherDriver, so Room 3 and SQLCipher move together.
-sqlcipher = "4.18.0"
+# 4.19.0 keeps both deps and the alignment identical, but raises its OWN aar-metadata minCompileSdk to 37
+# (4.18.0 was lower) — cleared by compileSdk 37.1, and the one thing to re-check if compileSdk ever drops.
+sqlcipher = "4.19.0"
 coroutines = "1.11.0"
 kotlinxSerializationJson = "1.11.0"
 datastore = "1.2.1"
@@ -52,10 +55,10 @@ datastore = "1.2.1"
 # 37 as of 5.5.0, which compileSdk 37.1 clears. Check okhttp-android, not okhttp, when bumping.
 okhttp = "5.5.0"
 koin = "4.2.2"
-# Coil 3.4.0+ is built with Kotlin 2.4.0. We now compile :app with Kotlin 2.4.0 (built-in Kotlin is
+# Coil 3.4.0+ is built with Kotlin 2.4.x. We now compile :app with Kotlin 2.4.20 (built-in Kotlin is
 # overridden off AGP's bundled 2.2.10 — see the buildscript classpath in the root build.gradle.kts), so
 # the 2.4 metadata is readable again and Coil is free to track latest.
-coil = "3.6.0"
+coil = "3.6.2"
 # On-device NSFW image classifier runtime — the classic TFLite interpreter, which upstream renamed to
 # "LiteRT". org.tensorflow:tensorflow-lite dead-ends at 2.17.0, whose x86_64/x86/armeabi-v7a .so segments
 # are only 4 KB-aligned (p_align=0x1000) and fail to load on a 16 KB-page image such as the emulator;
@@ -137,8 +140,11 @@ kover = "0.9.9"
 # so in-memory Room executes the real eviction/GC SQL, and MigrationTestHelper (room-testing) rebuilds the
 # exported schema via androidx.sqlite's AndroidSQLiteDriver on that same shadowed SQLite (BundledSQLiteDriver
 # can't load its Android native lib on the host JVM). androidx.test:core provides ApplicationProvider.
-# Robolectric 4.16 is the first release supporting SDK 36 (Baklava) and requires JDK 21 (this repo's toolchain).
-robolectric = "4.16.1"
+# Robolectric 4.17 is the first release supporting SDK 37 (4.16 was the first with SDK 36) and requires
+# JDK 21 (this repo's toolchain). Its breaking changes — `AndroidVersions` removed in favour of the
+# android.os.Build constants, and ShadowCameraCharacteristics.set(Key, Object) → set(Key, T) — touch
+# nothing here; neither symbol appears in app/src.
+robolectric = "4.17"
 androidxTestCore = "1.7.0"
 # Android Test Orchestrator (instrumentation isolation for Firebase Test Lab): each test runs in its own
 # process with `clearPackageData` wiping app data between tests. The orchestrator/test-services pair is a
@@ -156,10 +162,10 @@ androidxTestServices = "1.6.0"
 uiautomator = "2.4.0"
 # Macrobenchmark, used ONLY by the :baselineprofile module to generate app/src/main/baseline-prof.txt.
 # It never enters :app's dependency graph, never appears in app/gradle.lockfile, and never ships — the
-# module is only in the build under `-Pknit.baselineProfile=true`. An -rc is therefore acceptable here in a
-# way it would not be on a shipping path: 1.4.1 is the newest stable, but 1.5.x is the line that knows
-# about AGP 9.
-benchmark = "1.5.0-rc02"
+# module is only in the build under `-Pknit.baselineProfile=true`. 1.5.0 — the line that knows about AGP 9
+# — is now stable, so the -rc that was acceptable here (and would not have been on a shipping path) is
+# gone; keep this on stables like everything else.
+benchmark = "1.5.0"
 # androidx ExifInterface — reads the orientation tag off user-picked photos (ImageDecode). Preferred over
 # the platform android.media.ExifInterface (which AndroidLintExifInterface flags): the androidx one carries
 # the format support and bug fixes the platform class only gains with each OS release, which matters on
@@ -250,7 +256,7 @@ androidx-camera-view = { group = "androidx.camera", name = "camera-view", versio
 reandroid-arsclib = { group = "io.github.reandroid", name = "ARSCLib", version.ref = "arsclib" }
 apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "apksig" }
 
-# Put onto the root buildscript classpath so AGP 9's built-in Kotlin compiles with this KGP (2.4.0)
+# Put onto the root buildscript classpath so AGP 9's built-in Kotlin compiles with this KGP (2.4.20)
 # instead of AGP's bundled default (2.2.10). Kotlin 2.4 is supported on AGP 9.1+ per Google's
 # AGP↔Kotlin matrix; this is what lets us read Coil 3.4+/latest Compose's Kotlin-2.4 metadata.
 kotlin-gradle-plugin = { group = "org.jetbrains.kotlin", name = "kotlin-gradle-plugin", version.ref = "kotlin" }
@@ -270,5 +276,5 @@ detekt = { id = "dev.detekt", version.ref = "detekt" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintPlugin" }
 # Room schema export — replaces the raw `ksp { arg("room.schemaLocation", …) }`. Applied on :app; the
 # schema dir is set via `room3 { schemaDirectory(…) }` — the Room 3 plugin's extension is `room3`, not
-# `room`. Its id is `androidx.room3`; versioned with room3 (3.0.2).
+# `room`. Its id is `androidx.room3`; versioned with room3 (3.0.3).
 androidx-room = { id = "androidx.room3", version.ref = "room3" }

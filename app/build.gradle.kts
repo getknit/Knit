@@ -375,6 +375,26 @@ android {
             // app/src/test/resources/robolectric.properties.
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
+
+            // Robolectric 4.17 needs the JPMS escapes Robolectric documents for JDK 17+ — without them
+            // EVERY Robolectric test dies in setUpApplicationState with "Failed to interact with raw
+            // FileDescriptor internals" (AndroidInterceptors reflects into jdk.internal.access, which
+            // java.base does not open to the unnamed module). 4.16.x needed none of this; SDK 37's
+            // ApplicationSharedMemory is what walks into the interceptor. This is Robolectric's own
+            // published list, kept verbatim so it can be diffed against the docs on the next bump.
+            all { test ->
+                test.jvmArgs(
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.net=ALL-UNNAMED",
+                    "--add-opens=java.base/java.security=ALL-UNNAMED",
+                    "--add-opens=java.base/java.text=ALL-UNNAMED",
+                    "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED",
+                    "--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+                )
+            }
         }
 
         // Gradle Managed Device: a headless emulator Gradle provisions/boots/tears down itself, so

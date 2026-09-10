@@ -253,6 +253,8 @@ class MeshMetrics {
     private val loraBridgeRefused = AtomicLong()
     private val loraPassive = AtomicLong()
     private val loraSkippedLinked = AtomicLong()
+    private val loraStaleAtSend = AtomicLong()
+    private val loraStaleAtSendByReason = ConcurrentHashMap<String, AtomicLong>()
     private val loraTickDeferred = AtomicLong()
 
     // The Meshtastic room's inbound half: how much chat the board's primary channel actually carries, how
@@ -779,6 +781,21 @@ class MeshMetrics {
         loraSkippedLinked.incrementAndGet()
     }
 
+    /**
+     * A queued frame was refused at the moment it reached the air, because an enqueue-time gate had since
+     * changed its answer (`StaleAtSend`: the addressee linked on a better plane, the frame aged past the
+     * freshness window, or we stood down to a co-pocket gateway).
+     *
+     * Deliberately not folded into [onLoraSkippedLinked] or [onLoraSuppressed]: those say the gate refused a
+     * frame before it ever queued, this says the queue held it until the answer moved, and only the split
+     * measures the race. Climbing under `LINKED` while the phones are in Wi-Fi Aware range is airtime saved;
+     * climbing while they are far apart means the link set is lying.
+     */
+    fun onLoraStaleAtSend(reason: String) {
+        loraStaleAtSend.incrementAndGet()
+        loraStaleAtSendByReason.getOrPut(reason) { AtomicLong() }.incrementAndGet()
+    }
+
     /** A DM arrived over the board and its ✓✓ was held for the coalescer instead of sealed at once (ADR 054). */
     fun onLoraTickDeferred() {
         loraTickDeferred.incrementAndGet()
@@ -922,6 +939,8 @@ class MeshMetrics {
             loraBridgeRefused = loraBridgeRefused.get(),
             loraPassive = loraPassive.get(),
             loraSkippedLinked = loraSkippedLinked.get(),
+            loraStaleAtSend = loraStaleAtSend.get(),
+            loraStaleAtSendByReason = loraStaleAtSendByReason.mapValues { it.value.get() },
             loraTickDeferred = loraTickDeferred.get(),
             meshPostHeard = meshPostHeard.get(),
             meshPostIngested = meshPostIngested.get(),
@@ -1024,6 +1043,8 @@ class MeshMetrics {
         val loraBridgeRefused: Long = 0,
         val loraPassive: Long = 0,
         val loraSkippedLinked: Long = 0,
+        val loraStaleAtSend: Long = 0,
+        val loraStaleAtSendByReason: Map<String, Long> = emptyMap(),
         val loraTickDeferred: Long = 0,
         val meshPostHeard: Long = 0,
         val meshPostIngested: Long = 0,

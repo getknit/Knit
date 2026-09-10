@@ -587,6 +587,88 @@ class LoraBridgeTest {
             assertTrue("including from the one that used to fall silent", b.received.any { it.envelope.id == idOf(fromA) })
         }
 
+    /**
+     * The role is a send-time question too, and the queue outlives the answer. A fan-out admitted while we
+     * spoke for the pocket must not still go on the air after a co-pocket board took the role — that board
+     * holds a copy and will relay it, so airing ours is the duplicate the election exists to prevent.
+     */
+    @Test
+    fun aQueuedFanOutIsAbandonedWhenACoPocketBoardTakesTheRole() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+
+            a.link.free = 0 // hold it in the pacer while the election moves underneath it
+            runCurrent()
+            val sentBefore = a.link.sent.size
+            a.transport.fastFanout(frame("alice", body = "north gate", sentAt = testScheduler.currentTime))
+            runCurrent()
+            assertEquals("queued, not aired", sentBefore, a.link.sent.size)
+
+            forcePassive(a, air, backgroundScope) { testScheduler.currentTime }
+            advanceTimeBy(toFirstOffer + 30_000)
+            runCurrent()
+            assertEquals(LoraGatewayPolicy.Role.PASSIVE, a.status().role)
+
+            a.link.updateHeadroom(16)
+            advanceTimeBy(10_000)
+            runCurrent()
+
+            assertEquals("the co-pocket board speaks for the pocket now", sentBefore, a.link.sent.size)
+            // The beacon and the OFFER are role-gated too, so the count is "at least this frame" — what
+            // matters is that the role is the reason and no other gate fired.
+            val byReason = a.metrics.snapshot().loraStaleAtSendByReason
+            assertTrue("the role refused it", (byReason[StaleAtSend.PASSIVE.name] ?: 0L) >= 1L)
+            assertEquals(setOf(StaleAtSend.PASSIVE.name), byReason.keys)
+        }
+
+    /**
+     * ADR 044's field amendment, held on the way *out* as well as the way in. A `relay = false` targeted send
+     * is owed by exactly one node and never flooded, so no co-pocket gateway holds a copy to relay or to
+     * duplicate — and refusing it here would strand AckSync's ✓✓ for its full 24 h of retries exactly as
+     * gating it at enqueue once did.
+     */
+    @Test
+    fun aQueuedTargetedSendSurvivesGoingPassive() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+            b.transport.fastFanout(frame("bob", body = "hi", sentAt = testScheduler.currentTime))
+            advanceTimeBy(5_000)
+            runCurrent()
+
+            a.link.free = 0
+            runCurrent()
+            val sentBefore = a.link.sent.size
+            a.transport.fastSend(frame("alice", recipientId = "bob", body = "tick", relay = false), Peer("bob"))
+            runCurrent()
+
+            forcePassive(a, air, backgroundScope) { testScheduler.currentTime }
+            advanceTimeBy(toFirstOffer + 30_000)
+            runCurrent()
+            assertEquals(LoraGatewayPolicy.Role.PASSIVE, a.status().role)
+
+            a.link.updateHeadroom(16)
+            advanceTimeBy(10_000)
+            runCurrent()
+
+            assertTrue(
+                "the tick the queue held still reaches bob",
+                b.received.any { it.envelope.senderId == "alice" && it.envelope.recipientId == "bob" },
+            )
+            // The role may refuse the beacon and the OFFER beside it; the targeted send must never be among
+            // them, and no recipient gate applies to it at all.
+            assertNull(a.metrics.snapshot().loraStaleAtSendByReason[StaleAtSend.LINKED.name])
+        }
+
     @Test
     fun aPassiveBoardStillSendsItsTargetedTicks() =
         runTest {

@@ -128,7 +128,14 @@ internal object LoraFramePolicy {
         env: RelayEnvelope,
         now: Long,
         maxAgeMs: Long = FRESH_MS,
-    ): Boolean = (env.type != FrameType.CHAT && env.type != FrameType.REACTION) || now - env.sentAt <= maxAgeMs
+    ): Boolean = freshnessExempt(env) || now - env.sentAt <= maxAgeMs
+
+    /**
+     * Whether [isFresh] exempts [env] on its type alone — every type but `chat` and `reaction`, for the
+     * reasons [isFresh] gives. Split out so a caller that needs the *deadline* rather than the verdict
+     * ([app.getknit.knit.mesh.lora.RideGate.freshUntil]) reads the rule from here instead of restating it.
+     */
+    fun freshnessExempt(env: RelayEnvelope): Boolean = env.type != FrameType.CHAT && env.type != FrameType.REACTION
 
     /**
      * How old a chat/reaction may be and still ride the fan-out path: past the 10-min SeenSet, with skew slack.

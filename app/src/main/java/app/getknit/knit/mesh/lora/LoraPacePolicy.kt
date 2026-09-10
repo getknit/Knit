@@ -256,6 +256,47 @@ internal enum class Destination {
     Public,
 }
 
+/**
+ * The answers [LoraMeshTransport.fanout] and its siblings got from the send-time gates, carried so the frame
+ * can be asked the same questions again when it finally reaches the air.
+ *
+ * The queue is a **time-delayed commitment**: a frame waits here behind the 3 s pacing floor, a full board
+ * queue and a spent airtime share, which together can hold it for a whole window. Every gate the enqueuing
+ * path passed was answered about the mesh as it was at that moment, and the field failure this exists for is
+ * the four seconds between them — a peer's Wi-Fi Aware link came up while its receipts sat in this queue, and
+ * the plane spent its whole allowance re-delivering what that link had already carried.
+ *
+ * Each field is null/false on a path that never asked its question, because re-asking must only ever repeat a
+ * gate, never add one: a targeted `relay = false` send is deliberately **not** role-gated (ADR 044's field
+ * amendment), and gating it here would strand AckSync's ticks for their full 24 h of retries exactly as it
+ * did across that field.
+ */
+internal data class RideGate(
+    /** The addressee whose live link on a better plane makes this frame redundant, or null if never gated on one. */
+    val recipientId: String? = null,
+    /** Wall-clock instant past which the fan-out freshness gate would refuse this frame, or null when exempt. */
+    val freshUntil: Long? = null,
+    /** Whether the enqueuing path stood down to a co-pocket gateway, and so must stand down here too. */
+    val roleGated: Boolean = false,
+)
+
+/**
+ * Why a queued frame was refused at the moment it reached the air rather than sent. One per [RideGate]
+ * question, because "the queue held it until the answer changed" is only actionable if it says *which*
+ * answer: [LINKED] means the plane is doing its job, [STALE] means the queue is running deeper than the
+ * freshness window, and [PASSIVE] means a co-pocket board took the role mid-flight.
+ */
+internal enum class StaleAtSend {
+    /** A better plane linked to the addressee while this waited; the link has carried it. */
+    LINKED,
+
+    /** It aged past [LoraFramePolicy.FRESH_MS] in the queue; it is custody's business now, not a live plane's. */
+    STALE,
+
+    /** We stood down to a co-pocket gateway after queuing it, and that board speaks for the pocket. */
+    PASSIVE,
+}
+
 /** A whole frame queued for the LoRa hop: its already-encoded fragment messages, a diagnostic label, its class. */
 internal class OutboundFrame(
     val messages: List<ByteArray>,
@@ -287,6 +328,8 @@ internal class OutboundFrame(
      * must not move `loraDroppedQueue`, whose job is to say when the plane shed something it wanted.
      */
     val supersedes: String? = null,
+    /** The enqueue-time gates worth asking again on the way out; see [RideGate]. */
+    val gate: RideGate = RideGate(),
 ) {
     /**
      * How many of [messages] the board has already taken. A board that runs out of queue part-way through a

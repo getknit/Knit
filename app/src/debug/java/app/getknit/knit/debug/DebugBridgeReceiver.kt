@@ -967,6 +967,10 @@ class DebugBridgeReceiver :
             .put("loraBridgeRefused", snap.loraBridgeRefused)
             .put("loraPassive", snap.loraPassive)
             .put("loraSkippedLinked", snap.loraSkippedLinked)
+            // The same gates as `loraSkippedLinked`, asked again at the moment of sending: how much air the
+            // queue would have spent on frames whose answer changed while they waited (LINKED/STALE/PASSIVE).
+            .put("loraStaleAtSend", snap.loraStaleAtSend)
+            .put("loraStaleAtSendByReason", JSONObject(snap.loraStaleAtSendByReason))
             .put("loraTickDeferred", snap.loraTickDeferred)
             // The Meshtastic room's inbound half. `heard` is every chat packet on the board's primary channel,
             // `ingested` what survived the filters, and the difference is itemised in `refusedByReason`;

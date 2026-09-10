@@ -420,6 +420,14 @@ internal class LoraMeshTransport(
             "$label:${env.type}",
             classOf(env, hint),
             supersedes = supersedeKeyFor(env),
+            // All three gates above are answered about the mesh as it is *now*; the frame may not fly for a
+            // whole window. Carried so [staleReason] can ask them again on the way out.
+            gate =
+                RideGate(
+                    recipientId = env.recipientId?.takeIf { LoraFramePolicy.isDmForm(env) },
+                    freshUntil = freshUntilFor(env),
+                    roleGated = true,
+                ),
         )
     }
 
@@ -454,7 +462,9 @@ internal class LoraMeshTransport(
         val parts = encodeOrNull(wire, label) ?: return
         if (!sigSeen.add(dedupKey(wire, env))) return
         // The targeted path admits only receipts and sealed ticks (LoraFramePolicy), so it needs no hint.
-        enqueue(parts, label, classOf(env, FanoutHint.TICK))
+        // Recipient only: the role gate is deliberately absent here and must stay absent on the way out too,
+        // for the reason the comment above gives — this send is owed by exactly one node.
+        enqueue(parts, label, classOf(env, FanoutHint.TICK), gate = RideGate(recipientId = to.nodeId))
     }
 
     override suspend fun send(
@@ -514,8 +524,9 @@ internal class LoraMeshTransport(
         bucket: AirBucket = AirBucket.defaultFor(klass),
         destination: Destination = Destination.Knit,
         supersedes: String? = null,
+        gate: RideGate = RideGate(),
     ) {
-        if (pace.enqueue(OutboundFrame(parts, label, klass, bucket, destination, supersedes)) !=
+        if (pace.enqueue(OutboundFrame(parts, label, klass, bucket, destination, supersedes, gate)) !=
             LoraPacePolicy.Admission.ACCEPTED
         ) {
             metrics.onLoraDroppedQueue()
@@ -550,7 +561,13 @@ internal class LoraMeshTransport(
         val parts = encodeOrNull(wire, "profile-self") ?: return
         lastSelfProfileAt.set(clock())
         sigSeen.add(sigKey(wire))
-        enqueue(parts, "profile-self", FrameClass.BOOTSTRAP, supersedes = profileKey(selfIdCached))
+        enqueue(
+            parts,
+            "profile-self",
+            FrameClass.BOOTSTRAP,
+            supersedes = profileKey(selfIdCached),
+            gate = RideGate(roleGated = true),
+        )
     }
 
     /**
@@ -592,7 +609,14 @@ internal class LoraMeshTransport(
         val parts = encodeOrNull(wire, "reoffer:${env.id}") ?: return
         if (!sigSeen.add(dedupKey(wire, env))) return
         // DM class so a room post can never evict it, BRIDGE bucket so it is metered as the backfill it is.
-        enqueue(parts, "reoffer:${env.id}", FrameClass.DM, AirBucket.BRIDGE)
+        // [reofferTo] gated on both the role and this peer's link, so both are worth re-asking.
+        enqueue(
+            parts,
+            "reoffer:${env.id}",
+            FrameClass.DM,
+            AirBucket.BRIDGE,
+            gate = RideGate(recipientId = to, roleGated = true),
+        )
         metrics.onLoraReoffered()
     }
 
@@ -660,6 +684,38 @@ internal class LoraMeshTransport(
         if (!LoraFramePolicy.isDmForm(env)) return false
         val to = env.recipientId ?: return false
         return to == selfIdCached || to in linkedPeers
+    }
+
+    /**
+     * When [LoraFramePolicy.isFresh] would start refusing [env], or null for a type it exempts. The gate is a
+     * deadline rather than an age, so the queue can carry it without carrying the envelope.
+     */
+    private fun freshUntilFor(env: RelayEnvelope): Long? =
+        if (LoraFramePolicy.freshnessExempt(env)) null else env.sentAt + LoraFramePolicy.FRESH_MS
+
+    /**
+     * Why a frame the pacer just handed us should no longer go on the air, or null to send it.
+     *
+     * The enqueuing path asked these same questions, but the queue is a time-delayed commitment — the pacing
+     * floor, a full board queue and a spent airtime share can hold a frame for a whole window — and the
+     * answers move underneath it. Field-observed 2026-09-09: a phone that had been alone for hours met two
+     * peers on Wi-Fi Aware, queued their receipts in the four seconds before the second link came up, and
+     * then spent its entire 45-second allowance putting on the air what that link had already delivered. The
+     * far side confirmed it, receiving one frame id over Wi-Fi Aware and the same one over LoRa ten minutes
+     * later.
+     *
+     * Only [RideGate]'s own questions are asked, so this can never refuse a frame its path did not already
+     * gate — which is what keeps ADR 044's "never gate [fastSend]" true on the way out as well as the way in.
+     */
+    private fun staleReason(frame: OutboundFrame): StaleAtSend? {
+        val gate = frame.gate
+        // Links, never sightings — the same reading as [coveredByLink], and for the same field reason.
+        if (gate.recipientId != null && (gate.recipientId == selfIdCached || gate.recipientId in linkedPeers)) {
+            return StaleAtSend.LINKED
+        }
+        if (gate.freshUntil != null && wallClock() > gate.freshUntil) return StaleAtSend.STALE
+        if (gate.roleGated && role != LoraGatewayPolicy.Role.ACTIVE) return StaleAtSend.PASSIVE
+        return null
     }
 
     /** A publisher key as it reads in the log: the unsigned hex of the 64-bit hash an OFFER carries. */
@@ -774,6 +830,7 @@ internal class LoraMeshTransport(
             // (ADR 2026-09.7c8n). The window total still bounds it.
             AirBucket.GOSSIP,
             supersedes = OFFER_KEY,
+            gate = RideGate(roleGated = true),
         )
     }
 
@@ -953,7 +1010,18 @@ internal class LoraMeshTransport(
             return Serve.NO_AIR
         }
         sigSeen.add(dedupKey(wire, env)) // recorded for the fan-out's benefit, never consulted here — see the kdoc
-        enqueue(parts, label, klass, AirBucket.BRIDGE)
+        // No freshness: backfill is history by definition, and [isFresh] was never asked of it.
+        enqueue(
+            parts,
+            label,
+            klass,
+            AirBucket.BRIDGE,
+            gate =
+                RideGate(
+                    recipientId = env.recipientId?.takeIf { LoraFramePolicy.isDmForm(env) },
+                    roleGated = true,
+                ),
+        )
         return Serve.SENT
     }
 
@@ -1025,6 +1093,15 @@ internal class LoraMeshTransport(
         if (ready == null) {
             requeue(frame)
             return
+        }
+        // Asked only of a frame that has not yet put a fragment on the air: [OutboundFrame.remaining] exists
+        // to finish a part-sent frame, and abandoning one would strand the fragments the board already holds.
+        if (frame.sentParts == 0) {
+            staleReason(frame)?.let { reason ->
+                metrics.onLoraStaleAtSend(reason.name)
+                log("lora stale at send ${frame.label}: ${reason.name.lowercase()}")
+                return
+            }
         }
         val ch = currentConfig?.channelIndex ?: return
         if (!boundSlotIsKnit(ready.channels, ch)) {

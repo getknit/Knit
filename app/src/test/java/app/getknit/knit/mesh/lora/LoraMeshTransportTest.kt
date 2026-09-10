@@ -1005,6 +1005,158 @@ class LoraMeshTransportTest {
             b.transport.stop()
         }
 
+    /**
+     * The queue is a **time-delayed commitment**, and this is the gap that costs airtime: a DM-form frame is
+     * admitted because no better plane held a link to its addressee *at that instant*, then waits behind the
+     * pacing floor, a full board queue and a spent airtime share while the answer changes underneath it.
+     *
+     * Field-observed 2026-09-09 on the lab Pixel 7. It had been alone for hours; two peers appeared on
+     * Wi-Fi Aware at once and 107 frames landed in a minute. The receipts it owed for them were queued in the
+     * four seconds before the second peer's link came up, and the pacer then spent the plane's entire
+     * 45-second window putting on the air what that link had already carried — 22 packets for one typed
+     * message. The far side proved it, receiving one frame id over Wi-Fi Aware and the same id over LoRa ten
+     * minutes later.
+     */
+    @Test
+    fun aQueuedDmIsAbandonedWhenItsRecipientLinksWhileItWaits() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+
+            a.link.free = 0 // the board has no room, so the frame sits in the pacer exactly as it did in the field
+            runCurrent()
+            val sentBefore = a.link.sent.size
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", relay = false), FanoutHint.TICK)
+            runCurrent()
+            assertEquals("it is queued, not aired", sentBefore, a.link.sent.size)
+
+            // Wi-Fi Aware links bob while the frame waits — the four seconds the field failure turned on.
+            a.transport.suppressDataPath(setOf("bob"))
+            a.link.updateHeadroom(16)
+            advanceTimeBy(10_000)
+            runCurrent()
+
+            assertEquals("the link carried it; the board must not repeat it", sentBefore, a.link.sent.size)
+            val snap = a.metrics.snapshot()
+            assertEquals(1L, snap.loraStaleAtSend)
+            assertEquals(mapOf(StaleAtSend.LINKED.name to 1L), snap.loraStaleAtSendByReason)
+            assertEquals("nothing was shed that the plane wanted", 0L, snap.loraDroppedQueue)
+            a.transport.stop()
+        }
+
+    /**
+     * The other half of the same rule, and the one this fix could most easily break: a *sighting* is not a
+     * data path. BLE advertises far beyond L2CAP range and Wi-Fi Aware keeps a peer listed for 150 s after
+     * its last cue, so refusing on one takes away a far peer's only route — ADR 044's field amendment, which
+     * cost two Pixels across a field every message and every ✓✓ they had.
+     */
+    @Test
+    fun aQueuedDmStillRidesWhenItsRecipientIsOnlySighted() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+
+            a.link.free = 0
+            runCurrent()
+            val sentBefore = a.link.sent.size
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", relay = false), FanoutHint.TICK)
+            runCurrent()
+
+            a.transport.onForeignReachable(setOf("bob")) // heard, never linked
+            a.link.updateHeadroom(16)
+            advanceTimeBy(10_000)
+            runCurrent()
+
+            assertTrue("a merely-sighted peer's DM still rides", a.link.sent.size > sentBefore)
+            assertEquals(0L, a.metrics.snapshot().loraStaleAtSend)
+            a.transport.stop()
+        }
+
+    /**
+     * The freshness gate has the same shape as the recipient gate and goes stale the same way: a chat is
+     * admitted inside [LoraFramePolicy.FRESH_MS] and then waits past it, at which point it is a custody
+     * re-serve and fanning it would spend a newcomer's whole backfill on the air. The queue is sized to hold
+     * a fifteen-minute wait, so the dwell and the window are the same length by design.
+     */
+    @Test
+    fun aQueuedChatThatAgesPastTheFreshnessWindowIsAbandonedAtSend() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            // Bridge off: this test has to advance past the gossip interval to age the frame, and an OFFER
+            // put on the air on the way would be counted here as the frame that escaped.
+            val a =
+                rig(air, 1u, "alice", backgroundScope, config = MutableStateFlow(LoraConfig("AA:1", 0, bridge = false))) {
+                    testScheduler.currentTime
+                }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+
+            a.link.free = 0
+            runCurrent()
+            val sentBefore = a.link.sent.size
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate in ten", sentAt = testScheduler.currentTime))
+            runCurrent()
+
+            advanceTimeBy(LoraFramePolicy.FRESH_MS + 1_000)
+            a.link.updateHeadroom(16)
+            advanceTimeBy(10_000)
+            runCurrent()
+
+            assertEquals("a frame this old is custody's business, not a live plane's", sentBefore, a.link.sent.size)
+            assertEquals(mapOf(StaleAtSend.STALE.name to 1L), a.metrics.snapshot().loraStaleAtSendByReason)
+            a.transport.stop()
+        }
+
+    /**
+     * Asked only of a frame that has not yet put a fragment on the air. A board that runs out of queue
+     * part-way through a fragmented frame refuses the rest and the frame is requeued whole; abandoning it on
+     * the second pass would strand the fragments the board already holds, and the far side would wait on a
+     * reassembly that can never complete.
+     */
+    @Test
+    fun aPartSentFrameFinishesItsFragmentsEvenWhenItsRecipientLinks() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+
+            // Two slots for a frame that needs more, so the board takes some fragments and refuses the rest.
+            a.link.queueFills = true
+            a.link.free = 2
+            runCurrent()
+            a.transport.longRangeFanout(
+                frame(FrameType.CHAT, "alice", recipientId = "bob", relay = false, body = incompressibleBody(600)),
+                FanoutHint.CONTENT,
+            )
+            advanceTimeBy(5_000)
+            runCurrent()
+            val partSent = a.link.sent.size
+            assertTrue("the board took some of it and refused the rest", partSent > 0)
+
+            a.transport.suppressDataPath(setOf("bob")) // bob links mid-frame
+            a.link.queueFills = false
+            a.link.updateHeadroom(16)
+            advanceTimeBy(10_000)
+            runCurrent()
+
+            assertTrue("the fragments already on the air are finished, not stranded", a.link.sent.size > partSent)
+            assertEquals(0L, a.metrics.snapshot().loraStaleAtSend)
+            a.transport.stop()
+        }
+
     @Test
     fun aLongRoomChatFragmentsAndReassembles() =
         runTest {

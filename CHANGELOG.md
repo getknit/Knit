@@ -42,6 +42,11 @@ document:
 - On Android 11 and older, a list pulled past its end now glows Knit's coral. It had been a flat grey that
   belonged to nothing else on the screen.
 
+### Fixed
+
+- Knit no longer repeats over your LoRa radio a message that Bluetooth or Wi-Fi has already delivered. If
+  you have a board paired, its limited airtime now goes to the messages that actually need the range.
+
 ## [2.5.0](https://github.com/getknit/knit/releases/tag/v2.5.0) — 2026-09-08T07:54:21Z
 
 > A Meshtastic radio for reaching far past Wi-Fi and Bluetooth, and files of any kind.

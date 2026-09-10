@@ -14,6 +14,7 @@ import android.graphics.Typeface
 import android.os.Build
 import android.text.SpannableString
 import android.text.Spanned
+import android.text.format.Formatter
 import android.text.style.StyleSpan
 import android.util.LruCache
 import androidx.core.app.NotificationCompat
@@ -268,6 +269,41 @@ class MessageNotifier(
         postNotification(null, ID_OPEN_TO_CHAT, notification)
     }
 
+    override fun notifyTransferOffer(
+        peerId: String,
+        peerName: String,
+        peerAvatarBytes: ByteArray?,
+        fileName: String,
+        sizeBytes: Long?,
+    ) {
+        // Reading the thread already: the card is on screen with Accept and Decline on it.
+        if (peerId == visibleConversationId) return
+        val size = sizeBytes?.takeIf { it > 0 }?.let { Formatter.formatShortFileSize(context, it) }
+        val text =
+            if (size == null) {
+                context.getString(R.string.notif_transfer_offer, fileName)
+            } else {
+                context.getString(R.string.notif_transfer_offer_sized, fileName, size)
+            }
+        val tag = transferTagFor(peerId)
+        val notification =
+            NotificationCompat
+                .Builder(context, NotificationChannels.DMS)
+                // The feature's own mark, which is the whole reason this is not a line in the thread.
+                .setSmallIcon(R.drawable.ic_direct_transfer)
+                .setLargeIcon(bitmapFor(peerAvatarBytes) ?: letterAvatar(peerName, peerId))
+                .setContentTitle(peerName)
+                .setContentText(text)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setContentIntent(openChatIntent(tag, peerId))
+                .setAutoCancel(true)
+                // Standalone, not in the messages group: an offer expires in three minutes and is worth
+                // answering on its own, not folded into "N messages in M chats".
+                .setOnlyAlertOnce(false)
+                .build()
+        postNotification(tag, ID_TRANSFER, notification)
+    }
+
     override fun clearOpenToChat() {
         runCatching { manager.cancel(ID_OPEN_TO_CHAT) }
     }
@@ -277,6 +313,9 @@ class MessageNotifier(
             synchronized(states) { states.remove(tag) }
             runCatching { manager.cancel(tag, ID_MESSAGE) }
         }
+        // The offer heads-up belongs to the same thread and goes when it does — opening the chat puts the
+        // card itself in front of the user, which is more than the notification was offering.
+        runCatching { manager.cancel(transferTagFor(conversationId), ID_TRANSFER) }
         postSummary()
     }
 
@@ -734,6 +773,9 @@ class MessageNotifier(
         isMention: Boolean,
     ): String = if (isMention) MENTION_PREFIX + conversationId else conversationId
 
+    /** Its own tag namespace, so an offer and the thread's messages never overwrite each other. */
+    private fun transferTagFor(conversationId: String): String = TRANSFER_PREFIX + conversationId
+
     companion object {
         const val EXTRA_TAG = "app.getknit.knit.NOTIF_TAG"
         const val EXTRA_CONV = "app.getknit.knit.NOTIF_CONV"
@@ -749,6 +791,7 @@ class MessageNotifier(
         const val DISMISS_ALL = "app.getknit.knit.NOTIF_DISMISS_ALL"
 
         private const val MENTION_PREFIX = "mention:"
+        private const val TRANSFER_PREFIX = "xfer:"
 
         // Notification ids — id 1 is MeshService's foreground notification; 2-5 were the retired per-channel
         // buckets. Per-conversation notifications now share one id disambiguated by tag; the summary gets its own.
@@ -760,6 +803,9 @@ class MessageNotifier(
 
         // The single "someone nearby is open to chat" cue (standalone; refreshed in place).
         private const val ID_OPEN_TO_CHAT = 9
+
+        // A direct-transfer offer (standalone, one per peer by tag — it is answered, not read).
+        private const val ID_TRANSFER = 10
 
         // Its PendingIntent tag: a request code of its own so its deep link never clobbers a chat's.
         private const val TAG_OPEN_TO_CHAT = "open-to-chat"

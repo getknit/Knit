@@ -2095,10 +2095,17 @@ class InboundPipelineTest {
             assertEquals("clip.mp4", xf.name)
             assertEquals(7L, at)
             assertNull("a ctl is never a message", rig.msgMap["xf-1"])
-            val posted = slot<NotifMessage>()
-            coVerify { rig.notifier.notify(capture(posted), any(), any(), any(), any()) }
-            assertTrue(posted.captured.body, posted.captured.body.contains("clip.mp4"))
-            assertEquals(alice.nodeId, posted.captured.conversationId)
+            // Its own heads-up, not a line in the thread's: that is what lets it wear the transfer mark.
+            coVerify {
+                rig.notifier.notifyTransferOffer(
+                    peerId = alice.nodeId,
+                    peerName = any(),
+                    peerAvatarBytes = any(),
+                    fileName = "clip.mp4",
+                    sizeBytes = 2_500_000L,
+                )
+            }
+            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -2123,7 +2130,7 @@ class InboundPipelineTest {
             )
 
             assertEquals(listOf(TransferPayload.PHASE_OFFER, TransferPayload.PHASE_ACCEPT), rig.transferSignals.map { it.second.phase })
-            coVerify(exactly = 0) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { rig.notifier.notifyTransferOffer(any(), any(), any(), any(), any()) }
         }
 
     @Test

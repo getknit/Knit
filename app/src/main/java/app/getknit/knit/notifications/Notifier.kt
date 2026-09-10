@@ -96,6 +96,23 @@ interface Notifier {
         selfAvatarBytes: ByteArray?,
     )
 
+    /**
+     * Posts the heads-up for a direct file transfer someone is offering (`transfer/TransferManager`).
+     *
+     * Its own notification rather than a line in the thread's, and the reason is the icon: a MessagingStyle
+     * notification stands for the whole conversation, so its status-bar icon cannot say anything about one
+     * message in it. An offer wearing the transfer mark is worth more than an offer stacked with the chat —
+     * and it is an event to answer rather than something said. The [notifyMention] precedent, one thread
+     * carrying two kinds of notification.
+     */
+    fun notifyTransferOffer(
+        peerId: String,
+        peerName: String,
+        peerAvatarBytes: ByteArray?,
+        fileName: String,
+        sizeBytes: Long?,
+    )
+
     /** Posts a high-priority "you were mentioned" notification (separate Mentions entry for the thread). */
     fun notifyMention(
         incoming: NotifMessage,

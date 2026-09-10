@@ -197,6 +197,9 @@
     <string name="chat_transfer_consent_scope_receive">The file is encrypted while it travels, then saved normally in your Downloads folder without Knit’s encryption. Knit does not scan files for harmful content, so only accept files you trust.</string>
     <string name="chat_transfer_consent_accept">Continue</string>
     <string name="chat_transfer_consent_decline">Not now</string>
+    <!-- The direct-transfer offer heads-up. Its own notification, so it wears the transfer mark. -->
+    <string name="notif_transfer_offer">Wants to send you %1$s</string>
+    <string name="notif_transfer_offer_sized">Wants to send you %1$s (%2$s)</string>
 
     <!-- Voice notes -->
     <string name="chat_voice_record">Hold to record a voice message</string>

@@ -77,7 +77,6 @@ import app.getknit.knit.notifications.NotifConversation
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.notifications.incomingNotification
 import app.getknit.knit.notifications.mentionNotification
-import app.getknit.knit.transfer.TransferSizes
 import kotlinx.coroutines.flow.first
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -2416,9 +2415,16 @@ class InboundPipeline(
         if (!isAccepted(env.senderId, me)) return
         val admitted = onTransferCtl(env.senderId, payload, env.sentAt)
         if (admitted && payload.phase == TransferPayload.PHASE_OFFER) {
-            val size = payload.size?.let { " (${TransferSizes.short(it)})" }.orEmpty()
-            // Its own mark, not the attachment paperclip: a direct transfer is the other kind of file.
-            notifyWithBody(env, env.senderId, "\uD83D\uDCE1 Wants to send you ${payload.name}$size")
+            // Its own notification rather than a line in the thread's, so it can wear the transfer mark
+            // instead of an emoji standing in for one — see Notifier.notifyTransferOffer.
+            val peer = peers.find(env.senderId)
+            notifier.notifyTransferOffer(
+                peerId = env.senderId,
+                peerName = peers.labelIndex().labelFor(env.senderId, peer?.name).text,
+                peerAvatarBytes = peer?.avatarHash?.let { blobs.bytes(it) },
+                fileName = payload.name.orEmpty(),
+                sizeBytes = payload.size,
+            )
         }
     }
 

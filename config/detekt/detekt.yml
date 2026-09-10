@@ -38,6 +38,7 @@ complexity:
     allowedFunctionsPerClass: 64       # MeshManager 31 (+ content-moderation gate), MeshMetrics 59 (one fn per counter, +LoRa)
     allowedFunctionsPerFile: 20
     allowedFunctionsPerObject: 15
+    allowedFunctionsPerInterface: 14   # Notifier: one method per notification kind, plus its visibility/dismissal hooks
 
 naming:
   FunctionNaming:

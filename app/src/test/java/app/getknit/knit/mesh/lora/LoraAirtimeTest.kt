@@ -72,6 +72,55 @@ class LoraAirtimeTest {
         assertEquals(ceiling, overridden.allowanceMs())
     }
 
+    // --- What the last process spent (LoraPlaneState). ---
+
+    @Test
+    fun aRestoredLedgerStillOwesTheAirTheLastProcessSpent() {
+        val packet = listOf(MeshtasticProto.MAX_PAYLOAD)
+        val spent = LoraAirtime().apply { onRadioConfig(radio()) }
+        var now = 0L
+        while (spent.admits(AirBucket.LIVE, FrameClass.ROOM, packet, now)) {
+            spent.record(AirBucket.LIVE, MeshtasticProto.MAX_PAYLOAD, now)
+            now += 3_000
+        }
+
+        // The bug this closes: the next process built one of these and it admitted everything again.
+        val restarted = LoraAirtime().apply { onRadioConfig(radio()) }
+        assertTrue("a fresh ledger has the whole window", restarted.admits(AirBucket.LIVE, FrameClass.ROOM, packet, now))
+
+        restarted.restore(spent.bookings(now), now)
+        assertEquals(spent.snapshot(now).totalUsedMs, restarted.snapshot(now).totalUsedMs)
+        assertFalse("the window is as spent as the one it came from", restarted.admits(AirBucket.LIVE, FrameClass.ROOM, packet, now))
+    }
+
+    @Test
+    fun aRestoredLedgerGivesBackWhatTheWindowHasOutlived() {
+        val spent = LoraAirtime().apply { onRadioConfig(radio()) }
+        repeat(10) { spent.record(AirBucket.LIVE, MeshtasticProto.MAX_PAYLOAD, it * 3_000L) }
+        // Shuffled on the way in: a snapshot has been through a clock conversion, so the deque's send order
+        // is the restore's job to re-establish — [LoraAirtime.prune] walks it from the front.
+        val bookings = spent.bookings(30_000).shuffled(kotlin.random.Random(7))
+
+        val restarted = LoraAirtime().apply { onRadioConfig(radio()) }
+        restarted.restore(bookings, LoraAirtime.WINDOW_MS + 30_000)
+
+        assertEquals("a window old enough to have expired owes nothing", 0L, restarted.snapshot(LoraAirtime.WINDOW_MS + 30_000).totalUsedMs)
+    }
+
+    @Test
+    fun aRestoredBookingKeepsTheCostItWasChargedAtNotTodaysPreset() {
+        val slow = LoraAirtime().apply { onRadioConfig(radio(ModemPreset.LONG_SLOW)) }
+        slow.record(AirBucket.LIVE, MeshtasticProto.MAX_PAYLOAD, 0)
+        val booked = slow.snapshot(0).totalUsedMs
+
+        // A different board between the two processes: the air was spent at the old preset, and that is what
+        // the window is owed.
+        val fast = LoraAirtime().apply { onRadioConfig(radio(ModemPreset.SHORT_TURBO)) }
+        fast.restore(slow.bookings(0), 0)
+
+        assertEquals(booked, fast.snapshot(0).totalUsedMs)
+    }
+
     @Test
     fun theBridgeBudgetIsAShareOfTheWholeAllowanceNotASecondOne() {
         val air = LoraAirtime().apply { onRadioConfig(radio()) }

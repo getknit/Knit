@@ -348,6 +348,45 @@ injected `wallClock` (epoch) — the transport's `clock` is `elapsedRealtime` an
 frame's `sentAt`. Counted with the sig-window rejections under `loraSuppressed`. `BleConnectArbiter` lets
 the board dial pause the mesh BLE scan for its connect window (scanning starves connects).
 
+## Limiters that outlive the process (ADR 2026-09.7svb)
+
+**A limiter that resets on launch is not a limiter.** Five of them are persisted through `LoraPlaneState`
+(a JSON blob under one settings key, `LoraPlaneStateStore`; `mesh/lora/` itself stays Android-free): the
+airtime ledger, the profile beacon's floor, the gossip Trickle interval, the per-publisher serve cap and the
+12 h `profileSeen` gate. Every one of them used to begin each launch empty, so a restart handed the plane a
+**fresh 45-second allowance** and re-ran every first-time behaviour against it — a self beacon, an OFFER at
+the Trickle floor rather than at the back-off the silence had earned, and a `reofferTo` batch per peer as
+each was heard "first" again. The duty cycle is law rather than politeness (ADR 067) and the ledger is the
+only thing enforcing it, so a crash loop, a force-stop or a lab reinstall cycle spent air nothing accounted
+for.
+
+- **Stamps are wall-clock, converted at each end** (`WallShift`). `clock` is `elapsedRealtime`, which
+  restarts at zero every boot: persisted directly it reads as the far future and ages nothing out. A
+  snapshot stamped *ahead* of the wall clock is refused whole — the clock moved backwards, and one fresh
+  window is the smaller error.
+- **Nothing transmits until it is back** (`awaitRestored`, on the pacer, `gossipLoop` and `beaconProfile`).
+  It releases on failure and behind a 5 s timeout: a store that never answers costs a window, not the plane.
+- **A booking carries its recorded cost, not its size** — a board swapped between two processes has a
+  different preset, and the air was spent at the old one.
+- **`sigSeen` and `lastHeardAt` are deliberately not persisted.** A restored `sigSeen` would carry "we
+  transmitted" across a restart, which on a plane with no acks is not evidence anyone heard (the ADR
+  2026-09.y8pu reasoning); a restored `lastHeardAt` would claim `reachable` on evidence this process never
+  saw (ADR 2026-09.2ajk). The restored ledger bounds what both would otherwise let through.
+- Writes are debounced 2 s behind a conflated wake (the pacer's 3 s floor bounds the rate anyway), plus one
+  on `stop()` taken **before** `quiesce()` empties the serve budgets. A kill inside the debounce loses the
+  last packet or two of the ledger. The restore runs **once per instance**: an in-process stop/start keeps
+  the live ledger rather than re-reading a staler blob.
+
+> **The pacer's monitor is taken outside the ledger's, never the other way round.** `LoraPacePolicy`,
+> `LoraAirtime` and `LoraGossipPolicy` are all `@Synchronized` on every entry point, because the queue has
+> six writers on five coroutines (`take` on the pacer; `enqueue` on whichever coroutine sent; `onQueueStatus`
+> / `evictOversize` / `onNak` on the link, queue and outcomes collectors) and the ledger has a seventh — the
+> `LoraPlaneState` save, whose `bookings` prunes. `ArrayDeque` is not thread-safe and nulls a slot on
+> removal, so a structural change under `admitBest`'s index walk hands it a null through a non-null type:
+> field-observed on the lab P7 (2026-09-10) as `NullPointerException: … OutboundFrame.getBucket()`, which
+> kills the pacer coroutine and silences the plane while it still reports `state: Ready`. Nothing restarts
+> it. Regression: `LoraPacePolicyTest.aQueueDrainedWhileOtherThreadsEnqueueDoesNotTearItself`.
+
 ## DMs (ADR 039)
 
 A 1:1 DM rides as its ordinary sealed frame — nothing is re-encoded, the signature verifies unchanged, and

@@ -9,6 +9,7 @@ import app.getknit.knit.data.KnitDatabase
 import app.getknit.knit.data.MeshBlobStore
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.relay.RelayStatusRepository
+import app.getknit.knit.data.settings.LoraPlaneStateStore
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.BridgeFrameSource
@@ -191,6 +192,9 @@ val meshModule =
                 onBoardBound = { settings.setLoraBoard(it.nodeNum.toLong(), it.signingKey) },
                 scope = get(),
                 metrics = get(),
+                // The plane's rate limiters, kept across process death: without it every launch begins with a
+                // fresh airtime allowance, which in a lab that reinstalls all day is no allowance at all.
+                state = LoraPlaneStateStore(settings),
                 clock = SystemClock::elapsedRealtime,
                 wallClock = System::currentTimeMillis,
                 log = { Log.d("LoraMeshTransport", it) },

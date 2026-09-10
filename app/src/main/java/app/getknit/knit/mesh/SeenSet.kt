@@ -35,6 +35,30 @@ class SeenSet(
         return clock() - last < ttlMillis
     }
 
+    /**
+     * The live entries, oldest first — for a set whose window outlives the process that keeps it. Expired
+     * ones are left out: they are new again by definition, so persisting them would only cost bytes.
+     *
+     * (The LoRa plane's profile re-fan gate is the one that needs this: its window is 12 hours against a
+     * process that may live minutes — see `mesh/lora/LoraPlaneState`.)
+     */
+    @Synchronized
+    fun stamps(): List<Pair<String, Long>> {
+        val now = clock()
+        return seen.entries.filter { now - it.value < ttlMillis }.map { it.key to it.value }
+    }
+
+    /**
+     * Re-adds [stamps] as though each had been seen at its recorded time, skipping any that have since
+     * expired. Applied oldest-first so a list longer than [maxSize] leaves the newest behind — the same rule
+     * the LRU applies while running.
+     */
+    @Synchronized
+    fun restore(stamps: List<Pair<String, Long>>) {
+        val now = clock()
+        stamps.sortedBy { it.second }.forEach { (id, at) -> if (now - at < ttlMillis) seen[id] = at }
+    }
+
     private companion object {
         /** Default flood-suppression window: an id counts as new again after 10 minutes. */
         const val DEFAULT_TTL_MS = 10 * 60_000L

@@ -14,6 +14,15 @@ package app.getknit.knit.mesh.lora
  * against — so a frame can also wait because the plane has spent its share of the medium, not just because
  * the gap has not elapsed. Dequeue runs the same class order forwards (see [take]). Tested on the JVM
  * ([app.getknit.knit.mesh.lora.LoraPacePolicyTest]).
+ *
+ * **Every entry point is `@Synchronized`, because this queue has six writers on five coroutines.** `take`
+ * runs on the pacer loop; `enqueue` on whichever coroutine sent (the composite's fan-out, the ctl-packet
+ * handler's backfill, the gossip loop's OFFER, the link-state collector's beacon); `onQueueStatus` and
+ * `evictOversize` on the link and queue collectors; `onNak` on the outcomes collector. `ArrayDeque` is not
+ * thread-safe, and a structural change under `admitBest`'s index walk nulls the slot it is about to read —
+ * field-observed on the lab P7 as `NullPointerException: … OutboundFrame.getBucket()` at
+ * `admitBest`, which kills the pacer loop and silences the plane until the app is restarted (nothing
+ * restarts that coroutine). The monitor is taken **outside** [LoraAirtime]'s and never the other way round.
  */
 internal class LoraPacePolicy(
     private val minGapMs: Long = MIN_GAP_MS,
@@ -50,8 +59,9 @@ internal class LoraPacePolicy(
      */
     enum class Admission { ACCEPTED, DROPPED_OLDEST, REFUSED }
 
-    val pending: Int get() = queue.size
+    val pending: Int @Synchronized get() = queue.size
 
+    @Synchronized
     fun enqueue(frame: OutboundFrame): Admission {
         // A newcomer may fit where everything queued did not — it may spend a bucket the queue was not
         // asking for — so the airtime deferral is a fact about the queue as it stood, not a standing
@@ -79,6 +89,7 @@ internal class LoraPacePolicy(
      * chunked for the pre-Ready floor; should a board negotiate a smaller MTU than that floor, those parts
      * would fail every write and requeue forever, so they are shed here when the real cap lands.
      */
+    @Synchronized
     fun evictOversize(cap: Int): Int {
         val before = queue.size
         queue.removeAll { frame -> frame.remaining.any { it.size > cap } }
@@ -100,6 +111,7 @@ internal class LoraPacePolicy(
      * reports a due time already in the past, so the loop computes a zero wait, never suspends, and spins a
      * core flat for as long as the budget stays spent (and, having no suspension point, cannot be cancelled).
      */
+    @Synchronized
     fun nextDueAt(): Long =
         maxOf(
             if (lastSentAt == Long.MIN_VALUE) 0L else lastSentAt + minGapMs,
@@ -124,6 +136,7 @@ internal class LoraPacePolicy(
      * block everything behind it until its budget recovered. A frame that never gets a window eventually ages
      * out through the ordinary class shedding instead.
      */
+    @Synchronized
     fun take(now: Long): OutboundFrame? {
         // Cleared on entry, not only where it is filled: this returns early on an empty queue, an unelapsed
         // gap or a full board, and a caller reading [lastAirtimeHolds] after every call would otherwise
@@ -192,14 +205,17 @@ internal class LoraPacePolicy(
      * orders a DM ahead of the room while [LoraFramePolicy.backfillRank] orders the room ahead of the DM.
      * Counting what is already waiting closes that: a round can no longer promise more air than it has.
      */
+    @Synchronized
     fun pendingSizes(bucket: AirBucket): List<Int> =
         queue.filter { it.bucket == bucket }.flatMap { frame -> frame.remaining.map { it.size } }
 
+    @Synchronized
     fun onQueueStatus(free: Int) {
         boardFree = free
     }
 
     /** A rate-limit or duty-cycle NAK widens the gap for a cool-down; other NAKs don't pace. */
+    @Synchronized
     fun onNak(
         reason: RoutingError,
         now: Long,

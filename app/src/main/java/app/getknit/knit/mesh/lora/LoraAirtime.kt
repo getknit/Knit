@@ -73,6 +73,19 @@ internal interface PacketCost {
     ): Int
 }
 
+/**
+ * One packet booked against the rolling window: when it went out, what it cost, and out of whose share.
+ *
+ * The ledger's own entry type, and also what [LoraPlaneState] persists — the cost is carried rather than
+ * re-derived from a packet size, because a board swapped between two processes has a different preset and
+ * the air the last one spent was spent at the old one.
+ */
+internal data class Booking(
+    val atMs: Long,
+    val ms: Long,
+    val bucket: AirBucket,
+)
+
 /** A read-only view of the governor for the settings row and the `…debug.LORA` dump. */
 internal data class AirtimeSnapshot(
     val preset: ModemPreset,
@@ -160,6 +173,12 @@ internal data class AirtimeSnapshot(
  * reports them we assume [FALLBACK_PERCENT], which is below every real region's limit. Pure and
  * clock-driven by the caller, like [LoraPacePolicy] — the transport owns the actual clock.
  *
+ * **Every entry point is `@Synchronized`.** The ledger is read and written from more than one coroutine:
+ * the pacer books and asks, [LoraFrameCodec] prices a packet on whichever coroutine is sending, and the
+ * [LoraPlaneState] save takes a snapshot of it — and each of those prunes, so each of them *mutates*.
+ * The monitor is taken **inside** [LoraPacePolicy]'s and never the other way round, which is the whole
+ * lock order there is.
+ *
  * One thing the packet we hand the board is not: what leaves it. Firmware **2.8 signs every broadcast it
  * originates**, ours included, adding [MeshtasticProto.XEDDSA_SIGNATURE_FIELD] bytes to any packet small
  * enough to still fit one ([MeshtasticProto.MAX_SIGNED_PAYLOAD]). Knit neither asks for that nor can decline
@@ -190,13 +209,7 @@ internal class LoraAirtime(
      */
     private val dedicatedUnlocksDuty: Boolean = false,
 ) : PacketCost {
-    private class Sample(
-        val atMs: Long,
-        val ms: Long,
-        val bucket: AirBucket,
-    )
-
-    private val samples = ArrayDeque<Sample>()
+    private val samples = ArrayDeque<Booking>()
     private var liveUsedMs = 0L
     private var bridgeUsedMs = 0L
     private var bootstrapUsedMs = 0L
@@ -217,6 +230,7 @@ internal class LoraAirtime(
         private set
 
     /** Records the board's radio settings from the config handshake; a null report leaves the last one standing. */
+    @Synchronized
     fun onRadioConfig(config: LoraRadioConfig?) {
         if (config != null) radio = config
     }
@@ -226,6 +240,7 @@ internal class LoraAirtime(
      * (`has_xeddsa`, a build that verifies and so signs) and wins when present; a firmware too old to carry
      * the field is judged by its [version] instead, and null reads as unknown.
      */
+    @Synchronized
     fun onFirmware(
         version: String?,
         hasXeddsa: Boolean? = null,
@@ -239,6 +254,7 @@ internal class LoraAirtime(
      * covers the Meshtastic header and protobuf/crypto framing around it. This is a governor's estimate, not
      * a measurement — it does not know the board's preamble length or whether a rebroadcaster repeated us.
      */
+    @Synchronized
     override fun timeOnAirMs(payloadBytes: Int): Long = timeOnAirMs(payloadBytes, MeshtasticProto.MAX_SIGNED_PAYLOAD)
 
     /**
@@ -246,6 +262,7 @@ internal class LoraAirtime(
      * Meshtastic room's `TEXT_MESSAGE_APP` posts sign one byte further (`MeshtasticProto.maxSignedPayload`),
      * and a post at that cap is signed air the ledger has to book, not an unsigned packet one byte past it.
      */
+    @Synchronized
     fun timeOnAirMs(
         payloadBytes: Int,
         signedUpTo: Int,
@@ -287,6 +304,7 @@ internal class LoraAirtime(
      * ([app.getknit.knit.mesh.link.FastFrameCodec.deflated]), the only form where a receiver ignores the
      * trailing bytes.
      */
+    @Synchronized
     override fun padTo(
         payloadBytes: Int,
         cap: Int,
@@ -300,6 +318,7 @@ internal class LoraAirtime(
      * The window's allowance, in milliseconds of air, before the per-bucket split — the lower of the two
      * ceilings that still apply (see the class doc).
      */
+    @Synchronized
     fun allowanceMs(): Long {
         val cfg = radio ?: return (windowMs * FALLBACK_PERCENT / PERCENT * safety).toLong()
         // Law. The user set the firmware's own duty-cycle override: they have taken the regulatory call, so
@@ -313,6 +332,7 @@ internal class LoraAirtime(
     /** Whether the budget above is running under the dedicated-slot rules; diagnostics and the settings row. */
     fun dedicated(): Boolean = dedicatedUnlocksDuty && radio?.dedicatedSlot == true
 
+    @Synchronized
     fun budgetMs(bucket: AirBucket): Long =
         when (bucket) {
             AirBucket.LIVE -> allowanceMs()
@@ -328,6 +348,7 @@ internal class LoraAirtime(
             AirBucket.GOSSIP -> allowanceMs()
         }
 
+    @Synchronized
     fun usedMs(
         bucket: AirBucket,
         now: Long,
@@ -351,6 +372,7 @@ internal class LoraAirtime(
      * against the **total** as well as its own budget: each is a share of the one allowance, not a second
      * allowance beside it.
      */
+    @Synchronized
     fun admits(
         bucket: AirBucket,
         klass: FrameClass,
@@ -401,6 +423,7 @@ internal class LoraAirtime(
     }
 
     /** Books [payloadBytes] of air against [bucket]. Called once the board has actually accepted the write. */
+    @Synchronized
     fun record(
         bucket: AirBucket,
         payloadBytes: Int,
@@ -409,7 +432,50 @@ internal class LoraAirtime(
     ) {
         prune(now)
         val ms = timeOnAirMs(payloadBytes, signedUpTo)
-        samples.addLast(Sample(now, ms, bucket))
+        samples.addLast(Booking(now, ms, bucket))
+        book(bucket, ms)
+    }
+
+    /**
+     * The live window's bookings, oldest first — what [LoraPlaneState] persists so that a process restart
+     * cannot hand the plane a fresh allowance. Pruned first, so it is only ever what the window still holds.
+     */
+    @Synchronized
+    fun bookings(now: Long): List<Booking> {
+        prune(now)
+        return samples.toList()
+    }
+
+    /**
+     * Replaces the ledger with what a previous process spent ([bookings]), then ages it to [now].
+     *
+     * Sorted on the way in because [prune] walks the deque in send order and a restored list has been
+     * through a clock conversion, so nothing may assume it arrives ordered. Replaces rather than merges:
+     * this runs once, before the pacer is allowed to transmit at all — see `LoraMeshTransport.awaitRestored`.
+     */
+    @Synchronized
+    fun restore(
+        bookings: List<Booking>,
+        now: Long,
+    ) {
+        samples.clear()
+        liveUsedMs = 0L
+        bridgeUsedMs = 0L
+        bootstrapUsedMs = 0L
+        publicUsedMs = 0L
+        gossipUsedMs = 0L
+        bookings.sortedBy { it.atMs }.forEach { booking ->
+            samples.addLast(booking)
+            book(booking.bucket, booking.ms)
+        }
+        prune(now)
+    }
+
+    /** Adds [ms] to [bucket]'s running total; negative to give it back, which is what [prune] does. */
+    private fun book(
+        bucket: AirBucket,
+        ms: Long,
+    ) {
         when (bucket) {
             AirBucket.LIVE -> liveUsedMs += ms
             AirBucket.BRIDGE -> bridgeUsedMs += ms
@@ -424,11 +490,13 @@ internal class LoraAirtime(
      * ledger is empty. A caller the budget just refused has nothing to gain by asking again before this, so
      * it is what the pacer sleeps until rather than re-asking a question whose answer cannot have changed.
      */
+    @Synchronized
     fun nextReleaseAt(now: Long): Long? {
         prune(now)
         return samples.firstOrNull()?.let { it.atMs + windowMs }
     }
 
+    @Synchronized
     fun snapshot(now: Long): AirtimeSnapshot {
         prune(now)
         val cfg = radio
@@ -457,13 +525,7 @@ internal class LoraAirtime(
             val oldest = samples.firstOrNull() ?: return
             if (now - oldest.atMs < windowMs) return
             samples.removeFirst()
-            when (oldest.bucket) {
-                AirBucket.LIVE -> liveUsedMs -= oldest.ms
-                AirBucket.BRIDGE -> bridgeUsedMs -= oldest.ms
-                AirBucket.BOOTSTRAP -> bootstrapUsedMs -= oldest.ms
-                AirBucket.PUBLIC -> publicUsedMs -= oldest.ms
-                AirBucket.GOSSIP -> gossipUsedMs -= oldest.ms
-            }
+            book(oldest.bucket, -oldest.ms)
         }
     }
 

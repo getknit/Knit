@@ -312,6 +312,100 @@ class LoraMeshTransportTest {
             a.transport.stop()
         }
 
+    // --- Limiters that outlive the process (LoraPlaneState). ---
+
+    /** An in-memory [LoraPlaneState] — the DataStore blob's stand-in, so a test can restart a plane. */
+    private class FakePlaneState : LoraPlaneState {
+        var snapshot: LoraPlaneSnapshot? = null
+        var writes = 0
+
+        override suspend fun load(): LoraPlaneSnapshot? = snapshot
+
+        override suspend fun save(snapshot: LoraPlaneSnapshot) {
+            this.snapshot = snapshot
+            writes++
+        }
+    }
+
+    @Test
+    fun aRestartDoesNotBeaconAgainInsideTheProfileFloor() =
+        runTest {
+            // The lab's reinstall cycle: the process dies and comes straight back, and the beacon floor — an
+            // in-memory timestamp — used to be void every time, so session-up put a profile on the air on
+            // every launch however recently the last one had gone out.
+            val air = FakeMeshtasticAir()
+            val state = FakePlaneState()
+            val first = rig(air, 1u, "alice", backgroundScope, state = state) { testScheduler.currentTime }
+            first.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals("session-up beacons the profile", 1, first.link.sent.size)
+            first.transport.stop()
+            runCurrent()
+            assertTrue("stopping persisted the limiters", state.snapshot != null)
+
+            advanceTimeBy(60_000) // a minute later — well inside PROFILE_FLOOR_MS
+            val second = rig(air, 1u, "alice", backgroundScope, state = state) { testScheduler.currentTime }
+            second.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+
+            assertEquals("the floor survived the restart", 0, second.link.sent.size)
+            second.transport.stop()
+        }
+
+    @Test
+    fun aRestartInheritsTheSpentWindowRatherThanAFreshAllowance() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val state = FakePlaneState()
+            val first = rig(air, 1u, "alice", backgroundScope, state = state) { testScheduler.currentTime }
+            first.transport.start()
+            runCurrent()
+            first.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "north gate in ten"))
+            advanceTimeBy(10_000)
+            runCurrent()
+            first.transport.stop()
+            runCurrent()
+
+            val pace = LoraPacePolicy(minGapMs = 0)
+            assertEquals("a fresh ledger starts at zero", 0L, pace.airtime.snapshot(testScheduler.currentTime).totalUsedMs)
+            val second = rig(air, 1u, "alice", backgroundScope, pace = pace, state = state) { testScheduler.currentTime }
+            second.transport.start()
+            runCurrent()
+
+            assertTrue(
+                "the window still owes what the last process spent",
+                pace.airtime.snapshot(testScheduler.currentTime).totalUsedMs > 0,
+            )
+            second.transport.stop()
+        }
+
+    @Test
+    fun aSnapshotFromAheadOfTheWallClockIsRefusedRatherThanTrusted() =
+        runTest {
+            // A snapshot stamped in the future is a clock that moved backwards (a manual change, or an NTP
+            // correction over a reboot). Every age in it would read as negative — i.e. never expiring — so the
+            // limiters start clean instead, which costs one window.
+            val air = FakeMeshtasticAir()
+            val state = FakePlaneState()
+            state.snapshot =
+                LoraPlaneSnapshot(
+                    savedAtWall = 60 * 60_000,
+                    selfProfileAtWall = 60 * 60_000,
+                )
+            val rig = rig(air, 1u, "alice", backgroundScope, state = state) { testScheduler.currentTime }
+            rig.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+
+            assertEquals("a beacon that a bad snapshot would have suppressed", 1, rig.link.sent.size)
+            rig.transport.stop()
+        }
+
     /** A high-entropy body that will not deflate below the LoRa packet cap, so the frame truly fragments. */
     private fun incompressibleBody(chars: Int): String {
         val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -349,6 +443,7 @@ class LoraMeshTransportTest {
         publicKey: String? = null,
         onPublicPost: suspend (MeshPost) -> Unit = {},
         onBoardBound: suspend (BoardBinding) -> Unit = {},
+        state: LoraPlaneState = LoraPlaneState.None,
         now: () -> Long,
     ): Rig {
         val link = FakeMeshtasticLink(nodeNum, air, channelName, firmware, publicKey)
@@ -364,6 +459,7 @@ class LoraMeshTransportTest {
                 onBoardBound = onBoardBound,
                 scope = scope,
                 metrics = metrics,
+                state = state,
                 clock = now,
                 wallClock = now,
                 pace = pace,

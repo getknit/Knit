@@ -397,6 +397,17 @@ class SettingsStore(
     val loraBoardKey: Flow<String?> = dataStore.data.map { it[KEY_LORA_KEY] }
 
     /**
+     * The LoRa plane's rate limiters as its last process left them, as a JSON blob
+     * (`mesh/lora/LoraPlaneState`). Opaque here on purpose: what the snapshot means is the plane's business,
+     * and this store is only the place it survives a restart — a limiter that resets on launch is not one.
+     *
+     * Read once at [app.getknit.knit.mesh.lora.LoraMeshTransport.start] rather than observed, so this is a
+     * suspend read and not a flow: a snapshot arriving mid-session would be this process's own write coming
+     * back round.
+     */
+    suspend fun loraPlaneState(): String? = dataStore.data.first()[KEY_LORA_PLANE_STATE]
+
+    /**
      * The board set up for Knit (ADR 045) and the housekeeping intervals it had *before* — so restoring puts
      * the user's own values back rather than the firmware's defaults. Null while no board is set up; a zero
      * interval means "never recorded", which the restore reads as "let the firmware decide".
@@ -595,6 +606,9 @@ class SettingsStore(
 
     suspend fun setLoraChannelIndex(index: Int) = dataStore.edit { it[KEY_LORA_CHANNEL] = index }
 
+    /** Records the LoRa plane's limiters; see [loraPlaneState]. */
+    suspend fun setLoraPlaneState(json: String) = dataStore.edit { it[KEY_LORA_PLANE_STATE] = json }
+
     /** Records a board as set up for Knit, along with the intervals a restore must put back. */
     suspend fun setLoraBoardSetup(board: KnitBoardSetup) =
         dataStore.edit {
@@ -787,6 +801,7 @@ class SettingsStore(
         val KEY_LORA_PRIOR_CHANNEL_NUM = intPreferencesKey("lora_prior_channel_num")
         val KEY_LORA_PRIOR_LONG_NAME = stringPreferencesKey("lora_prior_long_name")
         val KEY_LORA_PRIOR_SHORT_NAME = stringPreferencesKey("lora_prior_short_name")
+        val KEY_LORA_PLANE_STATE = stringPreferencesKey("lora_plane_state")
         val KEY_RECENT_REACTIONS = stringPreferencesKey("recent_reactions")
     }
 }

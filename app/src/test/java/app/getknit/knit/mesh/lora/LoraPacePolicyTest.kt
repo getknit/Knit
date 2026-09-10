@@ -13,6 +13,41 @@ class LoraPacePolicyTest {
         supersedes: String? = null,
     ) = OutboundFrame(messages = listOf(byteArrayOf(1)), label = label, klass = klass, supersedes = supersedes)
 
+    /**
+     * The queue has six writers on five coroutines and [java.util.ArrayDeque] is not thread-safe: a
+     * structural change under `admitBest`'s index walk nulls the slot it is about to read. Field-observed on
+     * the lab P7 (2026-09-10) as `NullPointerException: … OutboundFrame.getBucket()`, which kills the pacer
+     * loop and silences the plane until the app restarts.
+     *
+     * A race is not deterministic, so this leans on volume rather than on ordering: without the monitors it
+     * fails within a run or two, and it costs a few hundred milliseconds when they are there.
+     */
+    @Test
+    fun aQueueDrainedWhileOtherThreadsEnqueueDoesNotTearItself() {
+        val pace = LoraPacePolicy(minGapMs = 0, queueCap = 64)
+        pace.onQueueStatus(free = 16)
+        val failures = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+        val start = java.util.concurrent.CountDownLatch(1)
+        val writers =
+            (1..4).map { w ->
+                Thread {
+                    start.await()
+                    runCatching { repeat(2_000) { pace.enqueue(frame("w$w-$it", FrameClass.entries[it % FrameClass.entries.size])) } }
+                        .onFailure { failures += it }
+                }
+            }
+        val drainer =
+            Thread {
+                start.await()
+                runCatching { repeat(8_000) { pace.take(it.toLong()) } }.onFailure { failures += it }
+            }
+        (writers + drainer).forEach { it.start() }
+        start.countDown()
+        (writers + drainer).forEach { it.join(30_000) }
+
+        assertTrue("the queue tore under concurrent access: ${failures.firstOrNull()}", failures.isEmpty())
+    }
+
     @Test
     fun holdsTheMinimumGapBetweenSends() {
         val pace = LoraPacePolicy(minGapMs = 3_000)

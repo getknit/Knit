@@ -73,8 +73,14 @@ import java.util.concurrent.atomic.AtomicLong
  * ADR 057) rather than on every flood-dedup lapse, and repaired — when a far pocket really lacks one — by
  * the bridge's digest-driven backfill rather than by re-offering it to everyone.
  *
+ * Its rate limiters outlive the process ([LoraPlaneState]): the airtime ledger, the beacon floor, the gossip
+ * interval, the serve cap and the profile re-fan gate are all read back at [start] and written behind a
+ * debounce, because a limiter that resets on launch is not a limiter — a restart used to hand this plane a
+ * fresh 45-second allowance and re-run every "first time" behaviour against it.
+ *
  * [clock] is monotonic (pacing, dedup, linger); [wallClock] is the epoch clock a frame's `sentAt` is stamped
- * in, read only by the freshness gate. Pure/Android-free — the
+ * in, read by the freshness gate and by the persisted limiters (a monotonic stamp cannot survive a reboot).
+ * Pure/Android-free — the
  * only `android.bluetooth.*` sits behind the [MeshtasticLink]/[MeshtasticGattDialer] seam.
  *
  * Large by suppression, as [MeshtasticSession] is: this is the plane's single owner. The pacer loop, the
@@ -102,6 +108,11 @@ internal class LoraMeshTransport(
     private val onBoardBound: suspend (BoardBinding) -> Unit = {},
     private val scope: CoroutineScope,
     private val metrics: MeshMetrics,
+    /**
+     * Where this plane's rate limiters go when the process dies, so a restart does not begin with a fresh
+     * airtime allowance and re-run every "first time" behaviour against it ([LoraPlaneState]).
+     */
+    private val state: LoraPlaneState = LoraPlaneState.None,
     private val clock: () -> Long,
     private val wallClock: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {},
@@ -229,6 +240,17 @@ internal class LoraMeshTransport(
 
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private val gossipWake = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * Flipped once the persisted limiter state has been applied — or has failed to load, which must cost the
+     * plane an allowance rather than its voice. Everything that can put a packet on the air waits on it
+     * ([awaitRestored]): a frame sent against an empty ledger is exactly the free air [state] exists to stop
+     * handing out. [LoraPlaneState.None] flips it on the first pass.
+     */
+    private val restored = MutableStateFlow(false)
+
+    /** Poked whenever something spends a limiter; [stateSaveLoop] debounces the write behind it. */
+    private val stateWake = Channel<Unit>(Channel.CONFLATED)
     private val jobs = mutableListOf<Job>()
 
     /**
@@ -258,9 +280,29 @@ internal class LoraMeshTransport(
         fun refund(n: Int) {
             spent = (spent - n).coerceAtLeast(0)
         }
+
+        /** This hour's allowance as it stands, or null while none has been opened. */
+        @Synchronized
+        fun snapshot(): ServeWindowState? = if (windowStart == Long.MIN_VALUE) null else ServeWindowState(windowStart, spent)
+
+        @Synchronized
+        fun restore(state: ServeWindowState) {
+            windowStart = state.startMs
+            spent = state.spent
+        }
     }
 
+    /** One [ServeBudget]'s hour, in the transport's monotonic clock — carried across a restart by [state]. */
+    private data class ServeWindowState(
+        val startMs: Long,
+        val spent: Int,
+    )
+
     override fun start() {
+        // First, and before anything may transmit: what the previous process spent is still owed to the
+        // window it spent it in.
+        jobs += scope.launch { restoreState() }
+        jobs += scope.launch { stateSaveLoop() }
         scope.launch {
             selfIdCached = selfId()
             recomputeRole()
@@ -289,7 +331,12 @@ internal class LoraMeshTransport(
     override fun stop() {
         jobs.forEach { it.cancel() }
         jobs.clear()
+        // Taken before [quiesce] empties the serve budgets, and written on the surviving scope: this is the
+        // orderly half of what [stateSaveLoop] covers on a kill, and the ledger it carries is what a restart
+        // must not be handed back for free.
+        val pending = snapshotState()
         quiesce()
+        scope.launch { writeState(pending) }
         // Republish, or the row keeps serving the snapshot taken while the plane was up — a signal reading,
         // a board count and a role for a plane that is no longer running.
         publishStatus()
@@ -331,6 +378,115 @@ internal class LoraMeshTransport(
      */
     private suspend fun awaitConfigured() {
         configured.first { it }
+    }
+
+    /**
+     * Parks until [restoreState] has applied the previous process's limiters. Everything that can put a
+     * packet on the air waits here — the pacer, the gossip loop and the profile beacon — because the whole
+     * point of persisting a ledger is that nothing spends against the empty one first.
+     */
+    private suspend fun awaitRestored() {
+        restored.first { it }
+    }
+
+    // --- limiters that outlive the process (LoraPlaneState) ---
+
+    /**
+     * Reads the limiter state the last process left and applies it, then releases [awaitRestored] — always,
+     * including on a store that is missing, slow or broken. A plane that stays silent because a preferences
+     * read failed would be a far worse trade than the fresh window it is avoiding.
+     */
+    private suspend fun restoreState() {
+        // Once per instance. A stop/start inside one process still holds the live ledger, and re-reading
+        // would replace it with a blob up to one debounce older — or, if [stop]'s write has not landed yet,
+        // with the one before that.
+        if (restored.value) return
+        try {
+            withTimeoutOrNull(STATE_LOAD_TIMEOUT_MS) {
+                runCatching { state.load() }
+                    .onFailure { log("lora state load failed: ${it.message}") }
+                    .getOrNull()
+            }?.let(::applyState)
+        } finally {
+            restored.value = true
+        }
+    }
+
+    private fun applyState(snapshot: LoraPlaneSnapshot) {
+        val nowWall = wallClock()
+        if (nowWall < snapshot.savedAtWall) {
+            // The wall clock moved backwards — a manual change, or an NTP correction over a reboot. Every age
+            // in the snapshot would come out negative, i.e. in the future, and would then never expire; one
+            // fresh window is much the smaller error.
+            log("lora state: wall clock is behind the snapshot, limiters start clean")
+            return
+        }
+        val now = clock()
+        val shift = WallShift(now, nowWall)
+        pace.airtime.restore(
+            snapshot.air.mapNotNull { booking ->
+                AirBucket.entries
+                    .firstOrNull { it.name == booking.bucket }
+                    ?.let { Booking(shift.toMono(booking.atWall), booking.ms, it) }
+            },
+            now,
+        )
+        snapshot.selfProfileAtWall?.let { lastSelfProfileAt.set(shift.toMono(it)) }
+        snapshot.gossip?.let {
+            gossip.restore(
+                TrickleState(it.intervalMs, shift.toMono(it.startWall), shift.toMono(it.transmitAtWall), it.spent, it.consistent),
+            )
+        }
+        snapshot.serve.forEach {
+            servedTo.getOrPut(it.publisher) { ServeBudget() }.restore(ServeWindowState(shift.toMono(it.startWall), it.spent))
+        }
+        profileSeen.restore(snapshot.profileSeen.map { it.id to shift.toMono(it.atWall) })
+        val air = pace.airtime.snapshot(now)
+        log(
+            "lora state restored: air=${air.totalUsedMs}/${air.liveBudgetMs}ms gossip=${gossip.interval}ms " +
+                "serve=${snapshot.serve.size} profiles=${snapshot.profileSeen.size}",
+        )
+    }
+
+    private fun snapshotState(): LoraPlaneSnapshot {
+        val now = clock()
+        val nowWall = wallClock()
+        val shift = WallShift(now, nowWall)
+        return LoraPlaneSnapshot(
+            savedAtWall = nowWall,
+            air = pace.airtime.bookings(now).map { AirBooking(shift.toWall(it.atMs), it.ms, it.bucket.name) },
+            selfProfileAtWall = lastSelfProfileAt.get().takeIf { it != NEVER }?.let(shift::toWall),
+            gossip =
+                gossip.snapshot()?.let {
+                    TrickleWindow(it.intervalMs, shift.toWall(it.startMs), shift.toWall(it.transmitAtMs), it.spent, it.consistent)
+                },
+            serve =
+                servedTo.mapNotNull { (publisher, budget) ->
+                    budget.snapshot()?.let { ServeWindow(publisher, shift.toWall(it.startMs), it.spent) }
+                },
+            // Newest first, capped: the gate is per profile *publish*, so a pocket produces a handful a day —
+            // but the set it lives in holds thousands, and none of that belongs in a preferences blob.
+            profileSeen = profileSeen.stamps().takeLast(STATE_PROFILE_CAP).map { SeenStamp(it.first, shift.toWall(it.second)) },
+        )
+    }
+
+    /**
+     * Persists the limiters a beat after something spends them. Conflated and debounced rather than written
+     * per booking: the pacer's 3-second floor already bounds how often this can fire, and coalescing a
+     * fragmented frame's packets into one write keeps a burst off the disk. The window it leaves is one
+     * debounce wide — a process killed inside it loses the last packet or two of the ledger, which is the
+     * same order of error as the governor's own estimate of what a packet costs.
+     */
+    private suspend fun stateSaveLoop() {
+        while (scope.isActive) {
+            stateWake.receive()
+            delay(STATE_SAVE_DEBOUNCE_MS)
+            writeState(snapshotState())
+        }
+    }
+
+    private suspend fun writeState(snapshot: LoraPlaneSnapshot) {
+        runCatching { state.save(snapshot) }.onFailure { log("lora state save failed: ${it.message}") }
     }
 
     override fun heal() {
@@ -407,9 +563,14 @@ internal class LoraMeshTransport(
         // because the bridge's digest-driven backfill is the path that repairs a lost one and it takes that
         // slot for itself (serveOne). Both come after encodeOrNull for the same reason — a frame that cannot
         // be encoded must not consume a window it never rode.
-        if (env.type == FrameType.PROFILE && !profileSeen.add(env.id)) {
-            metrics.onLoraProfileRefanSkipped()
-            return
+        if (env.type == FrameType.PROFILE) {
+            if (!profileSeen.add(env.id)) {
+                metrics.onLoraProfileRefanSkipped()
+                return
+            }
+            // The gate outlives the process (12 h against a launch that may last minutes), so a publish it
+            // has just taken is worth persisting rather than leaving to the send that follows.
+            stateWake.trySend(Unit)
         }
         if (!sigSeen.add(dedupKey(wire, env))) {
             metrics.onLoraSuppressed() // already sent/received over LoRa within the window
@@ -560,6 +721,7 @@ internal class LoraMeshTransport(
         if (!profileGapElapsed(clock(), minGapMs)) return
         val parts = encodeOrNull(wire, "profile-self") ?: return
         lastSelfProfileAt.set(clock())
+        stateWake.trySend(Unit)
         sigSeen.add(sigKey(wire))
         enqueue(
             parts,
@@ -577,6 +739,9 @@ internal class LoraMeshTransport(
      * key (A beaconed two minutes ago, B just came up: A must speak again or B's parked frames expire).
      */
     private suspend fun beaconProfile(minGapMs: Long) {
+        // The floor is only a floor once it has been read back: session-up is the very moment a restart used
+        // to beacon into, whatever the last process had already put on the air.
+        awaitRestored()
         if (!profileGapElapsed(clock(), minGapMs)) return // check before the (potentially costly) profile build
         val wire = selfProfile() ?: return
         sendSelfProfile(wire, minGapMs)
@@ -798,6 +963,9 @@ internal class LoraMeshTransport(
      * the other pocket already has.
      */
     private suspend fun gossipLoop() {
+        // Before the first `nextDueAt`, or the interval this computes a wait from is a fresh one at the floor
+        // rather than the back-off the last process had earned.
+        awaitRestored()
         while (scope.isActive) {
             // Nothing to offer without a board, and the interval bookkeeping would only be thrown away when
             // one arrives — [LoraGossipPolicy.ensureInterval] starts a fresh interval at that moment anyway.
@@ -807,7 +975,9 @@ internal class LoraMeshTransport(
             // the take while the board is down leaves the transmit point in the past, so the next pass
             // computes a zero wait and the loop spins at full tilt until the board returns.
             if (wait > 0) withTimeoutOrNull(wait) { gossipWake.receive() } else delay(IDLE_TICK_MS)
-            if (!gossip.takeTransmitSlot(clock())) continue
+            val transmit = gossip.takeTransmitSlot(clock())
+            stateWake.trySend(Unit) // the slot is spent either way, and that is what the interval carries
+            if (!transmit) continue
             if (link.state.value is LinkState.Ready) publishOffer()
         }
     }
@@ -906,6 +1076,7 @@ internal class LoraMeshTransport(
         val now = clock()
         val budget = servedTo.getOrPut(offer.publisher) { ServeBudget() }
         val allowance = budget.take(BACKFILL_LIMIT, now)
+        stateWake.trySend(Unit)
         if (allowance == 0) {
             metrics.onLoraBridgeRefused()
             log("lora bridge refused $key: hourly serve cap spent")
@@ -1034,6 +1205,9 @@ internal class LoraMeshTransport(
     // --- the pacer ---
 
     private suspend fun pacerLoop() {
+        // Nothing may be taken off the queue until the ledger says what the last process spent: this is the
+        // one place all outbound air passes through, so it is the one that has to wait.
+        awaitRestored()
         while (scope.isActive) {
             // Nothing leaves while the board is between sessions, so take nothing: a frame off the queue has
             // no owner but the pacer, and every take during an outage is one more round-trip through
@@ -1151,6 +1325,7 @@ internal class LoraMeshTransport(
             is SendResult.Queued -> {
                 pace.onQueueStatus(result.queue.free)
                 pace.airtime.record(frame.bucket, message.size, clock(), signedUpTo = MeshtasticProto.maxSignedPayload(portnum))
+                stateWake.trySend(Unit)
                 frame.onPartSent()
                 // The ledger just moved, and a send is the only thing that spends it — so republish here
                 // rather than leave the chat's saturation notice and the radio screen's percentage waiting
@@ -1514,6 +1689,25 @@ internal class LoraMeshTransport(
         const val PROFILE_REFAN_MS = 12 * 60 * 60_000L
         const val FIRST_HEARING_GAP_MS = 60_000L
         const val NEVER = Long.MIN_VALUE
+
+        // Limiters that outlive the process (LoraPlaneState).
+
+        /**
+         * How long the plane waits for its persisted limiters before transmitting anyway. Generous against a
+         * cold DataStore read and still far inside the board's own BLE handshake, so in practice nothing ever
+         * waits on it — it exists so that a store which never answers costs one window rather than the plane.
+         */
+        const val STATE_LOAD_TIMEOUT_MS = 5_000L
+
+        /** How long a spend waits for its neighbours before the snapshot is written. */
+        const val STATE_SAVE_DEBOUNCE_MS = 2_000L
+
+        /**
+         * The most profile publishes carried across a restart. The gate is per publish and a pocket makes a
+         * handful a day, so this is slack rather than a limit — but [profileSeen] itself holds thousands, and
+         * a preferences blob is the wrong place for them.
+         */
+        const val STATE_PROFILE_CAP = 128
 
         // The bridge (ADR 044).
         const val BACKFILL_LIMIT = 4 // frames per offer heard

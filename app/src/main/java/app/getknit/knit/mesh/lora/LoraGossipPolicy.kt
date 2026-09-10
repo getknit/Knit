@@ -23,7 +23,8 @@ import kotlin.random.Random
  * bounds a crowd is the serving side (the per-publisher cap and the bridge airtime budget), not this.
  *
  * Pure and clock-driven by the caller; [random] is injected so tests run on a fixed schedule, the way
- * `MeshRouter`'s relay jitter is.
+ * `MeshRouter`'s relay jitter is. Every entry point is `@Synchronized`: the gossip loop drives the timer
+ * while `onCtlPacket` feeds it heard OFFERs from the packet collector.
  */
 internal class LoraGossipPolicy(
     private val minIntervalMs: Long = MIN_INTERVAL_MS,
@@ -38,7 +39,7 @@ internal class LoraGossipPolicy(
     private var spent = false
 
     /** The current interval length, for logs and tests. */
-    val interval: Long get() = intervalMs
+    val interval: Long @Synchronized get() = intervalMs
 
     /**
      * Records an OFFER we heard. [sameSet] is whether it announced exactly the set ours would — see the class
@@ -56,6 +57,7 @@ internal class LoraGossipPolicy(
      * spending the BRIDGE budget on offers instead of on the backfill those offers exist to drive. A timer
      * already at [minIntervalMs] is already as fast as this policy goes; there is nothing to accelerate.
      */
+    @Synchronized
     fun onOffer(
         sameSet: Boolean,
         now: Long,
@@ -78,6 +80,7 @@ internal class LoraGossipPolicy(
      * ahead of us keeps its slot, and one already due stays due. Without that, news arriving just before our
      * own transmit point would push it back by up to a floor interval, which is the opposite of the intent.
      */
+    @Synchronized
     fun reset(now: Long) {
         val pending = if (intervalStart != NEVER && !spent) transmitAt else Long.MAX_VALUE
         intervalMs = minIntervalMs
@@ -87,6 +90,7 @@ internal class LoraGossipPolicy(
     }
 
     /** When the caller should next wake: this interval's transmit point, or its end once we are past that. */
+    @Synchronized
     fun nextDueAt(now: Long): Long {
         ensureInterval(now)
         return if (spent) intervalStart + intervalMs else transmitAt
@@ -96,6 +100,7 @@ internal class LoraGossipPolicy(
      * Whether to publish an OFFER right now. Consumes this interval's single transmit slot either way, so a
      * suppressed interval stays quiet rather than retrying every wake-up.
      */
+    @Synchronized
     fun takeTransmitSlot(now: Long): Boolean {
         ensureInterval(now)
         if (spent || now < transmitAt) return false

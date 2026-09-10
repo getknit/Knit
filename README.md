@@ -2,9 +2,9 @@
 
 # Knit
 
-**An offline, serverless mesh messenger for Android — end-to-end encrypted, no internet, no accounts, no Google Play services.**
+**Message the people around you when there is no network at all — an end-to-end-encrypted mesh messenger for Android.**
 
-Your phones talk directly to each other over Wi-Fi Aware and Bluetooth LE, and relay for one another hop by hop.
+Phones talk straight to each other over Wi-Fi Aware and Bluetooth LE, relaying for one another hop by hop, so a message reaches further than any one radio does. No internet, no accounts, no Google Play services.
 
 🌐 **[getknit.app](https://getknit.app)** — the Knit website
 
@@ -30,17 +30,18 @@ and a line that came the long way over a LoRa radio.</sub>
 
 ## What is Knit
 
-Knit is an **offline peer-to-peer messaging app for Android** that needs no internet connection, no
-cell service, no accounts, and no servers. It forms an ad-hoc **mesh** directly over **Wi-Fi Aware
-(NAN)** and **Bluetooth LE**, running both radios at once. When you send a message, it's transmitted
-to every device in range; each of those re-transmits it onward, so messages "leap-frog" across many
-phones with **no infrastructure**. Duplicate copies are discarded, hop-count and TTL bound the flood,
-and a store-and-forward layer carries what a single flood doesn't reach. The interface is a modern,
-Signal-style messenger.
+Knit keeps nearby phones talking when nothing else is available — no internet, no cell service, no
+accounts, no servers. It forms an ad-hoc **mesh** directly over **Wi-Fi Aware (NAN)** and **Bluetooth
+LE**, running both radios at once. A message you send goes to every device in range, and each of those
+passes it on, so it leap-frogs across phones to people you were never in range of yourself. Duplicates
+are discarded, hop-count and TTL bound the flood, and a store-and-forward layer carries what a single
+flood misses to whoever comes into range later. Above all that sits an ordinary modern messenger:
+conversation list, bubbles, reactions, attachments.
 
-It is comparable to apps like Bridgefy, Briar, or Meshtastic, but distinguished by running **two radios
-simultaneously** (Wi-Fi Aware + BLE) behind one transport seam, with **no Google Nearby / GMS
-dependency** and **end-to-end encryption** on direct and group messages.
+Bridgefy, Briar, and Meshtastic go after the same problem. What Knit does differently is run **two
+radios at once** (Wi-Fi Aware + BLE) behind one transport seam, with **no Google Nearby / GMS
+dependency** and **end-to-end encryption** on direct and group messages — and it needs no hardware
+beyond an Android phone, though it will happily use a Meshtastic board if you have one.
 
 ### At a glance
 
@@ -51,6 +52,7 @@ dependency** and **end-to-end encryption** on direct and group messages.
 | **Radios** | Wi-Fi Aware (NAN) **and** Bluetooth LE, running simultaneously — no Google Play services |
 | **Encryption** | E2E on 1:1 DMs & group chats, forward-secret between current builds (X3DH-style bootstrap + epoch ratchet, AES-256-GCM, Ed25519); at-rest DB via SQLCipher |
 | **Works without** | Internet, cellular, Wi-Fi routers, accounts, phone numbers, or any server |
+| **Optional extras** | A Meshtastic LoRa board for kilometre-scale hops; Internet relays for when nobody is in range — each off until you turn it on |
 | **License** | GPL-3.0-or-later — free and open source |
 
 ## Contents
@@ -72,12 +74,13 @@ dependency** and **end-to-end encryption** on direct and group messages.
 - [License](#-license)
 
 > [!NOTE]
-> Knit is feature-complete: a **"Nearby" public broadcast room**, **1:1 direct messages**, and
+> Knit is a complete messenger: a **"Nearby" public broadcast room**, **1:1 direct messages**, and
 > **multi-member group chats**, with profiles (name / status / avatar), emoji reactions, @-mentions,
-> and image attachments. **Direct and group messages are end-to-end encrypted** — bodies, mentions,
-> and image attachments are readable only by their intended recipients, even though every message
-> floods through relay devices. The public Nearby room is plaintext by design (no fixed recipient
-> set). See the [Security note](#-security-note).
+> photos, files, and voice notes. **Direct and group messages are end-to-end encrypted** — the body,
+> mentions, and attachments are readable only by the people they were sent to, even though every
+> message floods through other people's phones on the way. The public Nearby room is plaintext by
+> design: a room with no fixed recipient set has nobody in particular to encrypt to. See the
+> [Security note](#-security-note).
 
 ## 📥 Install
 
@@ -143,15 +146,15 @@ Knit is built for situations where there's **no reliable network but people are 
 
 ## ✨ Features
 
-- **Dual-radio mesh relay** — **Wi-Fi Aware (NAN)** and **Bluetooth LE** run *simultaneously* behind a
-  single `MeshTransport` seam (`CompositeMeshTransport`), no Google Nearby / GMS. Advertise + discover,
-  connect to nearby peers, and flood with hop-count/TTL bounds and dedup. Relays use **jittered,
-  overhear-suppressed** flooding so a dense cluster isn't stormed with redundant rebroadcasts. A device
-  with only one of the two radios still meshes over that one.
+- **Two radios at once, so there are more paths to you** — **Wi-Fi Aware (NAN)** and **Bluetooth LE**
+  both run behind a single `MeshTransport` seam (`CompositeMeshTransport`), with no Google Nearby / GMS.
+  Knit advertises, discovers, connects, and floods with hop-count/TTL bounds and dedup; relays
+  rebroadcast on a **jitter with overhear suppression**, so a dense cluster doesn't storm itself. A
+  phone with only one of the two radios still meshes over that one.
 - **Broadcast room, 1:1 DMs, and group chats** — a conversation list and contact picker, message
   bubbles, relative timestamps, unread badges, and delivery ticks (✓ / ✓✓).
 - **End-to-end encryption with forward secrecy** for DMs and groups — each message's body, mentions,
-  and image attachment are sealed with AES-256-GCM and authenticated with an Ed25519 signature, so
+  and attachments are sealed with AES-256-GCM and authenticated with an Ed25519 signature, so
   relays only ever carry ciphertext. Between current builds the keys rotate: a DM session bootstraps
   from a signed prekey published in the peer's profile (X3DH-style, so the first message still needs
   no round trip) and rekeys as the conversation turns over, and groups run a sender-key ratchet on top
@@ -159,16 +162,32 @@ Knit is built for situations where there's **no reliable network but people are 
   recorded ciphertext stops being readable once its epoch ages out. Peers on older builds fall back to
   the static-key scheme automatically. Identity keypairs are **hardware-backed** (AndroidKeyStore),
   advertised in profiles, pinned on first use (TOFU), and confirmable out of band via a
-  **safety-number / QR-code** verification screen.
+  **safety-number / QR-code** verification screen — or by trading contact links, which pins the same key
+  without either of you needing to be in the room. What the app keeps on disk is encrypted at rest with
+  SQLCipher.
 - **Store-and-forward delivery** — a message whose recipient isn't in range is held in encrypted custody
   and re-offered when they (or a path to them) later come into range, so two phones that meet only
   briefly still backfill each other. A content-digest anti-entropy layer means an idle mesh does zero
   data-path work; a new message triggers a targeted sync only with the peers that need it.
-- **Reactions, @-mentions, and image attachments** — emoji reactions converge across the mesh
-  (last-writer-wins) and, in DMs and groups, travel encrypted alongside delivery receipts, shaped on
-  the wire like any other message; mentions get a dedicated notification; images (GIF/JPEG/PNG/WebP) are
-  content-addressed and pulled on demand so the bytes don't ride the flood (encrypted attachments are
-  addressed by ciphertext hash, so dedup/pull is unchanged).
+- **Photos, files, voice notes, reactions, and @-mentions** — send an image (GIF/JPEG/PNG/WebP), any
+  other file up to 8 MB, or a voice note held down in the composer; files and voice notes are for DMs
+  and groups, and the public room stays photos-only so everything strangers see has been screened.
+  React with any emoji — the quick row learns the ones you actually use — and mentions raise their own
+  notification. Attachment bytes are content-addressed and pulled on demand instead of riding the
+  flood (encrypted ones by ciphertext hash, so dedup and pull are unchanged), and reactions converge
+  across the mesh (last-writer-wins), sealed alongside delivery receipts in DMs and groups.
+- **Kilometres of range from a Meshtastic radio, if you want them** — pair a LoRa board over Bluetooth
+  and the **Nearby room and your 1:1 messages** get a hop measured in kilometres instead of metres,
+  shared by every phone meshed with yours: one board extends the whole group. LoRa spends speed to buy
+  that distance, so the board carries small frames only — group chats and attachments keep to the phone
+  mesh or an optional relay — and a message that a Wi-Fi or Bluetooth link already delivered never
+  spends airtime on the radio. Nothing leaves over LoRa until you pair a board.
+- **Link previews and shared locations, each opt-in** — paste a link and *your* phone fetches the
+  page's title and picture and sends them with the message, so the people you send to never contact the
+  site. Fetching one shows that site your IP address, which is why it's off until you turn it on. The
+  pin beside the paperclip reads your position once, between the tap and the send, and puts it in the
+  message as a `geo:` line the other phone opens in any maps app — the only place the app ever reads
+  where you are.
 - **Profiles** — display name, status, and avatar flooded across the mesh; avatars transferred as files
   (re-pushed only when they actually change) and shown next to messages.
 - **On-device content moderation** — abusive-text and explicit-image (NSFW) filtering that runs
@@ -185,9 +204,10 @@ Knit is built for situations where there's **no reliable network but people are 
   significant-motion re-scan, and radio-availability recovery; prompts to disable battery optimization.
 - **Offline app sharing** — hand Knit to a nearby phone with no store: the installed splits are merged
   into a universal APK and re-signed on-device (ARSCLib + apksig).
-- **Material 3** UI with a coral brand theme and full dark mode — following your phone, or pinned to
-  light or dark in Settings, or taking your wallpaper's colours if you turn them on (Android 12+);
-  encrypted at rest (SQLCipher).
+- **Material 3** UI with a coral brand theme and full dark mode — following your phone, pinned to light
+  or dark in Settings, or taking your wallpaper's colours if you turn those on (Android 12+). A message
+  you start and don't send is still waiting in that chat when you come back, and the chat list shows it
+  as `Draft:` until it goes.
 
 ## 📋 Requirements
 
@@ -328,12 +348,14 @@ app reads your position, never at start and never in the background. The first t
 lets Android ask.
 
 **How far can messages travel?**
-Beyond direct radio range. Each phone relays for the others, so a message hops device-to-device across
-the mesh; a store-and-forward layer also carries messages to recipients who come into range later.
+Further than any one radio reaches. Each phone relays for the others, so a message hops device to device
+across the mesh, and a store-and-forward layer carries it onward to people who only come into range
+later. Pair a Meshtastic LoRa board and the Nearby room and 1:1 messages get hops measured in
+kilometres on top of that.
 
 **Are messages encrypted?**
 1:1 direct messages and group chats are **end-to-end encrypted** (only the intended recipients can read
-the body, mentions, and image attachments; relays carry only ciphertext), and between phones on a
+the body, mentions, and attachments; relays carry only ciphertext), and between phones on a
 current build they are **forward-secret**: the keys rotate as the conversation goes on and old ones are
 deleted, so recording traffic today and getting hold of a phone later does not open the older messages.
 Delivery receipts and reactions are encrypted too. The public "Nearby" broadcast room is plaintext by
@@ -350,10 +372,11 @@ paid tiers, or subscriptions; development is funded entirely by optional tips (s
 
 **How is it different from Bridgefy / Briar / Meshtastic?**
 Knit runs **two radios at once** (Wi-Fi Aware + Bluetooth LE) behind a single transport seam, has **no
-Google Play services dependency**, end-to-end encrypts DMs and groups, and needs no dedicated hardware
-(unlike Meshtastic's LoRa radios) — just an Android phone. The two are complementary rather than rivals:
-Knit can *optionally* pair a Meshtastic board over Bluetooth to relay its **Nearby room and 1:1 messages**
-across long-range LoRa, extending reach beyond phone-to-phone range (off by default; a preview).
+Google Play services dependency**, end-to-end encrypts DMs and groups, and needs no hardware beyond an
+Android phone — where Meshtastic needs a LoRa radio. Meshtastic is complementary rather than a rival:
+pair one of its boards over Bluetooth and Knit carries the **Nearby room and 1:1 messages** across it,
+kilometres past phone-to-phone range, for every phone meshed with yours. Group chats and attachments
+stay on the phone mesh or an optional relay, and the radio sits idle until you pair a board.
 
 ## 📚 Documentation
 
@@ -372,18 +395,34 @@ across long-range LoRa, extending reach beyond phone-to-phone range (off by defa
   reactions as sealed control frames, and the store-and-forward trade that came with them.
 - [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) — the normative spec for the optional Internet
   relay plane ("spools"): scope derivation, sealing, the relay protocol, and test vectors.
+- [`docs/CONTACT_CARD.md`](docs/CONTACT_CARD.md) — the contact card behind QR codes and share links:
+  layout, golden vectors, and what importing one does and does not establish.
 - [`docs/CONTENT_MODERATION.md`](docs/CONTENT_MODERATION.md) — on-device abusive-text / explicit-image
   moderation: design, hook points, the bundled models, and Git LFS.
 
 ## 🗺️ Roadmap
 
 **Implemented & verified:** broadcast room · 1:1 DMs · multi-member group chats · profiles · reactions ·
-mentions · attachments · at-rest DB encryption (SQLCipher) · **E2E encryption + identity verification**
-for DMs and groups · **forward secrecy** for both (an epoch ratchet for DMs, a sender-key ratchet for
-groups) · **encrypted delivery receipts and reactions** · dual **Wi-Fi Aware + Bluetooth LE** transports
-behind `MeshTransport` (no GMS) · **store-and-forward** delay-tolerant delivery · **key-request /
-retransmit** for messages received before a sender's key is known · on-device toxicity + NSFW moderation ·
-offline app sharing.
+mentions · photos, files and voice notes · at-rest DB encryption (SQLCipher) · **E2E encryption +
+identity verification** for DMs and groups · **forward secrecy** for both (an epoch ratchet for DMs, a
+sender-key ratchet for groups) · **encrypted delivery receipts and reactions** · dual **Wi-Fi Aware +
+Bluetooth LE** transports behind `MeshTransport` (no GMS) · **store-and-forward** delay-tolerant
+delivery · **key-request / retransmit** for messages received before a sender's key is known · contacts
+by QR **or** shared link · on-device toxicity + NSFW moderation · offline app sharing.
+
+**Shipped, and off until you turn it on:** a **Meshtastic LoRa bridge** carrying the Nearby room and 1:1
+DMs kilometres past phone range, **Internet relays**, **link previews**, and **sending your location**.
+
+The relay layer is the largest of those. It carries DMs and group messages between contacts you already
+have when no radio path exists, keeping the mesh's delay-tolerant behaviour and running through small
+relays ("spools") that hold sealed frames without learning whose they are or what is in them. Turning it
+on takes an explicit consent sheet in the relay settings screen that spells out what a spool can see —
+your IP address, when you send, and roughly how much — and what it cannot: your messages, who you are
+talking to, or who else is in a group. Until you do, a fresh install makes no network calls at all. The
+protocol is specified in [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) with executable test
+vectors; the client implements it, and the reference spool daemon lives in
+[`getknit/knit-spool`](https://github.com/getknit/knit-spool). Knit is built around proximity meshing
+either way.
 
 **Explicitly deferred (don't start without direction):**
 
@@ -392,20 +431,10 @@ offline app sharing.
 - **Encrypting the broadcast room** — the last cleartext plane, and as much a product question as a
   crypto one: a room with no fixed recipient set has nobody in particular to encrypt to.
 
-**Optional, and off until you switch it on:** an Internet layer that carries DMs and
-group messages between contacts you already have when no radio path exists, keeping the mesh's
-delay-tolerant behaviour and running through small relays ("spools") that hold sealed frames without
-learning whose they are or what is in them. The protocol is specified in [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) with
-executable test vectors; the client implements it, and the reference spool daemon lives in
-[`getknit/knit-spool`](https://github.com/getknit/knit-spool). **It stays off until you switch it on** —
-enabling it takes an explicit consent sheet in the relay settings screen that spells out what a spool
-can and cannot see, so a fresh install still makes no network calls (link previews, the other opt-in
-that uses the Internet, are off by default too). Knit is built around proximity meshing either way.
-
 ## 🔐 Security note
 
-**Direct and group messages are end-to-end encrypted.** Each message's content (body, mentions, image
-attachment) is sealed with AES-256-GCM and the whole envelope is signed with the sender's Ed25519 key.
+**Direct and group messages are end-to-end encrypted.** Each message's content (body, mentions,
+attachments) is sealed with AES-256-GCM and the whole envelope is signed with the sender's Ed25519 key.
 Relays, which flood every message hop-by-hop, only ever see ciphertext, and only the addressed
 recipient(s) can decrypt. Each device's identity keypair is generated on first run and stored wrapped
 under a hardware-backed AndroidKeyStore key, outside the database.
@@ -430,8 +459,10 @@ its receipts and reactions stay cleartext with it. Forward secrecy is **epoch-gr
 per-message** — a bounded window of messages shares one compromise fate. A conversation with a phone
 that hasn't updated falls back to the older **static-key** scheme, which has none; one member on an old
 build pins a whole group to it, and a group's info screen says which scheme it is on. Relays still see
-who is talking to whom and how often, since DMs flood the mesh rather than being routed. The at-rest
-database is encrypted with SQLCipher.
+who is talking to whom and how often, since DMs flood the mesh rather than being routed. On a paired
+**LoRa board** the content stays sealed, but a DM's sender, recipient, timing, and size ride the board's
+shared rendezvous channel at kilometre range — **Private messages over LoRa** on the radio screen turns
+that off while the Nearby room keeps going. The at-rest database is encrypted with SQLCipher.
 
 To report a vulnerability, see [`SECURITY.md`](SECURITY.md) — please **do not** open a public issue for
 security problems.

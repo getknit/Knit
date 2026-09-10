@@ -108,37 +108,6 @@ internal class LoraGossipPolicy(
     }
 
     /**
-     * The interval as it stands, for [LoraPlaneState] — null while none has started, which is what a process
-     * that never reached a board has to persist.
-     */
-    @Synchronized
-    fun snapshot(): TrickleState? =
-        if (intervalStart == NEVER) {
-            null
-        } else {
-            TrickleState(intervalMs, intervalStart, transmitAt, spent, consistent)
-        }
-
-    /**
-     * Resumes [state] from the previous process. The **back-off** is the point: a fresh instance starts at
-     * [minIntervalMs] with a new transmit point, so a converged pair of gateways that had doubled out to
-     * [maxIntervalMs] dropped back to offering every five minutes on every restart — and in a lab that
-     * reinstalls many times a day, never got to leave the floor at all.
-     *
-     * A spent interval stays spent: its one transmit slot was already used on the air. An interval that has
-     * since run out is not fixed up here — [ensureInterval] doubles it and starts a fresh one at the next
-     * call, which is exactly what it does for a caller that slept through a boundary.
-     */
-    @Synchronized
-    fun restore(state: TrickleState) {
-        intervalMs = state.intervalMs.coerceIn(minIntervalMs, maxIntervalMs)
-        intervalStart = state.startMs
-        transmitAt = state.transmitAtMs
-        spent = state.spent
-        consistent = state.consistent
-    }
-
-    /**
      * Starts a new interval when the previous one has run out (doubling up to [maxIntervalMs]), and picks a
      * transmit point in its second half — the listen-first window that lets a peer's OFFER suppress ours.
      *
@@ -172,16 +141,3 @@ internal class LoraGossipPolicy(
         private const val NEVER = Long.MIN_VALUE
     }
 }
-
-/**
- * A Trickle interval in the caller's own monotonic clock: how long it runs, when it started, the point in
- * its second half it transmits at, whether that slot is spent, and how many consistent OFFERs have been
- * heard inside it. Carried across a process restart by [LoraPlaneState].
- */
-internal data class TrickleState(
-    val intervalMs: Long,
-    val startMs: Long,
-    val transmitAtMs: Long,
-    val spent: Boolean,
-    val consistent: Int,
-)

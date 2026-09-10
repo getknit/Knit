@@ -368,6 +368,13 @@ for.
   It releases on failure and behind a 5 s timeout: a store that never answers costs a window, not the plane.
 - **A booking carries its recorded cost, not its size** — a board swapped between two processes has a
   different preset, and the air was spent at the old one.
+- **The gossip Trickle interval is NOT persisted, and that was tried.** Carrying the back-off stalls the ADR
+  044 election: an OFFER is the only evidence anyone has a board, `LoraGatewayPolicy` is not persisted
+  (`quiesce` calls `forget`), and a restored interval that has since elapsed makes `ensureInterval` double it
+  and draw a fresh point — so the first OFFER lands up to 15 min out with every gateway ACTIVE and fanning
+  out everything. Lab fleet, 2026-09-10: `gossip=600000ms` restored, no OFFER in 90 s, P7 and P9 both
+  `gatewaysHeard: 0` beside `boardsHeard: 1`. A fresh timer offers within 2.5–5 min, and that OFFER is
+  charged to the persisted window — which is all the back-off was buying.
 - **`sigSeen` and `lastHeardAt` are deliberately not persisted.** A restored `sigSeen` would carry "we
   transmitted" across a restart, which on a plane with no acks is not evidence anyone heard (the ADR
   2026-09.y8pu reasoning); a restored `lastHeardAt` would claim `reachable` on evidence this process never

@@ -61,13 +61,16 @@ store that never answers must cost the plane a window, not its voice.
 board swapped between two processes has a different preset, and the air the last process spent was spent at
 the old one.
 
-Two limiters are deliberately left out. **`sigSeen`** is the 10-minute "is this frame in flight" window, and
+Three limiters are deliberately left out. **`sigSeen`** is the 10-minute "is this frame in flight" window, and
 restoring it would carry a record that we *transmitted* across a restart — which on a plane with no acks is
 not evidence anyone heard, the reasoning that already exempts `serveOne` from it (ADR 2026-09.y8pu). And
 **`lastHeardAt`** feeds `reachable`, which only fresh frames may write (ADR 2026-09.2ajk): a peer restored
 from disk would be claimed as reachable on evidence this process never saw. Neither costs much, because the
 restored ledger bounds what they would otherwise let through — the re-offer batch is `AirBucket.BRIDGE`, and
 a window that was spent before the restart is spent after it.
+
+The third is the **gossip Trickle interval**, and that one was persisted first, shipped to the lab, and
+taken back out — see the trial below.
 
 **Not a debug-only affordance, and not a longer floor.** Making the beacon floor an hour, or gating any of
 this on `BuildConfig.DEBUG`, would have quietened the lab and left the compliance hole exactly where it was
@@ -118,7 +121,7 @@ nothing role-gated, so neither half of this is observable there. The P7 is `ACTI
 relaunch:
 
 ```
-15:29:06  lora state restored: air=13084/22500ms gossip=300000ms serve=1 profiles=2
+15:29:06  lora state restored: air=13084/22500ms serve=1 profiles=2
 15:29:14  lora ready board=1685461784 …
 ```
 
@@ -127,6 +130,35 @@ in the 85 s that followed: the floor held where the control had beaconed. The pl
 (two more `far:chat` fan-outs, `liveMs` climbing 7804 → 15608 *on top of* the restored figure rather than
 from zero). `air=…/22500` in the restore line is the fallback allowance, not a second bug: the restore runs
 before the board reports its region, and the budget re-prices to 45000 at `lora ready`.
+
+## Persisting the gossip timer stalls the election, so it isn't persisted
+
+The first cut carried `LoraGossipPolicy`'s Trickle interval too, on the reasoning that a converged pair of
+gateways should not drop back to the five-minute floor on every restart. Installing that on the lab fleet
+showed what it costs.
+
+An OFFER is the only evidence that anyone has a board, and `LoraGatewayPolicy` is **not** persisted —
+`quiesce` calls `forget` — so a restarted node knows of no rival until it hears one. Carrying the timer
+delays exactly that packet, and worst where the back-off is largest: a restored interval that has since run
+out sends `ensureInterval` down its "slept through the boundary" path, doubling the interval and drawing a
+fresh transmit point in its second half. Measured on the P7 after a fleet install (2026-09-10):
+
+```
+15:52:49  lora state restored: air=39062/22500ms gossip=600000ms serve=1 profiles=47
+          … no OFFER in the next 90 s; P7 and P9 both role=ACTIVE,
+          both gatewaysHeard: 0 beside boardsHeard: 1
+```
+
+A ten-minute interval came back, had already elapsed, and became a fifteen-minute one with its point up to
+fifteen minutes out — every gateway in the pocket ACTIVE and fanning out everything meanwhile. Wrongly ACTIVE
+costs duplicate air on two boards; wrongly passive costs silence; the back-off was buying neither.
+
+Dropping only the `spent` flag was tried first and is not enough: that frees the slot inside a *running*
+interval, and the case that matters is the elapsed one. So the timer is not persisted at all. A restart
+starts a fresh interval at the floor and offers within 2.5–5 min, and the OFFER it costs is charged to the
+window this ADR *does* persist — a reinstall loop cannot outspend its allowance on gossip, which was the
+whole reason to want the back-off across restarts. Gossip state and gateway state are now both session-local:
+remembering half of that pair is what caused this.
 
 ## The crash this uncovered, and the lock order that fixes it
 

@@ -432,18 +432,13 @@ internal class LoraMeshTransport(
             now,
         )
         snapshot.selfProfileAtWall?.let { lastSelfProfileAt.set(shift.toMono(it)) }
-        snapshot.gossip?.let {
-            gossip.restore(
-                TrickleState(it.intervalMs, shift.toMono(it.startWall), shift.toMono(it.transmitAtWall), it.spent, it.consistent),
-            )
-        }
         snapshot.serve.forEach {
             servedTo.getOrPut(it.publisher) { ServeBudget() }.restore(ServeWindowState(shift.toMono(it.startWall), it.spent))
         }
         profileSeen.restore(snapshot.profileSeen.map { it.id to shift.toMono(it.atWall) })
         val air = pace.airtime.snapshot(now)
         log(
-            "lora state restored: air=${air.totalUsedMs}/${air.liveBudgetMs}ms gossip=${gossip.interval}ms " +
+            "lora state restored: air=${air.totalUsedMs}/${air.liveBudgetMs}ms " +
                 "serve=${snapshot.serve.size} profiles=${snapshot.profileSeen.size}",
         )
     }
@@ -456,10 +451,6 @@ internal class LoraMeshTransport(
             savedAtWall = nowWall,
             air = pace.airtime.bookings(now).map { AirBooking(shift.toWall(it.atMs), it.ms, it.bucket.name) },
             selfProfileAtWall = lastSelfProfileAt.get().takeIf { it != NEVER }?.let(shift::toWall),
-            gossip =
-                gossip.snapshot()?.let {
-                    TrickleWindow(it.intervalMs, shift.toWall(it.startMs), shift.toWall(it.transmitAtMs), it.spent, it.consistent)
-                },
             serve =
                 servedTo.mapNotNull { (publisher, budget) ->
                     budget.snapshot()?.let { ServeWindow(publisher, shift.toWall(it.startMs), it.spent) }
@@ -975,9 +966,7 @@ internal class LoraMeshTransport(
             // the take while the board is down leaves the transmit point in the past, so the next pass
             // computes a zero wait and the loop spins at full tilt until the board returns.
             if (wait > 0) withTimeoutOrNull(wait) { gossipWake.receive() } else delay(IDLE_TICK_MS)
-            val transmit = gossip.takeTransmitSlot(clock())
-            stateWake.trySend(Unit) // the slot is spent either way, and that is what the interval carries
-            if (!transmit) continue
+            if (!gossip.takeTransmitSlot(clock())) continue
             if (link.state.value is LinkState.Ready) publishOffer()
         }
     }

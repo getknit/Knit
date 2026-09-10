@@ -21,12 +21,22 @@ import kotlinx.serialization.Serializable
  * is a JSON blob in the settings DataStore (`SettingsStore.loraPlaneState`), and every rule about what a
  * snapshot means is unit-testable without it.
  *
- * Two limiters are deliberately **not** here. [LoraMeshTransport.sigSeen] is the 10-minute "is this frame in
- * flight" window, and restoring it would carry a *transmitted* record across a restart — which on a plane
+ * Three limiters are deliberately **not** here. [LoraMeshTransport.sigSeen] is the 10-minute "is this frame
+ * in flight" window, and restoring it would carry a *transmitted* record across a restart — which on a plane
  * with no acks is not evidence anyone heard, the same reasoning that exempts `serveOne` from it (ADR
- * 2026-09.y8pu). And `lastHeardAt` feeds `reachable`, which only fresh frames may write (ADR 2026-09.2ajk):
+ * 2026-09.y8pu). `lastHeardAt` feeds `reachable`, which only fresh frames may write (ADR 2026-09.2ajk):
  * a peer restored from disk would be claimed as reachable on evidence this process never saw. Neither
  * matters much to the burst, because the ledger bounds what they would otherwise let through.
+ *
+ * The third is [LoraGossipPolicy]'s Trickle interval, and it was tried and taken back out. Persisting the
+ * back-off stalls the ADR 044 gateway **election**: an OFFER is the only evidence anyone has a board,
+ * `LoraGatewayPolicy` is *not* persisted (`quiesce` calls `forget`), and a restored interval that has since
+ * run out makes `ensureInterval` double it and draw a fresh transmit point — so the first OFFER lands up to
+ * 15 minutes out while every gateway in the pocket sits ACTIVE and fans out everything. Field-observed on
+ * the lab P7/P9 after a fleet install (2026-09-10): `gossip=600000ms` restored, no OFFER in 90 s, both
+ * `gatewaysHeard: 0` beside `boardsHeard: 1`. A fresh timer offers within 2.5–5 min instead, and the OFFER
+ * it costs is charged to the window this file *does* persist — so a reinstall loop still cannot outspend
+ * its allowance on gossip, which is all the back-off was buying.
  */
 internal interface LoraPlaneState {
     /** The last snapshot written, or null on a first run — or when it could not be read or parsed. */
@@ -55,7 +65,6 @@ internal data class LoraPlaneSnapshot(
     val savedAtWall: Long,
     val air: List<AirBooking> = emptyList(),
     val selfProfileAtWall: Long? = null,
-    val gossip: TrickleWindow? = null,
     val serve: List<ServeWindow> = emptyList(),
     val profileSeen: List<SeenStamp> = emptyList(),
 )
@@ -67,16 +76,6 @@ internal data class AirBooking(
     val ms: Long,
     /** [AirBucket.name], not the enum: a bucket a newer build added is dropped on load rather than thrown on. */
     val bucket: String,
-)
-
-/** [LoraGossipPolicy]'s Trickle interval, so a restart resumes the back-off instead of re-starting at the floor. */
-@Serializable
-internal data class TrickleWindow(
-    val intervalMs: Long,
-    val startWall: Long,
-    val transmitAtWall: Long,
-    val spent: Boolean,
-    val consistent: Int,
 )
 
 /** One far gateway's hourly serve allowance, keyed by its publisher digest. */

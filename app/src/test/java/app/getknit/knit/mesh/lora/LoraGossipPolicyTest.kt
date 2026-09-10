@@ -2,7 +2,6 @@ package app.getknit.knit.mesh.lora
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -24,36 +23,6 @@ class LoraGossipPolicyTest {
         max: Long = 15 * 60_000,
         redundancy: Int = 1,
     ) = policy(min, max, redundancy).also { it.nextDueAt(0) }
-
-    @Test
-    fun aRestoredIntervalKeepsTheBackoffARestartUsedToThrowAway() {
-        val before = armed()
-        before.nextDueAt(5 * 60_000) // interval 1 elapsed: doubles to 10 min
-        before.nextDueAt(15 * 60_000) // interval 2 elapsed: doubles to the 15-min ceiling
-        assertEquals(15 * 60_000L, before.interval)
-        val due = before.nextDueAt(15 * 60_000)
-
-        val after = policy()
-        after.restore(before.snapshot()!!)
-
-        assertEquals("the back-off survives the process, not just the interval", 15 * 60_000L, after.interval)
-        assertEquals("and so does the transmit point it had already drawn", due, after.nextDueAt(15 * 60_000))
-    }
-
-    @Test
-    fun aSpentSlotStaysSpentAcrossARestart() {
-        val before = armed()
-        assertTrue(before.takeTransmitSlot(150_000))
-
-        val after = policy().also { it.restore(before.snapshot()!!) }
-
-        assertFalse("the OFFER is already on the air; a restart must not send a second", after.takeTransmitSlot(150_001))
-    }
-
-    @Test
-    fun aPolicyThatNeverArmedHasNothingToPersist() {
-        assertNull(policy().snapshot())
-    }
 
     @Test
     fun theFirstTransmitLandsInTheSecondHalfOfTheFirstInterval() {

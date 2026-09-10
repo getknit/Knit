@@ -12,6 +12,7 @@ import app.getknit.knit.data.AvatarStore
 import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
@@ -70,6 +71,7 @@ data class GroupDetailsUiState(
 class GroupDetailsViewModel(
     private val groupId: String,
     private val groups: GroupRepository,
+    private val drafts: DraftRepository,
     peers: PeerRepository,
     private val meshManager: MeshController,
     private val avatars: AvatarStore,
@@ -209,6 +211,8 @@ class GroupDetailsViewModel(
         viewModelScope.launch {
             meshManager.sendGroupLeave(groupId)
             groups.leave(groupId)
+            // Leaving deletes the thread's messages, and an unsent line in it is no different.
+            drafts.clear(groupId)
             _left.tryEmit(Unit)
         }
     }

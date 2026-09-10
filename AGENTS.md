@@ -53,6 +53,13 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   no capability bit); it is read only between the pin tap and the send, by `ChatViewModel.startLocation`,
   the one collector of `LocationSource.fixes`, and `location/AndroidLocationSource` is the one
   `android.location` importer (detekt-enforced). Never ask for the grant at onboarding.
+- **When touching `data/draft/`, what the composer keeps between visits, or the chat list's `Draft: …`
+  preview:** READ ADR 2026-09.qtg9. An unsent draft is a row in the encrypted DB (never the DataStore —
+  it is message text), written debounced on the *application* scope, and handed to the composer exactly
+  once by `consumeRestoredDraft()`; nothing is persisted before that hand-over, because the field reports
+  itself empty the moment it composes. The list shows it in place of the preview only while
+  `updatedAt` beats the newest message, and never touches the row's time or sort. Text only: the staged
+  attachment, the reply quote and the mention bindings stay draft-local to the screen.
 - **When touching contact cards, the Add-by-link / share-link flow, deep links (`getknit.app/c`,
   `knit://`), or `mesh/IntroSync`:** READ `docs/CONTACT_CARD.md` (the card layout + golden vectors, the
   intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);

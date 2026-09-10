@@ -8,6 +8,8 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.draft.DraftEntity
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
@@ -66,6 +68,11 @@ data class ConversationRow(
     // The ` (Alias)` suffix already inside [title] when another known peer shares this DM peer's name
     // (ADR 058), so the row can draw it muted. Null for the room, groups, and an unambiguous name.
     val discriminator: String? = null,
+    // The unsent text sitting in this thread's composer, but **only** when it is newer than [lastMessageAt]
+    // — the row then reads "Draft: …" in italics in place of [lastPreview], the way Signal's does. Null
+    // whenever there is no draft or the thread has moved on since it was typed, which is the honest reading:
+    // the newest thing in the conversation is what the preview line is for.
+    val draft: String? = null,
     // True for the Meshtastic room — the paired radio's primary channel. It is a room ([isRoom] is true too,
     // so it draws the room glyph), but unlike Nearby it *is* clearable: clearing it drops the history, and
     // the row itself stays only while a radio is bound (or history remains).
@@ -108,6 +115,7 @@ class ChatListViewModel(
     identity: Identity,
     meshManager: MeshController,
     private val groups: GroupRepository,
+    private val drafts: DraftRepository,
     // The facts flow rather than the repository, for the reason spelled out on ChatViewModel's copy of this
     // parameter: the production flow is an infinite poller, which a test driving this VM with
     // `advanceUntilIdle()` could never let go idle.
@@ -128,6 +136,7 @@ class ChatListViewModel(
         val blocked: Set<String>,
         val groups: List<GroupEntity>,
         val accepted: Set<String>,
+        val drafts: Map<String, DraftEntity>,
     )
 
     // Neighbor count + radio health + the (already-dismissal-aware) banner + Internet-plane state, folded
@@ -150,8 +159,9 @@ class ChatListViewModel(
             settings.blockedNodeIds,
             groups.observeGroups(),
             settings.acceptedConversations,
-        ) { msgs, blocked, groupList, accepted ->
-            ListBundle(msgs.filter { it.senderId !in blocked }, blocked, groupList, accepted)
+            drafts.all,
+        ) { msgs, blocked, groupList, accepted, draftRows ->
+            ListBundle(msgs.filter { it.senderId !in blocked }, blocked, groupList, accepted, draftRows)
         }
 
     // Radio-off banner: which warning the per-radio statuses imply, and whether the user has dismissed it.
@@ -253,6 +263,14 @@ class ChatListViewModel(
                 // author, so treating one as the last message would also mis-attribute the preview.
                 val last = threadMsgs.lastOrNull { !it.isStatusNotice }
                 val lastReadAt = lastReadAll[conversationId] ?: 0L
+                // A draft only speaks for the row while it is the newest thing in the thread. Once a message
+                // lands after it — ours or theirs — the conversation has moved on and the preview says so;
+                // the draft is still in the composer, waiting where it was typed. Ties go to the message,
+                // and a peer's `sentAt` is their clock, which is the same skew every row here already sorts on.
+                val draft =
+                    bundle.drafts[conversationId]
+                        ?.takeIf { it.text.isNotBlank() && it.updatedAt > (last?.sentAt ?: 0L) }
+                        ?.text
 
                 // "Ours" means we wrote it. A heard Meshtastic post sits in our sender column by convention
                 // (the phone whose board heard it writes the row) — but we did not write a word of it, and
@@ -278,6 +296,7 @@ class ChatListViewModel(
                     isGroup = isGroup,
                     lastPreview = last?.let { previewFor(it, directory, me, isDm = !isRoom && !isGroup) },
                     lastMessageAt = last?.sentAt,
+                    draft = draft,
                     unreadCount = unread,
                     lastStatus = mineLast?.let { DeliveryStatus.of(it) },
                     lastDeliveredVia = mineLast?.receivedPlane ?: DeliveryPlane.Unknown,
@@ -441,6 +460,8 @@ class ChatListViewModel(
      */
     fun deleteConversation(conversationId: String) {
         viewModelScope.launch {
+            // An unsent line belongs to the thread it was typed in, and goes when the thread does.
+            drafts.clear(conversationId)
             when (Conversations.kindFor(conversationId)) {
                 ConversationKind.NEARBY -> Unit
 

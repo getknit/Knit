@@ -275,6 +275,48 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v10 → v11: one `drafts` table, holding the text left unsent in each thread's composer so that leaving
+     * the chat screen keeps it. Keyed by the same conversation id the messages are, one row per thread, and
+     * no row where nothing was left behind — so an upgrade creates an empty table and every existing thread
+     * is correct on arrival, with nothing to backfill.
+     *
+     * Nothing else moves: no message, peer or custody row is touched, and no other table gains a column.
+     * The SQL must stay byte-equivalent to what Room generates for `app/schemas/**/11.json`.
+     */
+    val MIGRATION_10_11 =
+        object : Migration(10, 11) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `drafts` " +
+                        "(`conversationId` TEXT NOT NULL, `text` TEXT NOT NULL, PRIMARY KEY(`conversationId`))",
+                )
+            }
+        }
+
+    /**
+     * v11 → v12: one `drafts.updatedAt` column — our own clock when a draft was last written. The chat list
+     * compares it against the thread's newest message to decide whether the row reads "Draft: …", which is
+     * the column's only reader.
+     *
+     * It is a second bump for one feature because v11 had already been installed before the column turned
+     * out to be needed. Adding it to v11 in place left those devices holding a v11 database whose identity
+     * hash no longer matched the app's — which Room reports as "you've changed schema but forgot to update
+     * the version number", at every launch, with no migration path out of it because the version *did*
+     * match. Two bumps and two migrations; no wipe.
+     *
+     * `DEFAULT 0` on the existing rows, matching MIGRATION_9_10's flags: a draft written before this column
+     * has no recorded time, and 0 is the honest value — it simply never wins the preview line from the
+     * thread's last message. Additive; the SQL must stay byte-equivalent to what Room generates for
+     * `app/schemas/**/12.json`.
+     */
+    val MIGRATION_11_12 =
+        object : Migration(11, 12) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE `drafts` ADD COLUMN `updatedAt` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
     /** All migrations, applied by Room in order. */
     val ALL: Array<Migration> =
         arrayOf(
@@ -287,5 +329,7 @@ object KnitMigrations {
             MIGRATION_7_8,
             MIGRATION_8_9,
             MIGRATION_9_10,
+            MIGRATION_10_11,
+            MIGRATION_11_12,
         )
 }

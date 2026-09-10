@@ -9,6 +9,7 @@ import app.getknit.knit.data.AvatarStore
 import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.identity.Identity
@@ -44,6 +45,7 @@ class GroupDetailsViewModelTest {
     private val groupId = "g-1"
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val groups = mockk<GroupRepository>(relaxed = true)
+    private val drafts = mockk<DraftRepository>(relaxed = true)
     private val peers = mockk<PeerRepository>(relaxed = true)
     private val mesh = FakeMeshController()
     private val avatars = mockk<AvatarStore>(relaxed = true)
@@ -66,7 +68,7 @@ class GroupDetailsViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = GroupDetailsViewModel(groupId, groups, peers, mesh, avatars, blobs, identity, context)
+    private fun vm() = GroupDetailsViewModel(groupId, groups, drafts, peers, mesh, avatars, blobs, identity, context)
 
     @Test
     fun rosterOrdersSelfFirstThenOnlineThenAlphabetical() =

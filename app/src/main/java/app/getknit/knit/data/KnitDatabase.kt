@@ -8,6 +8,8 @@ import app.getknit.knit.data.blob.BlobDao
 import app.getknit.knit.data.blob.BlobEntity
 import app.getknit.knit.data.blob.BlobVerdictDao
 import app.getknit.knit.data.blob.BlobVerdictEntity
+import app.getknit.knit.data.draft.DraftDao
+import app.getknit.knit.data.draft.DraftEntity
 import app.getknit.knit.data.forward.ForwardDao
 import app.getknit.knit.data.forward.ForwardEntity
 import app.getknit.knit.data.group.GroupDao
@@ -42,7 +44,7 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
         RatchetRecvEpochEntity::class, RatchetSkippedKeyEntity::class,
         GroupSendChainEntity::class, GroupRecvChainEntity::class,
         GroupSkippedKeyEntity::class, GroupKeySendEntity::class,
-        GroupRootEntity::class, MessageReceiptEntity::class,
+        GroupRootEntity::class, MessageReceiptEntity::class, DraftEntity::class,
     ],
     // v1: frozen launch baseline. The pre-1.0 alpha schema churn (the old destructive v2…v22 bumps that
     //     rode the wire/crypto breaks) is collapsed; docs/WIRE_COMPAT.md keeps the historical break record.
@@ -97,7 +99,21 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
     //     of them, and the first composite orders them too, which is what lets the chat screen read a
     //     bounded newest-first window instead of the whole conversation. Migrated by
     //     KnitMigrations.MIGRATION_9_10.
-    version = 10,
+    // v11: one `drafts` table — the text left unsent in a thread's composer, keyed by conversation id, so
+    //     leaving the chat screen no longer throws it away. Purely local: a draft is never framed, never
+    //     enters custody, and no digest folds over it. It sits in this database rather than the settings
+    //     DataStore because it is message text the user wrote, and the reason `messages` is encrypted at
+    //     rest is the same reason the sentence they were still writing should be; migrated by
+    //     KnitMigrations.MIGRATION_10_11.
+    // v12: one `drafts.updatedAt` column — our own clock when the draft was last written, which the chat
+    //     list compares against the thread's newest message to decide whether the row reads "Draft: …".
+    //     A second bump for one feature, deliberately: v11 was already installed on lab devices when the
+    //     column turned out to be needed, and folding it into v11 left those phones with a v11 database
+    //     Room refused to open (same version, different identity hash — a crash at every launch, no
+    //     migration path). 0 on every pre-upgrade row, which is honest: nothing recorded when those drafts
+    //     were typed, and a 0 simply loses the preview line to the thread's last message; migrated by
+    //     KnitMigrations.MIGRATION_11_12.
+    version = 12,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without
@@ -126,6 +142,8 @@ abstract class KnitDatabase : RoomDatabase() {
     abstract fun groupRootDao(): GroupRootDao
 
     abstract fun messageReceiptDao(): MessageReceiptDao
+
+    abstract fun draftDao(): DraftDao
 
     companion object {
         /**

@@ -342,6 +342,8 @@
     <string name="nearby_title">Nearby</string>
     <string name="meshtastic_title">Meshtastic</string>
     <string name="chat_list_empty_preview">No messages yet</string>
+    <!-- Chat list preview for a thread whose unsent draft is newer than its last message; %1$s is the draft. -->
+    <string name="chat_list_draft_preview">Draft: %1$s</string>
     <string name="chat_list_hint_title">Get started</string>
     <string name="chat_list_hint_body">Messages hop from phone to phone — no internet needed. Say hello in Nearby to reach everyone in range, or add a contact to message one person directly.</string>
     <string name="chat_list_hint_nearby">Say hello</string>

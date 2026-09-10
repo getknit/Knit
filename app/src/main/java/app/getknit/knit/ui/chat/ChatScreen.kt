@@ -427,6 +427,13 @@ fun ChatScreen(
             shared.fileUri?.let { viewModel.attachFile(it.toUri()) }
         }
     }
+    // Put back what was left in this thread's composer and never sent. One-shot (the ViewModel hands the
+    // stored text over once), and it defers to anything already in the field, so the share-sheet prefill
+    // above wins on the one open that has one.
+    LaunchedEffect(Unit) {
+        val restored = viewModel.consumeRestoredDraft()
+        if (restored.isNotEmpty() && inputState.text.isEmpty()) inputState.setTextAndPlaceCursorAtEnd(restored)
+    }
     // Debug trailer director: on the Nearby room, drive the REAL composer from scripted DemoComposer
     // commands — type char-by-char (which fires the real typing cue via MessageInput's snapshotFlow) then
     // send through the same path as the button. DEMO_DIRECTOR is a compile-time false in release, so R8

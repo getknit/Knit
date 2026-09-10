@@ -9,6 +9,8 @@ import app.getknit.knit.R
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.draft.DraftEntity
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
@@ -62,6 +64,7 @@ class ChatListViewModelTest {
     private val identity = mockk<Identity>(relaxed = true)
     private val mesh = FakeMeshController()
     private val groups = mockk<GroupRepository>(relaxed = true)
+    private val drafts = mockk<DraftRepository>(relaxed = true)
 
     private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
     private val blockedFlow = MutableStateFlow(emptySet<String>())
@@ -69,6 +72,7 @@ class ChatListViewModelTest {
     private val peersFlow = MutableStateFlow(emptyList<PeerEntity>())
     private val lastReadFlow = MutableStateFlow(emptyMap<String, Long>())
     private val acceptedFlow = MutableStateFlow(emptySet<String>())
+    private val draftsFlow = MutableStateFlow(emptyMap<String, DraftEntity>())
 
     // A finite stand-in for the production poller, which never idles under a virtual clock.
     private val relayFlow = MutableStateFlow(RelayFacts())
@@ -84,6 +88,9 @@ class ChatListViewModelTest {
         every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { settings.lastReadAll } returns lastReadFlow
         every { settings.acceptedConversations } returns acceptedFlow
+        // Not optional: a relaxed mock hands back a Flow that never emits, and one silent arm stalls the
+        // whole combine — every assertion in this class would then read the loading seed.
+        every { drafts.all } returns draftsFlow
     }
 
     @After
@@ -91,7 +98,7 @@ class ChatListViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = ChatListViewModel(messages, peers, settings, identity, mesh, groups, relayFlow, loraFlow, context)
+    private fun vm() = ChatListViewModel(messages, peers, settings, identity, mesh, groups, drafts, relayFlow, loraFlow, context)
 
     @Test
     fun theRadioRoomIsHiddenOutrightWhenTheUserSwitchesItOff() =
@@ -652,6 +659,37 @@ class ChatListViewModelTest {
                 vm.state.value.conversations
                     .first { it.id == "g-1" }
                     .unreadCount,
+            )
+        }
+
+    @Test
+    fun aDraftSpeaksForTheRowOnlyWhileItIsTheNewestThingInTheThread() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            // Verified, so the thread is a chat rather than a message request and reaches this list at all.
+            peersFlow.value = listOf(peer("x", "Ann", verified = true))
+            messagesFlow.value = listOf(msg(senderId = "x", sentAt = 100, conversationId = "x", body = "you around?"))
+            draftsFlow.value = mapOf("x" to DraftEntity("x", "half a sentence", updatedAt = 200))
+            advanceUntilIdle()
+
+            val withDraft =
+                vm.state.value.conversations
+                    .first { it.id == "x" }
+            assertEquals("half a sentence", withDraft.draft)
+            // The message the draft speaks over is still the thread's last one: the draft replaces the
+            // preview line, not the row's place in the list or the time beside it.
+            assertEquals("you around?", withDraft.lastPreview)
+            assertEquals(100L, withDraft.lastMessageAt)
+
+            // A message lands after it and the conversation has moved on; the draft waits in the composer.
+            messagesFlow.value =
+                messagesFlow.value + msg(senderId = "x", sentAt = 300, conversationId = "x", body = "still there?")
+            advanceUntilIdle()
+            assertNull(
+                vm.state.value.conversations
+                    .first { it.id == "x" }
+                    .draft,
             )
         }
 

@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-108 decisions.
+109 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -115,6 +115,7 @@ carries; never renumber an old one.
 | [2026-09.qgk4](decisions/2026-09-qgk4-the-startup-profile-ships-beside-the-baseline-one.md) | The startup profile ships beside the baseline one, from the same journey | performance, build, distribution |
 | [2026-09.qq2r](decisions/2026-09-qq2r-a-file-is-an-ordinary-attachment-with-an-arbitrary-mime-and-a-sealed-name.md) | A file is an ordinary attachment with an arbitrary MIME and a sealed name | attachments, ui, wire, moderation |
 | [2026-09.qsj6](decisions/2026-09-qsj6-a-heard-inconsistent-offer-is-news.md) | A heard inconsistent OFFER is news | lora, airtime, reliability |
+| [2026-09.qtg9](decisions/2026-09-qtg9-an-unsent-draft-is-a-row-in-the-encrypted-database.md) | An unsent draft is a row in the encrypted database, handed to the composer once | ui, data, room, privacy |
 | [2026-09.rre4](decisions/2026-09-rre4-the-lora-backfill-serves-the-room-before-dms.md) | The LoRa backfill serves the room before DMs | lora, airtime, custody |
 | [2026-09.sre4](decisions/2026-09-sre4-a-resolved-meshtastic-author-s-avatar-opens-the-caveat.md) | A resolved Meshtastic author's avatar opens the caveat, not the profile | lora, meshtastic, ui |
 | [2026-09.t8t8](decisions/2026-09-t8t8-an-offer-is-not-backfill-and-must-not-compete-with-it.md) | An OFFER is not backfill and must not compete with it | lora, airtime, reliability |

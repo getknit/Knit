@@ -8,6 +8,7 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
@@ -57,6 +58,7 @@ class MessageRequestsViewModel(
     private val settings: SettingsStore,
     private val peers: PeerRepository,
     private val groups: GroupRepository,
+    private val drafts: DraftRepository,
     identity: Identity,
     private val context: Context,
 ) : ViewModel() {
@@ -180,6 +182,8 @@ class MessageRequestsViewModel(
     /** Decline: clear a DM's messages, or hard-delete a group so it leaves the list. Local only. */
     fun delete(conversationId: String) {
         viewModelScope.launch {
+            // Whatever was typed at the stranger goes with the thread it was typed in.
+            drafts.clear(conversationId)
             when (Conversations.kindFor(conversationId)) {
                 ConversationKind.GROUP -> groups.delete(conversationId)
 

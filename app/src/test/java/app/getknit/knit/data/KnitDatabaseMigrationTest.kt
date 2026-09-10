@@ -45,9 +45,9 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v10) creates and opens from the exported JSON`() =
+    fun `the current schema (v12) creates and opens from the exported JSON`() =
         runTest {
-            val version = 10 // KnitDatabase @Database(version = 10) — bump alongside the DB (its retention is CLASS,
+            val version = 12 // KnitDatabase @Database(version = 12) — bump alongside the DB (its retention is CLASS,
             // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
             helper.createDatabase(version).close()
         }
@@ -421,6 +421,57 @@ class KnitDatabaseMigrationTest {
                     assertTrue(s.step())
                     assertEquals("a full 32-bit node number fits", 3735928559L, s.getLong(0))
                     assertEquals("oR62IJmFUE0Tgcw0GcypU5ZqUFCQllVBy2snB/BKQA4=", s.getText(1))
+                }
+            }
+        }
+
+    @Test
+    fun `migrate 10 to 11 preserves existing rows and adds the empty drafts table`() =
+        runTest {
+            // A device upgrading has threads but, by definition, no drafts: the table is new, so an empty one
+            // is the whole correct state and there is nothing to backfill.
+            helper.createDatabase(10).use { c ->
+                c.execSQL(
+                    "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, receivedVia, " +
+                        "mentions, replyToHasAttachment, moderation, pendingKey, kind, originViaMqtt, originSigned) " +
+                        "VALUES ('m1','n1','peer-1','hello',1,1,0,'[]',0,0,0,0,0,0)",
+                )
+            }
+            helper.runMigrationsAndValidate(11, listOf(KnitMigrations.MIGRATION_10_11)).use { c ->
+                c.prepare("SELECT body FROM messages WHERE id = 'm1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("hello", s.getText(0))
+                }
+                c.prepare("SELECT COUNT(*) FROM drafts").use { s ->
+                    assertTrue(s.step())
+                    assertEquals(0L, s.getLong(0))
+                }
+                // One row per thread, replaced in place — a second draft for the same chat is not a second row.
+                c.execSQL("INSERT INTO drafts (conversationId, text) VALUES ('peer-1','half a sen')")
+                c.execSQL("INSERT OR REPLACE INTO drafts (conversationId, text) VALUES ('peer-1','half a sentence')")
+                c.prepare("SELECT COUNT(*), MAX(text) FROM drafts").use { s ->
+                    assertTrue(s.step())
+                    assertEquals(1L, s.getLong(0))
+                    assertEquals("half a sentence", s.getText(1))
+                }
+            }
+        }
+
+    @Test
+    fun `migrate 11 to 12 keeps an existing draft and stamps it with a zero it cannot know`() =
+        runTest {
+            // The upgrade a lab device actually made: a v11 database with a draft already in it, written
+            // before anything recorded *when* a draft was written.
+            helper.createDatabase(11).use { c ->
+                c.execSQL("INSERT INTO drafts (conversationId, text) VALUES ('peer-1','half a sentence')")
+            }
+            helper.runMigrationsAndValidate(12, listOf(KnitMigrations.MIGRATION_11_12)).use { c ->
+                c.prepare("SELECT text, updatedAt FROM drafts WHERE conversationId = 'peer-1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("the draft survives the bump", "half a sentence", s.getText(0))
+                    // 0, not a backfilled "now": nothing recorded when it was typed, and a 0 just loses the
+                    // chat list's preview line to the thread's last message.
+                    assertEquals(0L, s.getLong(1))
                 }
             }
         }

@@ -81,6 +81,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTag
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -506,7 +507,13 @@ internal fun ConversationListItem(
     // The row is a single accessible target: collapse its children (avatar, title, preview, time,
     // unread badge) into one labelled Button node so a screen reader reads the whole conversation as
     // one summary with a spoken timestamp, and surface the long-press delete as a custom action.
-    val preview = row.lastPreview ?: stringResource(R.string.chat_list_empty_preview)
+    // An unsent draft newer than the thread's last message speaks for the row, in italics, the way Signal's
+    // list does it. It is the preview *and* what a screen reader reads (rowDescription below), so the
+    // "Draft:" prefix is words rather than styling alone.
+    val preview =
+        row.draft?.let { stringResource(R.string.chat_list_draft_preview, it) }
+            ?: row.lastPreview
+            ?: stringResource(R.string.chat_list_empty_preview)
     val spokenTime =
         row.lastMessageAt?.let {
             DateUtils.getRelativeTimeSpanString(it, now, DateUtils.MINUTE_IN_MILLIS).toString()
@@ -569,6 +576,7 @@ internal fun ConversationListItem(
                     text = preview,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontStyle = if (row.draft != null) FontStyle.Italic else null,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

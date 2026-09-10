@@ -16,6 +16,7 @@ import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.emoji.RecentReactions
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
@@ -58,6 +59,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -93,6 +95,7 @@ class ChatViewModelTest {
     private val messages = mockk<MessageRepository>(relaxed = true)
     private val groups = mockk<GroupRepository>(relaxed = true)
     private val peers = mockk<PeerRepository>(relaxed = true)
+    private val drafts = mockk<DraftRepository>(relaxed = true)
     private val reactions = mockk<ReactionRepository>(relaxed = true)
     private val receipts = mockk<MessageReceiptRepository>(relaxed = true)
     private val mesh = FakeMeshController()
@@ -219,6 +222,7 @@ class ChatViewModelTest {
             peers,
             reactions,
             receipts,
+            drafts,
             mesh,
             identity,
             settings,
@@ -1282,6 +1286,45 @@ class ChatViewModelTest {
                     .single()
                     .moderationFlagged,
             )
+        }
+
+    @Test
+    fun theStoredDraftIsHandedOverOnceAndOnlyThenAreEditsKept() =
+        runTest {
+            coEvery { drafts.load(Conversations.NEARBY) } returns "half a sentence"
+            val vm = vm()
+
+            // The composer reports its empty field the moment it composes — before the stored draft has been
+            // taken. Persisting that would erase the very draft the screen is about to put back.
+            vm.onDraftChanged("")
+            advanceUntilIdle()
+            verify(exactly = 0) { drafts.save(any(), any()) }
+
+            assertEquals("half a sentence", vm.consumeRestoredDraft())
+            // A rotation re-runs the screen's restore effect; a draft since cleared must not come back.
+            assertEquals("", vm.consumeRestoredDraft())
+
+            vm.onDraftChanged("half a sentence more")
+            verify { drafts.save(Conversations.NEARBY, "half a sentence more") }
+        }
+
+    @Test
+    fun anAcceptedSendDropsTheStoredDraftAndABlockedOneKeepsIt() =
+        runTest {
+            mesh.sendChatResult = false // moderator flags the text
+            val vm = vm()
+
+            vm.send("bad")
+            advanceUntilIdle()
+            verify(exactly = 0) { drafts.clear(any()) } // the user still has it to edit
+
+            mesh.sendChatResult = true
+            vm.onInputCleared()
+            vm.send("fine")
+            advanceUntilIdle()
+            // Dropped here, not left to the cleared field's own report: a user who sends and immediately
+            // leaves never gives us one.
+            verify { drafts.clear(Conversations.NEARBY) }
         }
 
     @Test

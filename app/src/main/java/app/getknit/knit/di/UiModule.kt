@@ -45,6 +45,7 @@ val uiModule =
                 get(),
                 get(),
                 get(),
+                get(),
                 get<LinkCardStore>(),
                 get<LinkPreviewService>(),
                 get<LocationSource>(),
@@ -55,6 +56,7 @@ val uiModule =
         }
         viewModel {
             ChatListViewModel(
+                get(),
                 get(),
                 get(),
                 get(),
@@ -79,10 +81,10 @@ val uiModule =
         viewModel { params -> MessageDetailsViewModel(params.get(), get(), get(), get(), get(), get(), get(), get()) }
         // GroupDetailsViewModel takes the group id as a runtime param; the rest are resolved by type.
         viewModel { params ->
-            GroupDetailsViewModel(params.get(), get(), get(), get(), get(), get(), get(), androidContext())
+            GroupDetailsViewModel(params.get(), get(), get(), get(), get(), get(), get(), get(), androidContext())
         }
         viewModel { BlockedUsersViewModel(get(), get()) }
-        viewModel { MessageRequestsViewModel(get(), get(), get(), get(), get(), androidContext()) }
+        viewModel { MessageRequestsViewModel(get(), get(), get(), get(), get(), get(), androidContext()) }
         viewModel { AddContactViewModel(get(), get(), get(), get(), get()) }
         viewModel { InternetRelayViewModel(get(), get()) }
         viewModel { LoraRadioViewModel(get(), get(), get(), get()) }

@@ -95,6 +95,39 @@ class ChatListScreenContentTest {
     }
 
     @Test
+    fun aRowWithADraftReadsAsDraftInsteadOfItsLastMessage() {
+        compose.setContent {
+            KnitTheme {
+                ChatListScreenContent(
+                    state =
+                        ChatListUiState(
+                            conversations = listOf(row("dm-1", "Ada").copy(draft = "half a sentence")),
+                        ),
+                    now = now,
+                    onOpenConversation = {},
+                    onNewMessage = {},
+                    onOpenSettings = {},
+                    onOpenDiagnostics = {},
+                    onOpenBlockedUsers = {},
+                    onOpenMessageRequests = {},
+                    onOpenDonate = {},
+                    onOpenAddContact = {},
+                    onShareApp = {},
+                    onOpenRadioSettings = {},
+                    onDismissRadioWarning = {},
+                    onDeleteConversation = {},
+                )
+            }
+        }
+
+        // The row is one accessible node, so the preview line is read through its description — which is
+        // where the "Draft:" prefix has to live, since italics say nothing to a screen reader.
+        compose
+            .onNodeWithTag("chat_row_dm-1")
+            .assertContentDescriptionContains("Draft: half a sentence", substring = true)
+    }
+
+    @Test
     fun tappingTheFabOpensNewMessage() {
         var newMessage = 0
         compose.setContent {

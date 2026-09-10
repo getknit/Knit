@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
@@ -53,6 +54,7 @@ class MessageRequestsViewModelTest {
     private val settings = mockk<SettingsStore>(relaxed = true)
     private val peers = mockk<PeerRepository>(relaxed = true)
     private val groups = mockk<GroupRepository>(relaxed = true)
+    private val drafts = mockk<DraftRepository>(relaxed = true)
     private val identity = mockk<Identity>(relaxed = true)
 
     private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
@@ -77,7 +79,7 @@ class MessageRequestsViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = MessageRequestsViewModel(messages, settings, peers, groups, identity, context)
+    private fun vm() = MessageRequestsViewModel(messages, settings, peers, groups, drafts, identity, context)
 
     @Test
     fun aStrangerDmIsAPendingRequest() =

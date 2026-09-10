@@ -16,6 +16,7 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.emoji.RecentReactions
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
@@ -71,9 +72,11 @@ import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.ui.voice.VoicePlayer
 import app.getknit.knit.ui.voice.VoiceRecorder
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -388,6 +391,9 @@ class ChatViewModel(
     private val peers: PeerRepository,
     private val reactions: ReactionRepository,
     private val receipts: MessageReceiptRepository,
+    // Unsent composer text. App-scoped, not a field of this ViewModel: the write that keeps a draft is the
+    // one started as the user leaves, which is exactly when this scope is being cancelled.
+    private val drafts: DraftRepository,
     private val meshManager: MeshController,
     private val identity: Identity,
     private val settings: SettingsStore,
@@ -439,8 +445,22 @@ class ChatViewModel(
     private val _confirmAttachment = MutableStateFlow<AttachmentStore.Ingested?>(null)
     val confirmAttachment: StateFlow<AttachmentStore.Ingested?> = _confirmAttachment.asStateFlow()
 
-    /** The composer's text as typed, fed by the screen so a link in it can grow a card. Never persisted. */
+    /** The composer's text as typed, fed by the screen so a link in it can grow a card. */
     private val draft = MutableStateFlow("")
+
+    /**
+     * What this thread's composer was left with last time, read once at construction. Held as a [Deferred]
+     * because the screen has to *wait* for it: the composer reports its empty field the moment it composes,
+     * and persisting that report before this read lands would erase the very draft it is fetching.
+     */
+    private val storedDraft: Deferred<String> = viewModelScope.async { drafts.load(conversationId) }
+
+    /**
+     * True once the screen has taken [storedDraft] — see [consumeRestoredDraft]. Until then no draft report
+     * is persisted, so a chat opened and left again before the read lands keeps what was in it.
+     * Main-thread-confined, like [dismissedUrl].
+     */
+    private var draftTaken = false
 
     /** Bumped when the draft is sent or a card dismissed, so a fetch still in flight cannot stage into the next draft. */
     private val draftEpoch = MutableStateFlow(0)
@@ -1046,6 +1066,21 @@ class ChatViewModel(
             dismissedUrl = null
             failedUrls.clear()
         }
+        // Keep it for next time (debounced, on the application scope). Blank text drops the row, so emptying
+        // the field is how a draft is thrown away deliberately.
+        if (draftTaken) drafts.save(conversationId, text)
+    }
+
+    /**
+     * Hands the screen the text this thread was left with, once, and returns empty on every later call — a
+     * rotation re-runs the screen's restore effect, and a draft the user has since cleared must not come
+     * back with it. Taking it is also what starts persisting edits: see [onDraftChanged].
+     */
+    suspend fun consumeRestoredDraft(): String {
+        if (draftTaken) return ""
+        val text = storedDraft.await()
+        draftTaken = true
+        return text
     }
 
     /**
@@ -1200,6 +1235,8 @@ class ChatViewModel(
                         dismissedUrl = null
                         failedUrls.clear()
                         draftEpoch.value++
+                        // The post is away; what is about to be cleared from the field is not a draft any more.
+                        drafts.clear(conversationId)
                         _clearInput.tryEmit(Unit)
                     }
 
@@ -1502,6 +1539,10 @@ class ChatViewModel(
                     dismissedUrl = null
                     failedUrls.clear()
                     draftEpoch.value++
+                    // The message is away; what is about to be cleared from the field is not a draft any more.
+                    // Dropped here rather than left to the field's own empty report, which a user who sends
+                    // and immediately leaves never gives us.
+                    drafts.clear(conversationId)
                     // Guard stays held until the screen reports the field cleared (onInputCleared), so no
                     // duplicate can slip through the tryEmit -> collect -> clearText hop.
                     _clearInput.tryEmit(Unit)

@@ -25,6 +25,7 @@ import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.crypto.DatabaseKey
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.crypto.KeystoreSecret
+import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.emoji.AndroidGlyphCheck
 import app.getknit.knit.data.emoji.EmojiCatalogLoader
 import app.getknit.knit.data.forward.ForwardRepository
@@ -156,6 +157,7 @@ val appModule =
         single { get<KnitDatabase>().groupRatchetDao() }
         single { get<KnitDatabase>().groupRootDao() }
         single { get<KnitDatabase>().messageReceiptDao() }
+        single { get<KnitDatabase>().draftDao() }
         single { MessageRepository(get()) }
         single { PeerRepository(get(), get<SettingsStore>(), get<Identity>()) }
         // Crash reports. The capture-side CrashStore is built by hand in KnitApplication.onCreate BEFORE
@@ -189,4 +191,7 @@ val appModule =
         // Internet plane's own lifetime: a device with the plane off still adopts and re-gossips roots, which
         // is what carries one across a plane-off member sitting between two plane-on ones.
         single<GroupRootStore> { GroupRootRepository(get()) }
+        // Unsent composer text, one row per thread. App-scoped on purpose: the write that keeps a draft is
+        // started as the user leaves the chat, so it cannot run on the screen's own scope.
+        single { DraftRepository(get(), get<CoroutineScope>()) }
     }

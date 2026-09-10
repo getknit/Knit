@@ -30,6 +30,8 @@ document:
   permission the first time you use it, never before.
 - Settings now lets you set Knit to light or dark instead of following your phone. It follows your phone
   until you pick one, and the choice appears on Android 12 or newer.
+- A message you start typing and don't send is still there when you come back to that chat, and the chat
+  list shows it as "Draft:" until you send it. Every chat keeps its own.
 
 ### Changed
 

@@ -942,7 +942,7 @@ class ChatViewModelTest {
             vm.onChatForeground()
             advanceUntilIdle()
 
-            vm.onUserTyping()
+            vm.onUserTyping("hi")
             advanceUntilIdle()
 
             assertTrue(mesh.sentTyping.isEmpty())
@@ -1317,8 +1317,62 @@ class ChatViewModelTest {
             // A rotation re-runs the screen's restore effect; a draft since cleared must not come back.
             assertEquals("", vm.consumeRestoredDraft())
 
+            // The restore itself comes back through the composer's collector, indistinguishable from a
+            // keystroke. It is not one: the row already holds this text, and saving it again would re-stamp
+            // `updatedAt` and float "Draft: …" back over a message that landed after it.
+            vm.onDraftChanged("half a sentence")
+            verify(exactly = 0) { drafts.save(any(), any()) }
+
             vm.onDraftChanged("half a sentence more")
-            verify { drafts.save(Conversations.NEARBY, "half a sentence more") }
+            verify(exactly = 1) { drafts.save(Conversations.NEARBY, "half a sentence more") }
+            // A recomposition (rotation, a screen popped off the chat) re-reports the unchanged text.
+            vm.onDraftChanged("half a sentence more")
+            verify(exactly = 1) { drafts.save(any(), any()) }
+        }
+
+    @Test
+    fun aRestoredDraftIsNotATypingCue() =
+        runTest {
+            coEvery { drafts.load(Conversations.NEARBY) } returns "half a sentence"
+            val vm = vm()
+            vm.onChatForeground()
+            assertEquals("half a sentence", vm.consumeRestoredDraft())
+
+            // The screen's typing collector reports the restore the way it reports a typed character — on a
+            // warm device the collectors are already running when the read lands. The peer must not see
+            // "typing…" with nothing to follow.
+            vm.onUserTyping("half a sentence")
+            advanceUntilIdle()
+            assertTrue(mesh.sentTyping.isEmpty())
+
+            // The first report past the restored text is the user.
+            vm.onUserTyping("half a sentence!")
+            advanceUntilIdle()
+            assertEquals(listOf(Conversations.NEARBY), mesh.sentTyping)
+        }
+
+    @Test
+    fun withNoStoredDraftTheComposersEmptyReportIsNotASaveAndTheFirstKeystrokeIs() =
+        runTest {
+            val vm = vm() // the relaxed repository loads ""
+            assertEquals("", vm.consumeRestoredDraft())
+
+            // The composer's initial snapshot, now that the (empty) draft has been taken: nothing to keep.
+            vm.onDraftChanged("")
+            verify(exactly = 0) { drafts.save(any(), any()) }
+
+            vm.onDraftChanged("h")
+            verify(exactly = 1) { drafts.save(Conversations.NEARBY, "h") }
+
+            // After an accepted send the row is dropped directly; the field's own empty report that follows
+            // matches what the row now holds, and the next keystroke starts a fresh draft.
+            vm.send("h")
+            advanceUntilIdle()
+            verify { drafts.clear(Conversations.NEARBY) }
+            vm.onDraftChanged("")
+            verify(exactly = 1) { drafts.save(any(), any()) }
+            vm.onDraftChanged("again")
+            verify(exactly = 1) { drafts.save(Conversations.NEARBY, "again") }
         }
 
     @Test

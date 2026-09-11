@@ -164,3 +164,41 @@ ordinary v10 → v11 path.
 
 One line above is now historical: regenerating the v11 JSON reproduces `7b5ce4f6…`, not the `350606fc…` that
 identified the old two-column shape.
+
+## Amended 2026-09-11 — a report that matches the row is not an edit
+
+Work item #42: putting the draft back was indistinguishable from typing it. `MessageInput` watches the field
+through two `snapshotFlow` collectors, and a `setTextAndPlaceCursorAtEnd` reaches them exactly as a keystroke
+does — so the restore sent the peer a "typing…" cue with nothing to follow, and re-persisted the same text
+with a fresh `updatedAt`, which floated `Draft: …` back over a message that had landed after it. Whether the
+cue fired depended on whether the collectors were already running when the DB read landed (on a warm device,
+yes); the re-stamp happened in either order, because in the other one the collector's *initial* snapshot
+already holds the text and reports it. The same re-stamp followed every recomposition of the composer after
+the take — a rotation, a profile screen popped off the chat — for the same reason.
+
+The ordering is not ours to control and the collectors cannot tell the two apart, so the ViewModel does, from
+what it knows: `draftTaken` became `persisted`, the text the row holds (or is scheduled to hold — the writes
+are debounced), and `onDraftChanged` saves only a report that differs from it. The typing cue carries the
+field's text now (`onUserTyping(text)`), and the ViewModel skips the one equal to the draft it handed over,
+clearing that memory on the first report past it — a variable only that function touches, since the two
+collectors are separate coroutines and their order per emission is not guaranteed. `drop(1)` stays on the
+typing collector: it is what keeps a share-sheet prefill quiet, which lands before the collector starts.
+
+*Rejected:* an `InputTransformation`, which sees user input only and would have been the exact "did the user
+edit" signal — but the debug `DemoComposer` drives the real field programmatically and relies on the
+snapshotFlow firing the real cue for the trailer capture. Restoring before the take and letting the initial
+snapshot absorb it only works in one of the two orderings.
+
+`ChatViewModelTest` pins all three: the restore's echo and a recomposition's re-report are not saved, the
+restore is not a cue and the first edit past it is, and the empty report after an accepted send is a no-op
+with the next keystroke starting a fresh draft.
+
+Verified on the Pixel 9 (the composer, driven over adb) against the Pixel 7 (the peer, driven by the bridge)
+on 2026-09-11, with the pre-fix build as the control first. Control: type, leave, peer sends, re-open
+untouched, leave → the row flipped back to `Draft: …` every time; the typing cue never reached the P7 in four
+warm opens and one cold one, so on this hardware the composer evidently composes *after* the read lands (the
+message window takes longer than the one-row draft read) and `drop(1)` was already absorbing it — the
+re-stamp was the half that showed. Fixed build, same script: the row stays on the peer's message after the
+untouched re-open, after a rotation inside the chat, and after a profile screen popped off it; no cue in any
+of the three (`…debug.STATE`'s `typing` map on the P7, which the bridge's own `…debug.TYPING` proved live);
+one typed character then cues and reads `Draft: …`, and clearing the field hands the row back.

@@ -475,11 +475,23 @@ class ChatViewModel(
     private val storedDraft: Deferred<String> = viewModelScope.async { drafts.load(conversationId) }
 
     /**
-     * True once the screen has taken [storedDraft] — see [consumeRestoredDraft]. Until then no draft report
+     * The text this thread's drafts row holds — or is scheduled to hold, since writes are debounced — and
+     * null until the screen has taken [storedDraft] (see [consumeRestoredDraft]). Until then no draft report
      * is persisted, so a chat opened and left again before the read lands keeps what was in it.
-     * Main-thread-confined, like [dismissedUrl].
+     *
+     * A report equal to it is not an edit. The composer's collectors cannot tell a keystroke from a
+     * programmatic set, so the restore itself comes back through [onDraftChanged] — on whichever side of the
+     * collector's start the read lands — and so does the fresh initial snapshot after a recomposition (a
+     * rotation, a profile screen popped off the chat). Persisting either would re-stamp the row's `updatedAt`
+     * and float `Draft: …` back over a message that landed after it. Main-thread-confined, like [dismissedUrl].
      */
-    private var draftTaken = false
+    private var persisted: String? = null
+
+    /**
+     * The text [consumeRestoredDraft] handed to the composer, until the user types past it. Read and cleared
+     * only by [onUserTyping], so the draft collector racing the typing one cannot change its answer.
+     */
+    private var restored: String? = null
 
     /** Bumped when the draft is sent or a card dismissed, so a fetch still in flight cannot stage into the next draft. */
     private val draftEpoch = MutableStateFlow(0)
@@ -1093,8 +1105,12 @@ class ChatViewModel(
             failedUrls.clear()
         }
         // Keep it for next time (debounced, on the application scope). Blank text drops the row, so emptying
-        // the field is how a draft is thrown away deliberately.
-        if (draftTaken) drafts.save(conversationId, text)
+        // the field is how a draft is thrown away deliberately. Text the row already holds is not an edit —
+        // see [persisted] for the two ways it comes back.
+        val held = persisted ?: return
+        if (text == held) return
+        persisted = text
+        drafts.save(conversationId, text)
     }
 
     /**
@@ -1103,9 +1119,10 @@ class ChatViewModel(
      * back with it. Taking it is also what starts persisting edits: see [onDraftChanged].
      */
     suspend fun consumeRestoredDraft(): String {
-        if (draftTaken) return ""
+        if (persisted != null) return ""
         val text = storedDraft.await()
-        draftTaken = true
+        persisted = text
+        restored = text.ifEmpty { null }
         return text
     }
 
@@ -1263,6 +1280,7 @@ class ChatViewModel(
                         draftEpoch.value++
                         // The post is away; what is about to be cleared from the field is not a draft any more.
                         drafts.clear(conversationId)
+                        if (persisted != null) persisted = ""
                         _clearInput.tryEmit(Unit)
                     }
 
@@ -1567,8 +1585,9 @@ class ChatViewModel(
                     draftEpoch.value++
                     // The message is away; what is about to be cleared from the field is not a draft any more.
                     // Dropped here rather than left to the field's own empty report, which a user who sends
-                    // and immediately leaves never gives us.
+                    // and immediately leaves never gives us — and which, when it does come, now matches the row.
                     drafts.clear(conversationId)
+                    if (persisted != null) persisted = ""
                     // Guard stays held until the screen reports the field cleared (onInputCleared), so no
                     // duplicate can slip through the tryEmit -> collect -> clearText hop.
                     _clearInput.tryEmit(Unit)
@@ -2150,12 +2169,17 @@ class ChatViewModel(
      * The user changed the (non-empty) draft: emit a best-effort "now typing" cue, throttled to at most one per
      * [TYPING_SEND_INTERVAL_MS] and only while the chat is foregrounded. Fires immediately on the first keystroke
      * after an idle gap (the throttle window has elapsed), so the indicator appears promptly on the other side.
-     * Cheap and fire-and-forget — the screen may call this on every keystroke.
+     * Cheap and fire-and-forget — the screen may call this on every keystroke, with the field's [text].
      */
-    fun onUserTyping() {
+    fun onUserTyping(text: String) {
         // Never in the bridged room: there is nobody on the far side to show a cue to, and the frame it would
         // mint carries no room of its own, so `MeshManager.sendTyping` would publish it as a *Nearby* cue.
         if (isBridged) return
+        // The restore is not a keystroke: the screen's collector reports the stored draft being put back the
+        // same way it reports a typed character, and a cue for it shows the peer "typing…" with nothing to
+        // follow. The first report past it is the user, and from then on every one is.
+        if (text == restored) return
+        restored = null
         val now = System.currentTimeMillis()
         if (!chatForeground.value || now - lastTypingSentAt < TYPING_SEND_INTERVAL_MS) return
         lastTypingSentAt = now

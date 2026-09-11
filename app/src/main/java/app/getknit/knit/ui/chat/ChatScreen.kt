@@ -446,7 +446,8 @@ fun ChatScreen(
     }
     // Put back what was left in this thread's composer and never sent. One-shot (the ViewModel hands the
     // stored text over once), and it defers to anything already in the field, so the share-sheet prefill
-    // above wins on the one open that has one.
+    // above wins on the one open that has one. The composer's collectors report this set like a keystroke;
+    // the ViewModel knows the text it handed over and treats that report as no edit (no cue, no re-save).
     LaunchedEffect(Unit) {
         val restored = viewModel.consumeRestoredDraft()
         if (restored.isNotEmpty() && inputState.text.isEmpty()) inputState.setTextAndPlaceCursorAtEnd(restored)
@@ -696,7 +697,7 @@ internal fun ChatScreenContent(
     onCancelTransfer: (id: String) -> Unit = {},
     onClearAttachment: () -> Unit,
     onReceiveImage: (Uri) -> Unit,
-    onTyping: () -> Unit,
+    onTyping: (String) -> Unit,
     // Every edit of the draft, so a link in it can grow a preview card; defaulted for the @Preview and test call sites.
     onDraftChanged: (String) -> Unit = {},
     // True while that card is being fetched; the input bar shows a transient "Loading preview…" line.
@@ -3461,7 +3462,7 @@ private fun MessageInput(
     onClearAttachment: () -> Unit,
     onReceiveImage: (Uri) -> Unit,
     onSend: () -> Unit,
-    onTyping: () -> Unit = {},
+    onTyping: (String) -> Unit = {},
     onDraftChanged: (String) -> Unit = {},
     linkPreviewLoading: Boolean = false,
     // The LoRa body budget for this draft ([loraBudgetFor]), or null when it would not ride the board. Above
@@ -3553,14 +3554,18 @@ private fun MessageInput(
             }
     }
     // Fire a best-effort "now typing" cue on each edit of a non-empty draft; the ViewModel throttles to at
-    // most one per interval. drop(1) skips the initial snapshot so opening a thread doesn't announce typing.
+    // most one per interval. drop(1) skips the initial snapshot so opening a thread doesn't announce typing —
+    // that covers an empty field and a share-sheet prefill, which lands before this starts. A restored draft
+    // can land on either side of it, so the text goes along and the ViewModel, which handed it over, tells
+    // the restore from a keystroke.
     LaunchedEffect(state) {
         snapshotFlow { state.text.toString() }
             .drop(1)
-            .collect { text -> if (text.isNotBlank()) onTyping() }
+            .collect { text -> if (text.isNotBlank()) onTyping(text) }
     }
-    // The draft itself, for the link-preview loop — including the initial snapshot, so a draft that already
-    // holds a link when the input composes can grow its card.
+    // The draft itself, for the link-preview loop and for keeping — including the initial snapshot, so a draft
+    // that already holds a link when the input composes can grow its card. The ViewModel ignores a report
+    // that matches what it already keeps, so the restore and a recomposition's re-report stay unpersisted.
     LaunchedEffect(state) {
         snapshotFlow { state.text.toString() }.collect(onDraftChanged)
     }

@@ -40,7 +40,7 @@ FEATURES
 SAFER SPACES
 On-device filtering screens out abusive text and explicit images, offline, nothing sent anywhere. Sensitive content is blurred behind a tap to reveal, and any sender is one tap from blocked.
 
-Knit is funded by tips — no ads, no tracking, nothing sold. Tip once at ko-fi.com/zaventh or monthly at liberapay.com/zaventh.
+Knit is funded by tips — no ads, no tracking, nothing sold. Tip once at ko-fi.com/getknit or monthly at liberapay.com/zaventh.
 
 HOW IT WORKS
 Knit runs two radios at once — Wi-Fi Aware and Bluetooth Low Energy — so it works on phones with only one. Best allowed to run in the background. Requires Android 10 or newer.

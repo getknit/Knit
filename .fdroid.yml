@@ -27,7 +27,7 @@ WebSite: https://github.com/getknit/knit
 SourceCode: https://github.com/getknit/knit
 IssueTracker: https://github.com/getknit/knit/issues
 Changelog: https://github.com/getknit/knit/releases
-Donate: https://ko-fi.com/zaventh
+Donate: https://ko-fi.com/getknit
 # Bare user/group name, not a URL — F-Droid builds the link itself. Field order matters to
 # fdroidserver's canonical writer: Liberapay goes directly after Donate.
 Liberapay: zaventh

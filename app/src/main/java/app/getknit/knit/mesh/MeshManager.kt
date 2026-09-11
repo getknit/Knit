@@ -290,6 +290,11 @@ class MeshManager(
     // a frame that raced ahead of its sender's profile still lands. The inbound complement of flushPendingFor.
     private val pendingInbound = PendingInbound(metrics = metrics)
 
+    // The group-key sibling: a seed ctl DM that arrived for a group we hold no row for yet (the creator
+    // floods the seed before the first frame that carries the roster) is parked before the ratchet commit
+    // and replayed by InboundPipeline.reconcileGroup once the group lands. Swept beside pendingInbound.
+    private val pendingGroupKeys = PendingGroupKeys(metrics = metrics)
+
     // Receiver-side state for the best-effort "now typing" indicator: which senders are typing in which
     // conversation. Ephemeral and never custodied — a typing cue is fire-and-forget, so nothing is persisted
     // (a live typer re-cues within the TTL). Populated by handleTyping, cleared by deliverChat on a real message.
@@ -327,6 +332,7 @@ class MeshManager(
             keyExchange = keyExchange,
             ackSync = ackSync,
             pendingInbound = pendingInbound,
+            pendingGroupKeys = pendingGroupKeys,
             typingTracker = typingTracker,
             ratchet = ratchet,
             groupRatchet = groupRatchet,
@@ -595,6 +601,7 @@ class MeshManager(
         sessionScope?.launch {
             forwardSync.sweepExpired()
             pendingInbound.sweepExpired()
+            pendingGroupKeys.sweepExpired()
             keyExchange.sweepExpired() // age out stale (unauthenticated) key-wants; blob fetches that never arrived
             blobExchange.sweepExpired()
             keyExchange.retryMissing()
@@ -1700,6 +1707,7 @@ class MeshManager(
             receipts.deleteOrphans() // ...and per-recipient delivery rows left by a deleted thread or a retention trim
             forwardSync.sweepExpired() // drop carried DMs whose TTL elapsed while we were down
             pendingInbound.sweepExpired() // and any key-wait frames whose TTL lapsed (in-memory, so usually a no-op)
+            pendingGroupKeys.sweepExpired()
             keyExchange.sweepExpired() // stale unauthenticated key-wants
             blobExchange.sweepExpired() // never-arriving blob fetches
             sweepLocalStorage() // bound the local messages/peers tables against a Sybil flood (Message Requests hardening)
@@ -1723,6 +1731,7 @@ class MeshManager(
                 delay(FORWARD_SWEEP_INTERVAL_MS)
                 forwardSync.sweepExpired()
                 pendingInbound.sweepExpired()
+                pendingGroupKeys.sweepExpired()
                 keyExchange.sweepExpired()
                 blobExchange.sweepExpired()
                 sweepLocalStorage()
@@ -2459,6 +2468,7 @@ class MeshManager(
                         "dropped=${s.framesDropped} drops=${s.dropsByReason} " +
                         "keyReq=${s.keyRequestsSent} keyServed=${s.keysServed} keyRecovered=${s.keysRecovered} " +
                         "framesHeld=${s.framesHeld} framesReplayed=${s.framesReplayed} " +
+                        "groupSeedsHeld=${s.groupSeedsHeld} groupSeedsReplayed=${s.groupSeedsReplayed} " +
                         "receiptsResent=${s.receiptsResent} " +
                         "receiptsSealed=${s.receiptsSealed}/${s.receiptsSealedFallback} " +
                         "dmSealedV3=${s.dmSealedV3} ticksUnsigned=${s.ticksUnsigned} " +

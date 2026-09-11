@@ -91,7 +91,8 @@ import java.util.concurrent.ConcurrentHashMap
  *    before dispatch returns and before the router schedules the relay, so the copy is durable pre-flood.
  *  - **replay-runs-last** — [handleProfile] pins the sender's key, then replays any frames parked in
  *    [PendingInbound] by re-entering [onDeliver] as its **last** step, so the key + any deviceTag block are
- *    applied first.
+ *    applied first. The group analogue: [reconcileGroup] commits the roster, then replays any seed ctl DM
+ *    parked in [PendingGroupKeys] because it arrived for a group we did not hold yet.
  *  - **no-throw-out-of-onDeliver** — [verifyInbound]/[decrypt] are `runCatching`-wrapped so a failure drops
  *    the frame locally but never throws, letting the router still relay it (it runs after onDeliver returns).
  *
@@ -122,6 +123,9 @@ class InboundPipeline(
     private val keyExchange: KeyExchange,
     private val ackSync: AckSync,
     private val pendingInbound: PendingInbound,
+    // Seeds that outran their group's first frame, parked before the ratchet commit and replayed by
+    // [reconcileGroup] once the roster lands. Defaults for the rigs that never see a group-key ctl.
+    private val pendingGroupKeys: PendingGroupKeys = PendingGroupKeys(metrics = metrics),
     private val typingTracker: TypingTracker,
     private val ratchet: RatchetSessions,
     private val groupRatchet: GroupRatchetSessions,
@@ -272,7 +276,7 @@ class InboundPipeline(
         val plane = planeOf(fromNodeId, kind)
         when (env.type) {
             FrameType.CHAT -> {
-                handleChat(env, plane, signed = wire.sig.isNotEmpty())
+                handleChat(env, plane, signed = wire.sig.isNotEmpty(), source = InboundFrame(wire, env, fromNodeId, kind))
             }
 
             FrameType.GROUP_UPDATE -> {
@@ -566,6 +570,10 @@ class InboundPipeline(
         // False for the one frame shape verifyInbound admits without a signature (ADR 059); the decrypt
         // path is what authenticates it, so it must know.
         signed: Boolean = true,
+        // The verified inbound unit this frame arrived as, so a seed ctl DM for a group we do not hold yet
+        // can be parked verbatim ([PendingGroupKeys]) and replayed later. Null for the carriers that have no
+        // wire frame to park (a board post); those never carry a group key.
+        source: InboundFrame? = null,
     ) {
         val me = identity.nodeId()
         // Blocked sender: never persist, notify, or reconcile their group/roster state — we surface nothing
@@ -592,7 +600,7 @@ class InboundPipeline(
         // A DM addressed to someone else: we're only relaying it (the router floods it onward). It
         // isn't ours, so don't persist, notify, or ack it.
         if (!Conversations.isForMe(env.recipientId, me)) return
-        decryptAndDeliver(env, content, me, Conversations.idFor(env.senderId, env.recipientId, me), plane, signed)
+        decryptAndDeliver(env, content, me, Conversations.idFor(env.senderId, env.recipientId, me), plane, signed, source)
     }
 
     /**
@@ -753,6 +761,7 @@ class InboundPipeline(
         conversationId: String,
         plane: DeliveryPlane,
         signed: Boolean = true,
+        source: InboundFrame? = null,
     ) {
         val enc = content.enc
         // The unsigned door (ADR 059) admits one envelope shape — v3, DM form — and it is judged before any
@@ -790,7 +799,7 @@ class InboundPipeline(
             }
 
             EncEnvelope.isDmRatchetVersion(enc.v) -> {
-                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId, plane, signed) }.getOrElse {
+                runCatching { decryptAndDeliverV2(env, content, enc, me, conversationId, plane, signed, source) }.getOrElse {
                     Log.w(TAG, "drop v2 chat ${env.id}: ${it.message}")
                     metrics.onDropped(DropReason.DECRYPT_FAILED)
                 }
@@ -837,6 +846,7 @@ class InboundPipeline(
         conversationId: String,
         plane: DeliveryPlane,
         signed: Boolean = true,
+        source: InboundFrame? = null,
     ) {
         val wireHeader = enc.r
         // v2/v3 are DM-only; a group-addressed or header-less envelope is malformed by construction.
@@ -875,6 +885,9 @@ class InboundPipeline(
             return
         }
         if (unsignedButNotATick(signed, plain)) return
+        // Decided on the peek, before anything commits: a seed for a group we do not hold yet is parked
+        // whole and the chain is left where it was, so the replay after the roster lands opens it again.
+        if (source != null && holdGroupKeyForUnknownGroup(source, plain)) return
         val commit: suspend (suspend () -> Unit) -> Boolean = { onOpened ->
             val committed =
                 db.withWriteTransaction {
@@ -1243,6 +1256,42 @@ class InboundPipeline(
             return
         }
         reactions.apply(ReactionEntity(rp.messageId, env.senderId, rp.emoji, env.sentAt))
+    }
+
+    /**
+     * The seed-before-roster race ([PendingGroupKeys]): a `CTL_GROUP_KEY` naming a group we hold no row
+     * for — the creator distributes the seed *before* the first group frame carries the roster, and custody
+     * serves the two in either order — is parked verbatim and reported held (true), so the caller skips the
+     * ratchet commit that would otherwise consume the frame with its seeds unadopted. [adoptGroupSeeds]'s
+     * own gates (left, roster membership) are not pre-judged here: a row exists for those cases and the
+     * frame takes the ordinary path. A group with a full hold (the per-group cap) also takes the ordinary
+     * path — the pre-existing behaviour — rather than being refused outright.
+     */
+    private suspend fun holdGroupKeyForUnknownGroup(
+        source: InboundFrame,
+        plain: MessageContent,
+    ): Boolean {
+        if (plain.ctl != MessageContent.CTL_GROUP_KEY) return false
+        val groupId = plain.gk?.groupId ?: return false
+        if (groups.find(groupId) != null) return false
+        if (!pendingGroupKeys.hold(groupId, source)) return false
+        Log.i(TAG, "holding group key ${source.envelope.id} from ${source.envelope.senderId}: group $groupId not held yet")
+        return true
+    }
+
+    /**
+     * The release half: every seed parked for [groupId] re-enters [onDeliver] now the group row exists, so
+     * the same open that was skipped commits and adopts — and the post-commit `replayGroupCustody` then
+     * decrypts the group frame that just carried the roster (already custodied by the time this runs). Runs
+     * **after** [reconcileGroup]'s transaction has committed: the adoption reads the row. Like the custody
+     * replay, the frame re-enters with `relay = false` — no second flood, no second fan-out; verify, custody
+     * and the exists-gate are all idempotent.
+     */
+    private suspend fun replayHeldGroupKeys(groupId: String) {
+        pendingGroupKeys.release(groupId).forEach {
+            metrics.onGroupSeedReplayed()
+            onDeliver(WireEnvelope(relay = false, sig = it.wire.sig, signed = it.wire.signed), it.env, it.fromNodeId, it.kind)
+        }
     }
 
     /**
@@ -1843,6 +1892,10 @@ class InboundPipeline(
         // so the adopt-on-arrival clock check matches), then adopt on arrival. Outside the transaction — it's a
         // network-bound blob fetch, not a DB write.
         photo.pull?.let { pullGroupPhoto(group.id, it, photo.clock) }
+        // The row exists now: any seed that arrived ahead of it can be adopted. Cheap when nothing is parked
+        // (the usual case), and it must run before a chat frame's own decrypt so the first message of a new
+        // group opens on its first pass rather than on the custody replay.
+        replayHeldGroupKeys(group.id)
         return true
     }
 

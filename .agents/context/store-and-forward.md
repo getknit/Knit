@@ -180,6 +180,23 @@ re-serve after the buffer expires (broadcast custody closed the old gap where a 
 `PendingInbound` TTL as its only recovery window). Surfaced in Diagnostics (`framesHeld`/`framesReplayed`)
 and JVM-tested (`PendingInboundTest`).
 
+## PendingGroupKeys (park-until-roster)
+
+The group-key sibling, keyed by **group id**. A member learns of a new group from the roster on its first
+frame (`reconcileGroup`), but the creator floods the sender-key seed (`CTL_GROUP_KEY`) *before* that frame,
+and custody serves the two in either order — so the seed can land on a phone with no group row, where
+adoption is (correctly) refused. The DM ratchet used to consume the frame anyway, which lost the seed for
+good: every re-serve was `RATCHET_DUPLICATE`, the group's first message sat at `GROUP_RATCHET_NO_KEY`, and
+no re-send trigger was due (lab repro 2026-09-10, Pixel 9 → Pixel 7). `decryptAndDeliverV2` now decides on
+the lock-free peek: a seed for a group with no row is parked **before the ratchet commit**, so the chain
+never advances past it, and `reconcileGroup` replays it (relay = false, like the custody replay) as its
+last step once the row is committed — the replay then adopts, acks, and `replayGroupCustody` decrypts the
+frame that carried the roster. Unlike `PendingInbound` the parked frame is already authenticated, so the
+TTL is long (1 h, well inside the 48 h skipped-key retention that keeps the replay openable); bounded by a
+per-group cap and a global cap. Oracles: `groupSeedsHeld`/`groupSeedsReplayed` in `…debug.STATE` and the
+metrics line, and `holding group key … not held yet` under `MeshManager`. JVM-tested (`PendingGroupKeysTest`,
+the three `InboundPipelineTest` seed-before-roster cases); device-verified 2026-09-10.
+
 ## Custody carries our own frames too — the self-frame silent drop
 
 Because custody now carries our **own** frames too, `verifyInbound` short-circuits any frame whose

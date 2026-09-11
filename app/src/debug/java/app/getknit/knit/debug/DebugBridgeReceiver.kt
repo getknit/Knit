@@ -901,6 +901,10 @@ class DebugBridgeReceiver :
             .put("groupSealedV1Fallback", snap.groupSealedV1Fallback)
             .put("groupSeedsSent", snap.groupSeedsSent)
             .put("groupSeedsAdopted", snap.groupSeedsAdopted)
+            // A seed that outran its group's first frame, parked and then replayed once the roster landed
+            // (PendingGroupKeys); held without a matching replay is a member that never saw the roster.
+            .put("groupSeedsHeld", snap.groupSeedsHeld)
+            .put("groupSeedsReplayed", snap.groupSeedsReplayed)
             .put("groupKeyRequestsSent", snap.groupKeyRequestsSent)
             // Read these together: a trickle of adoptions with no local mint is healthy gossip, while
             // mint/adopt alternating on one device is a lineage that is not collapsing (SPOOL_PROTOCOL §3.2).

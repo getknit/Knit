@@ -41,12 +41,23 @@ passes on the fix — verified 2026-09-11. Its first run also found a real route
 from the same neighbor** counted as an overhear and cancelled the relay of a newcomer's profile past the first
 hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
 
-- **Write a scenario at user level and end it in the oracle.** `node("alice")`, `link`/`linkAll`,
-  `awaitAcquainted`, `sendDm`/`createGroup`/`sendGroup`, then `assertConverged(nodes, atLeast) { thread }`:
-  every node holds the same decrypted messages, none stranded on `pendingKey`, no parked group seed that never
-  replayed. The oracle is what catches the bug the scenario's author did not think to assert; add a per-node
-  invariant there, not in individual scenarios. `createGroup` mirrors `ContactsViewModel.createGroup` (the
-  ViewModel needs a Main dispatcher) — if that body changes, change both.
+- **Write a scenario at user level and end it in the oracle.** `node("alice")`, `link`/`linkAll`/`unlink`,
+  `awaitAcquainted`, `sendDm`/`createGroup`/`sendGroup`, then `assertConverged(nodes, atLeast) { thread }`,
+  four checks in order, each awaited then asserted with a per-node listing: **messages** (same decrypted set
+  on every node, none on `pendingKey`), **ticks** (every message a node authored is acked by every other
+  node — the ADR 018 sealed receipt, a second protocol under every message), **custody** (`liveFingerprint`
+  parity across the nodes plus any `carriers = listOf(bob)` that relayed but are not party to the thread — the
+  soak oracle for the "digests diverge, NAN churns" class), and no parked seed that never replayed. The
+  oracle is what catches the bug the scenario's author did not think to assert; add a per-node invariant
+  there, not in individual scenarios. `createGroup` mirrors `ContactsViewModel.createGroup` (the ViewModel
+  needs a Main dispatcher) — if that body changes, change both.
+- **The group-tick debounce is shortened, not bypassed.** A group tick toward an absent author batches 45 s
+  before escalating into custody (`AckSync.TICK_BATCH_DEBOUNCE_MS`); a tick crossing a relay would never
+  land inside the await, so `MeshManager` takes `tickDebounceMs` and the lab passes 300 ms. Same path, same
+  frames — only the policy number moves. Production wiring takes the default.
+- **`CustodyLabTest` is the store-and-forward set:** a DM and a whole new group (seed + roster) reaching a
+  member who was away, through a carrier the sender has since left; and a partition where both sides send
+  (and one founds a group) before the merge.
 - **Order is a knob.** `alice.transport.hold(bob.transport)` parks what Alice sends Bob;
   `release(bob.transport) { reorder }` delivers it in the order you choose — how "custody serves the two in
   either order" becomes a deterministic case. Partition (group frames first, say) rather than blindly

@@ -152,6 +152,11 @@ class MeshManager(
     // sentAt) are deterministic under test. Defaults to the real clock, so production wiring (the Koin
     // module) is unchanged; mirrors the house convention — ForwardSync(clock = …), AckSync, KeyExchange.
     private val clock: () -> Long = { System.currentTimeMillis() },
+    // How long a group tick toward an absent author batches before it escalates into custody
+    // ([AckSync.TICK_BATCH_DEBOUNCE_MS]). A policy number, injectable like [clock] so the multi-node JVM
+    // harness (`mesh/lab`) can watch a tick cross a relay in milliseconds rather than wait out the field
+    // value; production wiring takes the default.
+    private val tickDebounceMs: Long = AckSync.TICK_BATCH_DEBOUNCE_MS,
     // Puts a post typed in the Meshtastic room on this phone's own board — the LoRa transport's
     // [PublicChannelSink]. A lambda rather than the interface for the reason [MeshPostSink] is a seam in the
     // other direction: the two ends construct each other, so one of them has to be late-bound. The default
@@ -255,6 +260,7 @@ class MeshManager(
             canSeal = { authorId -> canSealTickTo(authorId) },
             originateTick = { authorId, ackIds -> originateDeliveryTick(authorId, ackIds) },
             flushScope = { sessionScope },
+            debounceMs = tickDebounceMs,
         )
 
     // The ✓✓ for a DM that arrived over the LoRa board waits here (ADR 054): a burst from one author becomes

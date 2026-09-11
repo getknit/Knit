@@ -105,6 +105,24 @@ class MeshLab {
     }
 
     /**
+     * Takes a link down (out of range). Frames parked on it are lost, as a torn-down link loses them. Settles
+     * for [SETTLE_MS] afterwards so every peer's neighbor collector observes the departure: `neighbors` is a
+     * conflating `StateFlow`, and a link that comes back inside the collector's wake-up is a link that never
+     * went down — no newcomer, so no profile push, no digest exchange, no re-send of an owed group seed. No
+     * radio flaps that fast; the lab can.
+     */
+    suspend fun unlink(
+        a: LabNode,
+        b: LabNode,
+    ) {
+        a.transport.disconnect(b.transport)
+        settle()
+    }
+
+    /** See [unlink]. */
+    internal suspend fun settle() = withContext(Dispatchers.Default) { delay(SETTLE_MS) }
+
+    /**
      * Brings a whole topology up at once: every link exists before any node's `neighbors` moves. With links
      * made one at a time, a relay fired in the gap between two of them (the router's 0–150 ms jitter) can
      * miss a node that is not linked yet, and the frame then waits for the 60 s custody re-offer — real-world
@@ -139,26 +157,41 @@ class MeshLab {
         }
 
     /**
-     * The universal oracle. Every node in [nodes] holds the same set of ordinary (decrypted) messages in the
-     * thread [conversation] names on it (a group id is the same everywhere; a DM thread is named after the
-     * *other* party, so it differs per node) — and at least [atLeast] of them — none stranded as `pendingKey`,
-     * and no node is sitting on a parked group seed that never replayed. Waits first (the thing under test is
-     * exactly whether the messages land), then asserts with a per-node listing so a failure reads as a diff.
+     * The universal oracle, in four parts, each awaited (the thing under test is exactly whether it happens)
+     * and then asserted with a per-node listing so a failure reads as a diff:
+     *
+     * 1. **Messages.** Every node in [nodes] holds the same set of ordinary (decrypted) messages in the thread
+     *    [conversation] names on it (a group id is the same everywhere; a DM thread is named after the *other*
+     *    party, so it differs per node) — at least [atLeast] of them, none stranded as `pendingKey`.
+     * 2. **Ticks.** Every message a node authored has been acked by every other node in [nodes] — the sealed
+     *    receipt (ADR 018) is a second cross-node protocol under every message, and "the sender never saw a
+     *    tick" was cf94a06's user-visible half.
+     * 3. **Custody.** The store-and-forward stores of [nodes] and [carriers] hold the same live id set
+     *    (`liveFingerprint` parity, the same oracle the device soaks use). Two stores that quietly disagree
+     *    while delivery looks fine are the "NAN churns forever" class (the self-frame wipe divergence).
+     * 4. No node is sitting on a parked group seed that never replayed.
+     *
+     * [carriers] are nodes that relayed and custodied but are not party to the thread — they take part in the
+     * custody check only.
      */
     suspend fun assertConverged(
         nodes: List<LabNode>,
         atLeast: Int,
+        carriers: List<LabNode> = emptyList(),
         timeoutMs: Long = AWAIT_MS,
         conversation: (LabNode) -> String,
     ) {
-        val expected = nodes.map { it.name }
+        val names = nodes.map { it.name }
         val landed =
-            await(nodes.size, timeoutMs) {
+            await(1, timeoutMs) {
                 val sets = nodes.map { it.decrypted(conversation(it)) }
-                if (sets.all { it.size >= atLeast } && sets.distinct().size == 1) nodes.size else 0
+                if (sets.all { it.size >= atLeast } && sets.distinct().size == 1) 1 else 0
             }
-        val listing = nodes.map { n -> "  ${n.name}: ${n.decrypted(conversation(n)).map { it.second }}" }.joinToString("\n")
-        assertTrue("messages did not converge across $expected within ${timeoutMs}ms:\n$listing", landed)
+        assertTrue(
+            "messages did not converge across $names within ${timeoutMs}ms:\n${listing(nodes, conversation)}\n" +
+                nodes.joinToString("\n") { it.metricsLine() },
+            landed,
+        )
         nodes.forEach { n ->
             val pending =
                 n.messages
@@ -166,10 +199,27 @@ class MeshLab {
                     .first()
                     .filter { it.pendingKey }
             assertTrue("${n.name} has messages stranded on pendingKey: ${pending.map { it.id }}", pending.isEmpty())
+        }
+
+        val ticked = await(1, timeoutMs) { if (nodes.all { n -> n.missingAcks(conversation(n), nodes).isEmpty() }) 1 else 0 }
+        val owed = nodes.map { n -> "  ${n.name}: ${n.missingAcks(conversation(n), nodes)}" }.joinToString("\n")
+        assertTrue("delivery ticks did not converge across $names within ${timeoutMs}ms (message → who never acked):\n$owed", ticked)
+
+        val stores = nodes + carriers
+        val custodied = await(1, timeoutMs) { if (stores.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
+        val ids = stores.map { n -> "  ${n.name}: ${n.custodyIds().sorted()}" }.joinToString("\n")
+        assertTrue("custody did not converge across ${stores.map { it.name }} within ${timeoutMs}ms:\n$ids", custodied)
+
+        stores.forEach { n ->
             val snap = n.metrics.snapshot()
             assertEquals("${n.name} parked a group seed that never replayed", snap.groupSeedsHeld, snap.groupSeedsReplayed)
         }
     }
+
+    private suspend fun listing(
+        nodes: List<LabNode>,
+        conversation: (LabNode) -> String,
+    ): String = nodes.map { n -> "  ${n.name}: ${n.decrypted(conversation(n)).map { it.second }}" }.joinToString("\n")
 
     /** Waits until every pair in [nodes] has pinned the other's key — the profile exchange a link-up starts. */
     suspend fun awaitAcquainted(vararg nodes: LabNode) {
@@ -186,6 +236,16 @@ class MeshLab {
         const val AWAIT_MS = 15_000L
         const val POLL_MS = 25L
         const val WINDOW = 500
+
+        /**
+         * A group tick toward an absent author batches this long before it escalates into custody. The field
+         * value is 45 s ([app.getknit.knit.mesh.AckSync.TICK_BATCH_DEBOUNCE_MS]); the lab shortens it so a tick
+         * crossing a relay converges inside [AWAIT_MS] without changing which path it takes.
+         */
+        const val TICK_DEBOUNCE_MS = 300L
+
+        /** How long a departure is left visible before the next topology change ([unlink], [LabNode.restart]). */
+        const val SETTLE_MS = 100L
     }
 }
 
@@ -236,11 +296,14 @@ class LabNode internal constructor(
         private set
     lateinit var metrics: MeshMetrics
         private set
+    private lateinit var receipts: MessageReceiptRepository
+    private lateinit var forwardStore: ForwardRepository
     private var scope: CoroutineScope? = null
 
     /** The self-certifying id, computed once from the bundle exactly as [Identity.nodeId] does. */
     val nodeId: String = NodeId.fromPublicKeyBundle(identity.publicKeyBundle())
 
+    @Suppress("LongMethod") // the DI module's wiring, mirrored in one place on purpose
     internal suspend fun boot() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { this.scope = it }
         transport = LabTransport(nodeId)
@@ -250,13 +313,13 @@ class LabNode internal constructor(
         messages = MessageRepository(db.messageDao())
         peers = PeerRepository(db.peerDao(), settings, identity)
         val reactions = ReactionRepository(db.reactionDao(), db)
-        val receipts = MessageReceiptRepository(db.messageReceiptDao(), messages, db)
+        receipts = MessageReceiptRepository(db.messageReceiptDao(), messages, db)
         val blobs =
             BlobRepository(db.blobDao(), db.messageDao(), db.peerDao(), settings, db.blobVerdictDao(), db.groupDao(), db.forwardDao(), db)
         val groupRatchetStore = GroupRatchetRepository(db.groupRatchetDao())
         val groupRoots = GroupRootRepository(db.groupRootDao())
         groups = GroupRepository(db.groupDao(), messages, db, groupRatchetStore, groupRoots)
-        val forwardStore = ForwardRepository(db.forwardDao(), StoreDigest(), db)
+        forwardStore = ForwardRepository(db.forwardDao(), StoreDigest(), db)
         // The leaves with a hardware or UI side. Text allowed, images never classified, notifications swallowed.
         val allowAll = mockk<ScopedTextModerator> { coEvery { classify(any(), any()) } returns TextVerdict.ALLOWED }
         val imageScreening = ImageScreeningService(mockk<ImageModerator>(relaxed = true), db.blobVerdictDao(), allowAll)
@@ -298,6 +361,7 @@ class LabNode internal constructor(
                 scope = scope,
                 metrics = metrics,
                 db = db,
+                tickDebounceMs = MeshLab.TICK_DEBOUNCE_MS,
             )
         manager.start()
         // The session's collectors subscribe asynchronously; a frame sent before that is emitted into nobody.
@@ -306,9 +370,13 @@ class LabNode internal constructor(
         }
     }
 
-    /** Process death and relaunch: the live stack goes, the identity, database and settings stay. */
+    /**
+     * Process death and relaunch: the live stack goes, the identity, database and settings stay. The links
+     * go too, and the peers get [MeshLab.SETTLE_MS] to notice before the node is back (see [MeshLab.unlink]).
+     */
     suspend fun restart() {
         shutdownLive()
+        withContext(Dispatchers.Default) { delay(MeshLab.SETTLE_MS) }
         boot()
     }
 
@@ -385,6 +453,36 @@ class LabNode internal constructor(
             .map { it.id to it.body }
             .toSet()
 
+    /**
+     * For every ordinary message this node authored in [conversationId]: the members of [among] (other than
+     * itself) whose delivery receipt has not reached it, keyed by body. Empty when every tick has landed.
+     */
+    suspend fun missingAcks(
+        conversationId: String,
+        among: List<LabNode>,
+    ): Map<String, List<String>> {
+        val others = among.filter { it !== this }
+        return messages
+            .observeNewestMessages(conversationId, MeshLab.WINDOW)
+            .first()
+            .filter { it.kind == MessageEntity.KIND_NORMAL && it.senderId == nodeId }
+            .associate { m ->
+                val ackers =
+                    receipts
+                        .observeForMessage(m.id)
+                        .first()
+                        .map { it.ackerNodeId }
+                        .toSet()
+                m.body to others.filter { it.nodeId !in ackers }.map { it.name }
+            }.filterValues { it.isNotEmpty() }
+    }
+
+    /** The custody store's live id set, as the digest exchange advertises it. */
+    suspend fun custodyIds(): Set<String> = forwardStore.liveIds(System.currentTimeMillis()).toSet()
+
+    /** `liveFingerprint`: the digest recomputed over the live rows — what two converged stores share. */
+    suspend fun custodyFingerprint(): Long = StoreDigest.fingerprint(custodyIds())
+
     /** Whether this node has pinned [peer]'s key (its profile arrived). */
     suspend fun knows(peer: LabNode): Boolean = peers.find(peer.nodeId)?.pubKey != null
 
@@ -392,7 +490,8 @@ class LabNode internal constructor(
     fun metricsLine(): String =
         metrics.snapshot().let {
             "  $name: originated=${it.framesOriginated} delivered=${it.framesDelivered} relayed=${it.framesRelayed} " +
-                "deduped=${it.framesDeduped} suppressed=${it.framesSuppressed} drops=${it.dropsByReason}"
+                "deduped=${it.framesDeduped} suppressed=${it.framesSuppressed} drops=${it.dropsByReason} " +
+                "seedsSent=${it.groupSeedsSent} seedsAdopted=${it.groupSeedsAdopted} seedsHeld=${it.groupSeedsHeld} seedsReplayed=${it.groupSeedsReplayed} keyReq=${it.groupKeyRequestsSent}"
         }
 
     /** The DM thread id between this node and [peer], as this node names it. */

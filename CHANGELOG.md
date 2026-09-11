@@ -65,6 +65,8 @@ document:
   how much airtime it has spent, so a restart can't hand the radio a fresh allowance to burn through.
 - A paired LoRa radio no longer stops sending until you reopen Knit. Messages could pile up unsent while the
   radio still showed as connected, and nothing moved again until the app was restarted.
+- The first message in a new group now reaches every member. It used to get lost on a member's phone, and
+  the sender never saw a tick, because Knit sent the key for it a moment before it sent the group itself.
 
 ## [2.5.0](https://github.com/getknit/knit/releases/tag/v2.5.0) — 2026-09-08T07:54:21Z
 

@@ -289,6 +289,9 @@ class InboundPipelineTest {
          * that needs time to pass — the per-peer replacement floors are the only such case — advances it.
          */
         var nowMs = 42L
+
+        // The seed-before-roster hold, on the rig clock so a test can age a parked seed past its TTL.
+        val pendingGroupKeys = PendingGroupKeys(now = { nowMs }, metrics = metrics)
         val flushed = mutableListOf<String>()
         val resealed = mutableListOf<String>()
         val redistributed = mutableListOf<Pair<String, String>>()
@@ -371,6 +374,7 @@ class InboundPipelineTest {
                     keyExchange = keyExchange,
                     ackSync = ackSync,
                     pendingInbound = pendingInbound,
+                    pendingGroupKeys = pendingGroupKeys,
                     typingTracker = typingTracker,
                     ratchet = ratchet,
                     groupRatchet = groupRatchet,
@@ -5210,6 +5214,119 @@ class InboundPipelineTest {
             )
 
             assertEquals(listOf<Pair<String?, String?>>(group.id to alice.nodeId), rig.custodyReplays)
+        }
+
+    // --- the seed-before-roster race (PendingGroupKeys) ---
+
+    /** The wire roster of a group we do NOT hold a row for — what a creator's first frame carries. */
+    private fun Rig.unknownRatchetGroup(vararg others: Party): GroupInfo {
+        val members = listOf(self.nodeId) + others.map { it.nodeId }
+        return group(members = members, createdBy = others.first().nodeId)
+    }
+
+    @Test
+    fun aSeedThatOutransItsGroupsFirstFrameIsParkedAndAdoptedWhenTheRosterLands() =
+        runTest {
+            // The lab repro (Pixel 9 → Pixel 7, 2026-09-10): the creator floods the epoch seed BEFORE the
+            // first group frame, so it reaches a member who holds no group row yet. Adoption is gated on
+            // holding the group, and the ratchet used to consume the ctl frame regardless — the seed was
+            // lost and the first message sat at GROUP_RATCHET_NO_KEY with nothing due to re-send it.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.unknownRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-early", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            // Parked, not consumed: no chain, no ack, no custody replay — and the group row still absent.
+            assertTrue(rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).isEmpty())
+            assertFalse(rig.originated.any { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+            assertTrue(rig.custodyReplays.isEmpty())
+            assertFalse(rig.groupMap.containsKey(group.id))
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsAdopted)
+
+            rig.deliver(alice, author.groupFrame(group, "g-first", "stock group"))
+
+            // The roster landed, the parked seed replayed and adopted, and the first message opened on its
+            // own first pass — never a NO_KEY drop, so the key-request heuristic was never even needed.
+            assertTrue(rig.groupMap.containsKey(group.id))
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsReplayed)
+            assertEquals(1, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
+            assertEquals("stock group", rig.msgMap["g-first"]?.body)
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+            assertEquals(0L, rig.drops(DropReason.RATCHET_DUPLICATE))
+            // The adoption's post-commit half ran as for any seed: the ack rode back, custody was replayed.
+            assertTrue(rig.originated.any { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+            assertEquals(listOf<Pair<String?, String?>>(group.id to alice.nodeId), rig.custodyReplays)
+            // And the seed frame kept the ctl contract on replay: never a message row, never a receipt.
+            assertFalse(rig.msgMap.containsKey("seed-early"))
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+        }
+
+    @Test
+    fun aParkedSeedLeavesTheChainWhereItWasSoItsReServeStillOpens() =
+        runTest {
+            // The property the hold rests on: parking happens before the ratchet commit. Even when the hold
+            // ages out (TTL, restart), a custody re-serve of the very same seed frame is a fresh open — not
+            // the RATCHET_DUPLICATE that consuming-then-discarding used to leave behind.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.unknownRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+            val seed =
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-aged", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed())))
+
+            rig.deliver(alice, seed)
+            rig.nowMs += 2 * HOUR_MS
+            assertEquals(1, rig.pendingGroupKeys.sweepExpired())
+            // The roster arrives with nothing parked any more: the pre-fix symptom, one NO_KEY drop…
+            rig.deliver(alice, author.groupFrame(group, "g-first", "stock group"))
+            assertEquals(1L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+            assertFalse(rig.msgMap.containsKey("g-first"))
+
+            // …and then custody re-serves the seed to a member who now holds the group.
+            rig.deliver(alice, seed)
+
+            assertEquals(0L, rig.drops(DropReason.RATCHET_DUPLICATE))
+            assertEquals(1, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsAdopted)
+            assertEquals(listOf<Pair<String?, String?>>(group.id to alice.nodeId), rig.custodyReplays)
+        }
+
+    @Test
+    fun aSeedForAGroupWeHoldTakesTheOrdinaryPathUntouched() =
+        runTest {
+            // The hold is only for a group with no row: a seed for one we already hold adopts inline, exactly
+            // as before, and never touches the buffer.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-known", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsAdopted)
+            assertTrue(rig.pendingGroupKeys.release(group.id).isEmpty())
         }
 
     private companion object {

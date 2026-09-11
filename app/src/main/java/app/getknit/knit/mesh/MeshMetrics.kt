@@ -194,6 +194,8 @@ class MeshMetrics {
     private val groupSealedV1Fallback = AtomicLong()
     private val groupSeedsSent = AtomicLong()
     private val groupSeedsAdopted = AtomicLong()
+    private val groupSeedsHeld = AtomicLong()
+    private val groupSeedsReplayed = AtomicLong()
     private val groupKeyRequestsSent = AtomicLong()
     private val groupRootsMinted = AtomicLong()
     private val groupRootsAdopted = AtomicLong()
@@ -433,6 +435,20 @@ class MeshMetrics {
     /** One fresh recv chain adopted from a member's seed distribution. */
     fun onGroupSeedAdopted() {
         groupSeedsAdopted.incrementAndGet()
+    }
+
+    /**
+     * One `CTL_GROUP_KEY` parked because it named a group we did not hold yet ([PendingGroupKeys]) — the
+     * seed that outran its group's first frame. Paired with [onGroupSeedReplayed]: a held count that never
+     * turns into a replay is a member that heard a seed and then never saw the roster.
+     */
+    fun onGroupSeedHeld() {
+        groupSeedsHeld.incrementAndGet()
+    }
+
+    /** One parked `CTL_GROUP_KEY` re-run through the deliver path once its group was reconciled. */
+    fun onGroupSeedReplayed() {
+        groupSeedsReplayed.incrementAndGet()
     }
 
     /**
@@ -883,6 +899,8 @@ class MeshMetrics {
             groupSealedV1Fallback = groupSealedV1Fallback.get(),
             groupSeedsSent = groupSeedsSent.get(),
             groupSeedsAdopted = groupSeedsAdopted.get(),
+            groupSeedsHeld = groupSeedsHeld.get(),
+            groupSeedsReplayed = groupSeedsReplayed.get(),
             groupKeyRequestsSent = groupKeyRequestsSent.get(),
             groupRootsMinted = groupRootsMinted.get(),
             groupRootsAdopted = groupRootsAdopted.get(),
@@ -987,6 +1005,8 @@ class MeshMetrics {
         val groupSealedV1Fallback: Long = 0,
         val groupSeedsSent: Long = 0,
         val groupSeedsAdopted: Long = 0,
+        val groupSeedsHeld: Long = 0,
+        val groupSeedsReplayed: Long = 0,
         val groupKeyRequestsSent: Long = 0,
         val groupRootsMinted: Long = 0,
         val groupRootsAdopted: Long = 0,

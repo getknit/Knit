@@ -87,6 +87,15 @@ matches on `(epoch, mintedAt)` and never rewinds the chain; adoption is gated on
 not having left it, and the sender being in the pinned roster; adoption is rate-limited (§10) so
 seed-minting cannot be a skipped-key pump.
 
+The "holding the group" gate has one ordering trap: a member learns of a new group from the roster on
+its first frame, but the creator's seed floods *before* that frame (§4), and custody serves the two in
+either order. A seed for a group with no local row is therefore **parked before the ratchet commit**
+(`PendingGroupKeys`, the `PendingInbound` sibling keyed by group id) and replayed by `reconcileGroup`
+once the roster lands — the chain never advanced past it, so the replay is an ordinary open. Consuming
+it and discarding the payload, the pre-2026-09-10 behaviour, lost the seed for good: every re-serve was
+a `RATCHET_DUPLICATE`, the first message sat at `GROUP_RATCHET_NO_KEY`, and neither the 3-distinct-frame
+key-request heuristic nor the floored re-send triggers below were due.
+
 The **outbox** (`group_key_sends`, one row per (group, member)) tracks `sentEpoch/sentAt/ackedAt`.
 Receivers acknowledge adoption with `ctl = CTL_GROUP_KEY_ACK` (`gk` carrying the groupId + epoch),
 which stamps `ackedAt` and stops re-sends. Re-send triggers: an inbound key-request (§7), the

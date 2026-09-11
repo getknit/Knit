@@ -139,6 +139,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
@@ -3792,7 +3798,18 @@ private fun MessageInput(
                                         .then(
                                             receiveContentListener?.let { Modifier.contentReceiver(it) } ?: Modifier,
                                         ).testTag("chat_input")
-                                        .semantics { contentDescription = messageHint },
+                                        .semantics { contentDescription = messageHint }
+                                        // Ctrl+Enter sends from a hardware keyboard, the one place a
+                                        // keyboard-only send is expected. Preview, so the field's own Enter
+                                        // handling never sees it and puts a newline in the draft first.
+                                        .onPreviewKeyEvent { event ->
+                                            val sendChord =
+                                                event.type == KeyEventType.KeyDown &&
+                                                    event.key == Key.Enter &&
+                                                    event.isCtrlPressed
+                                            if (sendChord) onSend()
+                                            sendChord
+                                        },
                                 // The byte cap replaces the character one rather than chaining after it: a
                                 // Meshtastic line is a fifth of [TextLimits.MESSAGE] at its most generous, so
                                 // the character cap could never be the one that bit.
@@ -3805,8 +3822,12 @@ private fun MessageInput(
                                         color = MaterialTheme.colorScheme.onSurface,
                                     ),
                                 lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                                onKeyboardAction = { onSend() },
+                                // Enter starts a new line; the send button (or Ctrl+Enter, above) sends. With
+                                // `ImeAction.Send` the soft keyboard replaced its Enter key with Send, so there
+                                // was no way to break a line on a phone at all. `Default` on a multi-line field
+                                // asks the IME for a plain Enter (`IME_FLAG_NO_ENTER_ACTION`), and no
+                                // `onKeyboardAction` so an IME that still reports an action can't send either.
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             )
                         }

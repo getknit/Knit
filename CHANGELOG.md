@@ -56,6 +56,8 @@ document:
 - A contact with no photo now gets their own colour behind their initial, and Knit picks the same one on
   every phone and in your notifications. A chat list full of people without photos no longer looks like a
   row of identical grey circles.
+- Enter in the message field now starts a new line instead of sending. The send button sends, so you can
+  write a message across several lines before you tap it, and on a hardware keyboard Ctrl+Enter sends too.
 
 ### Fixed
 

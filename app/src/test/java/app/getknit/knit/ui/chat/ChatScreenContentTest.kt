@@ -4,6 +4,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
@@ -11,6 +12,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasImeAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -18,9 +20,14 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.test.withKeyDown
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.AttachmentStore
@@ -63,6 +70,8 @@ class ChatScreenContentTest {
 
     private fun content(
         input: String,
+        // Held by a test that needs to read back what the field kept of its keystrokes.
+        inputState: TextFieldState = TextFieldState(input),
         replyingTo: ReplyRef? = null,
         state: ChatUiState = ChatUiState(isRoom = true, myNodeId = "me"),
         pendingAttachment: AttachmentStore.Ingested? = null,
@@ -82,7 +91,7 @@ class ChatScreenContentTest {
                 ChatScreenContent(
                     conversationId = Conversations.NEARBY,
                     state = liveState?.invoke() ?: state,
-                    inputState = TextFieldState(input),
+                    inputState = inputState,
                     pendingAttachment = pendingAttachment,
                     stagedLocation = stagedLocation,
                     onClearLocation = { clearedLocations++ },
@@ -350,6 +359,29 @@ class ChatScreenContentTest {
 
         assertEquals(1, sends)
         assertEquals(0, attaches)
+    }
+
+    /**
+     * Enter breaks the line and never sends: the soft keyboard is asked for a plain Enter rather than a Send
+     * action, and a hardware Enter lands in the draft. Ctrl+Enter is the keyboard's send, and it must not
+     * leave a newline behind in the draft on its way out.
+     */
+    @Test
+    fun enterStartsANewLineAndCtrlEnterSends() {
+        val state = TextFieldState("hello")
+        compose.setContent(content(input = "hello", inputState = state))
+
+        compose.onNodeWithTag("chat_input").assert(hasImeAction(ImeAction.Default))
+        compose.onNodeWithTag("chat_input").requestFocus()
+        compose.onNodeWithTag("chat_input").performKeyInput { pressKey(Key.Enter) }
+
+        assertEquals("hello\n", state.text.toString())
+        assertEquals(0, sends)
+
+        compose.onNodeWithTag("chat_input").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) } }
+
+        assertEquals(1, sends)
+        assertEquals("hello\n", state.text.toString())
     }
 
     @Test

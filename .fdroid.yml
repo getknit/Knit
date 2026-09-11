@@ -99,7 +99,7 @@ Builds:
 
   - versionName: 2.5.1
     versionCode: 21
-    commit: v2.5.1
+    commit: da943e1e97432bb839e9b791037f9a931ecd859a
     subdir: app
     gradle:
       - yes

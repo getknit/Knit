@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-09-08T07:54:21Z
+  updated: 2026-09-11T07:59:17Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -17,6 +17,17 @@ document:
 ---
 
 # Knit changelog
+
+## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
+
+> A LoRa radio that stopped sending, and a new group's first message that never arrived.
+
+### Fixed
+
+- A paired LoRa radio no longer stops sending until you reopen Knit. Messages could pile up unsent while the
+  radio still showed as connected, and nothing moved again until the app was restarted.
+- The first message in a new group now reaches every member. It used to get lost on a member's phone, and
+  the sender never saw a tick, because Knit sent the key for it a moment before it sent the group itself.
 
 ## [2.5.0](https://github.com/getknit/knit/releases/tag/v2.5.0) — 2026-09-08T07:54:21Z
 

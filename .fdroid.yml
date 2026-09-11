@@ -92,7 +92,14 @@ Builds:
 
   - versionName: 2.5.0
     versionCode: 20
-    commit: v2.5.0
+    commit: 93eabf2bd61b534d0f5dbfe3550ef3206a001be8
+    subdir: app
+    gradle:
+      - yes
+
+  - versionName: 2.5.1
+    versionCode: 21
+    commit: v2.5.1
     subdir: app
     gradle:
       - yes
@@ -110,5 +117,5 @@ AllowedAPKSigningKeys: b18a283d11797c2a84a008c1fcb9e1b864e7b4c3b301408f7a4a80624
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9.]+$
 UpdateCheckData: gradle.properties|knit\.versionCode=(\d+)|.|knit\.versionName=(.*)
-CurrentVersion: 2.5.0
-CurrentVersionCode: 20
+CurrentVersion: 2.5.1
+CurrentVersionCode: 21

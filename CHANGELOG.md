@@ -67,6 +67,8 @@ document:
   radio still showed as connected, and nothing moved again until the app was restarted.
 - The first message in a new group now reaches every member. It used to get lost on a member's phone, and
   the sender never saw a tick, because Knit sent the key for it a moment before it sent the group itself.
+- Leave a group and start it again with the same people, and the others get your messages once more. The
+  chat shows you rejoined, and nobody but you can put you back in.
 
 ## [2.5.0](https://github.com/getknit/knit/releases/tag/v2.5.0) — 2026-09-08T07:54:21Z
 

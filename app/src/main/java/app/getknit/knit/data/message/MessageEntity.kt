@@ -238,10 +238,17 @@ data class MessageEntity(
 
         /**
          * [kind]: the group was created. [senderId] is its creator (ourselves for a group we made).
-         * A group's id is the hash of its founding roster and membership only ever shrinks, so this is
-         * the only join-shaped event that exists — there is no "member joined".
+         * A group's id is the hash of its founding roster and nobody can be added to it, so this is the
+         * only join-shaped event for a *new* face — there is no "member joined"; a founding member who
+         * left and came back is [KIND_MEMBER_REJOINED].
          */
         const val KIND_GROUP_CREATED = 6
+
+        /**
+         * [kind]: a founding member who had left re-added themselves (only their own signed frame can —
+         * the mirror of [KIND_MEMBER_LEFT]), shown as a centered line.
+         */
+        const val KIND_MEMBER_REJOINED = 7
 
         /**
          * [kind]: a profile update for this contact was refused because it did not match their pinned

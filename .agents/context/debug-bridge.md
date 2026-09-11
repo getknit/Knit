@@ -130,6 +130,12 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   (a real fault → latched on the next launch); `kill` is the **negative control** — SIGKILL is recorded
   exactly as a force-stop is, so it must never latch no matter how often it fires.
 - `…debug.REACT` — `--es id <messageId> --es emoji <emoji>`. `…debug.HEAL` — nudge rescan/re-advertise.
+- `…debug.MKGROUP --es members <nodeId,…>` — creates (or re-opens a left) group with those members plus
+  this device, **locally only** (no frame; members learn of it on its first `SEND`), and prints its id — the
+  contacts UI cannot make a 2-member group (one selection = DM), and a locked device cannot drive it anyway.
+  `…debug.LEAVE --es conv <g-…>` is the group-details "Leave" (the signed `groupleave` floods, then the local
+  tombstone). Together they drive the leave → re-create → send flow of ADR 2026-09.v6fu headlessly: on the
+  receiver expect `holding group key … sender departed`, a `rejoin:` notice, then the message.
 - `…debug.NANFAIL` / `…debug.NANSTORM` — reproduce **getknit/Knit#9** (ADR 052 + 055) on hardware that does
   not have the bug. `NANFAIL --ei count N` arms N Wi-Fi Aware attaches to take their failure path without
   reaching `mgr.attach` (0 disarms) — the stand-in for a vendor HAL with no STA+NAN interface combination.

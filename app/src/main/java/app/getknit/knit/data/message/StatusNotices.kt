@@ -30,12 +30,44 @@ object StatusNotices {
         leftAt: Long,
     ): MessageEntity =
         notice(
-            id = "leave:$groupId:$leaverId",
+            id = leaveId(groupId, leaverId),
             subjectId = leaverId,
             conversationId = groupId,
             sentAt = leftAt,
             kind = MessageEntity.KIND_MEMBER_LEFT,
         )
+
+    /**
+     * [MessageEntity.KIND_MEMBER_REJOINED] — [memberId], who had left [groupId], re-added themselves with a
+     * frame stamped [rejoinedAt]. Same deterministic id shape as [memberLeft], so a leave/rejoin cycle keeps
+     * one line of each and the pair's `sentAt`s are the clocks the roster guards read: a rejoin only counts
+     * when its frame is newer than the recorded leave, and a leave only when newer than the recorded rejoin
+     * (a custody re-serve of either must not flip the roster back).
+     */
+    fun memberRejoined(
+        groupId: String,
+        memberId: String,
+        rejoinedAt: Long,
+    ): MessageEntity =
+        notice(
+            id = rejoinId(groupId, memberId),
+            subjectId = memberId,
+            conversationId = groupId,
+            sentAt = rejoinedAt,
+            kind = MessageEntity.KIND_MEMBER_REJOINED,
+        )
+
+    /** The row id of [memberLeft]'s notice — read back as the member's departure clock. */
+    fun leaveId(
+        groupId: String,
+        memberId: String,
+    ): String = "leave:$groupId:$memberId"
+
+    /** The row id of [memberRejoined]'s notice — read back as the member's rejoin clock. */
+    fun rejoinId(
+        groupId: String,
+        memberId: String,
+    ): String = "rejoin:$groupId:$memberId"
 
     /**
      * [MessageEntity.KIND_PEER_RENAMED] — [peerId] changed their display name from [previousName] to

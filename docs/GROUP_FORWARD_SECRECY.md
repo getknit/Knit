@@ -46,9 +46,15 @@ receipts/reactions stay cleartext-signed (separate roadmap item — since shippe
 form). Groups keep their existing model:
 fixed founding roster (≤8), no add, departure only by a member's own signed `groupleave` — enforced
 since the roster-integrity phase (`InboundPipeline.vetRoster`): the stored founding set only ever
-comes from a roster whose id **is** its hash, membership never grows, and only signed leaves shrink
-it. Group key state distributes secrets to exactly that roster, which is why the integrity phase
-lands first.
+comes from a roster whose id **is** its hash, the founding set never grows, and only signed leaves
+shrink the effective roster. The one growth of the *effective* roster is the mirror image of the
+leave: a founding member who left may re-add **themselves**, by a signed frame of their own that lists
+them as a member and is newer than their recorded leave (`InboundPipeline.rejoinBy`, 2026-09-11).
+Nobody can re-add anyone else, and the founding set — the id's preimage — is untouched. It exists
+because a group's id is the hash of its member set, so "create a group with the same people" after
+leaving resolves to the same group on every phone; without it the creator's re-create was a dead
+letter everywhere but their own device. Group key state distributes secrets to exactly the effective
+roster, which is why the integrity phase lands first.
 
 ## 2. Keys
 
@@ -214,8 +220,19 @@ send mints a fresh epoch distributed to the remaining members only. The leaver's
 via the 48 h sweep (their pre-leave frames may still legitimately re-serve). Local leave/delete
 purges all group ratchet state for the group.
 
-Rekey triggers **only** on a signed leave — never on roster shrinkage carried by a frame (vetRoster
-ignores those; anything else would let a forged roster remotely trigger rekey fan-out). The claim is
+A rejoin (§1's self-re-add) rekeys the same way, so the returning member reads nothing sealed while
+they were out (`GroupRepository.recordRejoin`, atomic with the roster change in `reconcileGroup`'s
+transaction). Membership itself is never rate-limited — the rejoiner is back the moment their frame
+lands — but the rekey it triggers is floored per (group, member) at one an hour
+(`InboundPipeline.REJOIN_REKEY_FLOOR_MS`), so a leave/rejoin loop cannot make every member re-mint and
+fan seeds out on each turn. Leave and rejoin are last-writer-wins on the member's own `sentAt`: the
+two deterministic notice rows (`leave:`/`rejoin:` + group + member) are the clocks, so a custody
+re-serve of a pre-leave frame cannot rejoin them and a re-served old leave cannot evict them again.
+The rejoiner's seed usually floods ahead of the frame that rejoins them — the seed-before-roster race
+in its second shape — and is parked in `PendingGroupKeys` under "sender departed" until it does.
+
+Rekey triggers **only** on a signed leave or rejoin — never on roster shrinkage carried by a frame
+(vetRoster ignores those; anything else would let a forged roster remotely trigger rekey fan-out). The claim is
 therefore *eventual*: a member who never receives the leave frame (custody TTL is 24 h; partitions
 can outlast it) keeps sealing under epochs the leaver holds until their own advance rules rotate —
 and keeps the leaver in their roster (and seed distribution) until the leave arrives. The mesh

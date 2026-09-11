@@ -20,6 +20,7 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.PeerRename
+import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.peer.PeerEntity
@@ -323,6 +324,7 @@ class InboundPipelineTest {
             }
             coEvery { messages.recipientOf(any()) } answers { msgMap[firstArg<String>()]?.recipientId }
             coEvery { messages.conversationOf(any()) } answers { msgMap[firstArg<String>()]?.conversationId }
+            coEvery { messages.sentAtOf(any()) } answers { msgMap[firstArg<String>()]?.sentAt }
             // The real repository writes the tick and the acker row in one transaction; the fake keeps that
             // pairing so the existing markReceived verifications still describe what the pipeline did.
             coEvery { receipts.record(any(), any(), any(), any()) } coAnswers {
@@ -5303,6 +5305,109 @@ class InboundPipelineTest {
             assertEquals(1, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
             assertEquals(1L, rig.metrics.snapshot().groupSeedsAdopted)
             assertEquals(listOf<Pair<String?, String?>>(group.id to alice.nodeId), rig.custodyReplays)
+        }
+
+    // --- self-rejoin: a founding member who left re-adds themselves by their own signed frame ---
+
+    /** Puts [member] in the rig's tombstones for [group] as `recordDeparture` leaves things: out of the
+     *  members, in `departed`, with the leave notice (their departure clock) stamped [leftAt]. */
+    private fun Rig.depart(
+        group: GroupInfo,
+        member: Party,
+        leftAt: Long,
+    ) {
+        val stored = checkNotNull(groupMap[group.id])
+        groupMap[group.id] =
+            stored.copy(
+                members = GroupMembersStore.encode(GroupMembersStore.decode(stored.members) - member.nodeId),
+                departed = GroupMembersStore.encode(GroupMembersStore.decode(stored.departed) + member.nodeId),
+            )
+        msgMap[StatusNotices.leaveId(group.id, member.nodeId)] = StatusNotices.memberLeft(group.id, member.nodeId, leftAt)
+    }
+
+    private fun Rig.members(groupId: String) = GroupMembersStore.decode(checkNotNull(groupMap[groupId]).members).toSet()
+
+    private fun Rig.departed(groupId: String) = GroupMembersStore.decode(checkNotNull(groupMap[groupId]).departed).toSet()
+
+    @Test
+    fun aDepartedMemberRejoinsByItsOwnFrameAndItsEarlySeedIsReplayed() =
+        runTest {
+            // The lab repro (Pixel 9, 2026-09-11): leave a group, then "create" it again with the same
+            // people — the same id everywhere — and send. The seed floods first (held: sender departed),
+            // then the frame that carries the roster rejoins the sender, the seed replays and adopts, and
+            // the message opens on its first pass.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            rig.depart(group, alice, leftAt = 10L)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-back", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+            assertTrue(rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).isEmpty())
+            assertEquals(setOf(alice.nodeId), rig.departed(group.id))
+
+            rig.deliver(alice, author.groupFrame(group, "g-back", "back again", sentAt = 20L))
+
+            assertEquals(setOf(rig.self.nodeId, alice.nodeId), rig.members(group.id))
+            assertTrue(rig.departed(group.id).isEmpty())
+            coVerify(exactly = 1) { rig.groups.recordRejoin(group.id, alice.nodeId, 20L, rekey = true) }
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsReplayed)
+            assertEquals(1, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
+            assertEquals("back again", rig.msgMap["g-back"]?.body)
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+
+            // A second leave/rejoin inside the hour restores membership again but does not rekey again —
+            // the fan-out floor.
+            rig.depart(group, alice, leftAt = 30L)
+            rig.deliver(alice, rig.groupUpdate(alice, group, sentAt = 40L))
+            assertEquals(setOf(rig.self.nodeId, alice.nodeId), rig.members(group.id))
+            coVerify(exactly = 1) { rig.groups.recordRejoin(group.id, alice.nodeId, 40L, rekey = false) }
+        }
+
+    @Test
+    fun aReServedPreLeaveFrameDoesNotRejoinADepartedMember() =
+        runTest {
+            // Custody re-serves a frame alice sent BEFORE she left — she was a member then, so it lists her.
+            // It must not undo the leave: the rejoin needs a frame newer than the recorded departure.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            rig.depart(group, alice, leftAt = 10L)
+
+            rig.deliver(alice, rig.groupUpdate(alice, group, sentAt = 5L))
+
+            assertEquals(setOf(rig.self.nodeId), rig.members(group.id))
+            assertEquals(setOf(alice.nodeId), rig.departed(group.id))
+            coVerify(exactly = 0) { rig.groups.recordRejoin(any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun anotherMembersFrameCannotReAddADepartedMember() =
+        runTest {
+            // Bob never saw alice's leave, so his roster still lists her. Only alice's own signature can
+            // lift her tombstone — the mirror of "only her own signed leave can remove her".
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pin(alice)
+            rig.pin(bob)
+            val group = rig.seedRatchetGroup(alice, bob)
+            rig.depart(group, alice, leftAt = 10L)
+
+            rig.deliver(bob, rig.groupUpdate(bob, group, sentAt = 20L))
+
+            assertEquals(setOf(rig.self.nodeId, bob.nodeId), rig.members(group.id))
+            assertEquals(setOf(alice.nodeId), rig.departed(group.id))
+            coVerify(exactly = 0) { rig.groups.recordRejoin(any(), any(), any(), any()) }
         }
 
     @Test

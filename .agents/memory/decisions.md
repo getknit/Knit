@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-117 decisions.
+118 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -128,6 +128,7 @@ carries; never renumber an old one.
 | [2026-09.ursc](decisions/2026-09-ursc-the-nearby-room-says-when-lora-airtime-is-spent.md) | The Nearby room says when LoRa airtime is spent | lora, ui |
 | [2026-09.v5ck](decisions/2026-09-v5ck-light-and-dark-are-a-per-app-night-mode.md) | Light and dark are a per-app night mode | ui, theme, settings |
 | [2026-09.v66c](decisions/2026-09-v66c-reactions-are-an-open-emoji-set-with-a-receive-side-length-cap.md) | Reactions are an open emoji set with a receive-side length cap | wire, ui, limits |
+| [2026-09.v6fu](decisions/2026-09-v6fu-a-founding-member-who-left-rejoins-by-their-own-signed-frame.md) | A founding member who left rejoins by their own signed frame | groups, roster, crypto |
 | [2026-09.wdfz](decisions/2026-09-wdfz-message-search-is-an-external-content-fts4-index-over-messages-body.md) | Message search is an external-content FTS4 index over messages.body | data, room, search, perf |
 | [2026-09.wnh6](decisions/2026-09-wnh6-search-is-one-screen-over-the-chat-list-s-own-universe.md) | Search is one screen over the chat list's own universe, and a hit opens the thread on one message | ui, search, navigation |
 | [2026-09.wtmz](decisions/2026-09-wtmz-a-large-file-goes-off-the-mesh.md) | A large file goes off the mesh, over a Wi-Fi group the two phones raise | transfer, mesh, wifi |

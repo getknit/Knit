@@ -86,6 +86,13 @@ class MessageRepository(
     suspend fun conversationOf(id: String): String? = dao.conversationOf(id)
 
     /**
+     * The `sentAt` of message [id], or null when we don't hold it. Read for the deterministic leave/rejoin
+     * notice rows ([app.getknit.knit.data.message.StatusNotices.leaveId] / `rejoinId`), whose `sentAt` is
+     * the member's own clock for that roster event.
+     */
+    suspend fun sentAtOf(id: String): Long? = dao.sentAtOf(id)
+
+    /**
      * Flips message [id]'s delivery tick, noting the plane the receipt arrived on ([via]). Idempotent, and
      * the plane is written only by the receipt that first flips the tick — see [MessageDao.markReceived].
      * This is the enum↔code boundary: the column stores [DeliveryPlane.code].

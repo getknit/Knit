@@ -118,6 +118,56 @@ class GroupRepositoryTest : RoomDbTest() {
         }
 
     @Test
+    fun `recordRejoin writes the notice and rekeys only when asked`() =
+        runTest {
+            seedGroup("g", listOf("a", "b", "c"))
+            groupRatchet.commitSend(sendChain("g"))
+
+            repo().recordRejoin("g", "b", rejoinedAt = 200L, rekey = true)
+
+            // Our send chain died with the membership change, exactly as on a departure…
+            assertNull(groupRatchet.sendChain("g"))
+            val notice = messages.observeNewestForConversation("g", 10).first().single()
+            assertEquals(MessageEntity.KIND_MEMBER_REJOINED, notice.kind)
+            assertEquals("b", notice.senderId)
+            assertEquals(200L, notice.sentAt)
+
+            // …and a floored rejoin (the caller's per-member bound) keeps it.
+            groupRatchet.commitSend(sendChain("g"))
+            repo().recordRejoin("g", "b", rejoinedAt = 300L, rekey = false)
+            assertEquals(1, groupRatchet.sendChain("g")?.epoch)
+            // The notice row is deterministic: the second rejoin moved the one line, not added another.
+            assertEquals(1, messages.observeNewestForConversation("g", 10).first().size)
+        }
+
+    @Test
+    fun `recordDeparture ignores a leave older than the member's recorded rejoin`() =
+        runTest {
+            // A custody re-serve of the leave that preceded a rejoin must not evict the member again:
+            // leave and rejoin are last-writer-wins on the member's own sentAt clock.
+            seedGroup("g", listOf("a", "b", "c"))
+            repo().recordRejoin("g", "b", rejoinedAt = 200L, rekey = false)
+
+            assertFalse(repo().recordDeparture("g", "b", leftAt = 100L))
+            assertTrue("b" in GroupMembersStore.decode(db.groupDao().findById("g")!!.members))
+
+            // A leave newer than the rejoin still applies.
+            assertTrue(repo().recordDeparture("g", "b", leftAt = 300L))
+            assertFalse("b" in GroupMembersStore.decode(db.groupDao().findById("g")!!.members))
+        }
+
+    private fun sendChain(groupId: String) =
+        GroupRatchetEngine.SendChain(
+            groupId = groupId,
+            epoch = 1,
+            seed = ByteArray(32),
+            chainKey = ByteArray(32),
+            count = 3,
+            mintedAt = 1L,
+            export = ByteArray(32),
+        )
+
+    @Test
     fun `recordDeparture is a no-op for a non-member`() =
         runTest {
             seedGroup("g", listOf("a", "b"))

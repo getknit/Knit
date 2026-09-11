@@ -3313,6 +3313,10 @@ private fun statusNoticeText(row: ChatRow): String? =
             stringResource(R.string.chat_notice_member_left, row.senderName)
         }
 
+        MessageEntity.KIND_MEMBER_REJOINED -> {
+            stringResource(R.string.chat_notice_member_rejoined, row.senderName)
+        }
+
         // body is the rename pair (PeerRename); the live label stands in for a new name the row lacks —
         // a row written before the new name was stored, or a peer who cleared theirs.
         MessageEntity.KIND_PEER_RENAMED -> {

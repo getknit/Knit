@@ -1269,10 +1269,11 @@ class InboundPipeline(
      * The seed-before-roster race ([PendingGroupKeys]): a `CTL_GROUP_KEY` naming a group we hold no row
      * for — the creator distributes the seed *before* the first group frame carries the roster, and custody
      * serves the two in either order — is parked verbatim and reported held (true), so the caller skips the
-     * ratchet commit that would otherwise consume the frame with its seeds unadopted. [adoptGroupSeeds]'s
-     * own gates (left, roster membership) are not pre-judged here: a row exists for those cases and the
-     * frame takes the ordinary path. A group with a full hold (the per-group cap) also takes the ordinary
-     * path — the pre-existing behaviour — rather than being refused outright.
+     * ratchet commit that would otherwise consume the frame with its seeds unadopted. The same race in its
+     * second shape: a sender we hold as *departed* ([rejoinBy]), whose seed for the re-created group floods
+     * ahead of the frame that rejoins them. [adoptGroupSeeds]'s other gates (left, a non-member) are not
+     * pre-judged here — the frame takes the ordinary path. A group with a full hold (the per-group cap)
+     * also takes the ordinary path — the pre-existing behaviour — rather than being refused outright.
      */
     private suspend fun holdGroupKeyForUnknownGroup(
         source: InboundFrame,
@@ -1280,9 +1281,15 @@ class InboundPipeline(
     ): Boolean {
         if (plain.ctl != MessageContent.CTL_GROUP_KEY) return false
         val groupId = plain.gk?.groupId ?: return false
-        if (groups.find(groupId) != null) return false
+        val group = groups.find(groupId)
+        val why =
+            when {
+                group == null -> "not held yet"
+                source.envelope.senderId in GroupMembersStore.decode(group.departed) -> "sender departed"
+                else -> return false
+            }
         if (!pendingGroupKeys.hold(groupId, source)) return false
-        Log.i(TAG, "holding group key ${source.envelope.id} from ${source.envelope.senderId}: group $groupId not held yet")
+        Log.i(TAG, "holding group key ${source.envelope.id} from ${source.envelope.senderId}: group $groupId $why")
         return true
     }
 
@@ -1829,9 +1836,10 @@ class InboundPipeline(
      *
      * The roster itself is **pinned, never overwritten**: a frame can only establish a group whose id
      * verifiably derives from its founding roster ([vetRoster]'s Adopt), and thereafter membership only
-     * shrinks, via signed `groupleave` frames ([GroupRepository.recordDeparture]) — group key state
-     * (docs/GROUP_FORWARD_SECRECY.md) distributes epoch seeds to exactly this roster, so its integrity
-     * is a security input, not presentation.
+     * shrinks, via signed `groupleave` frames ([GroupRepository.recordDeparture]) — with one mirror-image
+     * exception, a founding member who left re-adding *themselves* by their own signed frame
+     * ([rejoinBy]) — group key state (docs/GROUP_FORWARD_SECRECY.md) distributes epoch seeds to exactly
+     * this roster, so its integrity is a security input, not presentation.
      */
     private suspend fun reconcileGroup(
         group: GroupInfo,
@@ -1854,21 +1862,8 @@ class InboundPipeline(
             db.withWriteTransaction<PhotoDecision?> {
                 val existing = groups.find(group.id)
                 if (groupFrameRefused(group, senderId, existing, blocked)) return@withWriteTransaction null
-                val roster =
-                    when (val verdict = vetRoster(group, senderId, existing, me)) {
-                        is RosterVerdict.Accept -> {
-                            verdict.members
-                        }
-
-                        RosterVerdict.NotOurs -> {
-                            return@withWriteTransaction null
-                        }
-
-                        RosterVerdict.Refused -> {
-                            metrics.onDropped(DropReason.GROUP_ROSTER_REFUSED)
-                            return@withWriteTransaction null
-                        }
-                    }
+                val rejoining = existing != null && rejoinBy(group, senderId, existing, sentAt)
+                val roster = acceptedRoster(group, senderId, existing, me, rejoining) ?: return@withWriteTransaction null
 
                 // The name is shared only when explicitly set; an unnamed (blank/null) frame never clears a name
                 // someone else set. Adopt an incoming name only if it's newer (last-writer-wins on sentAt).
@@ -1878,6 +1873,7 @@ class InboundPipeline(
                 val takeIncoming = incomingName != null && sentAt >= keepClock
                 val decision = groupPhotoDecision(existing, group)
                 val createdAt = existing?.createdAt ?: sentAt
+                val (_, departed) = storedRoster(existing, senderId, rejoining)
                 groups.upsert(
                     GroupEntity(
                         groupId = group.id,
@@ -1887,12 +1883,15 @@ class InboundPipeline(
                         createdAt = createdAt,
                         nameUpdatedAt = if (takeIncoming) sentAt else keepClock,
                         left = false,
-                        departed = existing?.departed ?: GroupMembersStore.encode(emptyList()),
+                        // The tombstones are ours alone (never the frame's `departed`, see vetRoster); the one
+                        // way out of them is the member's own signed rejoin, already lifted in `departed`.
+                        departed = GroupMembersStore.encode(departed),
                         photoHash = decision.hash,
                         photoUpdatedAt = decision.clock,
                     ),
                 )
                 groupNotices(group, senderId, sentAt, existing, incomingName, keepName, takeIncoming, decision, createdAt)
+                if (rejoining) groups.recordRejoin(group.id, senderId, sentAt, rekey = rejoinRekeyDue(group.id, senderId))
                 decision
             } ?: return false
         // A newer photo whose bytes we don't hold yet: pull it hop-by-hop (after the upsert advanced the clock,
@@ -1941,6 +1940,87 @@ class InboundPipeline(
             messages.save(StatusNotices.groupRenamed(group.id, senderId, incomingName, sentAt))
         }
         photo.changedTo?.let { messages.save(StatusNotices.groupPhotoChanged(group.id, senderId, it, sentAt)) }
+    }
+
+    /** [vetRoster]'s verdict as the roster to store, or null for either refusal (the counted one counted). */
+    private fun acceptedRoster(
+        group: GroupInfo,
+        senderId: String,
+        existing: GroupEntity?,
+        me: String,
+        rejoining: Boolean,
+    ): List<String>? =
+        when (val verdict = vetRoster(group, senderId, existing, me, rejoining)) {
+            is RosterVerdict.Accept -> {
+                verdict.members
+            }
+
+            RosterVerdict.NotOurs -> {
+                null
+            }
+
+            RosterVerdict.Refused -> {
+                metrics.onDropped(DropReason.GROUP_ROSTER_REFUSED)
+                null
+            }
+        }
+
+    /**
+     * The pinned roster as `(members, departed)`, with [senderId]'s tombstone already lifted when
+     * [rejoining] — so [vetRoster] and the upsert read one consistent view. Empty pair for a first sight.
+     */
+    private fun storedRoster(
+        existing: GroupEntity?,
+        senderId: String,
+        rejoining: Boolean,
+    ): Pair<List<String>, List<String>> {
+        if (existing == null) return emptyList<String>() to emptyList()
+        val members = GroupMembersStore.decode(existing.members)
+        val departed = GroupMembersStore.decode(existing.departed)
+        return if (rejoining) (members + senderId) to (departed - senderId) else members to departed
+    }
+
+    /**
+     * Whether this frame re-adds its sender to a group they had left: the sender is in our tombstones,
+     * lists *itself* in the frame's roster, and the frame is newer than the recorded leave. The mirror of
+     * the signed `groupleave` — [verifyInbound] has proven the frame is the sender's own, so this is the
+     * one roster growth that needs no coordination: nobody can re-add anyone else (the tombstone is keyed
+     * on the signer), and nobody can be re-added against their will. The `sentAt` guard is what keeps a
+     * custody re-serve of a *pre-leave* frame (in which they were, of course, a member) from undoing the
+     * leave; its clock is the leave notice's `sentAt`, written atomically with the tombstone by
+     * [GroupRepository.recordDeparture], and a missing notice reads as "left at 0" — lenient, never a
+     * lock-out. Why it exists at all: a group's id is the hash of its member set, so "create a group with
+     * the same people" after leaving resolves to the *same* group everywhere, and without this the
+     * creator's `createGroup` "re-creating rejoins it" was only ever true on their own phone.
+     */
+    private suspend fun rejoinBy(
+        group: GroupInfo,
+        senderId: String,
+        existing: GroupEntity,
+        sentAt: Long,
+    ): Boolean {
+        if (senderId !in GroupMembersStore.decode(existing.departed)) return false
+        if (senderId !in group.members) return false
+        val leftAt = messages.sentAtOf(StatusNotices.leaveId(group.id, senderId)) ?: 0L
+        return sentAt > leftAt
+    }
+
+    // (groupId, memberId) -> when we last rekeyed for their rejoin. A rejoin always restores membership;
+    // this only bounds the *rekey* it triggers, so a member flipping leave/rejoin cannot make every other
+    // member re-mint and fan seeds out on each turn (the rekey-fan-out amplifier §6.1 guards against).
+    private val lastRejoinRekeyAt = ConcurrentHashMap<Pair<String, String>, Long>()
+
+    /** Checks-and-stamps the per-(group, member) rejoin-rekey floor. */
+    private fun rejoinRekeyDue(
+        groupId: String,
+        memberId: String,
+    ): Boolean {
+        val key = groupId to memberId
+        val now = clock()
+        val last = lastRejoinRekeyAt[key]
+        if (last != null && now - last < REJOIN_REKEY_FLOOR_MS) return false
+        lastRejoinRekeyAt[key] = now
+        return true
     }
 
     /**
@@ -1996,16 +2076,20 @@ class InboundPipeline(
      * "kick" another by asserting they left. Cost: a departure we never saw the signed leave for keeps
      * the leaver in our effective roster (leave-rekey is *eventual*, bounded by leave-frame
      * convergence — docs/GROUP_FORWARD_SECRECY.md §security claim).
+     *
+     * [rejoining] ([rejoinBy], decided by the caller) is the one growth: the sender's own tombstone is
+     * lifted and they return to the members ([storedRoster]) — in both accepted shapes, since the founding
+     * set is unchanged.
      */
     private fun vetRoster(
         group: GroupInfo,
         senderId: String,
         existing: GroupEntity?,
         me: String,
+        rejoining: Boolean = false,
     ): RosterVerdict {
         val incomingFounding = (group.members + group.departed.orEmpty()).distinct()
-        val storedMembers = existing?.let { GroupMembersStore.decode(it.members) }.orEmpty()
-        val storedDeparted = existing?.let { GroupMembersStore.decode(it.departed) }.orEmpty()
+        val (storedMembers, storedDeparted) = storedRoster(existing, senderId, rejoining)
         val storedFounding = (storedMembers + storedDeparted).toSet()
         // Not our group: nothing to vet and nothing to count — we relay and custody it regardless
         // (delivery-side gating only). Checked against the pin when we hold one, else the frame.
@@ -3011,6 +3095,13 @@ class InboundPipeline(
 
         /** Most acked ids applied from one sealed CTL_RECEIPT — 2× AckSync's send-side batch cap. */
         const val MAX_RECEIPT_ACKS = 2 * AckSync.MAX_BATCH_ACKS
+
+        /**
+         * How often one member's rejoin may force our rekey ([rejoinRekeyDue]). Membership itself is never
+         * floored — the rejoiner is back the moment their frame lands — only the epoch re-mint it triggers,
+         * so the worst a leave/rejoin loop costs the roster is one mint and one seed fan-out an hour.
+         */
+        const val REJOIN_REKEY_FLOOR_MS = 60 * 60_000L
 
         /**
          * The v2 DM failures that feed the session-reset heuristic (ADR 023) — the ratchet outcomes that

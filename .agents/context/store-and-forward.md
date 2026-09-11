@@ -191,9 +191,11 @@ no re-send trigger was due (lab repro 2026-09-10, Pixel 9 → Pixel 7). `decrypt
 the lock-free peek: a seed for a group with no row is parked **before the ratchet commit**, so the chain
 never advances past it, and `reconcileGroup` replays it (relay = false, like the custody replay) as its
 last step once the row is committed — the replay then adopts, acks, and `replayGroupCustody` decrypts the
-frame that carried the roster. Unlike `PendingInbound` the parked frame is already authenticated, so the
-TTL is long (1 h, well inside the 48 h skipped-key retention that keeps the replay openable); bounded by a
-per-group cap and a global cap. Oracles: `groupSeedsHeld`/`groupSeedsReplayed` in `…debug.STATE` and the
+frame that carried the roster. The same hold covers the race's second shape — a sender we hold as
+*departed*, whose seed for a re-created same-members group floods ahead of the frame that rejoins them
+(`rejoinBy`; the log line says `sender departed`). Unlike `PendingInbound` the parked frame is already
+authenticated, so the TTL is long (1 h, well inside the 48 h skipped-key retention that keeps the replay
+openable); bounded by a per-group cap and a global cap. Oracles: `groupSeedsHeld`/`groupSeedsReplayed` in `…debug.STATE` and the
 metrics line, and `holding group key … not held yet` under `MeshManager`. JVM-tested (`PendingGroupKeysTest`,
 the three `InboundPipelineTest` seed-before-roster cases); device-verified 2026-09-10.
 

@@ -323,6 +323,7 @@
     <string name="chat_group_leave_confirm_body">You\'ll stop receiving messages and this chat will be removed from this device.</string>
     <string name="chat_group_leave_confirm_action">Leave</string>
     <string name="chat_notice_member_left">%1$s left the chat</string>
+    <string name="chat_notice_member_rejoined">%1$s rejoined the chat</string>
 
     <!-- Status notices: centered, muted lines shown in a thread for an event rather than a message.
          Derived on-device from state changes (see MessageEntity.kind); none of them crosses the wire. -->

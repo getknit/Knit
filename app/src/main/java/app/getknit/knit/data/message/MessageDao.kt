@@ -86,6 +86,10 @@ interface MessageDao {
     @Query("SELECT conversationId FROM messages WHERE id = :id")
     suspend fun conversationOf(id: String): String?
 
+    /** The `sentAt` of the stored message [id], or null when it isn't held — a status notice read as a clock. */
+    @Query("SELECT sentAt FROM messages WHERE id = :id")
+    suspend fun sentAtOf(id: String): Long?
+
     /**
      * Flips the delivery tick for [id], recording the [DeliveryPlane] code ([via]) the receipt that did it
      * arrived on. Callers pass the enum through [app.getknit.knit.data.MessageRepository.markReceived].

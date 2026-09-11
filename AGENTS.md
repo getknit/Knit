@@ -80,6 +80,12 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   `scripts/gen-avatar-palette.py` generates; under Material You `KnitTheme` harmonizes it toward the
   wallpaper's primary (a 15°-capped Oklch hue turn, tone kept), and the shade draws the same slot the same
   way. Pass a name as the key only for a face with no identity behind it.
+- **When touching a group's roster — `reconcileGroup`/`vetRoster`, `groupleave`, `GroupRepository.recordDeparture`
+  / `recordRejoin`, `PendingGroupKeys`, or how a member learns of a new group:** READ
+  `docs/GROUP_FORWARD_SECRECY.md` §1 (the pinned founding roster) and §6.1 (leave-rekey), then ADR
+  2026-09.v6fu. A group's id is the hash of its member set, so "the same people" is always the same group;
+  membership shrinks only by your own signed leave and grows only by your own signed rejoin — nobody can add
+  or remove anyone else — and the seed a creator floods *before* the roster is parked, never consumed.
 - **When touching contact cards, the Add-by-link / share-link flow, deep links (`getknit.app/c`,
   `knit://`), or `mesh/IntroSync`:** READ `docs/CONTACT_CARD.md` (the card layout + golden vectors, the
   intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);

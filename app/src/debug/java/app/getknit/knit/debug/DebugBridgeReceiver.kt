@@ -246,6 +246,10 @@ class DebugBridgeReceiver :
                             handleMkGroup(intent)
                         }
 
+                        ACTION_LEAVE -> {
+                            handleLeave(intent)
+                        }
+
                         ACTION_REVIEW -> {
                             handleReview(context, intent)
                         }
@@ -1450,6 +1454,21 @@ class DebugBridgeReceiver :
     }
 
     /**
+     * Leaves the group [EXTRA_CONV] names, exactly as the group-details screen does (the signed `groupleave`
+     * floods first, then the local tombstone), so a locked lab device can run the leave → re-create (ADR
+     * 2026-09.v6fu's self-rejoin) flow headlessly: `LEAVE`, then `MKGROUP` with the same members, then `SEND`.
+     */
+    private suspend fun handleLeave(intent: Intent): JSONObject {
+        val groupId = intent.getStringExtra(EXTRA_CONV)?.trim().orEmpty()
+        if (!groupId.startsWith(Conversations.GROUP_ID_PREFIX)) return reply("error", "missing --es conv <g-…>")
+        val existing = groups.find(groupId) ?: return reply("error", "no such group")
+        if (existing.left) return reply("ok", "already left").put("groupId", groupId)
+        mesh.sendGroupLeave(groupId)
+        groups.leave(groupId)
+        return reply("ok", "left").put("groupId", groupId)
+    }
+
+    /**
      * Arms (or disarms, with `count` 0 or absent) forced Wi-Fi Aware attach failures — the lab stand-in for
      * getknit/Knit#9's chipset. Pair it with [ACTION_NANSTORM]: the failures are what make the attach path
      * reachable at all, since a transport that is attached returns from `attach()` before any of it.
@@ -1526,6 +1545,7 @@ class DebugBridgeReceiver :
         const val ACTION_REQNOTIF = "app.getknit.knit.debug.REQNOTIF"
         const val ACTION_FLAGMSG = "app.getknit.knit.debug.FLAGMSG"
         const val ACTION_MKGROUP = "app.getknit.knit.debug.MKGROUP"
+        const val ACTION_LEAVE = "app.getknit.knit.debug.LEAVE"
         const val ACTION_REVIEW = "app.getknit.knit.debug.REVIEW"
         const val ACTION_MODEL = "app.getknit.knit.debug.MODEL"
         const val ACTION_SPOOL = "app.getknit.knit.debug.SPOOL"

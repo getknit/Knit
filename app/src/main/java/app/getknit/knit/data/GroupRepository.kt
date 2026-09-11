@@ -48,6 +48,10 @@ class GroupRepository(
      * gone, never a member, or a group we've left) returns false, which both dedups a re-flooded leave
      * and tells the caller not to surface anything. The status row's id is deterministic so a replay
      * upserts the same row rather than duplicating it.
+     *
+     * A leave older than the member's recorded rejoin ([recordRejoin]'s notice) is also a no-op: once a
+     * member can come back, a custody re-serve of their earlier `groupleave` would otherwise evict them
+     * again. Leave and rejoin are last-writer-wins on the member's own `sentAt` clock.
      */
     suspend fun recordDeparture(
         groupId: String,
@@ -59,6 +63,8 @@ class GroupRepository(
             if (group.left) return@withWriteTransaction false
             val members = GroupMembersStore.decode(group.members)
             if (leaverId !in members) return@withWriteTransaction false
+            val rejoinedAt = messages.sentAtOf(StatusNotices.rejoinId(groupId, leaverId)) ?: 0L
+            if (leftAt <= rejoinedAt) return@withWriteTransaction false
             val departed = GroupMembersStore.decode(group.departed)
             dao.upsert(
                 group.copy(
@@ -80,6 +86,29 @@ class GroupRepository(
             messages.save(StatusNotices.memberLeft(groupId, leaverId, leftAt))
             true
         }
+
+    /**
+     * The mirror of [recordDeparture], for a founding member who left and re-added themselves with their
+     * own signed frame (`InboundPipeline.reconcileGroup` decides that — it is the only writer of the
+     * pinned roster, and has already moved [memberId] from `departed` back into `members` in this same
+     * transaction). This records the rest: a "member rejoined" notice stamped [rejoinedAt] (the frame's
+     * `sentAt`, the clock [recordDeparture] reads back), and — when [rekey] — the same rekey a departure
+     * forces: our send chains die so the next send mints a fresh epoch, distributed to the roster as it
+     * is *now*, and the rejoiner reads nothing sealed while they were out. [rekey] is the caller's
+     * per-(group, member) floor, so a leave/rejoin loop cannot make every member re-mint on each turn.
+     * The group's spool root is untouched: a rejoiner adopts the current one from the next gossip.
+     */
+    suspend fun recordRejoin(
+        groupId: String,
+        memberId: String,
+        rejoinedAt: Long,
+        rekey: Boolean,
+    ) {
+        db.withWriteTransaction {
+            if (rekey) groupRatchet.deleteSendChains(groupId)
+            messages.save(StatusNotices.memberRejoined(groupId, memberId, rejoinedAt))
+        }
+    }
 
     /**
      * Leaves [groupId]: tombstones the row (so inbound frames are dropped and never resurrect it) and

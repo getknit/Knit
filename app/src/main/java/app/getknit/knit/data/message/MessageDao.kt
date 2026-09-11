@@ -11,16 +11,15 @@ import kotlinx.coroutines.flow.Flow
 @Suppress("TooManyFunctions")
 @Dao
 interface MessageDao {
-    @Query("SELECT * FROM messages ORDER BY sentAt ASC")
-    fun observeAll(): Flow<List<MessageEntity>>
-
-    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY sentAt ASC")
-    fun observeForConversation(conversationId: String): Flow<List<MessageEntity>>
+    // There is deliberately no `SELECT * FROM messages` and no whole-thread read here: an accepted thread
+    // has no retention cap, so any such query would grow without bound. The chat screen reads a window
+    // (below) and the list screens read per-thread summaries (further down).
 
     /**
      * The newest [limit] messages in a thread, **newest first** — the chat screen's window (ADR: the thread
-     * reads a window, not the whole conversation). A long-lived thread runs to the retention cap (5,000 on an
-     * accepted thread, 2,000 in a room), and reading all of it was what made a cold open slow.
+     * reads a window, not the whole conversation). A room runs to its 2,000-row retention cap and an accepted
+     * thread has no cap at all (the sweep never trims it), so reading a whole thread was what made a cold open
+     * slow, and would only have got slower.
      *
      * The `id` tiebreak matches [deleteOldestInConversation]'s and is what makes the window *stable*: rows
      * sharing a `sentAt` would otherwise be free to reshuffle across the boundary as the limit grows, so a
@@ -251,9 +250,25 @@ interface MessageDao {
     @Query("SELECT DISTINCT conversationId FROM messages WHERE senderId = :me AND originNode IS NULL")
     suspend fun conversationsIAuthoredIn(me: String): List<String>
 
+    /**
+     * The live form of [conversationsIAuthoredIn] — the same rule, for the screens that partition threads
+     * into chats and requests and must keep agreeing with the notify gate as messages land.
+     */
+    @Query("SELECT DISTINCT conversationId FROM messages WHERE senderId = :me AND originNode IS NULL")
+    fun observeConversationsIAuthoredIn(me: String): Flow<List<String>>
+
     /** Every distinct conversation id with any message — the candidate set for counting pending requests. */
     @Query("SELECT DISTINCT conversationId FROM messages")
     suspend fun distinctConversations(): List<String>
+
+    /**
+     * The live form of [distinctConversations], minus threads whose every row is from a sender in [blocked]:
+     * the set of conversations the chat list and the requests inbox may show a row for. Any kind counts —
+     * a thread holding only a notice is still a thread. Served whole by the `(conversationId, kind, senderId)`
+     * index, so it never touches a row. An empty [blocked] expands to `NOT IN ()`, which SQLite reads as true.
+     */
+    @Query("SELECT DISTINCT conversationId FROM messages WHERE senderId NOT IN (:blocked)")
+    fun observeDistinctConversations(blocked: Collection<String>): Flow<List<String>>
 
     /**
      * Distinct node ids that have sent a message in [conversationId] — a group is "known" once one is.
@@ -285,6 +300,100 @@ interface MessageDao {
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE conversationId = :conversationId AND kind = 0)")
     suspend fun hasMessagesIn(conversationId: String): Boolean
 
+    /**
+     * The newest row per conversation whose `kind` is in [kinds] and whose sender is not in [blocked] — the
+     * chat list's preview, time, tick and sort key for every thread at once, without reading any thread.
+     * [kinds] are [MessageEntity.KIND_NORMAL] and friends (Room's `@Query` can't reference the constants):
+     * the chat list passes normal + file-transfer rows (the two kinds that speak for a row), the requests
+     * inbox normal rows only. A thread with no such row is absent here but still present in
+     * [observeDistinctConversations].
+     *
+     * Shape matters for cost. The driver is the table's distinct conversation set (a covering-index walk),
+     * and for each conversation the correlated subquery walks the `(conversationId, sentAt, id)` index
+     * backward and stops at the first row that passes the kind/blocked filters — one row in the common case.
+     * The `id DESC` tiebreak is [observeNewestForConversation]'s, so a burst of same-instant messages
+     * cannot flip a row's preview between emissions. The rows are returned newest-first. (The SQLite
+     * `SELECT *, MAX(sentAt) … GROUP BY` idiom would pick an arbitrary row on a tie and fetch every row.)
+     */
+    @Query(
+        "SELECT * FROM messages WHERE id IN (" +
+            "SELECT (SELECT n.id FROM messages AS n WHERE n.conversationId = c.conversationId " +
+            "AND n.kind IN (:kinds) AND n.senderId NOT IN (:blocked) " +
+            "ORDER BY n.sentAt DESC, n.id DESC LIMIT 1) " +
+            "FROM (SELECT DISTINCT conversationId FROM messages) AS c) " +
+            "ORDER BY sentAt DESC, id DESC",
+    )
+    fun observeNewestPerConversation(
+        kinds: Collection<Int>,
+        blocked: Collection<String>,
+    ): Flow<List<MessageEntity>>
+
+    /**
+     * Every (group, author) pair for ordinary messages in group threads — [sendersIn]'s rule (`kind = 0`,
+     * and the same reason for it) for every group at once, so the chat list and the requests inbox can ask
+     * "has a known peer posted here" with the sweep's and the notify gate's answer. Senders in [blocked] are
+     * left out, as their messages are everywhere else on those screens.
+     *
+     * [groupGlob] is [Conversations.GROUP_ID_PREFIX] + `*`, which [app.getknit.knit.data.MessageRepository]
+     * supplies. It is `GLOB`, not `LIKE`, on purpose: the indices collate BINARY, so `LIKE 'g-%'` cannot use
+     * one and walks the whole table, while `GLOB 'g-*'` is a range over the group rows of the
+     * `(conversationId, kind, senderId)` index and never touches a row.
+     */
+    @Query(
+        "SELECT DISTINCT conversationId, senderId FROM messages " +
+            "WHERE kind = 0 AND conversationId GLOB :groupGlob AND senderId NOT IN (:blocked)",
+    )
+    fun observeGroupSenders(
+        groupGlob: String,
+        blocked: Collection<String>,
+    ): Flow<List<ConversationSender>>
+
+    /**
+     * The chat list's unread badge for one thread: ordinary messages (`kind = 0`) newer than the read
+     * watermark [since] that are not ours and not from a sender in [blocked]. "Ours" is `senderId = me`
+     * with no `originNode` — a post heard on the Meshtastic radio sits in our sender column by convention
+     * and is somebody else's words, so it counts. A range seek on `(conversationId, sentAt, id)` reaches
+     * only the rows newer than the watermark, which for a thread that is read up to date is none.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId AND sentAt > :since " +
+            "AND kind = 0 AND NOT (senderId = :me AND originNode IS NULL) AND senderId NOT IN (:blocked)",
+    )
+    suspend fun countUnreadIn(
+        conversationId: String,
+        since: Long,
+        me: String,
+        blocked: Collection<String>,
+    ): Int
+
+    /**
+     * The channel the newest heard post in [conversationId] was tagged with, or null when none was — the
+     * Meshtastic room's title while the board is away (`meshRoomChannel`). Our own typed posts carry no
+     * channel and are stepped over; a blank name is no name.
+     */
+    @Query(
+        "SELECT originChannel FROM messages WHERE conversationId = :conversationId " +
+            "AND originChannel IS NOT NULL AND TRIM(originChannel) <> '' " +
+            "ORDER BY sentAt DESC, id DESC LIMIT 1",
+    )
+    fun observeNewestOriginChannel(conversationId: String): Flow<String?>
+
+    /** The newest `sentAt` in [conversationId], or null for an empty thread — the notification's mark-read watermark. */
+    @Query("SELECT MAX(sentAt) FROM messages WHERE conversationId = :conversationId")
+    suspend fun newestSentAt(conversationId: String): Long?
+
+    /**
+     * How many ordinary messages (`kind = 0`) somebody other than [me] has sent — the review prompt's
+     * "has this person heard from anyone" count. A heard Meshtastic post sits in our sender column, so it
+     * is not counted here (and is counted by [countMine]); the prompt's policy has always read it that way.
+     */
+    @Query("SELECT COUNT(*) FROM messages WHERE senderId <> :me AND kind = 0")
+    suspend fun countFromOthers(me: String): Int
+
+    /** How many rows [me] is the sender of, notices and heard posts included — see [countFromOthers]. */
+    @Query("SELECT COUNT(*) FROM messages WHERE senderId = :me")
+    suspend fun countMine(me: String): Int
+
     /** Per-conversation row count + newest sentAt, for the retention sweep's cap / age / thread-count decisions. */
     @Query("SELECT conversationId, MAX(sentAt) AS lastSentAt, COUNT(*) AS count FROM messages GROUP BY conversationId")
     suspend fun conversationActivity(): List<ConversationActivity>
@@ -312,4 +421,10 @@ data class ConversationActivity(
     val conversationId: String,
     val lastSentAt: Long,
     val count: Int,
+)
+
+/** Room projection for [MessageDao.observeGroupSenders]: one row per distinct (group, author) pair. */
+data class ConversationSender(
+    val conversationId: String,
+    val senderId: String,
 )

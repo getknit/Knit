@@ -37,6 +37,11 @@ document:
 
 ### Changed
 
+- Direct messages and group chats now keep every message, however long they run. Knit used to drop the
+  oldest once a chat passed 5,000, and the Nearby room and a paired radio's channel still keep only the last
+  30 days.
+- The chat list now opens and updates without going back through every message you have stored. A phone
+  with years of history gets to its chats as fast as a new one.
 - Your name, photo and status moved to their own screen. Settings still sits in the chat list's menu, and
   the first row on it opens your profile.
 - Menus, cards, dialogs and sheets now match the rest of the app. They had been drawing a grey-purple from

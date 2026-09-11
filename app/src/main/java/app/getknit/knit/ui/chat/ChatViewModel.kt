@@ -28,6 +28,7 @@ import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.meshRoomChannel
+import app.getknit.knit.data.message.newestOriginChannel
 import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.message.replyRef
 import app.getknit.knit.data.reaction.ReactionEntity
@@ -965,7 +966,7 @@ class ChatViewModel(
                         // gave it), else the newest post's, else the generic label — one rule with the
                         // chat list (`meshRoomChannel`), so the two agree.
                         isBridged -> {
-                            meshRoomChannel(mesh.lora.facts.primaryChannel, msgs)
+                            meshRoomChannel(mesh.lora.facts.primaryChannel, newestOriginChannel(msgs))
                                 ?: context.getString(R.string.meshtastic_title)
                         }
 

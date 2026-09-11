@@ -1,6 +1,7 @@
 package app.getknit.knit.data
 
 import app.getknit.knit.data.message.ConversationActivity
+import app.getknit.knit.data.message.ConversationSender
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageDao
@@ -10,26 +11,26 @@ import kotlinx.coroutines.flow.map
 
 /**
  * Single source of truth for chat messages. Retention caps ([sweepRetention]) bound the table against a
- * Sybil flood; they are constructor params (with production defaults) so tests can drive tiny caps.
+ * Sybil flood — the rooms and strangers' request threads, which anyone in radio range can write into. An
+ * accepted thread is unbounded on purpose: it is the user's own history. The caps are constructor params
+ * (with production defaults) so tests can drive tiny ones.
+ *
+ * No reader here returns a whole table or a whole thread. The chat screen reads a window
+ * ([observeNewestMessages]) and the list screens read per-thread summaries ([observeNewestPerConversation]
+ * and its companions), so a thread's length costs nothing at open.
  */
 class MessageRepository(
     private val dao: MessageDao,
     private val nearbyMaxMessages: Int = DEFAULT_NEARBY_MAX_MESSAGES,
     private val nearbyMaxAgeMs: Long = DEFAULT_NEARBY_MAX_AGE_MS,
-    private val maxPerAcceptedThread: Int = DEFAULT_MAX_PER_ACCEPTED_THREAD,
     private val maxPerPendingThread: Int = DEFAULT_MAX_PER_PENDING_THREAD,
     private val pendingThreadMaxAgeMs: Long = DEFAULT_PENDING_THREAD_MAX_AGE_MS,
     private val maxPendingThreads: Int = DEFAULT_MAX_PENDING_THREADS,
 ) {
-    fun observeMessages(): Flow<List<MessageEntity>> = dao.observeAll()
-
-    /** Messages in a single thread (the broadcast room or a 1:1 DM), oldest first. */
-    fun observeMessages(conversationId: String): Flow<List<MessageEntity>> = dao.observeForConversation(conversationId)
-
     /**
      * The newest [limit] messages in a thread, oldest first — the chat screen's window. Reversing here keeps
-     * the ascending shape every consumer of [observeMessages] already expects; `asReversed` is a view, not a
-     * copy. See [MessageDao.observeNewestForConversation] for why the window exists and why it is stable.
+     * the ascending shape the screen folds; `asReversed` is a view, not a copy. See
+     * [MessageDao.observeNewestForConversation] for why the window exists and why it is stable.
      */
     fun observeNewestMessages(
         conversationId: String,
@@ -119,8 +120,58 @@ class MessageRepository(
     /** Distinct conversations the local user ([me]) has authored in — the "threads I started" accepted signal. */
     suspend fun conversationsIAuthoredIn(me: String): List<String> = dao.conversationsIAuthoredIn(me)
 
+    /** The live form of [conversationsIAuthoredIn], for the screens that partition chats from requests. */
+    fun observeConversationsIAuthoredIn(me: String): Flow<List<String>> = dao.observeConversationsIAuthoredIn(me)
+
     /** Every distinct conversation with any message — the candidate set for the pending-request count. */
     suspend fun distinctConversations(): List<String> = dao.distinctConversations()
+
+    /**
+     * The live form of [distinctConversations], minus threads whose every row is from a sender in [blocked]
+     * — the conversations a list screen may show a row for. Any kind of row counts.
+     */
+    fun observeConversations(blocked: Set<String> = emptySet()): Flow<List<String>> = dao.observeDistinctConversations(blocked)
+
+    /**
+     * The newest row of the given [kinds] in every conversation, keyed by conversation id, ignoring senders
+     * in [blocked] — what a list row shows and sorts on. See [MessageDao.observeNewestPerConversation] for
+     * the shape that keeps it cheap. Map order is the DAO's, newest thread first.
+     */
+    fun observeNewestPerConversation(
+        kinds: Set<Int>,
+        blocked: Set<String>,
+    ): Flow<Map<String, MessageEntity>> =
+        dao.observeNewestPerConversation(kinds, blocked).map { heads -> heads.associateBy { it.conversationId } }
+
+    /**
+     * Who has posted an ordinary message in each group, keyed by group id, ignoring senders in [blocked] —
+     * the "a known peer has spoken here" half of [Conversations.isAccepted] for every group at once.
+     */
+    fun observeGroupSenders(blocked: Set<String>): Flow<Map<String, Set<String>>> =
+        dao.observeGroupSenders(Conversations.GROUP_ID_PREFIX + "*", blocked).map { rows -> rows.senderSets() }
+
+    private fun List<ConversationSender>.senderSets(): Map<String, Set<String>> =
+        groupBy({ it.conversationId }, { it.senderId }).mapValues { (_, senders) -> senders.toSet() }
+
+    /** The unread badge for one thread — see [MessageDao.countUnreadIn] for what counts. */
+    suspend fun countUnreadIn(
+        conversationId: String,
+        since: Long,
+        me: String,
+        blocked: Set<String>,
+    ): Int = dao.countUnreadIn(conversationId, since, me, blocked)
+
+    /** The channel the newest heard post in [conversationId] named, or null — the Meshtastic room's stand-in title. */
+    fun observeNewestOriginChannel(conversationId: String): Flow<String?> = dao.observeNewestOriginChannel(conversationId)
+
+    /** The newest `sentAt` in [conversationId], null for an empty thread. */
+    suspend fun newestSentAt(conversationId: String): Long? = dao.newestSentAt(conversationId)
+
+    /** How many ordinary messages anyone but [me] has sent — see [MessageDao.countFromOthers]. */
+    suspend fun countFromOthers(me: String): Int = dao.countFromOthers(me)
+
+    /** How many rows [me] is the sender of — see [MessageDao.countMine]. */
+    suspend fun countMine(me: String): Int = dao.countMine(me)
 
     /**
      * Node ids [me] has exchanged messages with in both directions — the open-to-chat cue's "we have already
@@ -145,7 +196,9 @@ class MessageRepository(
      * transaction, a partial sweep is harmless. [protected] holds the conversation ids exempt from wholesale
      * eviction (accepted / verified / user-authored — the same set the notify gate treats as "not a request").
      *  - a public **room** — Nearby, and the bridged Meshtastic channel — is capped by count and age;
-     *  - a **protected** thread keeps a generous per-thread cap only, never wholesale-deleted;
+     *  - a **protected** thread is never trimmed, by count or by age: it is the user's own history, and the
+     *    chat screen reads it through a bounded window (ADR 2026-09.hd5n) while the list screens read
+     *    per-thread summaries, so its length costs nothing at open;
      *  - a **stranger's request** thread keeps only its newest few and is dropped once stale; and the number of
      *    live request threads is itself capped (a DM-flood is many one-message threads), oldest-by-activity first.
      *
@@ -166,25 +219,16 @@ class MessageRepository(
         val pending = mutableListOf<ConversationActivity>()
         for (conv in dao.conversationActivity()) {
             val id = conv.conversationId
-            if (id in ROOMS) continue // trimmed above
+            // Rooms were trimmed above; a protected thread is never trimmed.
+            if (id in ROOMS || id in protected) continue
 
-            when {
-                id in protected -> {
-                    if (conv.count > maxPerAcceptedThread) {
-                        dao.deleteOldestInConversation(id, maxPerAcceptedThread)
-                    }
+            if (conv.lastSentAt < now - pendingThreadMaxAgeMs) {
+                dao.deleteByConversation(id) // a stale request thread — drop it wholesale
+            } else {
+                if (conv.count > maxPerPendingThread) {
+                    dao.deleteOldestInConversation(id, maxPerPendingThread)
                 }
-
-                conv.lastSentAt < now - pendingThreadMaxAgeMs -> {
-                    dao.deleteByConversation(id) // a stale request thread — drop it wholesale
-                }
-
-                else -> {
-                    if (conv.count > maxPerPendingThread) {
-                        dao.deleteOldestInConversation(id, maxPerPendingThread)
-                    }
-                    pending += conv
-                }
+                pending += conv
             }
         }
         if (pending.size > maxPendingThreads) {
@@ -204,9 +248,6 @@ class MessageRepository(
 
         /** Broadcast-room messages older than this are reclaimed regardless of count. */
         const val DEFAULT_NEARBY_MAX_AGE_MS = 30L * 24 * 60 * 60_000 // 30 days
-
-        /** Generous per-thread cap for an accepted/known conversation (never wholesale-deleted). */
-        const val DEFAULT_MAX_PER_ACCEPTED_THREAD = 5_000
 
         /** A stranger's request thread keeps at most this many newest messages. */
         const val DEFAULT_MAX_PER_PENDING_THREAD = 50

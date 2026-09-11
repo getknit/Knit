@@ -3,9 +3,9 @@ package app.getknit.knit.ui.chat
 /**
  * How much of a thread the chat screen reads at once.
  *
- * A conversation runs to its retention cap — 5,000 messages on an accepted thread, 2,000 in a room — and the
- * screen used to select all of them, fold every one into a row, and redo both on every write to the messages
- * table. It now reads the newest [INITIAL] and grows by [PAGE] as the reader scrolls back into history.
+ * A room runs to its 2,000-row retention cap and an accepted thread has no cap at all, and the screen used to
+ * select every row, fold each into a bubble, and redo both on every write to the messages table. It now reads
+ * the newest [INITIAL] and grows by [PAGE] as the reader scrolls back into history.
  */
 object ChatWindow {
     /** Enough to fill a tall phone several times over, so the reader can fling before a page is fetched. */
@@ -16,9 +16,10 @@ object ChatWindow {
 
     /**
      * Ceiling on the window, so following a reply quote deep into history can't quietly restore the
-     * unbounded read. Kept level with `MessageRepository.DEFAULT_MAX_PER_ACCEPTED_THREAD` — the retention cap
-     * — so a thread can never hold more than this anyway; that constant is private to the repository, so the
-     * two are matched by hand rather than shared.
+     * unbounded read. This is the screen's own policy, not a mirror of any retention constant: an accepted
+     * thread is never trimmed, so it is the one bound on the largest read the screen can ever issue, however
+     * long the thread has lived. A quote deeper than this is not followed (`ChatViewModel` clamps both the
+     * page-in and the reveal to it).
      */
     const val MAX = 5_000
 

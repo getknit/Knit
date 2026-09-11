@@ -9,15 +9,16 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.draft.DraftRepository
+import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.groupTitle
-import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.ui.chat.messagePreview
+import app.getknit.knit.ui.observeConversationTable
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -68,92 +70,78 @@ class MessageRequestsViewModel(
         viewModelScope.launch { myNodeId.value = identity.nodeId() }
     }
 
-    // Messages + the accepted/blocked sets are pre-combined so the outer combine stays within the
-    // 5-flow typed overload (it then adds peers + groups + myNodeId, for four total).
-    private data class Bundle(
-        val messages: List<MessageEntity>,
-        val accepted: Set<String>,
-        val blocked: Set<String>,
-    )
-
-    private val messagesAndSets =
-        combine(
-            messages.observeMessages(),
-            settings.acceptedConversations,
-            settings.blockedNodeIds,
-        ) { msgs, accepted, blocked -> Bundle(msgs, accepted, blocked) }
+    // Per-thread summaries, never the table: the newest ordinary message of each thread is all a request
+    // row shows, and a notice never speaks for a thread here either (see ChatListViewModel). Senders in the
+    // blocked set are left out of every summary, as the chat list's badge already leaves them out, so a
+    // stranger's group whose only speaker is blocked reads the same on both screens.
+    private val table =
+        messages.observeConversationTable(setOf(MessageEntity.KIND_NORMAL), settings.blockedNodeIds, myNodeId)
 
     val requests: StateFlow<List<RequestRow>> =
         combine(
-            messagesAndSets,
+            table,
+            settings.acceptedConversations.distinctUntilChanged(),
             peers.observeDirectory(),
             groups.observeGroups(),
-            myNodeId,
-        ) { bundle, directory, groupList, me ->
+        ) { t, accepted, directory, groupList ->
             // Until our own id resolves we can't compute "self-authored", so surface nothing rather than
             // mis-classifying our own threads as requests during the ~1s cold-start gap.
-            if (me == null) return@combine emptyList<RequestRow>()
-            val msgs = bundle.messages
-            val peersByNode = directory.byNode
+            val me = t.me ?: return@combine emptyList<RequestRow>()
             val groupsById = groupList.associateBy { it.groupId }
             val verified =
                 directory.peers
                     .filter { it.verified }
                     .map { it.nodeId }
                     .toSet()
-            val authored = msgs.filter { it.senderId == me }.map { it.conversationId }.toSet()
-            // Senders per thread, so a group a known peer has posted in falls through to the chat list
-            // instead of showing here (matches the notify gate and chat list). Status notices are
-            // excluded, as they are in MessageDao.sendersIn: a notice's senderId is the event's subject,
-            // not an author, so counting one would let a peer who merely renamed themselves or left
-            // promote a stranger's group out of this list without ever having spoken in it.
-            val sendersByConversation =
-                msgs
-                    .filterNot { it.isStatusNotice }
-                    .groupBy { it.conversationId }
-                    .mapValues { (_, tms) -> tms.map { it.senderId }.toSet() }
 
             // A conversation is a pending request when it isn't Nearby, isn't blocked, and the shared
-            // predicate says it's not yet accepted — matching the notify gate exactly.
+            // predicate says it's not yet accepted — matching the notify gate exactly. The group-senders
+            // half is who has posted an *ordinary* message there, as MessageDao.sendersIn counts it: a
+            // notice's senderId is the event's subject, not an author, so counting one would let a peer
+            // who merely renamed themselves or left promote a stranger's group out of this list.
             fun isRequest(id: String): Boolean =
                 id != Conversations.NEARBY &&
-                    id !in bundle.blocked &&
-                    !Conversations.isAccepted(id, bundle.accepted, verified, authored, sendersByConversation[id].orEmpty())
+                    id !in t.blocked &&
+                    !Conversations.isAccepted(id, accepted, verified, t.authored, t.groupSenders[id].orEmpty())
 
-            val byConversation = msgs.groupBy { it.conversationId }
-            val rows =
-                byConversation.mapNotNull { (conversationId, threadMsgs) ->
-                    if (!isRequest(conversationId)) return@mapNotNull null
-                    val isGroup = Conversations.kindFor(conversationId) == ConversationKind.GROUP
-                    val group = groupsById[conversationId]
-                    // A group we've already left (or that has no roster row yet) isn't an active request.
-                    if (isGroup && (group == null || group.left)) return@mapNotNull null
-                    val title =
-                        if (isGroup) {
-                            groupTitle(
-                                storedName = group?.name ?: "",
-                                memberIds = GroupMembersStore.decode(group?.members ?: ""),
-                                selfId = me,
-                                fallback = context.getString(R.string.group_unnamed),
-                            ) { id -> directory.label(id).text }
-                        } else {
-                            directory.label(conversationId).text
-                        }
-                    // Notices never speak for a thread here either (see ChatListViewModel.rowFor).
-                    val last = threadMsgs.lastOrNull { !it.isStatusNotice }
-                    RequestRow(
-                        conversationId = conversationId,
-                        title = title,
-                        avatarHash =
-                            if (isGroup) group?.photoHash else peersByNode[conversationId]?.avatarHash,
-                        isGroup = isGroup,
-                        lastPreview = last?.let { previewFor(it, directory, isGroup) },
-                        lastMessageAt = last?.sentAt,
-                        discriminator = if (isGroup) null else directory.label(conversationId).discriminator,
-                    )
-                }
-            rows.sortedByDescending { it.lastMessageAt ?: 0L }
+            t.conversations
+                .filter(::isRequest)
+                .mapNotNull { id -> requestRowFor(id, t.heads[id], groupsById[id], directory, me) }
+                .sortedByDescending { it.lastMessageAt ?: 0L }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The inbox row for one pending thread, or null for a group we have left or hold no roster row for. */
+    private fun requestRowFor(
+        conversationId: String,
+        last: MessageEntity?,
+        group: GroupEntity?,
+        directory: PeerDirectory,
+        me: String,
+    ): RequestRow? {
+        val isGroup = Conversations.kindFor(conversationId) == ConversationKind.GROUP
+        // A group we've already left (or that has no roster row yet) isn't an active request.
+        if (isGroup && (group == null || group.left)) return null
+        val title =
+            if (isGroup) {
+                groupTitle(
+                    storedName = group?.name ?: "",
+                    memberIds = GroupMembersStore.decode(group?.members ?: ""),
+                    selfId = me,
+                    fallback = context.getString(R.string.group_unnamed),
+                ) { id -> directory.label(id).text }
+            } else {
+                directory.label(conversationId).text
+            }
+        return RequestRow(
+            conversationId = conversationId,
+            title = title,
+            avatarHash = if (isGroup) group?.photoHash else directory.byNode[conversationId]?.avatarHash,
+            isGroup = isGroup,
+            lastPreview = last?.let { previewFor(it, directory, isGroup) },
+            lastMessageAt = last?.sentAt,
+            discriminator = if (isGroup) null else directory.label(conversationId).discriminator,
+        )
+    }
 
     /**
      * Emitted with the conversation id once an accept has persisted, so the screen can open that thread.

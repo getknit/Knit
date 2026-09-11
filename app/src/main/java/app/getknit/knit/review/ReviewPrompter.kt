@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import android.os.Build
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.MessageRepository
-import app.getknit.knit.data.message.isStatusNotice
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.ui.ISSUES_URL
@@ -70,10 +69,9 @@ class ReviewPrompter(
     /** The policy inputs as they stand right now — read-only, shared with the debug bridge dump. */
     suspend fun gateInputs(now: Long): ReviewPromptPolicy.Inputs {
         val me = identity.nodeId()
-        val msgs = messages.observeMessages().first()
         return ReviewPromptPolicy.Inputs(
-            peerMessageCount = msgs.count { it.senderId != me && !it.isStatusNotice },
-            sentMessageCount = msgs.count { it.senderId == me },
+            peerMessageCount = messages.countFromOthers(me),
+            sentMessageCount = messages.countMine(me),
             engagementStartedAt = settings.reviewEngagementStartedAt.first(),
             lastAttemptAt = settings.reviewLastAttemptAt.first(),
             attemptCount = settings.reviewAttemptCount.first(),

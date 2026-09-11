@@ -33,7 +33,8 @@ interface MessageReceiptDao {
     /**
      * How many of [roster] have acked each of [conversationId]'s messages, one row per message that has at
      * least one — the chat bubble's "delivered to N of M" without loading every receipt row in the thread
-     * (a busy group thread can hold thousands: the retention cap times the roster).
+     * (a busy group thread can hold thousands: every message times the roster, and an accepted thread has no
+     * retention cap).
      *
      * The roster filter is not an optimization: it is what keeps this count identical to the one the
      * message-details screen derives, which lists only *current* members. Without it a departed member's

@@ -531,9 +531,12 @@ that budget is a purely local knob that can differ per node without breaking cue
     off the seal — null on images and voice notes, which describe themselves; the name is what selects the
     file bubble, and the size is a pre-arrival label the stored blob's length supersedes),
     `moderation` (on-device content verdict), `pendingKey` (composed before the recipient's key was
-    known; not yet flooded — §14), `kind` (normal vs. a member-left system row). DAO exposes
-    `observeAll()` and the conversation-scoped `observeForConversation(id)` (both `ORDER BY sentAt ASC`),
-    plus `markReceived`, `deleteByConversation`, and `hashesNeedingFetch`.
+    known; not yet flooded — §14), `kind` (normal vs. a member-left system row). No DAO read returns a
+    whole table or a whole thread: the chat screen reads a newest-anchored window
+    (`observeNewestForConversation`, ADR 2026-09.hd5n) and the list screens read per-thread summaries
+    (`observeNewestPerConversation`, `observeDistinctConversations`, `observeGroupSenders`,
+    `countUnreadIn`), all served by the two `conversationId`-led indices; plus `markReceived`,
+    `deleteByConversation`, and `hashesNeedingFetch`.
   - `peers`: `nodeId` (PK), `name`, `status`, `avatarHash?`, `pubKey?` (pinned E2E public-key bundle),
     `verified` (out-of-band key confirmation, see §14), `deviceTag?` (key-independent block-list
     continuity), `protoVersion?` / `capabilities?` (advertised, diagnostic), `updatedAt`, `openToChat` (their

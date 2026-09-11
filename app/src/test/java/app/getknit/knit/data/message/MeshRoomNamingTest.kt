@@ -15,11 +15,19 @@ class MeshRoomNamingTest {
         )
 
     @Test
-    fun `the live board wins, then the newest post that named a channel, then nothing`() {
-        assertEquals("MediumFast", meshRoomChannel("MediumFast", rows))
-        assertEquals("a blank live name says nothing", "LongTurbo", meshRoomChannel("", rows))
-        assertEquals("LongTurbo", meshRoomChannel(null, rows))
-        assertNull(meshRoomChannel(null, emptyList()))
-        assertNull(meshRoomChannel(null, listOf(rows.last())))
+    fun `the live board wins, then the newest channel a post named, then nothing`() {
+        assertEquals("MediumFast", meshRoomChannel("MediumFast", "LongTurbo"))
+        assertEquals("a blank live name says nothing", "LongTurbo", meshRoomChannel("", "LongTurbo"))
+        assertEquals("LongTurbo", meshRoomChannel(null, "LongTurbo"))
+        assertNull(meshRoomChannel(null, null))
+        assertNull("a blank stored name says nothing either", meshRoomChannel(null, " "))
+    }
+
+    @Test
+    fun `the newest post that named a channel is the window's channel`() {
+        // The thread header reads this off its window; the chat list asks the database the same question.
+        assertEquals("LongTurbo", newestOriginChannel(rows))
+        assertNull(newestOriginChannel(emptyList()))
+        assertNull(newestOriginChannel(listOf(rows.last())))
     }
 }

@@ -9,11 +9,12 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
-import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.MeshController
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -21,6 +22,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -129,20 +133,32 @@ class ContactsViewModel(
         const val MAX_OTHER_MEMBERS = 7
     }
 
-    // Messages + groups + the accepted set are pre-combined so the outer combine stays within the
-    // 5-flow typed overload (it then adds peers + neighbors + blocked + myNodeId).
+    // The two facts the picker needs from the messages table — which DM threads exist, and which threads we
+    // have spoken in — read as distinct-id queries rather than as the table. Pre-combined with groups + the
+    // accepted set so the outer combine stays within the 5-flow typed overload (it then adds peers +
+    // neighbors + blocked + myNodeId).
     private data class Bundle(
-        val messages: List<MessageEntity>,
+        val conversations: Set<String>,
+        val authored: Set<String>,
         val groups: List<GroupEntity>,
         val accepted: Set<String>,
     )
 
+    // Keyed by our own id, which resolves after construction: empty until then, and the state below stays
+    // loading until then too, so the gap never renders as "no contacts".
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val authored: Flow<Set<String>> =
+        myNodeId.flatMapLatest { me ->
+            if (me == null) flowOf(emptySet()) else messages.observeConversationsIAuthoredIn(me).map { it.toSet() }
+        }
+
     private val bundle =
         combine(
-            messages.observeMessages(),
+            messages.observeConversations(),
+            authored,
             groups.observeGroups(),
             settings.acceptedConversations,
-        ) { msgs, groupList, accepted -> Bundle(msgs, groupList, accepted) }
+        ) { conversations, mine, groupList, accepted -> Bundle(conversations.toSet(), mine, groupList, accepted) }
 
     /** Accepted DM peers ∪ active-group co-members ∪ verified peers, minus self and blocked; connected first, then name. */
     val state: StateFlow<ContactsUiState> =
@@ -164,19 +180,12 @@ class ContactsViewModel(
                     .filter { it.verified }
                     .map { it.nodeId }
                     .toSet()
-            val authored =
-                b.messages
-                    .filter { it.senderId == me }
-                    .map { it.conversationId }
-                    .toSet()
             // A DM thread's conversationId IS the peer's node id; keep only those the shared accept
             // predicate treats as a real conversation (matching the chat list / requests split).
             val acceptedDmPeers =
-                b.messages
-                    .asSequence()
-                    .map { it.conversationId }
+                b.conversations
                     .filter { Conversations.kindFor(it) == ConversationKind.DM }
-                    .filter { Conversations.isAccepted(it, b.accepted, verifiedIds, authored) }
+                    .filter { Conversations.isAccepted(it, b.accepted, verifiedIds, b.authored) }
                     .toSet()
             val groupMembers =
                 b.groups

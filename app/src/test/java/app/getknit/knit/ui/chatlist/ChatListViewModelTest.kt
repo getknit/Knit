@@ -7,7 +7,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.R
 import app.getknit.knit.data.GroupRepository
-import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.draft.DraftEntity
 import app.getknit.knit.data.draft.DraftRepository
@@ -23,6 +22,7 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
+import app.getknit.knit.ui.InMemoryMessages
 import app.getknit.knit.ui.chat.DeliveryStatus
 import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.group
@@ -54,11 +54,18 @@ import org.junit.runner.RunWith
  * Robolectric-hosted (the state combine calls `context.getString`, incl. format args in `previewFor`, so a
  * real Context returns the actual strings). Covers the unread-count watermark math, room/group/DM assembly
  * + sort, and the own-message preview label.
+ *
+ * The messages are a real in-memory database ([InMemoryMessages]) rather than a stubbed flow: the list reads
+ * per-thread summary queries, and the rules under test here — which row speaks for a thread, what counts
+ * as unread, who has spoken in a group — now live in that SQL. Room's own work rides the same unconfined
+ * dispatcher as Main, so a seeded write reaches `state.value` before `store.set` returns.
  */
 @RunWith(AndroidJUnit4::class)
 class ChatListViewModelTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
-    private val messages = mockk<MessageRepository>(relaxed = true)
+    private val mainDispatcher = UnconfinedTestDispatcher()
+    private lateinit var store: InMemoryMessages
+    private val messages get() = store.repo
     private val peers = mockk<PeerRepository>(relaxed = true)
     private val settings = mockk<SettingsStore>(relaxed = true)
     private val identity = mockk<Identity>(relaxed = true)
@@ -66,7 +73,6 @@ class ChatListViewModelTest {
     private val groups = mockk<GroupRepository>(relaxed = true)
     private val drafts = mockk<DraftRepository>(relaxed = true)
 
-    private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
     private val blockedFlow = MutableStateFlow(emptySet<String>())
     private val groupsFlow = MutableStateFlow(emptyList<GroupEntity>())
     private val peersFlow = MutableStateFlow(emptyList<PeerEntity>())
@@ -80,9 +86,9 @@ class ChatListViewModelTest {
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(UnconfinedTestDispatcher())
+        Dispatchers.setMain(mainDispatcher)
+        store = InMemoryMessages(mainDispatcher)
         coEvery { identity.nodeId() } returns "me"
-        every { messages.observeMessages() } returns messagesFlow
         every { settings.blockedNodeIds } returns blockedFlow
         every { groups.observeGroups() } returns groupsFlow
         every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
@@ -95,6 +101,7 @@ class ChatListViewModelTest {
 
     @After
     fun tearDown() {
+        store.close()
         Dispatchers.resetMain()
     }
 
@@ -122,18 +129,17 @@ class ChatListViewModelTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             loraFlow.value = LoraFacts(plane = LoraPlane.Live, primaryChannel = "LongFast")
-            messagesFlow.value =
-                listOf(
-                    msg(
-                        senderId = "gw",
-                        body = "anyone around?",
-                        sentAt = 100,
-                        conversationId = Conversations.MESHTASTIC,
-                        originNode = 0x1234abcd,
-                        originName = "Bob",
-                        originChannel = "LongFast",
-                    ),
-                )
+            store.set(
+                msg(
+                    senderId = "gw",
+                    body = "anyone around?",
+                    sentAt = 100,
+                    conversationId = Conversations.MESHTASTIC,
+                    originNode = 0x1234abcd,
+                    originName = "Bob",
+                    originChannel = "LongFast",
+                ),
+            )
             advanceUntilIdle()
             assertTrue(
                 vm.state.value.conversations
@@ -185,18 +191,17 @@ class ChatListViewModelTest {
 
             // Unbound again with history: the history keeps the row.
             loraFlow.value = LoraFacts()
-            messagesFlow.value =
-                listOf(
-                    msg(
-                        senderId = "gw",
-                        body = "anyone around?",
-                        sentAt = 100,
-                        conversationId = Conversations.MESHTASTIC,
-                        originNode = 0x1234abcd,
-                        originName = "Bob",
-                        originChannel = "LongFast",
-                    ),
-                )
+            store.set(
+                msg(
+                    senderId = "gw",
+                    body = "anyone around?",
+                    sentAt = 100,
+                    conversationId = Conversations.MESHTASTIC,
+                    originNode = 0x1234abcd,
+                    originName = "Bob",
+                    originChannel = "LongFast",
+                ),
+            )
             advanceUntilIdle()
 
             val row =
@@ -223,18 +228,17 @@ class ChatListViewModelTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             peersFlow.value = listOf(peer("sam", name = "Sam"))
-            messagesFlow.value =
-                listOf(
-                    msg(
-                        senderId = "me",
-                        body = "hi",
-                        sentAt = 100,
-                        conversationId = Conversations.MESHTASTIC,
-                        originNode = 0x1234abcd,
-                        originName = "Knit 1a2b",
-                        originPeerId = "sam",
-                    ),
-                )
+            store.set(
+                msg(
+                    senderId = "me",
+                    body = "hi",
+                    sentAt = 100,
+                    conversationId = Conversations.MESHTASTIC,
+                    originNode = 0x1234abcd,
+                    originName = "Knit 1a2b",
+                    originPeerId = "sam",
+                ),
+            )
             advanceUntilIdle()
 
             val row =
@@ -250,24 +254,23 @@ class ChatListViewModelTest {
             // preview would read "You: …" over a stranger's words.
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value =
-                listOf(
-                    msg(
-                        senderId = "me",
-                        body = "anyone around?",
-                        sentAt = 100,
-                        conversationId = Conversations.MESHTASTIC,
-                        originNode = 0x1234abcd,
-                        originName = "Bob",
-                    ),
-                    msg(
-                        senderId = "me",
-                        body = "still here",
-                        sentAt = 200,
-                        conversationId = Conversations.MESHTASTIC,
-                        originNode = 0xdeadbeef,
-                    ),
-                )
+            store.set(
+                msg(
+                    senderId = "me",
+                    body = "anyone around?",
+                    sentAt = 100,
+                    conversationId = Conversations.MESHTASTIC,
+                    originNode = 0x1234abcd,
+                    originName = "Bob",
+                ),
+                msg(
+                    senderId = "me",
+                    body = "still here",
+                    sentAt = 200,
+                    conversationId = Conversations.MESHTASTIC,
+                    originNode = 0xdeadbeef,
+                ),
+            )
             advanceUntilIdle()
 
             val row =
@@ -303,7 +306,7 @@ class ChatListViewModelTest {
             // Nothing but the (empty) Nearby row: the list looks populated but has nothing to open.
             assertTrue(vm.state.value.showGettingStarted)
 
-            messagesFlow.value = listOf(msg(senderId = "bob", sentAt = 100, conversationId = Conversations.NEARBY))
+            store.set(msg(senderId = "bob", sentAt = 100, conversationId = Conversations.NEARBY))
             advanceUntilIdle()
 
             assertFalse(vm.state.value.showGettingStarted)
@@ -323,8 +326,7 @@ class ChatListViewModelTest {
 
             // An accepted DM.
             groupsFlow.value = emptyList()
-            messagesFlow.value =
-                listOf(msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"))
+            store.set(msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"))
             acceptedFlow.value = setOf("friend")
             advanceUntilIdle()
             assertFalse(vm.state.value.showGettingStarted)
@@ -342,11 +344,10 @@ class ChatListViewModelTest {
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value =
-                listOf(
-                    msg(senderId = "bob", sentAt = 100, conversationId = Conversations.NEARBY),
-                    msg(senderId = "me", sentAt = 200, conversationId = Conversations.NEARBY),
-                )
+            store.set(
+                msg(senderId = "bob", sentAt = 100, conversationId = Conversations.NEARBY),
+                msg(senderId = "me", sentAt = 200, conversationId = Conversations.NEARBY),
+            )
             lastReadFlow.value = mapOf(Conversations.NEARBY to 50L)
             advanceUntilIdle()
 
@@ -362,7 +363,7 @@ class ChatListViewModelTest {
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value = listOf(msg(senderId = "b", sentAt = 100, conversationId = "b", recipientId = "me"))
+            store.set(msg(senderId = "b", sentAt = 100, conversationId = "b", recipientId = "me"))
             blockedFlow.value = setOf("b")
             advanceUntilIdle()
 
@@ -377,11 +378,10 @@ class ChatListViewModelTest {
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value =
-                listOf(
-                    msg(senderId = "bob", sentAt = 100, conversationId = Conversations.NEARBY),
-                    msg(senderId = "ada", sentAt = 200, conversationId = "ada", recipientId = "me"),
-                )
+            store.set(
+                msg(senderId = "bob", sentAt = 100, conversationId = Conversations.NEARBY),
+                msg(senderId = "ada", sentAt = 200, conversationId = "ada", recipientId = "me"),
+            )
             groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x"), createdAt = 50))
             // ada + g-1 are accepted so they stay in the main list; this test asserts sort order, not the
             // request partition (covered by aStrangerDmRequestIsPartitionedOutOfTheListButCounted).
@@ -399,7 +399,7 @@ class ChatListViewModelTest {
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value = listOf(msg(senderId = "me", body = "hello", sentAt = 100, conversationId = Conversations.NEARBY))
+            store.set(msg(senderId = "me", body = "hello", sentAt = 100, conversationId = Conversations.NEARBY))
             advanceUntilIdle()
 
             val nearby =
@@ -419,8 +419,7 @@ class ChatListViewModelTest {
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value =
-                listOf(msg(senderId = "stranger", sentAt = 100, conversationId = "stranger", recipientId = "me"))
+            store.set(msg(senderId = "stranger", sentAt = 100, conversationId = "stranger", recipientId = "me"))
             advanceUntilIdle()
 
             // The stranger's DM is not in the main list (it's a pending request)...
@@ -440,7 +439,7 @@ class ChatListViewModelTest {
             // Verified peer "b" posts in the group: it reads as a normal chat, not a request — so it stays
             // in the list and isn't counted for the badge.
             groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x", "b"), createdAt = 50))
-            messagesFlow.value = listOf(msg(senderId = "b", sentAt = 100, conversationId = "g-1"))
+            store.set(msg(senderId = "b", sentAt = 100, conversationId = "g-1"))
             peersFlow.value = listOf(peer("b", verified = true))
             advanceUntilIdle()
 
@@ -459,7 +458,7 @@ class ChatListViewModelTest {
             // Verified "b" is a member but silent; only stranger "x" has posted. Membership alone doesn't
             // promote it — it stays a request.
             groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x", "b"), createdAt = 50))
-            messagesFlow.value = listOf(msg(senderId = "x", sentAt = 100, conversationId = "g-1"))
+            store.set(msg(senderId = "x", sentAt = 100, conversationId = "g-1"))
             peersFlow.value = listOf(peer("b", verified = true))
             advanceUntilIdle()
 
@@ -475,8 +474,7 @@ class ChatListViewModelTest {
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value =
-                listOf(msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"))
+            store.set(msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"))
             acceptedFlow.value = setOf("friend")
             advanceUntilIdle()
 
@@ -494,12 +492,11 @@ class ChatListViewModelTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             peersFlow.value = listOf(peer("friend", name = "Friend"), peer("friend2", name = "Friend"), peer("pal", name = "Pal"))
-            messagesFlow.value =
-                listOf(
-                    msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"),
-                    msg(senderId = "friend2", sentAt = 200, conversationId = "friend2", recipientId = "me"),
-                    msg(senderId = "pal", sentAt = 300, conversationId = "pal", recipientId = "me"),
-                )
+            store.set(
+                msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"),
+                msg(senderId = "friend2", sentAt = 200, conversationId = "friend2", recipientId = "me"),
+                msg(senderId = "pal", sentAt = 300, conversationId = "pal", recipientId = "me"),
+            )
             acceptedFlow.value = setOf("friend", "friend2", "pal")
             advanceUntilIdle()
 
@@ -518,18 +515,17 @@ class ChatListViewModelTest {
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value =
-                listOf(
-                    msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"),
-                    msg(
-                        senderId = "me",
-                        sentAt = 200,
-                        conversationId = "friend",
-                        recipientId = "friend",
-                        received = true,
-                        receivedVia = DeliveryPlane.Internet.code,
-                    ),
-                )
+            store.set(
+                msg(senderId = "friend", sentAt = 100, conversationId = "friend", recipientId = "me"),
+                msg(
+                    senderId = "me",
+                    sentAt = 200,
+                    conversationId = "friend",
+                    recipientId = "friend",
+                    received = true,
+                    receivedVia = DeliveryPlane.Internet.code,
+                ),
+            )
             advanceUntilIdle()
 
             val dm =
@@ -544,11 +540,10 @@ class ChatListViewModelTest {
         runTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
-            messagesFlow.value =
-                listOf(
-                    msg(senderId = "me", sentAt = 100, conversationId = "a", recipientId = "a"),
-                    msg(senderId = "me", sentAt = 100, conversationId = "b", recipientId = "b", pendingKey = true),
-                )
+            store.set(
+                msg(senderId = "me", sentAt = 100, conversationId = "a", recipientId = "a"),
+                msg(senderId = "me", sentAt = 100, conversationId = "b", recipientId = "b", pendingKey = true),
+            )
             acceptedFlow.value = setOf("a", "b")
             advanceUntilIdle()
 
@@ -566,11 +561,10 @@ class ChatListViewModelTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             // Ours is older; theirs is the newest, so delivery isn't ours to report on this row.
-            messagesFlow.value =
-                listOf(
-                    msg(senderId = "me", sentAt = 100, conversationId = "friend", recipientId = "friend"),
-                    msg(senderId = "friend", sentAt = 200, conversationId = "friend", recipientId = "me"),
-                )
+            store.set(
+                msg(senderId = "me", sentAt = 100, conversationId = "friend", recipientId = "friend"),
+                msg(senderId = "friend", sentAt = 200, conversationId = "friend", recipientId = "me"),
+            )
             advanceUntilIdle()
 
             val rows =
@@ -590,17 +584,16 @@ class ChatListViewModelTest {
             // A notice arriving AFTER the newest real message must not speak for the thread: the preview,
             // the timestamp and the tick all keep describing the last thing someone actually said. A
             // notice is worth a line inside the thread and is not worth re-sorting someone's chat list.
-            messagesFlow.value =
-                listOf(
-                    msg(senderId = "me", sentAt = 100, conversationId = "g-1", body = "see you"),
-                    msg(
-                        senderId = "x",
-                        sentAt = 200,
-                        conversationId = "g-1",
-                        body = "",
-                        kind = MessageEntity.KIND_MEMBER_LEFT,
-                    ),
-                )
+            store.set(
+                msg(senderId = "me", sentAt = 100, conversationId = "g-1", body = "see you"),
+                msg(
+                    senderId = "x",
+                    sentAt = 200,
+                    conversationId = "g-1",
+                    body = "",
+                    kind = MessageEntity.KIND_MEMBER_LEFT,
+                ),
+            )
             advanceUntilIdle()
 
             val row =
@@ -622,16 +615,15 @@ class ChatListViewModelTest {
             // empty-group behaviour rather than borrowing the notice's clock. A notice's senderId is the
             // event's SUBJECT rather than an author, so it must not grow a tick either — which is what
             // would happen if the filter keyed on authorship instead of on kind.
-            messagesFlow.value =
-                listOf(
-                    msg(
-                        senderId = "me",
-                        sentAt = 200,
-                        conversationId = "g-1",
-                        body = "",
-                        kind = MessageEntity.KIND_GROUP_CREATED,
-                    ),
-                )
+            store.set(
+                msg(
+                    senderId = "me",
+                    sentAt = 200,
+                    conversationId = "g-1",
+                    body = "",
+                    kind = MessageEntity.KIND_GROUP_CREATED,
+                ),
+            )
             advanceUntilIdle()
 
             // The group is in the chat list at all only because we are its creator — see the
@@ -650,19 +642,18 @@ class ChatListViewModelTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x"), createdAt = 50))
-            messagesFlow.value =
-                listOf(
-                    // Ours, so the thread is an accepted chat rather than a request.
-                    msg(senderId = "me", sentAt = 100, conversationId = "g-1"),
-                    msg(senderId = "x", sentAt = 200, conversationId = "g-1"),
-                    msg(
-                        senderId = "x",
-                        sentAt = 300,
-                        conversationId = "g-1",
-                        body = "",
-                        kind = MessageEntity.KIND_PEER_RENAMED,
-                    ),
-                )
+            store.set(
+                // Ours, so the thread is an accepted chat rather than a request.
+                msg(senderId = "me", sentAt = 100, conversationId = "g-1"),
+                msg(senderId = "x", sentAt = 200, conversationId = "g-1"),
+                msg(
+                    senderId = "x",
+                    sentAt = 300,
+                    conversationId = "g-1",
+                    body = "",
+                    kind = MessageEntity.KIND_PEER_RENAMED,
+                ),
+            )
             advanceUntilIdle()
 
             // One unread, not two: the notice is quiet even though it is unread, from someone else, and
@@ -682,7 +673,7 @@ class ChatListViewModelTest {
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             // Verified, so the thread is a chat rather than a message request and reaches this list at all.
             peersFlow.value = listOf(peer("x", "Ann", verified = true))
-            messagesFlow.value = listOf(msg(senderId = "x", sentAt = 100, conversationId = "x", body = "you around?"))
+            store.set(msg(senderId = "x", sentAt = 100, conversationId = "x", body = "you around?"))
             draftsFlow.value = mapOf("x" to DraftEntity("x", "half a sentence", updatedAt = 200))
             advanceUntilIdle()
 
@@ -696,8 +687,7 @@ class ChatListViewModelTest {
             assertEquals(100L, withDraft.lastMessageAt)
 
             // A message lands after it and the conversation has moved on; the draft waits in the composer.
-            messagesFlow.value =
-                messagesFlow.value + msg(senderId = "x", sentAt = 300, conversationId = "x", body = "still there?")
+            store.add(msg(senderId = "x", sentAt = 300, conversationId = "x", body = "still there?"))
             advanceUntilIdle()
             assertNull(
                 vm.state.value.conversations
@@ -715,16 +705,15 @@ class ChatListViewModelTest {
             // A notice's senderId is the event's subject, so it is not someone "having spoken here": a
             // group whose only row is a stranger's rename stays a message request. Were notices counted
             // as speech, renaming yourself would be enough to promote your group into someone's chat list.
-            messagesFlow.value =
-                listOf(
-                    msg(
-                        senderId = "x",
-                        sentAt = 300,
-                        conversationId = "g-1",
-                        body = "",
-                        kind = MessageEntity.KIND_PEER_RENAMED,
-                    ),
-                )
+            store.set(
+                msg(
+                    senderId = "x",
+                    sentAt = 300,
+                    conversationId = "g-1",
+                    body = "",
+                    kind = MessageEntity.KIND_PEER_RENAMED,
+                ),
+            )
             advanceUntilIdle()
 
             assertTrue(

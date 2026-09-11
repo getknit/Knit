@@ -12,6 +12,7 @@ import org.junit.Test
 /**
  * Drives [MessageRepository.sweepRetention] against a real in-memory DB with tiny caps — the local-storage
  * bound that stops a Sybil DM/broadcast flood from growing the (otherwise uncapped) `messages` table forever.
+ * The caps are for what strangers can write; an accepted thread has none, and the last test pins that.
  */
 class MessageRetentionTest : RoomDbTest() {
     private fun repo() =
@@ -19,7 +20,6 @@ class MessageRetentionTest : RoomDbTest() {
             db.messageDao(),
             nearbyMaxMessages = 3,
             nearbyMaxAgeMs = 1_000L,
-            maxPerAcceptedThread = 100,
             maxPerPendingThread = 2,
             pendingThreadMaxAgeMs = 1_000L,
             maxPendingThreads = 2,
@@ -37,7 +37,7 @@ class MessageRetentionTest : RoomDbTest() {
     private suspend fun ids(conversationId: String) =
         db
             .messageDao()
-            .observeForConversation(conversationId)
+            .observeNewestForConversation(conversationId, 100)
             .first()
             .map { it.id }
             .toSet()
@@ -78,7 +78,21 @@ class MessageRetentionTest : RoomDbTest() {
             repo().sweepRetention(now, protected = setOf("friend"))
 
             assertEquals(2, ids("stranger").size) // capped to maxPerPendingThread
-            assertEquals(5, ids("friend").size) // protected: kept (< maxPerAcceptedThread)
+            assertEquals(5, ids("friend").size) // protected: never trimmed
+        }
+
+    @Test
+    fun `a protected thread is never trimmed, however large or stale`() =
+        runTest {
+            val now = 10_000L
+            // More rows than every count cap (nearbyMaxMessages = 3, maxPerPendingThread = 2) and older than
+            // every age cap (nearbyMaxAgeMs = pendingThreadMaxAgeMs = 1_000): every rule that trims anything
+            // would fire here. An accepted thread is the user's own history, and none of them may.
+            (1..10).forEach { put("f$it", "friend", sentAt = now - 5_000L - it) }
+
+            repo().sweepRetention(now, protected = setOf("friend"))
+
+            assertEquals((1..10).map { "f$it" }.toSet(), ids("friend"))
         }
 
     @Test

@@ -49,7 +49,7 @@ class GroupRepositoryTest : RoomDbTest() {
             val group = db.groupDao().findById("g")!!
             assertEquals(listOf("a", "c"), GroupMembersStore.decode(group.members))
             assertTrue("b" in GroupMembersStore.decode(group.departed))
-            val notice = messages.observeForConversation("g").first().single()
+            val notice = messages.observeNewestForConversation("g", 10).first().single()
             assertEquals(MessageEntity.KIND_MEMBER_LEFT, notice.kind)
             assertEquals("b", notice.senderId)
             assertEquals(100L, notice.sentAt)
@@ -125,7 +125,7 @@ class GroupRepositoryTest : RoomDbTest() {
             assertFalse(repo().recordDeparture("g", "z", leftAt = 100L))
 
             assertEquals(listOf("a", "b"), GroupMembersStore.decode(db.groupDao().findById("g")!!.members))
-            assertTrue(messages.observeForConversation("g").first().isEmpty())
+            assertTrue(messages.observeNewestForConversation("g", 10).first().isEmpty())
         }
 
     @Test

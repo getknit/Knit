@@ -56,6 +56,7 @@ import app.getknit.knit.review.ReviewPromptPolicy
 import app.getknit.knit.review.ReviewPrompter
 import app.getknit.knit.transfer.OfferOutcome
 import app.getknit.knit.transfer.TransferManager
+import app.getknit.knit.ui.chat.ChatWindow
 import app.getknit.knit.ui.chat.buildReplySnippet
 import app.getknit.knit.ui.invite.prepareKnitApk
 import kotlinx.coroutines.CoroutineScope
@@ -316,7 +317,7 @@ class DebugBridgeReceiver :
         val replyTo =
             intent.getStringExtra(EXTRA_REPLY_TO)?.let { replyId ->
                 val row =
-                    messages.observeMessages(conv).first().firstOrNull { it.id == replyId }
+                    messages.observeMessage(replyId).first()?.takeIf { it.conversationId == conv }
                         ?: return reply("error", "reply target not in $conv: $replyId")
                 val authorName =
                     if (row.senderId == identity.nodeId()) {
@@ -627,7 +628,7 @@ class DebugBridgeReceiver :
 
         intent.getStringExtra(EXTRA_CONV)?.let { conv ->
             val limit = intent.getIntExtra(EXTRA_LIMIT, DEFAULT_MESSAGE_LIMIT)
-            val recent = messages.observeMessages(conv).first().takeLast(limit)
+            val recent = messages.observeNewestMessages(conv, limit).first()
             out.put("conversation", conv).put("messages", messagesJson(recent, selfId, selfName, nameByNode))
         }
         return out
@@ -1398,7 +1399,7 @@ class DebugBridgeReceiver :
         val rows = JSONArray()
         intent.getStringExtra("conv")?.let { conv ->
             messages
-                .observeMessages(conv)
+                .observeNewestMessages(conv, ChatWindow.MAX)
                 .first()
                 .filter { it.kind == MessageEntity.KIND_FILE_TRANSFER }
                 .forEach { row -> rows.put(JSONObject().put("id", row.id).put("sentAt", row.sentAt).put("record", row.body)) }

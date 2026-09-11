@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-113 decisions.
+114 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -132,5 +132,6 @@ carries; never renumber an old one.
 | [2026-09.x52a](decisions/2026-09-x52a-the-meshtastic-room-is-a-switch.md) | The Meshtastic room is a switch, and off means unread | lora, ui, settings |
 | [2026-09.xdm2](decisions/2026-09-xdm2-a-queued-snapshot-is-replaced-by-its-own-newer-copy.md) | A queued snapshot is replaced by its own newer copy | lora, airtime, mesh |
 | [2026-09.y8pu](decisions/2026-09-y8pu-a-lora-fan-out-nobody-heard-does-not-suppress-its-own-backfill.md) | A LoRa fan-out nobody heard does not suppress its own backfill | lora, custody, reliability |
+| [2026-09.z58t](decisions/2026-09-z58t-the-chat-list-reads-per-thread-summaries.md) | The chat list reads per-thread summaries, and an accepted thread has no retention cap | data, ui, perf |
 | [2026-09.zkma](decisions/2026-09-zkma-the-bridge-offer-and-its-backfill-draw-from-one-ranked-list.md) | The bridge offer and its backfill draw from one ranked list | lora, bridge, custody |
 | [2026-09.zu5t](decisions/2026-09-zu5t-content-capture-is-off.md) | Content capture is off | privacy, ui, performance |

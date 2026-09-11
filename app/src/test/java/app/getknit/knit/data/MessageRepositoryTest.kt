@@ -31,16 +31,28 @@ class MessageRepositoryTest : RoomDbTest() {
         }
 
     @Test
-    fun `observeMessages returns all and per-conversation threads`() =
+    fun `observeNewestPerConversation keys each thread's head by its id`() =
         runTest {
             val repo = repo()
-            repo.save(msg("a", conversationId = "t1"))
-            repo.save(msg("b", conversationId = "t1"))
-            repo.save(msg("c", conversationId = "t2"))
+            repo.save(msg("a", conversationId = "t1", sentAt = 1L))
+            repo.save(msg("b", conversationId = "t1", sentAt = 2L))
+            repo.save(msg("c", conversationId = "t2", sentAt = 3L))
 
-            val all = repo.observeMessages().first().map { it.id }
-            assertEquals(setOf("a", "b", "c"), all.toSet())
-            assertEquals(listOf("a", "b"), repo.observeMessages("t1").first().map { it.id })
+            val heads = repo.observeNewestPerConversation(setOf(MessageEntity.KIND_NORMAL), emptySet()).first()
+
+            assertEquals(mapOf("t1" to "b", "t2" to "c"), heads.mapValues { (_, head) -> head.id })
+        }
+
+    @Test
+    fun `observeGroupSenders folds the rows into a sender set per group`() =
+        runTest {
+            // The one piece of logic in the wrapper: the glob it supplies must actually match group ids.
+            val repo = repo()
+            repo.save(msg("a", conversationId = "g-1"))
+            repo.save(msg("b", conversationId = "g-1", sentAt = 2L))
+            repo.save(msg("c", conversationId = "bob"))
+
+            assertEquals(mapOf("g-1" to setOf("s")), repo.observeGroupSenders(emptySet()).first())
         }
 
     @Test
@@ -60,13 +72,7 @@ class MessageRepositoryTest : RoomDbTest() {
             val repo = repo()
             repo.save(msg("m1", received = false))
             repo.markReceived("m1", DeliveryPlane.Nearby)
-            assertTrue(
-                repo
-                    .observeMessages()
-                    .first()
-                    .single()
-                    .received,
-            )
+            assertTrue(repo.observeMessage("m1").first()!!.received)
         }
 
     @Test

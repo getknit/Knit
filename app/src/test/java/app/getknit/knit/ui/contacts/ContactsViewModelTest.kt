@@ -16,7 +16,6 @@ import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.Peer
 import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.group
-import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -53,7 +52,8 @@ class ContactsViewModelTest {
 
     private val peersFlow = MutableStateFlow(emptyList<PeerEntity>())
     private val blockedFlow = MutableStateFlow(emptySet<String>())
-    private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
+    private val conversationsFlow = MutableStateFlow(emptyList<String>())
+    private val authoredFlow = MutableStateFlow(emptyList<String>())
     private val groupsFlow = MutableStateFlow(emptyList<GroupEntity>())
     private val acceptedFlow = MutableStateFlow(emptySet<String>())
 
@@ -64,7 +64,8 @@ class ContactsViewModelTest {
         every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { settings.blockedNodeIds } returns blockedFlow
         every { settings.acceptedConversations } returns acceptedFlow
-        every { messages.observeMessages() } returns messagesFlow
+        every { messages.observeConversations(any()) } returns conversationsFlow
+        every { messages.observeConversationsIAuthoredIn(any()) } returns authoredFlow
         every { groups.observeGroups() } returns groupsFlow
     }
 
@@ -198,13 +199,10 @@ class ContactsViewModelTest {
             val vm = vm()
             startCollecting(vm)
             peersFlow.value = listOf(peer("pat", name = "Pat"), peer("rando", name = "Rando"))
-            messagesFlow.value =
-                listOf(
-                    // I authored a DM to "pat" -> accepted (an engaged conversation).
-                    msg(senderId = "me", conversationId = "pat", recipientId = "pat"),
-                    // "rando" DM'd me and I never replied/accepted -> a pending request, excluded.
-                    msg(senderId = "rando", conversationId = "rando", recipientId = "me"),
-                )
+            // Two DM threads exist; I have written in "pat" (an engaged conversation) and never in "rando",
+            // who DM'd me and was never replied to or accepted -> a pending request, excluded.
+            conversationsFlow.value = listOf("pat", "rando")
+            authoredFlow.value = listOf("pat")
             advanceUntilIdle()
 
             assertEquals(
@@ -221,7 +219,7 @@ class ContactsViewModelTest {
             val vm = vm()
             startCollecting(vm)
             peersFlow.value = listOf(peer("rando", name = "Rando"))
-            messagesFlow.value = listOf(msg(senderId = "rando", conversationId = "rando", recipientId = "me"))
+            conversationsFlow.value = listOf("rando")
             acceptedFlow.value = setOf("rando")
             advanceUntilIdle()
 

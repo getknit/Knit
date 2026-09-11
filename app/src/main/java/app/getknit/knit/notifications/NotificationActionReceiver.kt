@@ -108,7 +108,7 @@ class NotificationActionReceiver :
     private suspend fun handleMarkRead(intent: Intent) {
         val conv = intent.getStringExtra(MessageNotifier.EXTRA_CONV) ?: return
         // Match ChatViewModel's foreground watermark: stamp the newest message's sentAt as last-read.
-        val newest = messages.observeMessages(conv).first().maxOfOrNull { it.sentAt }
+        val newest = messages.newestSentAt(conv)
         settings.setLastReadAt(conv, newest ?: System.currentTimeMillis())
         notifier.clearConversation(conv)
     }

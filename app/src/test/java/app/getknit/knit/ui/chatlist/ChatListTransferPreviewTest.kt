@@ -6,12 +6,10 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.GroupRepository
-import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.draft.DraftEntity
 import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
-import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.TransferPhase
 import app.getknit.knit.data.message.TransferRecord
 import app.getknit.knit.data.peer.PeerEntity
@@ -22,6 +20,7 @@ import app.getknit.knit.mesh.FakeMeshController
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.transfer.TransferManager
 import app.getknit.knit.transfer.TransferState
+import app.getknit.knit.ui.InMemoryMessages
 import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
@@ -57,7 +56,9 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ChatListTransferPreviewTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
-    private val messages = mockk<MessageRepository>(relaxed = true)
+    private val mainDispatcher = UnconfinedTestDispatcher()
+    private lateinit var store: InMemoryMessages
+    private val messages get() = store.repo
     private val peers = mockk<PeerRepository>(relaxed = true)
     private val settings = mockk<SettingsStore>(relaxed = true)
     private val identity = mockk<Identity>(relaxed = true)
@@ -66,7 +67,6 @@ class ChatListTransferPreviewTest {
     private val drafts = mockk<DraftRepository>(relaxed = true)
     private val transfers = mockk<TransferManager>(relaxed = true)
 
-    private val messagesFlow = MutableStateFlow(emptyList<MessageEntity>())
     private val peersFlow = MutableStateFlow(emptyList<PeerEntity>())
     private val draftsFlow = MutableStateFlow(emptyMap<String, DraftEntity>())
     private val transfersFlow = MutableStateFlow(emptyMap<String, TransferState>())
@@ -75,9 +75,9 @@ class ChatListTransferPreviewTest {
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(UnconfinedTestDispatcher())
+        Dispatchers.setMain(mainDispatcher)
+        store = InMemoryMessages(mainDispatcher)
         coEvery { identity.nodeId() } returns "me"
-        every { messages.observeMessages() } returns messagesFlow
         every { settings.blockedNodeIds } returns MutableStateFlow(emptySet())
         every { groups.observeGroups() } returns MutableStateFlow(emptyList<GroupEntity>())
         every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
@@ -90,6 +90,7 @@ class ChatListTransferPreviewTest {
 
     @After
     fun tearDown() {
+        store.close()
         Dispatchers.resetMain()
     }
 
@@ -138,7 +139,7 @@ class ChatListTransferPreviewTest {
 
             for ((key, line) in expected) {
                 val (phase, outgoing) = key
-                messagesFlow.value = listOf(xferRow(phase, outgoing))
+                store.set(xferRow(phase, outgoing))
                 transfersFlow.value = xferLive(phase, outgoing)
                 advanceUntilIdle()
                 assertEquals(
@@ -161,11 +162,10 @@ class ChatListTransferPreviewTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             peersFlow.value = listOf(peer("bob", "Bob", verified = true))
-            messagesFlow.value =
-                listOf(
-                    msg(senderId = "bob", sentAt = 50, conversationId = "bob", body = "you around?"),
-                    xferRow(TransferPhase.Done, outgoing = false, sentAt = 100),
-                )
+            store.set(
+                msg(senderId = "bob", sentAt = 50, conversationId = "bob", body = "you around?"),
+                xferRow(TransferPhase.Done, outgoing = false, sentAt = 100),
+            )
             advanceUntilIdle()
 
             val row =
@@ -178,7 +178,7 @@ class ChatListTransferPreviewTest {
             assertEquals("only the real message counts", 1, row.unreadCount)
 
             // A row whose newest thing is an ordinary message wears no mark.
-            messagesFlow.value = messagesFlow.value + msg(senderId = "bob", sentAt = 200, conversationId = "bob", body = "thanks")
+            store.add(msg(senderId = "bob", sentAt = 200, conversationId = "bob", body = "thanks"))
             advanceUntilIdle()
             assertFalse(
                 vm.state.value.conversations
@@ -194,7 +194,7 @@ class ChatListTransferPreviewTest {
             val vm = vm()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
             peersFlow.value = listOf(peer("bob", "Bob", verified = true))
-            messagesFlow.value = listOf(xferRow(TransferPhase.Transferring, outgoing = true))
+            store.set(xferRow(TransferPhase.Transferring, outgoing = true))
             transfersFlow.value = xferLive(TransferPhase.Transferring, outgoing = true)
             advanceUntilIdle()
             assertEquals(

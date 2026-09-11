@@ -50,13 +50,13 @@ class MessageDaoTest : RoomDbTest() {
         runTest {
             dao.upsert(msg("m1", received = false))
             dao.markReceived("m1", DeliveryPlane.Nearby.code)
-            val nearby = dao.observeAll().first().single { it.id == "m1" }
+            val nearby = dao.observeById("m1").first()!!
             assertTrue(nearby.received)
             assertEquals(DeliveryPlane.Nearby, nearby.receivedPlane)
 
             dao.upsert(msg("m2", received = false))
             dao.markReceived("m2", DeliveryPlane.Internet.code)
-            val relayed = dao.observeAll().first().single { it.id == "m2" }
+            val relayed = dao.observeById("m2").first()!!
             assertTrue(relayed.received)
             assertEquals(DeliveryPlane.Internet, relayed.receivedPlane)
         }
@@ -69,26 +69,12 @@ class MessageDaoTest : RoomDbTest() {
             dao.upsert(msg("nearby-first", received = false))
             dao.markReceived("nearby-first", DeliveryPlane.Nearby.code)
             dao.markReceived("nearby-first", DeliveryPlane.Internet.code)
-            assertEquals(
-                DeliveryPlane.Nearby,
-                dao
-                    .observeAll()
-                    .first()
-                    .single { it.id == "nearby-first" }
-                    .receivedPlane,
-            )
+            assertEquals(DeliveryPlane.Nearby, dao.observeById("nearby-first").first()!!.receivedPlane)
 
             dao.upsert(msg("relay-first", received = false))
             dao.markReceived("relay-first", DeliveryPlane.Internet.code)
             dao.markReceived("relay-first", DeliveryPlane.Nearby.code)
-            assertEquals(
-                DeliveryPlane.Internet,
-                dao
-                    .observeAll()
-                    .first()
-                    .single { it.id == "relay-first" }
-                    .receivedPlane,
-            )
+            assertEquals(DeliveryPlane.Internet, dao.observeById("relay-first").first()!!.receivedPlane)
         }
 
     @Test
@@ -106,7 +92,7 @@ class MessageDaoTest : RoomDbTest() {
 
             assertEquals(-1L, dao.insertIfAbsent(msg("m1", received = false).copy(arrivedAt = 999L)))
 
-            val row = dao.observeAll().first().single { it.id == "m1" }
+            val row = dao.observeById("m1").first()!!
             assertTrue(row.received)
             assertEquals(DeliveryPlane.LoRa, row.receivedPlane)
             // The first crossing is the one that describes when the message actually got here; a re-serve
@@ -119,14 +105,7 @@ class MessageDaoTest : RoomDbTest() {
     fun `insertIfAbsent inserts a new row`() =
         runTest {
             assertTrue(dao.insertIfAbsent(msg("m2").copy(receivedVia = DeliveryPlane.LoRa.code)) != -1L)
-            assertEquals(
-                DeliveryPlane.LoRa,
-                dao
-                    .observeAll()
-                    .first()
-                    .single { it.id == "m2" }
-                    .receivedPlane,
-            )
+            assertEquals(DeliveryPlane.LoRa, dao.observeById("m2").first()!!.receivedPlane)
         }
 
     @Test
@@ -190,7 +169,7 @@ class MessageDaoTest : RoomDbTest() {
             assertEquals(
                 setOf("m4", "m5"),
                 dao
-                    .observeForConversation("t")
+                    .observeNewestForConversation("t", 10)
                     .first()
                     .map { it.id }
                     .toSet(),
@@ -313,9 +292,10 @@ class MessageDaoTest : RoomDbTest() {
 
     // --- The thread window (ChatWindow / ChatViewModel) --------------------------------------------------
     //
-    // These run the real SQL over a thread the size the retention caps actually allow, which is the only place
-    // "the screen no longer reads the whole conversation" can be proved. A 1,000-message thread plus a decoy
-    // thread; `sentAt` doubles as the row's ordinal so every assertion can name exact messages.
+    // These run the real SQL over a thousand-row thread — an ordinary size now that an accepted thread has no
+    // retention cap — which is the only place "the screen no longer reads the whole conversation" can be
+    // proved. A 1,000-message thread plus a decoy thread; `sentAt` doubles as the row's ordinal so every
+    // assertion can name exact messages.
 
     /** Seeds [count] messages in [conversationId] with `sentAt` running 1..count, oldest first. */
     private suspend fun seedThread(
@@ -415,6 +395,165 @@ class MessageDaoTest : RoomDbTest() {
             assertFalse("a status notice's subject has not spoken here", "carol" in senders)
         }
 
+    // --- The list screens' per-thread summaries (ChatListViewModel / MessageRequestsViewModel) ------------
+    //
+    // The chat list and the requests inbox used to read the whole table and fold it; they now ask these
+    // questions of the database, so the rules they fold — which row speaks for a thread, who has spoken in
+    // a group, what counts as unread — live in SQL and are pinned here.
+
+    private val speaking = setOf(MessageEntity.KIND_NORMAL, MessageEntity.KIND_FILE_TRANSFER)
+
+    @Test
+    fun `observeNewestPerConversation picks the newest speaking row per thread, breaking a sentAt tie on id`() =
+        runTest {
+            seedThread("dm", 3)
+            for (c in 'a'..'j') {
+                dao.upsert(msg("tie-$c", conversationId = THREAD, sentAt = 500L))
+            }
+
+            val heads = dao.observeNewestPerConversation(speaking, emptySet()).first()
+
+            assertEquals(listOf(THREAD, "dm"), heads.map { it.conversationId })
+            assertEquals("the id tiebreak the window uses, so a burst cannot flip the preview", "tie-j", heads[0].id)
+            assertEquals("dm-3", heads[1].id)
+        }
+
+    @Test
+    fun `observeNewestPerConversation skips notices, blocked senders and kinds it was not asked for`() =
+        runTest {
+            dao.upsert(msg("said", conversationId = "dm", sender = "bob", sentAt = 1L))
+            dao.upsert(msg("renamed", conversationId = "dm", sender = "bob", sentAt = 5L, kind = MessageEntity.KIND_PEER_RENAMED))
+            dao.upsert(msg("spam", conversationId = "dm", sender = "blk", sentAt = 9L))
+            dao.upsert(msg("offer", conversationId = "xfer", sender = "bob", sentAt = 2L, kind = MessageEntity.KIND_FILE_TRANSFER))
+
+            val forList = dao.observeNewestPerConversation(speaking, setOf("blk")).first().associateBy { it.conversationId }
+            assertEquals("a notice never speaks for a thread, nor does a blocked sender", "said", forList["dm"]?.id)
+            assertEquals("a transfer speaks for the chat list", "offer", forList["xfer"]?.id)
+
+            val forInbox = dao.observeNewestPerConversation(setOf(MessageEntity.KIND_NORMAL), setOf("blk")).first()
+            assertNull("but not for the requests inbox", forInbox.firstOrNull { it.conversationId == "xfer" })
+        }
+
+    @Test
+    fun `a notice-only thread has no head but is still a conversation`() =
+        runTest {
+            dao.upsert(msg("n1", conversationId = "g-1", sender = "x", kind = MessageEntity.KIND_PEER_RENAMED))
+
+            assertTrue(dao.observeNewestPerConversation(speaking, emptySet()).first().isEmpty())
+            assertEquals(listOf("g-1"), dao.observeDistinctConversations(emptySet()).first())
+        }
+
+    @Test
+    fun `observeNewestPerConversation runs with nobody blocked`() =
+        runTest {
+            // Room expands an empty collection to `NOT IN ()`, which must read as true on the Android driver.
+            seedThread("a", 2)
+            seedThread("b", 2)
+
+            assertEquals(
+                setOf("a-2", "b-2"),
+                dao
+                    .observeNewestPerConversation(speaking, emptySet())
+                    .first()
+                    .map { it.id }
+                    .toSet(),
+            )
+        }
+
+    @Test
+    fun `observeDistinctConversations drops a thread whose every row is from a blocked sender`() =
+        runTest {
+            dao.upsert(msg("s1", conversationId = "blk", sender = "blk"))
+            dao.upsert(msg("s2", conversationId = "g-1", sender = "blk"))
+            dao.upsert(msg("m1", conversationId = "g-1", sender = "ok"))
+
+            assertEquals(listOf("g-1"), dao.observeDistinctConversations(setOf("blk")).first())
+            assertEquals(setOf("blk", "g-1"), dao.observeDistinctConversations(emptySet()).first().toSet())
+        }
+
+    @Test
+    fun `observeGroupSenders names the ordinary-message senders of groups only, blocked and notices out`() =
+        runTest {
+            dao.upsert(msg("d1", conversationId = "bob", sender = "bob"))
+            dao.upsert(msg("r1", conversationId = Conversations.NEARBY, sender = "hal"))
+            dao.upsert(msg("g1", conversationId = "g-1", sender = "p"))
+            dao.upsert(msg("g2", conversationId = "g-1", sender = "p", sentAt = 2L))
+            dao.upsert(msg("g3", conversationId = "g-1", sender = "q", kind = MessageEntity.KIND_MEMBER_LEFT))
+            dao.upsert(msg("g4", conversationId = "g-1", sender = "blk"))
+            dao.upsert(msg("g5", conversationId = "g-2", sender = "r"))
+
+            val rows = dao.observeGroupSenders(Conversations.GROUP_ID_PREFIX + "*", setOf("blk")).first()
+
+            assertEquals(
+                setOf(ConversationSender("g-1", "p"), ConversationSender("g-2", "r")),
+                rows.toSet(),
+            )
+        }
+
+    @Test
+    fun `countUnreadIn counts others' ordinary messages past the watermark, heard posts included`() =
+        runTest {
+            dao.upsert(msg("t1", conversationId = "dm", sender = "them", sentAt = 2L))
+            dao.upsert(msg("mine", conversationId = "dm", sender = ME, sentAt = 10L))
+            dao.upsert(msg("heard", conversationId = "dm", sender = ME, sentAt = 11L, originNode = 42L))
+            dao.upsert(msg("t2", conversationId = "dm", sender = "them", sentAt = 12L))
+            dao.upsert(msg("avatar", conversationId = "dm", sender = "them", sentAt = 13L, kind = MessageEntity.KIND_PEER_AVATAR))
+            dao.upsert(msg("spam", conversationId = "dm", sender = "blk", sentAt = 14L))
+
+            // Our own row is read by definition; a post our board heard is somebody else's words and counts.
+            assertEquals(2, dao.countUnreadIn("dm", since = 5L, me = ME, blocked = setOf("blk")))
+            assertEquals(3, dao.countUnreadIn("dm", since = 5L, me = ME, blocked = emptySet()))
+            assertEquals(3, dao.countUnreadIn("dm", since = 0L, me = ME, blocked = setOf("blk")))
+            assertEquals(0, dao.countUnreadIn("dm", since = 14L, me = ME, blocked = setOf("blk")))
+            assertEquals(0, dao.countUnreadIn("empty", since = 0L, me = ME, blocked = emptySet()))
+        }
+
+    @Test
+    fun `observeNewestOriginChannel is the newest post that named a channel, and null when none did`() =
+        runTest {
+            val room = Conversations.MESHTASTIC
+            dao.upsert(msg("h1", conversationId = room, sender = ME, sentAt = 1L, originNode = 7L, originChannel = "LongFast"))
+            dao.upsert(msg("h2", conversationId = room, sender = ME, sentAt = 2L, originNode = 7L, originChannel = ""))
+            dao.upsert(msg("typed", conversationId = room, sender = ME, sentAt = 3L))
+            dao.upsert(msg("h3", conversationId = room, sender = ME, sentAt = 4L, originNode = 7L, originChannel = "  "))
+
+            assertEquals("LongFast", dao.observeNewestOriginChannel(room).first())
+            assertNull(dao.observeNewestOriginChannel("quiet").first())
+        }
+
+    @Test
+    fun `observeConversationsIAuthoredIn mirrors the one-shot rule and leaves heard posts out`() =
+        runTest {
+            dao.upsert(msg("a", conversationId = "t1", sender = ME))
+            dao.upsert(msg("b", conversationId = "t2", sender = "them"))
+            dao.upsert(msg("c", conversationId = Conversations.MESHTASTIC, sender = ME, originNode = 9L))
+
+            assertEquals(listOf("t1"), dao.observeConversationsIAuthoredIn(ME).first())
+            assertEquals(dao.conversationsIAuthoredIn(ME), dao.observeConversationsIAuthoredIn(ME).first())
+        }
+
+    @Test
+    fun `newestSentAt is the thread's newest time, and null for a thread we hold nothing of`() =
+        runTest {
+            seedThread(THREAD, 40)
+
+            assertEquals(40L, dao.newestSentAt(THREAD))
+            assertNull(dao.newestSentAt("never"))
+        }
+
+    @Test
+    fun `countFromOthers and countMine split the table by sender, notices out of the peer count`() =
+        runTest {
+            dao.upsert(msg("m1", sender = ME))
+            dao.upsert(msg("m2", sender = ME, kind = MessageEntity.KIND_GROUP_CREATED))
+            dao.upsert(msg("t1", sender = "them"))
+            dao.upsert(msg("t2", sender = "them", sentAt = 2L))
+            dao.upsert(msg("t3", sender = "them", sentAt = 3L, kind = MessageEntity.KIND_PEER_RENAMED))
+
+            assertEquals(2, dao.countFromOthers(ME))
+            assertEquals(2, dao.countMine(ME))
+        }
+
     private fun msg(
         id: String,
         recipientId: String? = null,
@@ -425,6 +564,8 @@ class MessageDaoTest : RoomDbTest() {
         sender: String = "s",
         sentAt: Long = 1L,
         kind: Int = MessageEntity.KIND_NORMAL,
+        originNode: Long? = null,
+        originChannel: String? = null,
     ) = MessageEntity(
         id = id,
         senderId = sender,
@@ -436,6 +577,8 @@ class MessageDaoTest : RoomDbTest() {
         attachmentHash = attachmentHash,
         pendingKey = pendingKey,
         kind = kind,
+        originNode = originNode,
+        originChannel = originChannel,
     )
 
     private companion object {

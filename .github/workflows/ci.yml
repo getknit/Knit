@@ -54,6 +54,39 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
 
+  mesh-lab:
+    name: Mesh-in-a-box scenarios (x3)
+    runs-on: ubuntu-latest
+    # The multi-node JVM scenarios (app/src/test/.../mesh/lab/, see .agents/context/testing.md) already
+    # ride build-test's testDebugUnitTest once. They get their own job because they are the one suite
+    # where real time and thread scheduling decide the outcome — N complete mesh stacks converging on
+    # Dispatchers.Default, polled — so a 1-in-N flake here is a bug, either in the lab or in the mesh
+    # (the router overhear-suppression bug and the lost-parked-seed gap both surfaced as flakes). Three
+    # consecutive green runs are the bar; `--rerun` forces the Test task past Gradle's up-to-date check.
+    # Enforced, not advisory: the suite is deterministic on a 4 vCPU runner (48/48 locally).
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Run the mesh/lab scenarios three times
+        run: |
+          for run in 1 2 3; do
+            echo "::group::mesh/lab run $run"
+            ./gradlew :app:testDebugUnitTest --tests 'app.getknit.knit.mesh.lab.*' --rerun --stacktrace --console=plain
+            echo "::endgroup::"
+          done
+      - name: Upload mesh/lab report (last run)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mesh-lab-report
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
+
   verify:
     name: detekt & ktlint (advisory)
     runs-on: ubuntu-latest

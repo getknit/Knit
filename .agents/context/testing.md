@@ -73,6 +73,11 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   themselves run in a few hundred ms.
 - **A failed `awaitAcquainted` prints every node's router counters** (`originated / delivered / relayed /
   deduped / suppressed / drops`) — read `suppressed` first; that is how the same-neighbor overhear bug showed.
+- **CI runs the package three times in a row in its own job** (`mesh-lab` in `.github/workflows/ci.yml`,
+  `test:mesh-lab` in `.gitlab-ci.yml`), on top of the one pass inside the full unit suite: this is the one
+  suite where real time and scheduling decide the outcome, so a 1-in-N flake is a bug — both of the
+  2026-09-11 findings started as one. Reproduce a CI flake locally with the same loop:
+  `for i in 1 2 3; do ./gradlew :app:testDebugUnitTest --tests 'app.getknit.knit.mesh.lab.*' --rerun; done`.
 - Robolectric, so the Gradle 9.5 result-serialization race applies: tally the per-class XMLs under
   `app/build/test-results/testDebugUnitTest/` after `rm -rf`-ing the directory, not the console summary.
 

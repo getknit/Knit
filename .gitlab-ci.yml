@@ -156,6 +156,33 @@ test:unit:
       - app/build/reports/tests/testDebugUnitTest/
     expire_in: 1 week
 
+# The multi-node JVM scenarios (app/src/test/.../mesh/lab/, see .agents/context/testing.md) already ride
+# test:unit once. They get their own job because they are the one suite where real time and thread
+# scheduling decide the outcome — N complete mesh stacks converging on Dispatchers.Default, polled — so a
+# 1-in-N flake here is a bug, either in the lab or in the mesh (the router overhear-suppression bug and the
+# lost-parked-seed gap both surfaced as flakes). Three consecutive green runs are the bar; `--rerun` forces
+# the Test task past Gradle's up-to-date check. Same compile/run split as test:unit, and each run forks its
+# own test JVM in turn, so the memory profile is test:unit's, three times over. Enforced, not advisory — but
+# the awaits are sized for a multi-core box (15 s per convergence, ~1 s per node to boot); if this runner's
+# single core turns out to miss them, widen MeshLab.AWAIT_MS before reaching for allow_failure.
+test:mesh-lab:
+  extends: .android
+  stage: test
+  script:
+    - *compile-unit-tests
+    - |
+      for run in 1 2 3; do
+        echo "--- mesh/lab run $run ---"
+        ./gradlew :app:testDebugUnitTest --tests 'app.getknit.knit.mesh.lab.*' --rerun --stacktrace --console=plain
+      done
+  artifacts:
+    when: always
+    reports:
+      junit: app/build/test-results/testDebugUnitTest/**/TEST-*.xml
+    paths:
+      - app/build/reports/tests/testDebugUnitTest/
+    expire_in: 1 week
+
 # Test coverage (advisory) — Kover instruments the *debug* unit tests and reports line coverage over the
 # hand-written code (generated Room _Impl / Compose / BuildConfig are excluded in app/build.gradle.kts).
 # koverXmlReportDebug depends on testDebugUnitTest, so the report tasks run the tests themselves. Kept a

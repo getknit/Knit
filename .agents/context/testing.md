@@ -3,7 +3,8 @@
 ## Verification ladder
 
 1. `./gradlew :app:testDebugUnitTest` for mesh/protocol/data logic — now including **Robolectric +
-   in-memory Room** tests that execute the real DAO SQL (see below).
+   in-memory Room** tests that execute the real DAO SQL (see below), and the **mesh-in-a-box** scenarios
+   (`mesh/lab/`, below) that run several complete real stacks against each other in one JVM.
 2. Emulator smoke test for UI/startup (launch, Koin init, screen rendering, no crash) — the app
    runs fine on an emulator, and it can even join the *real* BLE mesh there if you pass a USB Bluetooth
    dongle through to it (see **Real BLE from an emulator** below); its Bluetooth is otherwise a simulation
@@ -19,6 +20,50 @@
 > Wi-Fi Aware needs physical devices — an emulator can't do NAN, whatever you do about Bluetooth. Use
 > `FakeLoopTransport` for logic tests and two physical Wi-Fi-Aware-capable phones (e.g. Pixels) for real
 > discovery → data path → relay.
+
+## Mesh in a box (`app/src/test/…/mesh/lab/`)
+
+`MeshLab` runs **N complete, real Knit stacks in one JVM** — the real `MeshManager` (so the real
+`InboundPipeline`, `MeshRouter`, `ForwardSync`, `KeyExchange`, `AckSync`, both ratchets), the Room-backed
+repositories over Robolectric's in-memory SQLite, a real `IdentityKeyStore` over an in-memory secret, a
+DataStore-backed `SettingsStore` — linked through `LabTransport`, an in-process `MeshTransport` with no radio.
+The only doubles are the leaves with a hardware or UI side (notifier, tflite text moderators, image moderator).
+The wiring mirrors `di/AppModule` + `di/MeshModule` by hand, so a constructor change is a compile error here
+rather than a silently narrower rig.
+
+It exists for the bug that lives **between** two nodes — A's real send order meeting B's real state — which
+neither `MeshManagerTest` (real sender, recording transport, mocked repos) nor `InboundPipelineTest` (real
+receiver, hand-built frames, mocked repos) can see, because each half is checked against a stand-in for the
+other. The founding case is cf94a06 (seed-before-roster: the creator floods a group's sender-key seed before
+the frame that carries its roster, and the member's DM ratchet consumed it for good): `GroupFirstMessageLabTest`
+fails on the fix's parent commit with the bug's exact signature (creator has the message, members don't) and
+passes on the fix — verified 2026-09-11. Its first run also found a real router bug: a **second copy of a frame
+from the same neighbor** counted as an overhear and cancelled the relay of a newcomer's profile past the first
+hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
+
+- **Write a scenario at user level and end it in the oracle.** `node("alice")`, `link`/`linkAll`,
+  `awaitAcquainted`, `sendDm`/`createGroup`/`sendGroup`, then `assertConverged(nodes, atLeast) { thread }`:
+  every node holds the same decrypted messages, none stranded on `pendingKey`, no parked group seed that never
+  replayed. The oracle is what catches the bug the scenario's author did not think to assert; add a per-node
+  invariant there, not in individual scenarios. `createGroup` mirrors `ContactsViewModel.createGroup` (the
+  ViewModel needs a Main dispatcher) — if that body changes, change both.
+- **Order is a knob.** `alice.transport.hold(bob.transport)` parks what Alice sends Bob;
+  `release(bob.transport) { reorder }` delivers it in the order you choose — how "custody serves the two in
+  either order" becomes a deterministic case. Partition (group frames first, say) rather than blindly
+  reverse: the intro driver's own `CTL_PROFILE` DM can land in the window.
+- **Restart is real.** `node.restart()` tears the live stack down and rebuilds it over the same identity, DB
+  and settings — every in-memory structure (`PendingInbound`, `PendingGroupKeys`, ratchet caches, seen set)
+  starts empty.
+- **Time is real.** `MeshManager.start` builds its session on `Dispatchers.Default`, so scenarios run under
+  `runBlocking` and poll (`MeshLab.await`), never virtual time. `node()` returns only once the router is
+  collecting `inbound` — a `SharedFlow` with no replay drops what is emitted before that, and a link brought
+  up too early would lose the profile push. Bring a multi-hop topology up with `linkAll` so no relay fires in
+  the gap between two links. Boot costs ~1 s per node (Tink keygen + Room + DataStore); the scenarios
+  themselves run in a few hundred ms.
+- **A failed `awaitAcquainted` prints every node's router counters** (`originated / delivered / relayed /
+  deduped / suppressed / drops`) — read `suppressed` first; that is how the same-neighbor overhear bug showed.
+- Robolectric, so the Gradle 9.5 result-serialization race applies: tally the per-class XMLs under
+  `app/build/test-results/testDebugUnitTest/` after `rm -rf`-ing the directory, not the console summary.
 
 ## JVM Room/DAO + migration tests (Robolectric)
 

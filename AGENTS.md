@@ -103,8 +103,10 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   mint / gossip / adopt / departure-re-mint rules are spec §3.2 — read that before touching them. The
   reference daemon lives in the separate `knit-spool` repo.
 - **When writing or running tests, or checking accessibility:** READ `.agents/context/testing.md` (unit +
-  Robolectric Room + seeded UI / FTL + black-box UIAutomator + the accessibility/ATF suite that mirrors the
-  Play pre-launch report).
+  Robolectric Room + the **mesh-in-a-box** multi-node JVM scenarios in `mesh/lab/` + seeded UI / FTL +
+  black-box UIAutomator + the accessibility/ATF suite that mirrors the Play pre-launch report). A change to
+  what two nodes exchange — a new ctl frame, a custody rule, a roster or key path — gets a `mesh/lab/`
+  scenario ending in `assertConverged`, not only a single-SUT test against mocked repos.
 - **When driving the app on a device:** obey `.agents/rules/devices.md` first, then use
   `.agents/context/debug-bridge.md`.
 - **Before an architectural choice:** CONSULT `.agents/memory/decisions.md` — a generated router table

@@ -955,6 +955,7 @@ internal fun ChatScreenContent(
                                 Avatar(
                                     avatarHash = state.avatarHash,
                                     name = state.title,
+                                    nodeId = conversationId,
                                     size = 36.dp,
                                     contentDescription = stringResource(R.string.chat_view_profile, state.title),
                                     onClick = { onOpenProfile(conversationId) },
@@ -2023,6 +2024,10 @@ private fun MessageBubble(
             Avatar(
                 avatarHash = row.avatarHash,
                 name = row.senderName,
+                // The colour keys on whoever the face stands for: the matched contact, else the heard
+                // radio's own `!hex` label (the sender column is this phone on a heard post), else the
+                // Knit author.
+                nodeId = row.origin?.let { it.peerId ?: it.nodeLabel } ?: row.senderNodeId,
                 size = 40.dp,
                 contentDescription =
                     when {
@@ -3271,7 +3276,7 @@ private fun TypingIndicatorRow(
         // Overlap avatars when more than one person is typing (a group/room), like a small stack.
         Row(horizontalArrangement = Arrangement.spacedBy((-10).dp)) {
             peers.take(3).forEach { peer ->
-                Avatar(avatarHash = peer.avatarHash, name = peer.name, size = 30.dp)
+                Avatar(avatarHash = peer.avatarHash, name = peer.name, nodeId = peer.nodeId, size = 30.dp)
             }
         }
         Spacer(Modifier.width(8.dp))
@@ -3598,7 +3603,12 @@ private fun MessageInput(
                                         .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Avatar(avatarHash = candidate.avatarHash, name = candidate.displayName, size = 32.dp)
+                                Avatar(
+                                    avatarHash = candidate.avatarHash,
+                                    name = candidate.displayName,
+                                    nodeId = candidate.nodeId,
+                                    size = 32.dp,
+                                )
                                 Spacer(Modifier.width(12.dp))
                                 // The alias is always shown here — this is where the right Alice gets picked —
                                 // muted like a discriminator; a collided label already carries its own.

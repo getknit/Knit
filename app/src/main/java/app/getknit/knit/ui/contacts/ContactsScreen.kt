@@ -271,7 +271,7 @@ private fun ContactRow(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(avatarHash = contact.avatarHash, name = contact.displayName, size = 48.dp)
+        Avatar(avatarHash = contact.avatarHash, name = contact.displayName, nodeId = contact.nodeId, size = 48.dp)
         Spacer(Modifier.width(12.dp))
         PeerNameText(
             text = contact.displayName,

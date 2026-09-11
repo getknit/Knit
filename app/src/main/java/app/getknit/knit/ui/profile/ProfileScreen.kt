@@ -188,9 +188,8 @@ internal fun ProfileScreenContent(
                 Avatar(
                     avatarHash = form.avatarHash,
                     name = displayNameFor(form.name, form.nodeId),
+                    nodeId = form.nodeId,
                     size = 96.dp,
-                    background = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                     textStyle = MaterialTheme.typography.displaySmall,
                     contentDescription = stringResource(R.string.profile_change_photo_desc),
                     onClick = onPickPhoto,

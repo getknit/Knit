@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
@@ -17,6 +16,8 @@ import android.text.Spanned
 import android.text.format.Formatter
 import android.text.style.StyleSpan
 import android.util.LruCache
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -32,6 +33,9 @@ import app.getknit.knit.R
 import app.getknit.knit.data.decodeBoundedFromBytes
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.ui.theme.AvatarTintsLight
+import app.getknit.knit.ui.theme.ThemePreferences
+import app.getknit.knit.ui.theme.avatarTintIndex
 import java.text.BreakIterator
 
 /**
@@ -54,6 +58,9 @@ import java.text.BreakIterator
  */
 class MessageNotifier(
     private val context: Context,
+    // Only read for the letter avatar: whether the app is on the wallpaper palette, so the tile in the shade
+    // can be harmonized the way the one in the list is.
+    private val themePrefs: ThemePreferences,
 ) : Notifier {
     private val manager = NotificationManagerCompat.from(context)
 
@@ -646,18 +653,27 @@ class MessageNotifier(
      * square) colored deterministically by the identity [key] — the node id, or a conversation id — with the
      * leading grapheme initial, the same initial rule as the in-app [app.getknit.knit.ui.components.Avatar]
      * fallback. Keyed on the identity rather than the name so two people with the same name at least
-     * differ in shade (ADR 058); the in-app avatar is one fixed tint and does not mirror this.
+     * differ in shade (ADR 058), and drawn from the same palette and slot as the in-app avatar
+     * ([AvatarTintsLight] via [avatarTintIndex], ADR 2026-09.j8c7), so the face in the shade is the face in
+     * the list. Fixed to the light pair for the same reason [roomAvatar] is: the shade's own polarity is
+     * the system's, not the app's, and a tone-85 disc with a tone-10 initial reads on either. When the app
+     * is on the wallpaper palette the tint is harmonized toward the same primary `KnitTheme` uses, so the
+     * two stay identical there too.
      */
     private fun letterAvatar(
         name: String,
         key: String,
     ): Bitmap {
+        val tint =
+            AvatarTintsLight[avatarTintIndex(key)].let { base ->
+                if (onWallpaperPalette()) base.harmonizedToward(dynamicLightColorScheme(context).primary) else base
+            }
         val bitmap = createBitmap(AVATAR_PX, AVATAR_PX)
         val canvas = Canvas(bitmap)
-        canvas.drawColor(colorFor(key))
+        canvas.drawColor(tint.container.toArgb())
         val paint =
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
+                color = tint.onContainer.toArgb()
                 textAlign = Paint.Align.CENTER
                 textSize = AVATAR_PX * 0.5f
                 typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
@@ -667,11 +683,8 @@ class MessageNotifier(
         return bitmap
     }
 
-    /** A stable, pleasant background hue for a letter avatar (same identity [key] -> same color). */
-    private fun colorFor(key: String): Int {
-        val hue = ((key.hashCode() % HUE_STEPS) + HUE_STEPS) % HUE_STEPS
-        return Color.HSVToColor(floatArrayOf(hue.toFloat(), AVATAR_SAT, AVATAR_VAL))
-    }
+    /** Whether `KnitTheme` is drawing the wallpaper palette: the Material You switch, on a release that has one. */
+    private fun onWallpaperPalette(): Boolean = themePrefs.dynamicColor.value && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     /** The leading grapheme of [name], uppercased (emoji-safe), or "?" when blank — mirrors the in-app avatar. */
     private fun avatarInitial(name: String): String {
@@ -818,9 +831,6 @@ class MessageNotifier(
 
         // ~8 distinct 256² ARGB_8888 avatars resident — more than one notification ever shows.
         private const val AVATAR_CACHE_BYTES = 2 * 1024 * 1024
-        private const val HUE_STEPS = 360
-        private const val AVATAR_SAT = 0.5f
-        private const val AVATAR_VAL = 0.65f
 
         // Request-code action slots (per tag), so open/reply/mark-read/dismiss don't collide.
         private const val CODE_OPEN = 0

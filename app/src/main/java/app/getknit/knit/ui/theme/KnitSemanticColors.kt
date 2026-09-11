@@ -25,6 +25,13 @@ import androidx.compose.ui.graphics.Color
  * `onErrorContainer` — the string does not appear in `DynamicTonalPalette.android.kt` at all — so "bad"
  * inherits Material's wallpaper-independent red in every scheme. That fixed red is exactly what makes one
  * pinned green sufficient.
+ *
+ * [avatarTints] is pinned for a different reason: the hue a photo-less avatar wears is keyed on the node
+ * id (ADR 2026-09.j8c7), and a colour that stands for *who* must not be handed to the wallpaper, or Ada is
+ * green on one phone and violet on another. Under Material You `KnitTheme` harmonizes the palette toward
+ * the wallpaper's primary instead — a hue nudge capped at 15° (`AvatarTint.harmonizedToward`), so Ada stays
+ * a green, the wallpaper's kind of green. Like the green, it is safe to pin because the palette sits at
+ * Material's container tones, and only the mode changes those; harmonizing keeps the tone too.
  */
 @Immutable
 data class KnitSemanticColors(
@@ -32,10 +39,17 @@ data class KnitSemanticColors(
     val positive: Color,
     /** Content drawn on top of [positive]. */
     val onPositive: Color,
-)
+    /** The identity-keyed avatar palette for this mode; index it through [avatarTint]. */
+    val avatarTints: List<AvatarTint>,
+) {
+    /** The tint the identity [key] wears — see [avatarTintIndex] for what a key is. */
+    fun avatarTint(key: String): AvatarTint = avatarTints[avatarTintIndex(key, avatarTints.size)]
+}
 
-internal val LightSemanticColors = KnitSemanticColors(positive = PositiveLight, onPositive = OnPositiveLight)
-internal val DarkSemanticColors = KnitSemanticColors(positive = PositiveDark, onPositive = OnPositiveDark)
+internal val LightSemanticColors =
+    KnitSemanticColors(positive = PositiveLight, onPositive = OnPositiveLight, avatarTints = AvatarTintsLight)
+internal val DarkSemanticColors =
+    KnitSemanticColors(positive = PositiveDark, onPositive = OnPositiveDark, avatarTints = AvatarTintsDark)
 
 /**
  * `static` for the same reason as [LocalReduceMotion]: it changes only at a theme flip, which already

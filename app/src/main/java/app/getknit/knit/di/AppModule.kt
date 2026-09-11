@@ -127,7 +127,7 @@ val appModule =
         // One voice player for the whole app: any number of voice-note bubbles can be on screen, and
         // starting one note has to stop whichever was playing. Owns its own scope (see VoicePlayer).
         single { VoicePlayer(androidContext(), get()) }
-        single<Notifier> { MessageNotifier(androidContext()) }
+        single<Notifier> { MessageNotifier(androidContext(), get()) }
         // Single-shot handoff for content arriving via the system share sheet (ACTION_SEND).
         single { ShareInbox() }
         // Debug trailer seam driving the real Nearby composer (see DemoComposer). Inert in every build

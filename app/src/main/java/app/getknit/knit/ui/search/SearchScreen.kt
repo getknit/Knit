@@ -274,7 +274,7 @@ private fun ChatHitRow(
     onClick: () -> Unit,
 ) {
     HitRow(tag = "search_result_chat_${hit.id}", description = hit.title, onClick = onClick) {
-        ThreadAvatar(hit.kind, hit.avatarHash, hit.title)
+        ThreadAvatar(hit.kind, hit.id, hit.avatarHash, hit.title)
         Spacer(Modifier.width(12.dp))
         PeerNameText(
             text = hit.title,
@@ -292,7 +292,7 @@ private fun PersonHitRow(
 ) {
     val text = PeerLabel.text(hit.name, hit.alias)
     HitRow(tag = "search_result_person_${hit.nodeId}", description = text, onClick = onClick) {
-        Avatar(avatarHash = hit.avatarHash, name = hit.name, size = HIT_AVATAR_DP.dp)
+        Avatar(avatarHash = hit.avatarHash, name = hit.name, nodeId = hit.nodeId, size = HIT_AVATAR_DP.dp)
         Spacer(Modifier.width(12.dp))
         PeerNameText(
             text = text,
@@ -324,7 +324,7 @@ private fun MessageHitRow(
         description = listOf(hit.conversationTitle, line.text, spokenTime).joinToString(", "),
         onClick = onClick,
     ) {
-        ThreadAvatar(hit.kind, hit.avatarHash, hit.conversationTitle)
+        ThreadAvatar(hit.kind, hit.conversationId, hit.avatarHash, hit.conversationTitle)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -384,14 +384,18 @@ private fun HitRow(
 @Composable
 private fun ThreadAvatar(
     kind: ConversationKind,
+    conversationId: String,
     avatarHash: String?,
     name: String,
 ) {
     val size = HIT_AVATAR_DP.dp
     when (kind) {
         ConversationKind.NEARBY, ConversationKind.MESHTASTIC -> RoomAvatar(size = size)
+
         ConversationKind.GROUP -> GroupAvatar(photoHash = avatarHash, size = size)
-        ConversationKind.DM -> Avatar(avatarHash = avatarHash, name = name, size = size)
+
+        // A DM's conversation id is the peer's node id.
+        ConversationKind.DM -> Avatar(avatarHash = avatarHash, name = name, nodeId = conversationId, size = size)
     }
 }
 

@@ -320,7 +320,7 @@ private fun MemberRow(
                 .padding(horizontal = 4.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(avatarHash = member.avatarHash, name = member.displayName, size = 48.dp)
+        Avatar(avatarHash = member.avatarHash, name = member.displayName, nodeId = member.nodeId, size = 48.dp)
         Spacer(Modifier.width(12.dp))
         PeerNameText(
             text = member.displayName,

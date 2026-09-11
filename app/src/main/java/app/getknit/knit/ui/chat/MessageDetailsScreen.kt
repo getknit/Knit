@@ -399,7 +399,7 @@ private fun RecipientListRow(
                 .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(avatarHash = recipient.avatarHash, name = recipient.displayName, size = 40.dp)
+        Avatar(avatarHash = recipient.avatarHash, name = recipient.displayName, nodeId = recipient.nodeId, size = 40.dp)
         Spacer(Modifier.width(12.dp))
         PeerNameText(
             text = recipient.displayName,
@@ -476,7 +476,7 @@ private fun ReactorListRow(
                 .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(avatarHash = reactor.avatarHash, name = name, size = 40.dp)
+        Avatar(avatarHash = reactor.avatarHash, name = name, nodeId = reactor.nodeId, size = 40.dp)
         Spacer(Modifier.width(12.dp))
         PeerNameText(
             text = name,

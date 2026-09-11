@@ -11,6 +11,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
@@ -150,9 +151,23 @@ fun KnitTheme(
     // platform's "Remove animations" setting is a property of being inside the theme, not something a call
     // site can forget. MaterialTheme's motionScheme is left at its default (standard, not expressive) — see
     // KnitMotion for why.
-    // LocalKnitColors is keyed on darkTheme and NOT on dynamicColor: the semantic green is fixed in
-    // every scheme (see KnitSemanticColors), and pairing it with onPositive by mode keeps the two
-    // legible together in all four combinations.
+    // LocalKnitColors is keyed on darkTheme, and on dynamicColor only for the avatar palette: the semantic
+    // green is fixed in every scheme (see KnitSemanticColors), and pairing it with onPositive by mode keeps
+    // the two legible together in all four combinations. The avatar tints are static under the coral scheme
+    // they were drawn against, and under Material You are harmonized toward the wallpaper's primary — a
+    // bounded hue nudge (AvatarTint.harmonizedToward), so an identity keeps its colour family while the
+    // palette stops fighting the wallpaper. Remembered on the primary rather than recomputed per read: it
+    // is twelve pairs of colour-space round trips, and it changes only when the theme does.
+    val dynamic = dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val knitColors =
+        remember(darkTheme, dynamic, colorScheme.primary) {
+            val base = if (darkTheme) DarkSemanticColors else LightSemanticColors
+            if (dynamic) {
+                base.copy(avatarTints = base.avatarTints.map { it.harmonizedToward(colorScheme.primary) })
+            } else {
+                base
+            }
+        }
     // LocalOverscrollFactory is provided for the same reason: the stretch/glow that every list draws when
     // it runs out of content is the last colour in the app that came from neither KnitTheme nor the XML
     // theme. Compose Foundation hardcodes it — AndroidOverscroll.android.kt's DefaultGlowColor is
@@ -164,7 +179,7 @@ fun KnitTheme(
     // finger 1:1, and the platform's own RecyclerView keeps stretching at animator scale 0.
     CompositionLocalProvider(
         LocalReduceMotion provides rememberReduceMotion(),
-        LocalKnitColors provides if (darkTheme) DarkSemanticColors else LightSemanticColors,
+        LocalKnitColors provides knitColors,
         LocalOverscrollFactory provides rememberPlatformOverscrollFactory(glowColor = colorScheme.primary),
     ) {
         MaterialTheme(

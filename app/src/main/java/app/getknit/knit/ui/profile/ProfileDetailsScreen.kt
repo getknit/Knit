@@ -201,9 +201,8 @@ internal fun ProfileDetailsScreenContent(
             Avatar(
                 avatarHash = state.avatarHash,
                 name = state.displayName,
+                nodeId = state.nodeId,
                 size = 96.dp,
-                background = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 textStyle = MaterialTheme.typography.displaySmall,
                 // Tappable only when a photo is set: a default (initials) avatar has nothing to enlarge,
                 // so onClick stays null and Avatar renders non-interactive (no ripple / no touch target).

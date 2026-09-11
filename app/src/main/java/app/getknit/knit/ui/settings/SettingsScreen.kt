@@ -241,9 +241,8 @@ private fun ProfileHeaderRow(
         Avatar(
             avatarHash = header.avatarHash,
             name = header.name,
+            nodeId = header.nodeId,
             size = 56.dp,
-            background = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             textStyle = MaterialTheme.typography.titleLarge,
             // Decorative: the row carries the accessible name, and tapping it does the same thing.
             contentDescription = null,

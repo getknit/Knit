@@ -50,6 +50,8 @@ data class ProfileHeader(
     val name: String = "",
     val alias: String? = null,
     val avatarHash: String? = null,
+    /** Keys the letter avatar's tint; empty until the id resolves, like [name]. */
+    val nodeId: String = "",
 )
 
 class SettingsViewModel(
@@ -76,6 +78,7 @@ class SettingsViewModel(
                 name = if (id.isEmpty()) "" else displayNameFor(stored, id),
                 alias = alias.takeIf { it.isNotEmpty() && stored.isNotBlank() },
                 avatarHash = hash,
+                nodeId = id,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProfileHeader())
 

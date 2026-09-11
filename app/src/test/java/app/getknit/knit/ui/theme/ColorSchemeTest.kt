@@ -11,6 +11,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sign
 
 /**
  * Contract tests for the two static [androidx.compose.material3.ColorScheme]s in [KnitTheme].
@@ -112,6 +113,158 @@ class ColorSchemeTest {
         }
     }
 
+    /**
+     * The identity-keyed avatar palette (ADR 2026-09.j8c7) is generated at Material's container tones, so
+     * the initial should clear text contrast by construction — this is the measurement behind that claim,
+     * against AA's 4.5:1 text floor rather than the 3:1 graphic floor, because the initial *is* text.
+     */
+    @Test
+    fun everyAvatarTintClearsTextContrast() {
+        listOf("light" to AvatarTintsLight, "dark" to AvatarTintsDark).forEach { (which, tints) ->
+            assertEquals(
+                "the $which palette has a different size, so slots no longer line up across modes",
+                AvatarTintsLight.size,
+                tints.size,
+            )
+            tints.forEachIndexed { i, tint ->
+                val ratio = contrastRatio(tint.onContainer, tint.container)
+                assertTrue(
+                    "$which avatar tint $i: ${tint.onContainer.hex()} on ${tint.container.hex()} is %.2f:1, under AA's %.1f:1 for text"
+                        .format(ratio, MIN_TEXT_CONTRAST),
+                    ratio >= MIN_TEXT_CONTRAST,
+                )
+            }
+        }
+    }
+
+    /**
+     * The palette walks the wheel once, in order, and a slot is the same hue in both modes — so a person is
+     * "the green one" whether the phone is light or dark, and a hand edit that swapped or duplicated a row
+     * is caught. Measured in HSL hue, which is not the generator's HCT and bunches around orange and cyan;
+     * that is why this checks order and per-slot agreement rather than a fixed gap between neighbours.
+     */
+    @Test
+    fun avatarTintsWalkTheWheelOnceAndAgreeAcrossModes() {
+        listOf("light" to AvatarTintsLight, "dark" to AvatarTintsDark).forEach { (which, tints) ->
+            val hues = tints.map { hueOf(it.container) }
+            val steps = hues.indices.map { i -> (hues[(i + 1) % hues.size] - hues[i] + 360f) % 360f }
+            steps.forEachIndexed { i, step ->
+                assertTrue(
+                    "$which avatar tints $i -> ${(i + 1) % hues.size} step ${step.toInt()}° — the table is out of order or has a repeat",
+                    step > 0f && step < 180f,
+                )
+            }
+            assertEquals("$which palette does not lap the wheel exactly once", 360f, steps.sum(), 1f)
+        }
+        AvatarTintsLight.zip(AvatarTintsDark).forEachIndexed { i, (light, dark) ->
+            val gap = hueDistance(hueOf(light.container), hueOf(dark.container))
+            assertTrue(
+                "avatar slot $i is hue ${hueOf(light.container).toInt()}° in light but ${hueOf(dark.container).toInt()}° in dark",
+                gap <= MAX_AVATAR_MODE_HUE_GAP,
+            )
+        }
+    }
+
+    /**
+     * The slot is the contract: the same node id must land on the same tint on every phone and after every
+     * update, or Ada changes colour between your list and Bob's, and between the list and the notification
+     * shade. Pinned vectors, so a "better" hash or a resized palette shows up here rather than on devices.
+     */
+    @Test
+    fun avatarTintSlotIsStableAcrossPhonesAndVersions() {
+        assertEquals(12, AvatarTintsLight.size)
+        // A real-shaped node id (26 base32 chars), a short label, a display name, and the empty string.
+        assertEquals(0, avatarTintIndex("mfrggzdfmztwq2lknnwg23tpobyxe43uov3ho6dz"))
+        assertEquals(6, avatarTintIndex("ada"))
+        assertEquals(7, avatarTintIndex("Ada Lovelace"))
+        assertEquals(5, avatarTintIndex("!a1b2c3d4"))
+        assertEquals(0, avatarTintIndex(""))
+        // Integer.MIN_VALUE is the one hash a `%` would have sent negative; floorMod keeps it in range.
+        assertEquals(Int.MIN_VALUE, "polygenelubricants".hashCode())
+        assertEquals(4, avatarTintIndex("polygenelubricants"))
+        // What AvatarPalettePreview relies on to show the twelve slots in order.
+        assertEquals((0 until 12).toList(), ('l'..'w').map { avatarTintIndex(it.toString()) })
+    }
+
+    /** The colour maths under harmonize: a colour must come back from Oklch as itself, or every tint drifts. */
+    @Test
+    fun oklchRoundTripsWithinAStep() {
+        (AvatarTintsLight + AvatarTintsDark).flatMap { listOf(it.container, it.onContainer) }.plus(ACCENTS).forEach { color ->
+            val back = Oklch.of(color).toColor()
+            val (r1, g1, b1) = color.rgb()
+            val (r2, g2, b2) = back.rgb()
+            assertTrue(
+                "${color.hex()} came back from Oklch as ${back.hex()}",
+                abs(r1 - r2) <= 1 && abs(g1 - g2) <= 1 && abs(b1 - b2) <= 1,
+            )
+        }
+    }
+
+    /**
+     * Material's harmonize rule, as `AvatarTint.harmonizedToward` applies it: the hue turns toward the
+     * accent by half the difference and never past 15°, and lightness stays put — which is what keeps a
+     * green contact green under a blue wallpaper and keeps the initial's contrast intact.
+     */
+    @Test
+    fun harmonizeTurnsTheHueTowardTheAccentByAtMostFifteenDegreesAndMovesNothingElse() {
+        (AvatarTintsLight + AvatarTintsDark).flatMap { listOf(it.container, it.onContainer) }.forEach { color ->
+            ACCENTS.forEach { accent ->
+                val from = Oklch.of(color)
+                val to = Oklch.of(accent)
+                val difference = signedHue(to.hue - from.hue)
+                val turn = difference.sign * min(abs(difference) / 2.0, MAX_HARMONIZE_DEGREES)
+                // Compared as 8-bit colours rather than as angles: at a pastel's chroma one quantisation step
+                // is worth a degree or more of hue, so the honest oracle is the colour the rule's own turn
+                // produces, and it must match to the step.
+                val expected = from.copy(hue = from.hue + turn).toColor()
+                val got = harmonize(color, accent)
+                val (r1, g1, b1) = expected.rgb()
+                val (r2, g2, b2) = got.rgb()
+                assertTrue(
+                    "${color.hex()} toward ${accent.hex()} (difference ${"%.1f".format(difference)}°, turn ${"%.1f".format(turn)}°) " +
+                        "should be ${expected.hex()} but is ${got.hex()}",
+                    abs(r1 - r2) <= 1 && abs(g1 - g2) <= 1 && abs(b1 - b2) <= 1,
+                )
+                val moved = Oklch.of(got)
+                assertEquals("${color.hex()} toward ${accent.hex()} changed lightness", from.lightness, moved.lightness, OKLCH_TOLERANCE)
+                // Chroma may only ever come *down*, and only when the turned hue left the gamut (a light
+                // saturated yellow turned toward orange); it never goes up.
+                assertTrue(
+                    "${color.hex()} toward ${accent.hex()} gained chroma: ${from.chroma} -> ${moved.chroma}",
+                    moved.chroma <= from.chroma + OKLCH_TOLERANCE,
+                )
+            }
+        }
+    }
+
+    /** A monochrome wallpaper theme has a grey primary, which has no hue to steer by: the palette stays as drawn. */
+    @Test
+    fun harmonizeTowardAGreyIsANoOp() {
+        (AvatarTintsLight + AvatarTintsDark).forEach { tint ->
+            assertEquals(tint, tint.harmonizedToward(Color(0xFF777777)))
+        }
+    }
+
+    /** Harmonizing keeps tone, so the AA floor the palette was generated to should survive any wallpaper. */
+    @Test
+    fun harmonizedAvatarTintsStillClearTextContrast() {
+        listOf("light" to AvatarTintsLight, "dark" to AvatarTintsDark).forEach { (which, tints) ->
+            tints.forEachIndexed { i, tint ->
+                ACCENTS.forEach { accent ->
+                    val moved = tint.harmonizedToward(accent)
+                    val ratio = contrastRatio(moved.onContainer, moved.container)
+                    assertTrue(
+                        "$which avatar tint $i harmonized toward ${accent.hex()} is %.2f:1, under AA's %.1f:1 for text".format(
+                            ratio,
+                            MIN_TEXT_CONTRAST,
+                        ),
+                        ratio >= MIN_TEXT_CONTRAST,
+                    )
+                }
+            }
+        }
+    }
+
     /** Every role whose value is a neutral or surface — the ones a baseline fallthrough would taint. */
     private fun neutralRoles(light: Boolean): List<Pair<String, Color>> {
         val s = if (light) LightColorScheme else DarkColorScheme
@@ -174,6 +327,35 @@ class ColorSchemeTest {
 
         /** WCAG's floor for a graphical object that carries meaning. */
         const val MIN_CONTRAST = 3.0
+
+        /** WCAG AA's floor for text at any size. */
+        const val MIN_TEXT_CONTRAST = 4.5
+
+        /** How far one avatar slot's hue may drift between the light and dark tables. */
+        const val MAX_AVATAR_MODE_HUE_GAP = 20f
+
+        /** Slack for Oklch lightness and chroma after an 8-bit round trip. */
+        const val OKLCH_TOLERANCE = 0.006
+
+        /**
+         * Wallpaper primaries to harmonize toward: Material's baseline purple, then a blue, green, amber and
+         * red of the kind `dynamicLightColorScheme` produces (tone 40), plus one that sits opposite the
+         * palette's coral so the 15° cap is exercised.
+         */
+        val ACCENTS =
+            listOf(
+                Color(0xFF6750A4),
+                Color(0xFF0B57D0),
+                Color(0xFF386A20),
+                Color(0xFF7A5900),
+                Color(0xFFB3261E),
+                Color(0xFF006A6A),
+            )
+
+        fun signedHue(degrees: Double): Double {
+            val d = ((degrees % 360.0) + 360.0) % 360.0
+            return if (d > 180.0) d - 360.0 else d
+        }
 
         val NAMED_ARG = Regex("""(\w+)\s*=""")
 

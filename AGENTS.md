@@ -74,6 +74,12 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   membership, titles, speaker and contacts rules live in those two shared files so search cannot drift
   from the list; a hit opens the thread through `chat/{id}?messageId=` and the quote-jump machinery,
   never a second thread view). "Search in this chat" is deferred — CHECK `.agents/memory/roadmap.md`.
+- **When touching `ui/components/Avatar`, `ui/theme/AvatarTint.kt`, or the notification letter avatar in
+  `MessageNotifier`:** READ ADR 2026-09.j8c7. A photo-less avatar's colour is keyed on the **node id**
+  (`avatarTintIndex`, pinned by `ColorSchemeTest`), from a static twelve-hue palette that
+  `scripts/gen-avatar-palette.py` generates; under Material You `KnitTheme` harmonizes it toward the
+  wallpaper's primary (a 15°-capped Oklch hue turn, tone kept), and the shade draws the same slot the same
+  way. Pass a name as the key only for a face with no identity behind it.
 - **When touching contact cards, the Add-by-link / share-link flow, deep links (`getknit.app/c`,
   `knit://`), or `mesh/IntroSync`:** READ `docs/CONTACT_CARD.md` (the card layout + golden vectors, the
   intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);

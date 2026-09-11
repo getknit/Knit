@@ -286,7 +286,7 @@ private fun PreviewCard(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Spacer(Modifier.height(4.dp))
-        Avatar(avatarHash = null, name = ready.displayName, size = 72.dp)
+        Avatar(avatarHash = null, name = ready.displayName, nodeId = ready.nodeId, size = 72.dp)
         Text(
             text = stringResource(R.string.add_contact_preview_title, ready.displayName),
             style = MaterialTheme.typography.titleLarge,

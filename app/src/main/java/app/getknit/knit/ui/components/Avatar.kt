@@ -1,10 +1,14 @@
 package app.getknit.knit.ui.components
 
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +39,9 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.theme.AvatarTint
+import app.getknit.knit.ui.theme.avatarTintIndex
+import app.getknit.knit.ui.theme.knitColors
 import app.getknit.knit.ui.theme.rememberPressScale
 import coil3.compose.AsyncImage
 import java.text.BreakIterator
@@ -46,6 +53,13 @@ import java.text.BreakIterator
  * so larger [size]s stay crisp. When [onClick] is non-null the whole circle is tappable, with a
  * circular ripple.
  *
+ * The circle's colour is keyed on [nodeId] (ADR 2026-09.j8c7): one of the twelve [AvatarTint]s in
+ * `MaterialTheme.knitColors`, chosen by [avatarTintIndex], so the same person wears the same hue in
+ * every list, in the notification shade, and on every phone that knows them — and a column of
+ * photo-less strangers is not a column of identical discs. Pass null only when the face has no
+ * identity behind it (a heard radio author, keyed on its `!hex` label); the colour then keys on
+ * [name] instead, which is stable but not unique.
+ *
  * Accessibility: the image/initial is decorative on its own, so pass [contentDescription] to give
  * the avatar an accessible name (do this when [onClick] is set, so the tappable target is
  * announced). When [onClick] is set the touch target grows to the 48dp minimum without enlarging
@@ -55,15 +69,15 @@ import java.text.BreakIterator
 fun Avatar(
     avatarHash: String?,
     name: String,
+    nodeId: String?,
     size: Dp,
     modifier: Modifier = Modifier,
-    background: Color = MaterialTheme.colorScheme.secondaryContainer,
-    contentColor: Color = MaterialTheme.colorScheme.onSecondaryContainer,
     textStyle: TextStyle = MaterialTheme.typography.labelLarge,
     contentDescription: String? = null,
     onClick: (() -> Unit)? = null,
     onClickLabel: String? = null,
 ) {
+    val tint = MaterialTheme.knitColors.avatarTint(nodeId ?: name)
     // An avatar is a tap target with no container of its own, so a ripple alone is easy to miss on a
     // photo. Giving it a little under the finger is the confirmation the image can't provide.
     val interaction = remember { MutableInteractionSource() }
@@ -85,7 +99,7 @@ fun Avatar(
                 .then(press)
                 .size(size)
                 .clip(CircleShape)
-                .background(background)
+                .background(tint.container)
                 .then(
                     if (onClick != null) {
                         Modifier.clickable(
@@ -94,7 +108,7 @@ fun Avatar(
                             // whatever the row or bubble around the avatar set — not this circle's own
                             // content colour. Name it, the way ripple()'s own docs mean it: the colour
                             // the component's text or iconography uses.
-                            indication = ripple(color = contentColor),
+                            indication = ripple(color = tint.onContainer),
                             onClickLabel = onClickLabel,
                             role = Role.Button,
                             onClick = onClick,
@@ -127,7 +141,7 @@ fun Avatar(
                 onError = { imageFailed = true },
             )
         } else {
-            AvatarInitial(name = name, size = size, textStyle = textStyle, contentColor = contentColor)
+            AvatarInitial(name = name, size = size, textStyle = textStyle, contentColor = tint.onContainer)
         }
     }
 }
@@ -183,12 +197,26 @@ private fun avatarInitial(name: String): String {
 @Composable
 fun AvatarInitialPreview() =
     KnitPreview {
-        Avatar(avatarHash = null, name = "Ada Lovelace", size = 40.dp)
+        Avatar(avatarHash = null, name = "Ada Lovelace", nodeId = "ada", size = 40.dp)
     }
 
 @Preview(showBackground = true)
 @Composable
 fun AvatarLargeEmojiPreview() =
     KnitPreview {
-        Avatar(avatarHash = null, name = "🦊 Fox", size = 96.dp)
+        Avatar(avatarHash = null, name = "🦊 Fox", nodeId = "fox", size = 96.dp)
+    }
+
+/** Every tint in the palette side by side, the way a list of photo-less contacts would show them. */
+@Preview(showBackground = true)
+@Preview(showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun AvatarPalettePreview() =
+    KnitPreview {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(8.dp)) {
+            // Twelve consecutive one-letter keys land in twelve consecutive slots; "l" is the one at slot 0.
+            for (key in ('l'..'w').map(Char::toString)) {
+                Avatar(avatarHash = null, name = key, nodeId = key, size = 40.dp)
+            }
+        }
     }

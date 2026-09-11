@@ -53,6 +53,9 @@ document:
   card had looked different depending on whether you sent the message or received it.
 - On Android 11 and older, a list pulled past its end now glows Knit's coral. It had been a flat grey that
   belonged to nothing else on the screen.
+- A contact with no photo now gets their own colour behind their initial, and Knit picks the same one on
+  every phone and in your notifications. A chat list full of people without photos no longer looks like a
+  row of identical grey circles.
 
 ### Fixed
 

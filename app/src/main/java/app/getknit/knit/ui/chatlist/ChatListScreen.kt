@@ -755,7 +755,8 @@ private fun LeadingVisual(row: ConversationRow) {
         }
 
         else -> {
-            Avatar(avatarHash = row.avatarHash, name = row.title, size = size)
+            // A DM's conversation id is the peer's node id.
+            Avatar(avatarHash = row.avatarHash, name = row.title, nodeId = row.id, size = size)
         }
     }
 }

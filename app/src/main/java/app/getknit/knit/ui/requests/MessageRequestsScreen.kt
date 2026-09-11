@@ -295,6 +295,8 @@ private fun RequestLeadingVisual(
         Avatar(
             avatarHash = row.avatarHash,
             name = row.title,
+            // A DM request's conversation id is the peer's node id.
+            nodeId = row.conversationId,
             size = size,
             contentDescription = stringResource(R.string.chat_view_profile, row.title),
             onClick = onOpenProfile,

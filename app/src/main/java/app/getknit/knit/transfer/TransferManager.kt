@@ -403,8 +403,6 @@ class TransferManager(
             fail(l, TransferPayload.REASON_CONNECTION, tellPeer = false)
             return
         }
-        // Let the READY actually leave before the radio is taken away — see readyGraceMs.
-        delay(timings.readyGraceMs)
         l.job = scope.launch { hostAndSend(l) }
     }
 
@@ -462,6 +460,10 @@ class TransferManager(
     private suspend fun hostAndSend(l: Live) {
         var failure: Int? = null
         try {
+            // Let the READY actually leave before the radio is taken away — see readyGraceMs. It waits here, on
+            // the role's own job, so the accept that started it hands the inbound collector back at once, and
+            // a cancel during the wait ends the job before it ever hosts.
+            delay(timings.readyGraceMs)
             withContext(io) {
                 val group = wifi.host(checkNotNull(l.credentials), timings.groupUpMs)
                 log(

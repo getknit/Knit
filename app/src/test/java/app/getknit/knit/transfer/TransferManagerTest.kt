@@ -107,8 +107,11 @@ class TransferManagerTest {
         return side
     }
 
-    private fun pair(timingsB: TransferTimings = fast): Pair<Side, Side> {
-        val a = side("alice")
+    private fun pair(
+        timingsA: TransferTimings = fast,
+        timingsB: TransferTimings = fast,
+    ): Pair<Side, Side> {
+        val a = side("alice", timingsA)
         val b = side("bob", timingsB)
         a.signals.peer = b.manager
         b.signals.peer = a.manager
@@ -241,6 +244,30 @@ class TransferManagerTest {
             assertEquals(TransferPayload.REASON_TIMEOUT, b.record(id)!!.reason)
             assertTrue(a.log.events.none { it == "host" })
             assertEquals(TransferPhase.Offered, a.record(id)!!.phase)
+        }
+
+    @Test
+    fun anAcceptHandsTheCollectorBackBeforeTheReadyGraceAndACancelDuringItNeverHosts() =
+        runBlocking {
+            val grace = 1_000L
+            val (a, b) = pair(timingsA = fast.copy(readyGraceMs = grace))
+            a.withClip()
+            val id = offer(a)
+            awaitIncoming(b, id)
+            // The ACCEPT lands on the inbound pipeline's own coroutine: the grace must not be served there.
+            val acceptedAt = clock()
+            a.manager.onSignal("bob", TransferPayload(id = id, phase = TransferPayload.PHASE_ACCEPT), clock())
+            val heldMs = clock() - acceptedAt
+            assertTrue("the accept held its caller for $heldMs ms", heldMs < grace)
+            assertEquals(TransferPhase.Connecting, a.record(id)!!.phase)
+            assertTrue(a.signals.sent.any { it.phase == TransferPayload.PHASE_READY && it.id == id })
+            assertTrue(a.log.events.none { it == "host" })
+            // Cancelled while the grace is still running: the host job ends without ever taking the radio.
+            a.manager.cancel(id)
+            awaitPhase(a, id, TransferPhase.Cancelled)
+            await("alice releases the radio") { a.wifi.released.isNotEmpty() }
+            delay(grace)
+            assertTrue(a.log.events.none { it == "host" })
         }
 
     @Test

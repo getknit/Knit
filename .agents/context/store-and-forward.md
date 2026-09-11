@@ -197,7 +197,13 @@ frame that carried the roster. The same hold covers the race's second shape — 
 authenticated, so the TTL is long (1 h, well inside the 48 h skipped-key retention that keeps the replay
 openable); bounded by a per-group cap and a global cap. Oracles: `groupSeedsHeld`/`groupSeedsReplayed` in `…debug.STATE` and the
 metrics line, and `holding group key … not held yet` under `MeshManager`. JVM-tested (`PendingGroupKeysTest`,
-the three `InboundPipelineTest` seed-before-roster cases); device-verified 2026-09-10.
+the three `InboundPipelineTest` seed-before-roster cases); device-verified 2026-09-10. **The park does not
+survive a restart**, and a parked-then-lost seed is one nobody re-serves (we custodied it before parking, so
+our digest already folds it) while the creator's re-send sits behind its 15-min floor and one unreadable
+frame never reaches the key-request heuristic. So `reconcileGroup` also re-feeds, on first sight of a group
+only, our own custody's ratchet-form chat DMs from that roster that produced no message row
+(`MeshManager.replayCustodiedSeedDms`) — idempotent for the same reasons the group-frame replay is. Pinned by
+`mesh/lab`'s restart-with-a-parked-seed scenario, which found it.
 
 ## Custody carries our own frames too — the self-frame silent drop
 

@@ -102,6 +102,15 @@ it and discarding the payload, the pre-2026-09-10 behaviour, lost the seed for g
 a `RATCHET_DUPLICATE`, the first message sat at `GROUP_RATCHET_NO_KEY`, and neither the 3-distinct-frame
 key-request heuristic nor the floored re-send triggers below were due.
 
+The park is in memory, so a process death between the seed and the roster loses it — and the same three
+doors are then shut: the seed was custodied before it was parked, so no peer re-serves it; the creator's
+proactive re-send is behind its 15-min floor whenever any trigger fired recently; and one unreadable frame
+does not reach the heuristic. `reconcileGroup` therefore has a restart-safe half: on **first sight** of a
+group it re-enters our own custody's ratchet-form chat DMs from that roster that never produced a message
+row (`MeshManager.replayCustodiedSeedDms`, the DM analogue of `replayCustodiedGroupFrames`). A delivered DM
+stops at the exists-gate, a consumed ctl DM drops as a duplicate, and the lost seed opens because a parked
+frame never advanced the chain. Found by the `mesh/lab` restart-with-a-parked-seed scenario (2026-09-11).
+
 The **outbox** (`group_key_sends`, one row per (group, member)) tracks `sentEpoch/sentAt/ackedAt`.
 Receivers acknowledge adoption with `ctl = CTL_GROUP_KEY_ACK` (`gk` carrying the groupId + epoch),
 which stamps `ackedAt` and stops re-sends. Re-send triggers: an inbound key-request (§7), the

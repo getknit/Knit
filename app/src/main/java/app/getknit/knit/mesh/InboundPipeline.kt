@@ -157,6 +157,10 @@ class InboundPipeline(
     // arrived (MeshManager.replayCustodiedGroupFrames) — the local half of the re-serve heal; a frame
     // WE custodied before its seed is never re-served by a peer (no digest divergence to cue it).
     private val replayGroupCustody: suspend (String?, String?) -> Unit = { _, _ -> },
+    // The DM half of the same heal (MeshManager.replayCustodiedSeedDms): on first sight of a group, re-enters
+    // our own custody's undelivered chat DMs from its roster, so a seed that was parked in memory and lost
+    // with the process is adopted from the copy custody kept.
+    private val replaySeedCustody: suspend (String) -> Unit = {},
     // Adopts a gossiped shared group root (MeshManager.adoptGroupRoot, docs/SPOOL_PROTOCOL.md §3.2).
     // Called INSIDE the ctl commit so the root lands atomically with the DM chain advance that carried
     // it; returns whether anything was adopted. Lambda-mediated like redistributeGroupKey, so this
@@ -1865,7 +1869,7 @@ class InboundPipeline(
         // delete(): otherwise a find that read left=false just before leave() commits would blind-upsert left=false
         // and resurrect the group. Returns the PhotoDecision on adoption (its bytes may still need pulling) with
         // the tombstones the row now holds, or null when the frame is refused.
-        val (photo, departed) =
+        val (photo, departed, firstSight) =
             // Explicit type argument: withWriteTransaction's block is a TransactionScope<R> receiver, and R is
             // invariant, so inference latches onto the first `return@` (null) instead of unifying with the
             // Reconciled returned at the end.
@@ -1902,7 +1906,7 @@ class InboundPipeline(
                 )
                 groupNotices(group, senderId, sentAt, existing, incomingName, keepName, takeIncoming, decision, createdAt)
                 if (rejoining) groups.recordRejoin(group.id, senderId, sentAt, rekey = rejoinRekeyDue(group.id, senderId))
-                Reconciled(decision, departed.toSet())
+                Reconciled(decision, departed.toSet(), firstSight = existing == null)
             } ?: return false
         // A newer photo whose bytes we don't hold yet: pull it hop-by-hop (after the upsert advanced the clock,
         // so the adopt-on-arrival clock check matches), then adopt on arrival. Outside the transaction — it's a
@@ -1912,13 +1916,22 @@ class InboundPipeline(
         // (the usual case), and it must run before a chat frame's own decrypt so the first message of a new
         // group opens on its first pass rather than on the custody replay.
         replayHeldGroupKeys(group.id, departed)
+        // The park is in memory: a seed that arrived, was parked, and was lost to a process death before this
+        // row existed is still in our custody store, and nothing else will hand it to us again (see
+        // MeshManager.replayCustodiedSeedDms). First sight only — the park can only have held a seed for a
+        // group we did not hold — so a group's ordinary frames never pay for it.
+        if (firstSight) replaySeedCustody(group.id)
         return true
     }
 
-    /** What [reconcileGroup]'s transaction hands its post-commit half: the photo verdict and the row's tombstones. */
+    /**
+     * What [reconcileGroup]'s transaction hands its post-commit half: the photo verdict, the row's tombstones,
+     * and whether the row was created just now.
+     */
     private data class Reconciled(
         val photo: PhotoDecision,
         val departed: Set<String>,
+        val firstSight: Boolean,
     )
 
     /**

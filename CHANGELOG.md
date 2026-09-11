@@ -72,6 +72,8 @@ document:
 - Someone two phones away from you now shows up as nearby as soon as they arrive. Before, the phone in the
   middle sometimes held on to their details, so you saw them only after a minute or once they had sent
   something.
+- A new group's first message now opens even when Knit was shut down on your phone between the key arriving
+  and the group itself. It used to stay unreadable for up to fifteen minutes after you came back.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

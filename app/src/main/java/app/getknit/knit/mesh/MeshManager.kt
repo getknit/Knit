@@ -354,6 +354,7 @@ class MeshManager(
             redistributeGroupKey = ::redistributeGroupKey,
             flushGroupKeys = ::flushPendingGroupKeysFor,
             replayGroupCustody = ::replayCustodiedGroupFrames,
+            replaySeedCustody = ::replayCustodiedSeedDms,
             adoptGroupRoot = ::adoptGroupRoot,
             onGroupRootCtl = ::onGroupRootCtl,
             onProfilePinned = { introSync.onProfilePinned(it) },
@@ -1292,6 +1293,49 @@ class MeshManager(
 
     /** The heal/startup backstop: every undelivered group frame in custody, any group, any sender. */
     private suspend fun replayUndeliveredGroupCustody() = replayCustodiedGroupFrames(groupId = null, senderId = null)
+
+    /**
+     * The DM half of [replayCustodiedGroupFrames], fired on **first sight** of a group: re-enters every
+     * custodied chat DM addressed to us from the new roster that never produced a message row. A sender-key
+     * seed that outran its roster is parked in memory (`PendingGroupKeys`) and lost with the process — but it
+     * was custodied before it was parked, and once we hold it the same three doors are shut as for the group
+     * frame: no peer re-serves it (our digest folds its id), the creator's proactive re-send sits behind its
+     * [SEED_RESEND_FLOOR_MS], and the key-request heuristic wants three unreadable frames where a new group
+     * has one. So the member sat on an unreadable first message for up to the floor (found by the `mesh/lab`
+     * restart-with-a-parked-seed case). Replay is idempotent: a delivered DM stops at the exists-gate, a ctl
+     * DM the ratchet already consumed drops as a duplicate, and the lost seed opens because a parked frame
+     * never advanced the chain. Bounded by the roster and the custody TTL; oldest first so the chain walks
+     * forward.
+     */
+    private suspend fun replayCustodiedSeedDms(groupId: String) {
+        val me = identity.nodeId()
+        val group = groups.find(groupId) ?: return
+        val senders = GroupMembersStore.decode(group.members).toSet() - GroupMembersStore.decode(group.departed).toSet() - me
+        forwardStore
+            .liveFrames(clock())
+            .filter { frame ->
+                val env = frame.envelope
+                env.type == FrameType.CHAT && env.recipientId == me && env.group == null && env.senderId in senders
+            }
+            // Ratchet-form only: the duplicate drop is what makes re-entering a consumed DM a no-op, and a seed
+            // is never anything else. A legacy envelope has no such guard and must not be re-delivered.
+            .filter { frame ->
+                WireCodec
+                    .decodePayload<ChatContent>(frame.envelope.payload)
+                    ?.enc
+                    ?.v
+                    ?.let(EncEnvelope::isDmRatchetVersion) ==
+                    true
+            }.sortedBy { it.envelope.sentAt }
+            .forEach { frame ->
+                if (messages.exists(frame.envelope.id)) return@forEach
+                pipeline.onDeliver(
+                    WireEnvelope(relay = false, sig = frame.sig, signed = frame.signed),
+                    frame.envelope,
+                    frame.envelope.senderId,
+                )
+            }
+    }
 
     /** Checks-and-stamps the per-(group, member) seed re-send floor. */
     private fun seedSendFloorOpen(

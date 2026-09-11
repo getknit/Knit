@@ -13,7 +13,14 @@ package app.getknit.knit.mesh
  * The pipeline parks the frame here **before the ratchet commit** (the lock-free peek decides), so the
  * chain never advances past it; when the group is first reconciled, `reconcileGroup` releases the parked
  * frames and re-runs them through the deliver path, where the same open now succeeds (a later frame from
- * that sender only leaves a skipped key behind, which the replay consumes).
+ * that sender only leaves a skipped key behind, which the replay consumes). The race's second shape parks
+ * here too: a sender we hold as *departed* whose seed for the re-created group floods ahead of the frame
+ * that rejoins them. That frame waits on its sender's own rejoin, not on the roster, so [release] takes a
+ * predicate — the pipeline releases only what the reconciled row can now adopt, and a frame whose sender is
+ * still departed stays parked (its `parkedAt` untouched) across every other member's frame, until the
+ * rejoin lifts the tombstone or the TTL ages it out. Releasing it regardless would re-park it with a fresh
+ * clock on every group frame, so the hold never expired and the held/replayed metrics climbed for a seed
+ * that was going nowhere.
  *
  * In-memory like [PendingInbound]: the frame is already authenticated (it passed `verifyInbound`), but a
  * process restart loses nothing that custody does not still hold — the seed frame was custodied on first
@@ -59,14 +66,21 @@ class PendingGroupKeys(
         return true
     }
 
-    /** Removes and returns every frame parked for [groupId], oldest first, to replay now the group is held. */
+    /**
+     * Removes and returns every frame parked for [groupId] that [eligible] accepts, oldest first, to replay
+     * now the group is held. A frame it refuses is left exactly where it was — same slot, same `parkedAt` —
+     * so a caller can release what the roster can now adopt without restarting the clock on what it can't.
+     */
     @Synchronized
-    fun release(groupId: String): List<HeldFrame> {
+    fun release(
+        groupId: String,
+        eligible: (HeldFrame) -> Boolean = { true },
+    ): List<HeldFrame> {
         val out = ArrayList<HeldFrame>()
         val iterator = held.values.iterator()
         while (iterator.hasNext()) {
             val parked = iterator.next()
-            if (parked.groupId == groupId) {
+            if (parked.groupId == groupId && eligible(parked.frame)) {
                 out.add(parked.frame)
                 iterator.remove()
             }

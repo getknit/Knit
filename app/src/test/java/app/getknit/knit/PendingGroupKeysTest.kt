@@ -66,6 +66,26 @@ class PendingGroupKeysTest {
     }
 
     @Test
+    fun releaseLeavesFramesThePredicateRefusesParked() {
+        // The pipeline releases only what the reconciled roster can adopt: a frame the predicate refuses
+        // stays parked in place, its parkedAt untouched, so the TTL keeps counting from the original park
+        // rather than restarting on every release.
+        var clock = 0L
+        val buffer = PendingGroupKeys(now = { clock }, holdTtlMs = 100)
+        assertTrue(buffer.hold("g-1", frame("a1", "alice")))
+        clock = 10
+        assertTrue(buffer.hold("g-1", frame("b1", "bob")))
+
+        clock = 50
+        assertEquals(listOf("a1"), buffer.release("g-1") { it.env.senderId != "bob" }.map { it.env.id })
+
+        // bob is still held — and parked at 10, not re-stamped at 50: at 120 he is past the 100 ms TTL.
+        clock = 120
+        assertEquals(1, buffer.sweepExpired())
+        assertTrue(buffer.release("g-1").isEmpty())
+    }
+
+    @Test
     fun perGroupCapRefusesBeyondTheLimit() {
         var clock = 0L
         val buffer = PendingGroupKeys(now = { clock }, maxPerGroup = 2)

@@ -5373,6 +5373,80 @@ class InboundPipelineTest {
         }
 
     @Test
+    fun anotherMembersFrameLeavesADepartedSendersSeedParkedUntilTheyRejoin() =
+        runTest {
+            // Work item 44: bob's frames used to release alice's parked seed on every pass, the replay found
+            // her still departed and parked it again with a fresh clock — the hold never aged out and the
+            // held/replayed counts climbed once per group frame. Her seed waits on her own rejoin, not on
+            // the roster, so bob's traffic must leave it exactly where it is.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pin(alice)
+            rig.pin(bob)
+            val group = rig.seedRatchetGroup(alice, bob)
+            rig.depart(group, alice, leftAt = 10L)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-parked", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+
+            // Bob never saw alice's leave, so his roster still lists her — but only her own signature lifts
+            // the tombstone, and none of his frames touches her seed.
+            for (sentAt in 20L..22L) rig.deliver(bob, rig.groupUpdate(bob, group, sentAt = sentAt))
+
+            assertEquals(setOf(alice.nodeId), rig.departed(group.id))
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsReplayed)
+            assertTrue(rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).isEmpty())
+
+            // Her own frame rejoins her, and that is what releases the seed: replayed, adopted, opened.
+            rig.deliver(alice, author.groupFrame(group, "g-back", "back again", sentAt = 30L))
+
+            assertTrue(rig.departed(group.id).isEmpty())
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsReplayed)
+            assertEquals(1, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
+            assertEquals("back again", rig.msgMap["g-back"]?.body)
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+        }
+
+    @Test
+    fun aDepartedSendersParkedSeedAgesOutDespiteTheGroupsTraffic() =
+        runTest {
+            // The TTL half of the same bug: with the seed no longer re-parked on every frame, its original
+            // park time is what the sweep sees, and an hour of bob's messages does not keep it alive.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pin(alice)
+            rig.pin(bob)
+            val group = rig.seedRatchetGroup(alice, bob)
+            rig.depart(group, alice, leftAt = 10L)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-stale", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+            rig.nowMs += 2 * HOUR_MS
+            rig.deliver(bob, rig.groupUpdate(bob, group, sentAt = 20L))
+
+            assertEquals(1, rig.pendingGroupKeys.sweepExpired())
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsReplayed)
+        }
+
+    @Test
     fun aReServedPreLeaveFrameDoesNotRejoinADepartedMember() =
         runTest {
             // Custody re-serves a frame alice sent BEFORE she left — she was a member then, so it lists her.

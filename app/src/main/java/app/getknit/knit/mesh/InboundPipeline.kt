@@ -1271,7 +1271,8 @@ class InboundPipeline(
      * serves the two in either order — is parked verbatim and reported held (true), so the caller skips the
      * ratchet commit that would otherwise consume the frame with its seeds unadopted. The same race in its
      * second shape: a sender we hold as *departed* ([rejoinBy]), whose seed for the re-created group floods
-     * ahead of the frame that rejoins them. [adoptGroupSeeds]'s other gates (left, a non-member) are not
+     * ahead of the frame that rejoins them — released by that rejoin alone, never by another member's
+     * frame ([replayHeldGroupKeys]). [adoptGroupSeeds]'s other gates (left, a non-member) are not
      * pre-judged here — the frame takes the ordinary path. A group with a full hold (the per-group cap)
      * also takes the ordinary path — the pre-existing behaviour — rather than being refused outright.
      */
@@ -1294,15 +1295,24 @@ class InboundPipeline(
     }
 
     /**
-     * The release half: every seed parked for [groupId] re-enters [onDeliver] now the group row exists, so
-     * the same open that was skipped commits and adopts — and the post-commit `replayGroupCustody` then
-     * decrypts the group frame that just carried the roster (already custodied by the time this runs). Runs
-     * **after** [reconcileGroup]'s transaction has committed: the adoption reads the row. Like the custody
-     * replay, the frame re-enters with `relay = false` — no second flood, no second fan-out; verify, custody
-     * and the exists-gate are all idempotent.
+     * The release half: every seed parked for [groupId] whose sender the reconciled row can now adopt
+     * re-enters [onDeliver], so the same open that was skipped commits and adopts — and the post-commit
+     * `replayGroupCustody` then decrypts the group frame that just carried the roster (already custodied by
+     * the time this runs). Runs **after** [reconcileGroup]'s transaction has committed: the adoption reads
+     * the row. Like the custody replay, the frame re-enters with `relay = false` — no second flood, no
+     * second fan-out; verify, custody and the exists-gate are all idempotent.
+     *
+     * [departed] is the row's tombstones as that transaction left them. A seed parked because its sender
+     * is departed waits on that sender's own rejoin — the frame that lifts their tombstone, in the same
+     * transaction that produced this set — so it stays parked, clock untouched, through every other
+     * member's frame; replaying it would only park it again, stamped afresh, and the hold would never
+     * age out.
      */
-    private suspend fun replayHeldGroupKeys(groupId: String) {
-        pendingGroupKeys.release(groupId).forEach {
+    private suspend fun replayHeldGroupKeys(
+        groupId: String,
+        departed: Set<String>,
+    ) {
+        pendingGroupKeys.release(groupId) { it.env.senderId !in departed }.forEach {
             metrics.onGroupSeedReplayed()
             onDeliver(WireEnvelope(relay = false, sig = it.wire.sig, signed = it.wire.signed), it.env, it.fromNodeId, it.kind)
         }
@@ -1853,13 +1863,13 @@ class InboundPipeline(
         // find → refuse-check → upsert run in one transaction, re-reading `existing` inside, so the left-tombstone
         // check and the upsert can't tear apart from a concurrent transactional GroupRepository.leave()/
         // delete(): otherwise a find that read left=false just before leave() commits would blind-upsert left=false
-        // and resurrect the group. Returns the PhotoDecision on adoption (its bytes may still need pulling), or null
-        // when the frame is refused.
-        val photo =
+        // and resurrect the group. Returns the PhotoDecision on adoption (its bytes may still need pulling) with
+        // the tombstones the row now holds, or null when the frame is refused.
+        val (photo, departed) =
             // Explicit type argument: withWriteTransaction's block is a TransactionScope<R> receiver, and R is
             // invariant, so inference latches onto the first `return@` (null) instead of unifying with the
-            // PhotoDecision returned at the end.
-            db.withWriteTransaction<PhotoDecision?> {
+            // Reconciled returned at the end.
+            db.withWriteTransaction<Reconciled?> {
                 val existing = groups.find(group.id)
                 if (groupFrameRefused(group, senderId, existing, blocked)) return@withWriteTransaction null
                 val rejoining = existing != null && rejoinBy(group, senderId, existing, sentAt)
@@ -1892,7 +1902,7 @@ class InboundPipeline(
                 )
                 groupNotices(group, senderId, sentAt, existing, incomingName, keepName, takeIncoming, decision, createdAt)
                 if (rejoining) groups.recordRejoin(group.id, senderId, sentAt, rekey = rejoinRekeyDue(group.id, senderId))
-                decision
+                Reconciled(decision, departed.toSet())
             } ?: return false
         // A newer photo whose bytes we don't hold yet: pull it hop-by-hop (after the upsert advanced the clock,
         // so the adopt-on-arrival clock check matches), then adopt on arrival. Outside the transaction — it's a
@@ -1901,9 +1911,15 @@ class InboundPipeline(
         // The row exists now: any seed that arrived ahead of it can be adopted. Cheap when nothing is parked
         // (the usual case), and it must run before a chat frame's own decrypt so the first message of a new
         // group opens on its first pass rather than on the custody replay.
-        replayHeldGroupKeys(group.id)
+        replayHeldGroupKeys(group.id, departed)
         return true
     }
+
+    /** What [reconcileGroup]'s transaction hands its post-commit half: the photo verdict and the row's tombstones. */
+    private data class Reconciled(
+        val photo: PhotoDecision,
+        val departed: Set<String>,
+    )
 
     /**
      * Writes the status notices a reconciled group frame earns, inside [reconcileGroup]'s transaction so

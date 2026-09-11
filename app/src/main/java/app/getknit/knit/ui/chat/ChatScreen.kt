@@ -221,6 +221,7 @@ import app.getknit.knit.ui.components.GroupAvatar
 import app.getknit.knit.ui.components.KnitStitchIndicator
 import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.components.RoomAvatar
+import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.components.skeletonBlockColor
 import app.getknit.knit.ui.components.skeletonPulseAlpha
 import app.getknit.knit.ui.icons.KnitIcons
@@ -3799,6 +3800,7 @@ private fun MessageInput(
                                             receiveContentListener?.let { Modifier.contentReceiver(it) } ?: Modifier,
                                         ).testTag("chat_input")
                                         .semantics { contentDescription = messageHint }
+                                        .noAutofillMenu()
                                         // Ctrl+Enter sends from a hardware keyboard, the one place a
                                         // keyboard-only send is expected. Preview, so the field's own Enter
                                         // handling never sees it and puts a newline in the draft first.

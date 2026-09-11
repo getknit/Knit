@@ -55,6 +55,7 @@ import app.getknit.knit.R
 import app.getknit.knit.contacts.ContactImporter
 import app.getknit.knit.mesh.spool.SpoolUrl
 import app.getknit.knit.ui.components.Avatar
+import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.scan.QrScanner
 import app.getknit.knit.ui.shareText
@@ -249,7 +250,7 @@ internal fun AddContactScreenContent(
                 label = { Text(stringResource(R.string.add_contact_input_label)) },
                 placeholder = { Text(stringResource(R.string.add_contact_input_hint)) },
                 maxLines = 4,
-                modifier = Modifier.fillMaxWidth().testTag("add_contact_input"),
+                modifier = Modifier.fillMaxWidth().testTag("add_contact_input").noAutofillMenu(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(onClick = onPaste, modifier = Modifier.weight(1f).testTag("add_contact_paste")) {

@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.mesh.spool.SpoolErrCode
+import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.theme.knitColors
 import org.koin.androidx.compose.koinViewModel
@@ -444,7 +445,7 @@ private fun AddRelayDialog(
                         else -> Text(stringResource(R.string.relays_add_hint))
                     }
                 },
-                modifier = Modifier.fillMaxWidth().testTag("relays_add_field"),
+                modifier = Modifier.fillMaxWidth().testTag("relays_add_field").noAutofillMenu(),
             )
         },
         confirmButton = {

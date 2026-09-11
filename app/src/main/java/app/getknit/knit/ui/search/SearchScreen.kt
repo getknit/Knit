@@ -74,6 +74,7 @@ import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.GroupAvatar
 import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.components.RoomAvatar
+import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
 import app.getknit.knit.ui.util.compactTimeAgo
@@ -215,7 +216,8 @@ private fun SearchField(
             Modifier
                 .fillMaxWidth()
                 .focusRequester(focusRequester)
-                .testTag("search_input"),
+                .testTag("search_input")
+                .noAutofillMenu(),
     )
 }
 

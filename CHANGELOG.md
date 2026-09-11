@@ -58,6 +58,8 @@ document:
   row of identical grey circles.
 - Enter in the message field now starts a new line instead of sending. The send button sends, so you can
   write a message across several lines before you tap it, and on a hardware keyboard Ctrl+Enter sends too.
+- The menu that pops up over a text field no longer offers Autofill. Android puts it on any box that could
+  hold a saved password or address, and nothing you type into Knit is one.
 
 ### Fixed
 

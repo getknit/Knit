@@ -60,6 +60,7 @@ import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.FullscreenImageViewer
 import app.getknit.knit.ui.components.GroupAvatar
 import app.getknit.knit.ui.components.PeerNameText
+import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.profile.AvatarCropDialog
@@ -363,6 +364,7 @@ private fun RenameGroupDialog(
                 value = name,
                 onValueChange = { name = it.take(TextLimits.GROUP_NAME) },
                 singleLine = true,
+                modifier = Modifier.noAutofillMenu(),
                 label = { Text(stringResource(R.string.chat_group_name_label)) },
                 supportingText = {
                     Text(

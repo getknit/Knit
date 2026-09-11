@@ -90,6 +90,7 @@ import app.getknit.knit.data.emoji.EmojiCatalog
 import app.getknit.knit.data.emoji.EmojiCatalogLoader
 import app.getknit.knit.data.emoji.EmojiEntry
 import app.getknit.knit.data.emoji.EmojiGroup
+import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.components.skeletonBlockColor
 import app.getknit.knit.ui.components.skeletonPulseAlphaState
 import app.getknit.knit.ui.preview.KnitPreview
@@ -196,7 +197,8 @@ private fun EmojiSearchField(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp)
-                .testTag("emoji_search"),
+                .testTag("emoji_search")
+                .noAutofillMenu(),
     )
 }
 

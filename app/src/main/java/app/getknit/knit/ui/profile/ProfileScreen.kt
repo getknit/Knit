@@ -65,6 +65,7 @@ import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.ui.components.Avatar
+import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
 import org.koin.androidx.compose.koinViewModel
 
@@ -209,6 +210,7 @@ internal fun ProfileScreenContent(
                     Modifier
                         .fillMaxWidth()
                         .testTag("profile_name")
+                        .noAutofillMenu()
                         .onFocusChanged { if (!it.isFocused) onNameCommit() },
                 label = { Text(stringResource(R.string.profile_display_name_label)) },
                 placeholder = { if (form.alias.isNotEmpty()) Text(form.alias) },
@@ -231,6 +233,7 @@ internal fun ProfileScreenContent(
                     Modifier
                         .fillMaxWidth()
                         .testTag("profile_status")
+                        .noAutofillMenu()
                         .onFocusChanged { if (!it.isFocused) onStatusCommit() },
                 label = { Text(stringResource(R.string.profile_status_label)) },
                 singleLine = true,

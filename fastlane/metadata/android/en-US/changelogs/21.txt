@@ -1,0 +1,12 @@
+A LoRa radio that stopped sending, and a new group's first message that never arrived.
+
+Messages sent from several places at once could trip the queue that feeds the radio. Everything behind it
+then stayed unsent while the radio still showed as connected, and inbound messages kept arriving, so the
+only sign was that nothing you sent was getting through. Reopening the app cleared it until next time.
+Only phones with a Meshtastic radio paired were affected; Wi-Fi and Bluetooth carried messages normally
+throughout.
+
+The first message in a new group now reaches every member. Knit sent the key for that message a moment
+before it sent the group itself, so on a member's phone the key had nothing to attach to and was dropped;
+the group then showed up with no message in it, and the sender never saw a tick. The receiving phone now
+keeps that key until the group arrives, and the message opens as soon as it does.

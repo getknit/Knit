@@ -34,6 +34,9 @@ document:
   list shows it as "Draft:" until you send it. Every chat keeps its own.
 - Send someone nearby a file that is too big to attach, from the menu in a direct message. The two phones
   connect to each other over Wi-Fi for the transfer, and the file arrives in their Downloads folder.
+- Tap the magnifier at the top of the chat list to find a chat, a contact, or a message by what it said.
+  Open a message from the results and its chat lands on that message. A stranger's message request stays
+  out of the results until you accept it.
 
 ### Changed
 

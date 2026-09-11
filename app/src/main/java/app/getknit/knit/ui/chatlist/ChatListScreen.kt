@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -120,6 +121,7 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun ChatListScreen(
     onOpenConversation: (conversationId: String) -> Unit,
+    onSearch: () -> Unit,
     onNewMessage: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -144,6 +146,7 @@ fun ChatListScreen(
         state = state,
         now = now,
         onOpenConversation = onOpenConversation,
+        onSearch = onSearch,
         onNewMessage = onNewMessage,
         onOpenSettings = onOpenSettings,
         onOpenDiagnostics = onOpenDiagnostics,
@@ -207,6 +210,7 @@ internal fun ChatListScreenContent(
     state: ChatListUiState,
     now: Long,
     onOpenConversation: (conversationId: String) -> Unit,
+    onSearch: () -> Unit,
     onNewMessage: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -242,6 +246,9 @@ internal fun ChatListScreenContent(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onSearch, modifier = Modifier.size(48.dp).semantics { testTag = "chatlist_search" }) {
+                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search_title))
+                    }
                     // Signal-style: the requests inbox affordance appears only when something is pending,
                     // so it pops in the moment a request lands rather than materialising between frames.
                     // The horizontal expand is added on top of the shared pop for this one call site: the
@@ -965,6 +972,7 @@ fun ChatListScreenPopulatedPreview() =
                 ),
             now = PREVIEW_NOW,
             onOpenConversation = {},
+            onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
             onOpenDiagnostics = {},
@@ -993,6 +1001,7 @@ fun ChatListScreenRadioWarningPreview() =
                 ),
             now = PREVIEW_NOW,
             onOpenConversation = {},
+            onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
             onOpenDiagnostics = {},
@@ -1016,6 +1025,7 @@ fun ChatListScreenLoadingPreview() =
             state = ChatListUiState(isLoading = true),
             now = PREVIEW_NOW,
             onOpenConversation = {},
+            onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
             onOpenDiagnostics = {},
@@ -1057,6 +1067,7 @@ fun ChatListScreenFirstRunPreview() =
                 ),
             now = PREVIEW_NOW,
             onOpenConversation = {},
+            onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
             onOpenDiagnostics = {},
@@ -1086,6 +1097,7 @@ fun ChatListScreenQuietPreview() =
                 ),
             now = PREVIEW_NOW,
             onOpenConversation = {},
+            onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
             onOpenDiagnostics = {},

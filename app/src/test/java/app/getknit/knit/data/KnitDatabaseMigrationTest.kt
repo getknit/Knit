@@ -1,6 +1,7 @@
 package app.getknit.knit.data
 
 import androidx.room3.testing.MigrationTestHelper
+import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.sqlite.execSQL
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -45,9 +46,9 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v11) creates and opens from the exported JSON`() =
+    fun `the current schema (v12) creates and opens from the exported JSON`() =
         runTest {
-            val version = 11 // KnitDatabase @Database(version = 11) — bump alongside the DB (its retention is CLASS,
+            val version = 12 // KnitDatabase @Database(version = 12) — bump alongside the DB (its retention is CLASS,
             // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
             helper.createDatabase(version).close()
         }
@@ -458,4 +459,61 @@ class KnitDatabaseMigrationTest {
                 }
             }
         }
+
+    @Test
+    fun `migrate 11 to 12 indexes every existing message and keeps the index in step from then on`() =
+        runTest {
+            // A device upgrading holds history; 'rebuild' must index all of it, and the sync triggers must
+            // carry every write after that. The seeded bodies also pin the tokenizer: unicode61 folds case
+            // and drops the acute, so `cafe` finds `Café`.
+            helper.createDatabase(11).use { c ->
+                c.execSQL(INSERT_V11 + "VALUES ('m1','n1','peer-1','Trailhead at dawn',1,1,0,'[]',0,0,0,0,0,0)")
+                c.execSQL(INSERT_V11 + "VALUES ('m2','n1','peer-1','Café closes early',2,1,0,'[]',0,0,0,0,0,0)")
+            }
+            helper.runMigrationsAndValidate(12, listOf(KnitMigrations.MIGRATION_11_12)).use { c ->
+                assertEquals("pre-upgrade rows are indexed", listOf("m1"), c.matches("trail*"))
+                assertEquals("case and diacritics fold", listOf("m2"), c.matches("cafe"))
+                val triggers = mutableListOf<String>()
+                c.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'messages'").use { s ->
+                    while (s.step()) triggers += s.getText(0)
+                }
+                assertEquals(
+                    setOf(
+                        "room_fts_content_sync_messages_fts_BEFORE_UPDATE",
+                        "room_fts_content_sync_messages_fts_BEFORE_DELETE",
+                        "room_fts_content_sync_messages_fts_AFTER_UPDATE",
+                        "room_fts_content_sync_messages_fts_AFTER_INSERT",
+                    ),
+                    triggers.toSet(),
+                )
+                // An insert is searchable, an update re-indexes, a delete drops out — via the triggers alone.
+                c.execSQL(INSERT_V11 + "VALUES ('m3','n1','peer-1','Summit photos',3,1,0,'[]',0,0,0,0,0,0)")
+                assertEquals(listOf("m3"), c.matches("summit*"))
+                c.execSQL("UPDATE messages SET body = 'Ridge photos' WHERE id = 'm3'")
+                assertEquals(emptyList<String>(), c.matches("summit*"))
+                assertEquals(listOf("m3"), c.matches("ridge*"))
+                c.execSQL("DELETE FROM messages WHERE id = 'm1'")
+                assertEquals(emptyList<String>(), c.matches("trail*"))
+                // Throws if the index and its content table disagree.
+                c.execSQL("INSERT INTO messages_fts(messages_fts) VALUES('integrity-check')")
+            }
+        }
+
+    private fun SQLiteConnection.matches(match: String): List<String> =
+        buildList {
+            prepare(
+                "SELECT id FROM messages WHERE rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?) " +
+                    "ORDER BY id",
+            ).use { s ->
+                s.bindText(1, match)
+                while (s.step()) add(s.getText(0))
+            }
+        }
+
+    private companion object {
+        /** The v11 column list, as MIGRATION_10_11's test seeds it. */
+        const val INSERT_V11 =
+            "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, receivedVia, " +
+                "mentions, replyToHasAttachment, moderation, pendingKey, kind, originViaMqtt, originSigned) "
+    }
 }

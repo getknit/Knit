@@ -1,6 +1,9 @@
 package app.getknit.knit.ui.chat
 
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
@@ -68,12 +71,17 @@ class ChatScreenContentTest {
         onDraftChanged: (String) -> Unit = {},
         showTransferConsent: TransferConsent? = null,
         onLoadOlder: () -> Unit = {},
+        // A search hit to open the thread on, and the reveal it asks for when the window has not reached it.
+        jumpToMessageId: String? = null,
+        onRevealMessage: (String) -> Unit = {},
+        // Read inside the composition, so a test can swap the state under a running screen (the rows landing).
+        liveState: (() -> ChatUiState)? = null,
     ): @androidx.compose.runtime.Composable () -> Unit =
         {
             KnitTheme {
                 ChatScreenContent(
                     conversationId = Conversations.NEARBY,
-                    state = state,
+                    state = liveState?.invoke() ?: state,
                     inputState = TextFieldState(input),
                     pendingAttachment = pendingAttachment,
                     stagedLocation = stagedLocation,
@@ -105,6 +113,8 @@ class ChatScreenContentTest {
                     onCopy = {},
                     onSaveAttachment = { _, _, _ -> },
                     onLoadOlder = onLoadOlder,
+                    jumpToMessageId = jumpToMessageId,
+                    onRevealMessage = onRevealMessage,
                 )
             }
         }
@@ -253,6 +263,83 @@ class ChatScreenContentTest {
         compose.waitForIdle()
 
         assertTrue("reaching the oldest loaded message reads more history", pages > 0)
+    }
+
+    /** A search hit inside the first window: revealed (a no-op there) and scrolled into view. */
+    @Test
+    fun aSearchHitInsideTheWindowIsScrolledIntoView() {
+        val revealed = mutableListOf<String>()
+        compose.setContent(
+            content(
+                input = "",
+                state = ChatUiState(isRoom = true, myNodeId = "me", rows = rows(60), hasOlder = true),
+                jumpToMessageId = "m5",
+                onRevealMessage = { revealed += it },
+            ),
+        )
+        compose.waitForIdle()
+
+        assertEquals(listOf("m5"), revealed)
+        compose.onNodeWithText("message 5").assertIsDisplayed()
+    }
+
+    /** A hit older than the window: the reveal widens it, and the scroll waits for the rows to arrive. */
+    @Test
+    fun aSearchHitBeyondTheWindowWaitsForTheRowsToReachIt() {
+        val revealed = mutableListOf<String>()
+        var live by mutableStateOf(ChatUiState(isRoom = true, myNodeId = "me", rows = rows(3), hasOlder = true))
+        compose.setContent(
+            content(
+                input = "",
+                jumpToMessageId = "m40",
+                onRevealMessage = { revealed += it },
+                liveState = { live },
+            ),
+        )
+        compose.waitForIdle()
+        assertEquals(listOf("m40"), revealed)
+        compose.onNodeWithText("message 40").assertDoesNotExist()
+
+        live = live.copy(rows = rows(60))
+        compose.waitForIdle()
+
+        compose.onNodeWithText("message 40").assertIsDisplayed()
+        assertEquals("revealed once, not again when the rows land", listOf("m40"), revealed)
+    }
+
+    /** The seed state has no rows and no history; a hit asked for then must outlive it. */
+    @Test
+    fun aSearchHitRequestedWhileLoadingSurvivesUntilTheRowsLand() {
+        val revealed = mutableListOf<String>()
+        var live by mutableStateOf(ChatUiState(isRoom = true, myNodeId = "me", isLoading = true))
+        compose.setContent(
+            content(input = "", jumpToMessageId = "m5", onRevealMessage = { revealed += it }, liveState = { live }),
+        )
+        compose.waitForIdle()
+
+        live = ChatUiState(isRoom = true, myNodeId = "me", rows = rows(60), hasOlder = false)
+        compose.waitForIdle()
+
+        assertEquals(listOf("m5"), revealed)
+        compose.onNodeWithText("message 5").assertIsDisplayed()
+    }
+
+    /** A hit the fully loaded thread does not hold — retention trimmed it — opens the thread at its newest. */
+    @Test
+    fun aSearchHitAbsentFromAFullyLoadedThreadIsDropped() {
+        val revealed = mutableListOf<String>()
+        compose.setContent(
+            content(
+                input = "",
+                state = ChatUiState(isRoom = true, myNodeId = "me", rows = rows(3), hasOlder = false),
+                jumpToMessageId = "m99",
+                onRevealMessage = { revealed += it },
+            ),
+        )
+        compose.waitForIdle()
+
+        assertEquals(listOf("m99"), revealed)
+        compose.onNodeWithText("message 3").assertIsDisplayed()
     }
 
     @Test

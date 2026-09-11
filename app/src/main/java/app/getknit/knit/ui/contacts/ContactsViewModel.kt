@@ -7,7 +7,6 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
-import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.data.settings.SettingsStore
@@ -175,27 +174,7 @@ class ContactsViewModel(
             if (me == null) return@combine ContactsUiState(isLoading = true)
             val online = neighbors.map { it.nodeId }.toSet()
             val byNode = directory.byNode
-            val verifiedIds =
-                directory.peers
-                    .filter { it.verified }
-                    .map { it.nodeId }
-                    .toSet()
-            // A DM thread's conversationId IS the peer's node id; keep only those the shared accept
-            // predicate treats as a real conversation (matching the chat list / requests split).
-            val acceptedDmPeers =
-                b.conversations
-                    .filter { Conversations.kindFor(it) == ConversationKind.DM }
-                    .filter { Conversations.isAccepted(it, b.accepted, verifiedIds, b.authored) }
-                    .toSet()
-            val groupMembers =
-                b.groups
-                    .filterNot { it.left }
-                    .flatMap { GroupMembersStore.decode(it.members) }
-                    .toSet()
-            // A peer the user explicitly accepted (a contact card imported, or a request accepted) is a
-            // contact even before a single message exists in the thread.
-            val explicitlyAccepted = b.accepted.filterTo(mutableSetOf()) { Conversations.kindFor(it) == ConversationKind.DM }
-            val contactIds = (acceptedDmPeers + explicitlyAccepted + groupMembers + verifiedIds) - blocked - me
+            val contactIds = contactIds(b.conversations, b.authored, b.groups, b.accepted, directory.verified, blocked, me)
             ContactsUiState(
                 contacts =
                     contactIds

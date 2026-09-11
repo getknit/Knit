@@ -1,5 +1,6 @@
 package app.getknit.knit.ui
 
+import android.net.Uri
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
@@ -53,6 +54,7 @@ import app.getknit.knit.ui.relay.InternetRelayScreen
 import app.getknit.knit.ui.requests.MessageRequestsScreen
 import app.getknit.knit.ui.review.RateReviewDialog
 import app.getknit.knit.ui.review.ReviewPromptInbox
+import app.getknit.knit.ui.search.SearchScreen
 import app.getknit.knit.ui.settings.SettingsScreen
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.ShareTargetScreen
@@ -79,9 +81,21 @@ private object Routes {
     const val INTERNET_RELAYS = "relays"
     const val LORA_RADIO = "lora"
     const val SHARE = "share"
-    const val CHAT = "chat/{conversationId}"
+    const val SEARCH = "search"
+
+    // The optional `messageId` is how a search hit opens a thread ON a message; everywhere else — the
+    // notification route, the pickers, `demo_route` — the path alone still matches, and the thread opens
+    // at its newest.
+    const val CHAT = "chat/{conversationId}?messageId={messageId}"
 
     fun chat(conversationId: String) = "chat/$conversationId"
+
+    // Message ids are FrameId base64url (or a demo id), so encoding is a no-op today; it stays because the
+    // query string is the one place in the graph where an id carrying '&' or '#' would otherwise cut a route.
+    fun chat(
+        conversationId: String,
+        messageId: String,
+    ) = "chat/$conversationId?messageId=${Uri.encode(messageId)}"
 
     const val PROFILE_DETAILS = "profileDetails/{nodeId}"
 
@@ -197,7 +211,7 @@ fun KnitApp(startRoute: String? = null) {
         val current = navController.currentBackStackEntry
         val alreadyOpen =
             current?.destination?.route == Routes.CHAT &&
-                current.arguments?.getString("conversationId")?.let(Routes::chat) == route
+                current.arguments?.getString("conversationId")?.let { Routes.chat(it) } == route
         // popUpTo is a no-op when the chat list isn't on the stack (debug -PstartRoute captures).
         if (!alreadyOpen) navController.navigate(route) { popUpTo(Routes.CHAT_LIST) }
         routeInbox.consume()
@@ -273,6 +287,7 @@ fun KnitApp(startRoute: String? = null) {
             LaunchedEffect(Unit) { reviewPrompter.maybePrompt() }
             ChatListScreen(
                 onOpenConversation = { id -> navController.navigate(Routes.chat(id)) },
+                onSearch = { navController.navigate(Routes.SEARCH) },
                 onNewMessage = { navController.navigate(Routes.CONTACTS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
@@ -312,15 +327,35 @@ fun KnitApp(startRoute: String? = null) {
                 },
             )
         }
+        composable(Routes.SEARCH) {
+            SearchScreen(
+                onBack = { navController.popBackStack() },
+                // A plain navigate on purpose: the search entry — and its ViewModel, which holds the query —
+                // stays under the thread, so Back returns to the results as they were. No launchSingleTop,
+                // for the reason spelled out on the notification deep link above.
+                onOpenConversation = { id -> navController.navigate(Routes.chat(id)) },
+                onOpenMessage = { id, messageId -> navController.navigate(Routes.chat(id, messageId)) },
+            )
+        }
         composable(
             route = Routes.CHAT,
-            arguments = listOf(navArgument("conversationId") { type = NavType.StringType }),
+            arguments =
+                listOf(
+                    navArgument("conversationId") { type = NavType.StringType },
+                    navArgument("messageId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
         ) { backStackEntry ->
             // conversationId is the Nearby room, a peer's node id (a 1:1 DM), or a group id.
             val conversationId =
                 backStackEntry.arguments?.getString("conversationId") ?: Conversations.NEARBY
             ChatScreen(
                 conversationId = conversationId,
+                // Navigation hands the value back decoded.
+                jumpToMessageId = backStackEntry.arguments?.getString("messageId"),
                 onBack = { navController.popBackStack() },
                 onOpenProfile = { id -> navController.navigate(Routes.profileDetails(id)) },
                 onOpenGroupDetails = { id -> navController.navigate(Routes.groupDetails(id)) },

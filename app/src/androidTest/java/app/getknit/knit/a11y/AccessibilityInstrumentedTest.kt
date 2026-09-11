@@ -3,7 +3,9 @@ package app.getknit.knit.a11y
 import android.os.Build
 import android.util.Log
 import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.tryPerformAccessibilityChecks
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
@@ -133,6 +135,26 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
     @Test fun crashLog() = audit(route = "crash") { awaitTag("screen_crash_log") }
 
     @Test fun addContact() = audit(route = "addContact") { awaitTag("screen_add_contact") }
+
+    // Search, three ways: the idle field, a query with all three sections answering (Sam is a chat, a
+    // contact and a speaker), and the no-results state.
+    @Test fun searchIdle() = audit(route = "search") { awaitTag("search_input") }
+
+    @Test
+    fun searchResults() =
+        audit(route = "search") {
+            awaitTag("search_input")
+            compose.onNodeWithTag("search_input").performTextInput("sam")
+            awaitTag("search_result_person_samr1v00")
+        }
+
+    @Test
+    fun searchNoResults() =
+        audit(route = "search") {
+            awaitTag("search_input")
+            compose.onNodeWithTag("search_input").performTextInput("zzzz")
+            awaitTag("search_empty")
+        }
 
     /**
      * Launches [route], waits for its seeded content via [awaitContent], then audits the whole screen. A

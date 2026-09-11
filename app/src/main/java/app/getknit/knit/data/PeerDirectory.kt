@@ -17,6 +17,9 @@ data class PeerDirectory(
     /** The peer rows by node id — the `peersByNode` map every ViewModel used to build itself. */
     val byNode: Map<String, PeerEntity> by lazy { peers.associateBy { it.nodeId } }
 
+    /** The node ids whose key the user has verified out of band — one input of `Conversations.isAccepted`. */
+    val verified: Set<String> by lazy { peers.filter { it.verified }.mapTo(HashSet()) { it.nodeId } }
+
     /**
      * The label for [nodeId]: a cached peer's stored name, our own name for our own id, or the alias for
      * an identity this device has never pinned — discriminated whenever another known identity renders

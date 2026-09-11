@@ -6,6 +6,7 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageDao
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.search.SearchQuery
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -36,6 +37,25 @@ class MessageRepository(
         conversationId: String,
         limit: Int,
     ): Flow<List<MessageEntity>> = dao.observeNewestForConversation(conversationId, limit).map { it.asReversed() }
+
+    /**
+     * Ordinary messages whose body matches the typed query [raw], newest first and at most [limit], in the
+     * threads [conversations] (an allow-list — the caller's visible threads, never every thread), from
+     * senders not in [blocked]; [hideFlagged] leaves out text the on-device moderator flagged. Empty for a
+     * query with nothing to ask ([SearchQuery.toMatch]) or for no threads at all. Bounded and served by the
+     * `messages_fts` index — see [MessageDao.searchBodies].
+     */
+    suspend fun search(
+        raw: String,
+        conversations: Collection<String>,
+        blocked: Set<String>,
+        hideFlagged: Boolean,
+        limit: Int,
+    ): List<MessageEntity> {
+        val match = SearchQuery.toMatch(raw) ?: return emptyList()
+        if (conversations.isEmpty()) return emptyList()
+        return dao.searchBodies(match, conversations, blocked, hideFlagged, limit)
+    }
 
     /** How deep [id] sits from the newest end of its thread — the window that just reaches a quoted message. */
     suspend fun depthOf(

@@ -295,6 +295,49 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v11 → v12: one `messages_fts` virtual table — the FTS4 external-content index over `messages.body`
+     * that app-wide search reads (`MessageDao.searchBodies`). Three parts, in this order. The virtual table
+     * itself, which stores no text: an external-content FTS table keeps only tokens, keyed by the content
+     * table's rowid. The four content-sync triggers Room generates for it, verbatim, so that every later
+     * INSERT, UPDATE and DELETE on `messages` keeps the index in step — Room drops any
+     * `room_fts_content_sync_*` trigger before a migration and re-creates its own after, so in production
+     * these are idempotent, but under the migration-test harness (whose open delegate does neither) they
+     * are what makes the migrated file behave like a fresh one. Then the `'rebuild'` command, which reads
+     * every existing row of `messages` into the index so the messages a device already holds are
+     * searchable on arrival; it is proportional to the text held and runs inside Room's migration
+     * transaction, so a crash mid-way leaves the file at v11 and the upgrade runs again.
+     *
+     * No row of `messages` or any other table moves. The SQL must stay byte-equivalent to what Room
+     * generates for `app/schemas/**/12.json` (`createSql` and `contentSyncTriggers`).
+     */
+    val MIGRATION_11_12 =
+        object : Migration(11, 12) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS `messages_fts` USING FTS4(`body` TEXT NOT NULL, " +
+                        "tokenize=unicode61, content=`messages`)",
+                )
+                connection.execSQL(
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_messages_fts_BEFORE_UPDATE BEFORE UPDATE ON " +
+                        "`messages` BEGIN DELETE FROM `messages_fts` WHERE `docid`=OLD.`rowid`; END",
+                )
+                connection.execSQL(
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_messages_fts_BEFORE_DELETE BEFORE DELETE ON " +
+                        "`messages` BEGIN DELETE FROM `messages_fts` WHERE `docid`=OLD.`rowid`; END",
+                )
+                connection.execSQL(
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_messages_fts_AFTER_UPDATE AFTER UPDATE ON " +
+                        "`messages` BEGIN INSERT INTO `messages_fts`(`docid`, `body`) VALUES (NEW.`rowid`, NEW.`body`); END",
+                )
+                connection.execSQL(
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_messages_fts_AFTER_INSERT AFTER INSERT ON " +
+                        "`messages` BEGIN INSERT INTO `messages_fts`(`docid`, `body`) VALUES (NEW.`rowid`, NEW.`body`); END",
+                )
+                connection.execSQL("INSERT INTO `messages_fts`(`messages_fts`) VALUES('rebuild')")
+            }
+        }
+
     /** All migrations, applied by Room in order. */
     val ALL: Array<Migration> =
         arrayOf(
@@ -308,5 +351,6 @@ object KnitMigrations {
             MIGRATION_8_9,
             MIGRATION_9_10,
             MIGRATION_10_11,
+            MIGRATION_11_12,
         )
 }

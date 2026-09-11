@@ -270,6 +270,8 @@ fun ChatScreen(
     onOpenProfile: (nodeId: String) -> Unit,
     onOpenGroupDetails: (conversationId: String) -> Unit,
     onOpenMessageDetails: (messageId: String) -> Unit,
+    // The message a search hit opened the thread on, or null to open at the newest — see ChatScreenContent.
+    jumpToMessageId: String? = null,
     viewModel: ChatViewModel = koinViewModel { parametersOf(conversationId) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -576,6 +578,7 @@ fun ChatScreen(
         onSaveAttachment = viewModel::saveAttachment,
         onLoadOlder = viewModel::loadOlder,
         onRevealMessage = viewModel::revealMessage,
+        jumpToMessageId = jumpToMessageId,
         onDismissRelayNotice = viewModel::dismissRelayNotice,
         voiceRecording = voiceRecording,
         voicePlayback = voicePlayback,
@@ -728,6 +731,10 @@ internal fun ChatScreenContent(
     // has not reached. Defaulted so previews and the content-level tests need not name them.
     onLoadOlder: () -> Unit = {},
     onRevealMessage: (messageId: String) -> Unit = {},
+    // The message to open the thread on — a search hit — rather than its newest. Consumed once per value:
+    // the window is widened to reach it (`onRevealMessage`) and the quote-jump machinery below scrolls and
+    // flashes it once the rows hold it. Defaulted so previews and the content-level tests need not name it.
+    jumpToMessageId: String? = null,
 ) {
     var fullscreenImage by remember { mutableStateOf<FullscreenImage?>(null) }
     // The message the full emoji picker is open for (from the long-press menu's "+"), or null. Saveable so a
@@ -794,17 +801,34 @@ internal fun ChatScreenContent(
     // A tapped quote whose original is older than the window: ask for it, then scroll once it lands. Held
     // rather than acted on immediately because the rows arrive an emission later.
     var pendingQuoteTarget by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(pendingQuoteTarget, state.rows.size) {
+    LaunchedEffect(pendingQuoteTarget, state.rows.size, state.isLoading) {
         val target = pendingQuoteTarget ?: return@LaunchedEffect
         val idx = state.rows.asReversed().indexOfFirst { it.id == target }
         if (idx >= 0) {
             pendingQuoteTarget = null
             highlightedMessageId = target
-            listState.animateScrollToItem(idx)
-        } else if (!state.hasOlder) {
-            // The whole thread is loaded and the message is not in it — retention trimmed it. Stop waiting.
+            // On the screen's scope, not this effect's: clearing the target above re-keys this effect, and
+            // the relaunch would cancel a scroll animated from inside it before its first frame.
+            scrollScope.launch { listState.animateScrollToItem(idx) }
+        } else if (!state.isLoading && (!state.hasOlder || state.rows.size >= ChatWindow.MAX)) {
+            // The whole thread is loaded — or as much of it as the window may hold — and the message is not
+            // in it: retention trimmed it, or it sits deeper than the screen reaches. Stop waiting. The seed
+            // state reports no rows and no history, so it must not count as "the end".
             pendingQuoteTarget = null
         }
+    }
+
+    // A search hit: the thread opens on that message rather than on its newest. Rides the quote machinery
+    // above — the window is widened to reach it (a no-op when it is already inside) and the retry effect
+    // scrolls and flashes once the rows hold it. Remembered across process death so a restored entry jumps
+    // once, and keyed on the value so a later hand-over jumps again.
+    var consumedJump by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(jumpToMessageId) {
+        val target = jumpToMessageId ?: return@LaunchedEffect
+        if (target == consumedJump) return@LaunchedEffect
+        consumedJump = target
+        onRevealMessage(target)
+        pendingQuoteTarget = target
     }
 
     // Reveal the typing indicator when it appears: it's inserted at the visual bottom, where scroll

@@ -54,6 +54,17 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **"Search in this chat"** (app-wide search shipped 2026-09-10, ADR 2026-09.wnh6 + 2026-09.wdfz) — a
+  scoped search from a thread's overflow menu, pre-filtered to that conversation. The data side is already
+  there (`MessageRepository.search` takes an allow-list; pass one id). What is not: the hand-back. A hit
+  must scroll the thread that is *already open*, so the search entry has to return the message id to its
+  parent (`previousBackStackEntry.savedStateHandle` + `popBackStack`) and `ChatScreen` has to take it from
+  the saved state as well as from the route's `messageId` argument — never `navigate(chat(id, messageId))`
+  from there, which stacks a second entry for the same thread and two `ChatViewModel`s race the one-shot
+  draft restore. The overflow menu is also hidden on rooms, so the entry point needs a room variant.
+  **Still owed on the shipped feature:** the device trial (a hit beyond the first 60 rows, the migration's
+  `'rebuild'` timed on real history, Back returning to the results) and the ATF pass over the field.
+
 - **Direct file transfer's follow-ons** (ADR 2026-09.wtmz, `context/direct-transfer.md`). Shipped as a
   DM-only overflow item; four things were named and left. **The APK entry point** is one call away —
   `TransferManager.offer(peerId, prepareKnitApk(context).toString())`, since `ui/invite/ShareApk.kt` already

@@ -13,7 +13,8 @@ import kotlinx.coroutines.flow.Flow
 interface MessageDao {
     // There is deliberately no `SELECT * FROM messages` and no whole-thread read here: an accepted thread
     // has no retention cap, so any such query would grow without bound. The chat screen reads a window
-    // (below) and the list screens read per-thread summaries (further down).
+    // (below), the list screens read per-thread summaries (further down), and search reads through the
+    // `messages_fts` index under a LIMIT ([searchBodies]).
 
     /**
      * The newest [limit] messages in a thread, **newest first** — the chat screen's window (ADR: the thread
@@ -299,6 +300,36 @@ interface MessageDao {
      */
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE conversationId = :conversationId AND kind = 0)")
     suspend fun hasMessagesIn(conversationId: String): Boolean
+
+    /**
+     * Ordinary messages (`kind = 0`) whose body matches the FTS4 expression [match], in [conversations], from
+     * senders not in [blocked], newest first, at most [limit] — the Messages section of search. [match] is
+     * built by `SearchQuery.toMatch` and never from raw input: it is only ever `term* term*`, which both
+     * FTS query syntaxes read the same way. [conversations] is an allow-list, the chat list's own visible
+     * threads, so a stranger's request thread is never searched (ADR 009); [hideFlagged] drops text the
+     * on-device moderator flagged, mirroring the thread's collapse of those bubbles.
+     *
+     * Shape matters for cost, as everywhere in this file. The subselect makes SQLite drive from the FTS
+     * index — the match set, then one rowid seek into `messages` per hit — rather than scan `messages` and
+     * ask the index per row; the filters run on those rows only, and the sort is over the filtered hits
+     * before the LIMIT. Bounded and index-served, so it honours the header rule. An empty [blocked] expands
+     * to `NOT IN ()`, which reads as true. One-shot on purpose: as a `Flow` it would re-run on every write to
+     * `messages` anywhere, because the FTS table's invalidation is the content table's.
+     */
+    @Query(
+        "SELECT * FROM messages WHERE rowid IN " +
+            "(SELECT rowid FROM messages_fts WHERE messages_fts MATCH :match) " +
+            "AND kind = 0 AND (:hideFlagged = 0 OR moderation = 0) " +
+            "AND senderId NOT IN (:blocked) AND conversationId IN (:conversations) " +
+            "ORDER BY sentAt DESC, id DESC LIMIT :limit",
+    )
+    suspend fun searchBodies(
+        match: String,
+        conversations: Collection<String>,
+        blocked: Collection<String>,
+        hideFlagged: Boolean,
+        limit: Int,
+    ): List<MessageEntity>
 
     /**
      * The newest row per conversation whose `kind` is in [kinds] and whose sender is not in [blocked] — the

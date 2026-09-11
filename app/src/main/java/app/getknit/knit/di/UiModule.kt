@@ -20,6 +20,7 @@ import app.getknit.knit.ui.profile.ProfileDetailsViewModel
 import app.getknit.knit.ui.profile.ProfileViewModel
 import app.getknit.knit.ui.relay.InternetRelayViewModel
 import app.getknit.knit.ui.requests.MessageRequestsViewModel
+import app.getknit.knit.ui.search.SearchViewModel
 import app.getknit.knit.ui.settings.SettingsViewModel
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
@@ -72,6 +73,7 @@ val uiModule =
             )
         }
         viewModel { ContactsViewModel(get(), get(), get(), get(), get(), get()) }
+        viewModel { SearchViewModel(get(), get(), get(), get(), get(), get<LoraStatusRepository>().facts, androidContext()) }
         viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
         viewModel { CrashLogViewModel(get()) }
         viewModel { ProfileViewModel(get(), get(), get(), get()) }

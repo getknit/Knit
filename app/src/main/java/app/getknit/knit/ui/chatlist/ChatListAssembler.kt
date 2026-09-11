@@ -3,19 +3,20 @@ package app.getknit.knit.ui.chatlist
 import android.content.Context
 import app.getknit.knit.R
 import app.getknit.knit.data.PeerDirectory
-import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
-import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.isStatusNotice
-import app.getknit.knit.data.message.meshRoomChannel
 import app.getknit.knit.data.message.receivedPlane
-import app.getknit.knit.mesh.lora.LoraPlane
-import app.getknit.knit.mesh.meshNodeLabel
+import app.getknit.knit.ui.ConversationTitle
+import app.getknit.knit.ui.MeshRoomInputs
 import app.getknit.knit.ui.chat.DeliveryStatus
 import app.getknit.knit.ui.chat.messagePreview
 import app.getknit.knit.ui.chat.transferPreview
+import app.getknit.knit.ui.isPending
+import app.getknit.knit.ui.speakerLabel
+import app.getknit.knit.ui.visibleConversations
 
 /**
  * Folds one [ChatListViewModel.Snapshot] into the list's rows. Pure over the snapshot — it reads the
@@ -30,7 +31,6 @@ internal class ChatListAssembler(
 ) {
     private val table = s.table
     private val me = table.me
-    private val blocked = table.blocked
     private val directory: PeerDirectory = s.directory
     private val activeGroups = s.inputs.groups.filter { !it.left }
 
@@ -39,42 +39,21 @@ internal class ChatListAssembler(
         s.inputs.groups
             .map { it.groupId }
             .toSet()
-    private val verified =
-        directory.peers
-            .filter { it.verified }
-            .map { it.nodeId }
-            .toSet()
 
     fun build(): ChatListUiState {
-        // The Nearby room is always present (even with no messages yet). Groups appear from the groups
-        // table (so a freshly created group shows even before its first message); DM threads appear once
-        // they have a message — excluding any conversation that is actually a group. Most-recent first.
-        val nearby =
-            rowFor(
-                Conversations.NEARBY,
-                title = context.getString(R.string.nearby_title),
-                isRoom = true,
-                isGroup = false,
-                avatarHash = null,
-            )
-        val bridged = bridgedRow()
-        val groupRows = groupRows()
-        val dms = dmRows()
+        // Which threads exist and what they are called is `visibleConversations`'s rule, shared with search:
+        // the Nearby room always, the Meshtastic room by the radio's state, active non-request groups, and
+        // DM threads once they have a message. Most-recent first.
+        val meshRoom = MeshRoomInputs(s.mesh.loraRoom, s.mesh.loraPlane, s.mesh.publicChannel, s.inputs.bridgedChannel)
+        val rows = visibleConversations(context, table, s.inputs.groups, directory, s.inputs.accepted, meshRoom).map(::rowFor)
         val requestCount = requestCount()
         // The list is never literally empty — the Nearby room always has a row — so a fresh install
         // reads as a working screen with nothing to do on it. Nudge until there is: any Nearby message,
         // a group, a DM, or a pending request. Deleting every thread again brings the hint back, which
         // is the state it is written for.
-        val gettingStarted =
-            nearby.lastMessageAt == null &&
-                bridged?.lastMessageAt == null &&
-                groupRows.isEmpty() &&
-                dms.isEmpty() &&
-                requestCount == 0
+        val gettingStarted = rows.all { it.isRoom && it.lastMessageAt == null } && requestCount == 0
         return ChatListUiState(
-            conversations =
-                (listOf(nearby) + listOfNotNull(bridged) + groupRows + dms)
-                    .sortedByDescending { it.lastMessageAt ?: 0L },
+            conversations = rows.sortedByDescending { it.lastMessageAt ?: 0L },
             requestCount = requestCount,
             neighborCount = s.mesh.neighborCount,
             transportHealth = s.mesh.health,
@@ -85,21 +64,8 @@ internal class ChatListAssembler(
         )
     }
 
-    /**
-     * Whether a thread is a stranger's message request — the SAME shared predicate as the notify gate
-     * (Nearby / accepted-set / verified peer / self-authored / a known peer has spoken in the group) so this
-     * list and the gate agree. A pending DM/group is dropped from the list and surfaced in the Message
-     * Requests inbox instead.
-     */
-    fun isPending(conversationId: String): Boolean =
-        conversationId !in blocked &&
-            !Conversations.isAccepted(
-                conversationId,
-                s.inputs.accepted,
-                verified,
-                table.authored,
-                table.groupSenders[conversationId].orEmpty(),
-            )
+    /** Whether a thread is a stranger's message request — [ConversationTable.isPending] over this snapshot's inputs. */
+    fun isPending(conversationId: String): Boolean = table.isPending(conversationId, s.inputs.accepted, directory.verified)
 
     /**
      * One row. Its last message is the thread's head: the newest normal or direct-transfer row, which is
@@ -112,22 +78,14 @@ internal class ChatListAssembler(
      * the thread. It still earns no delivery tick and no unread count: nothing was sent anywhere on the
      * mesh, and the card in the thread is the thing that wants answering.
      */
-    private fun rowFor(
-        conversationId: String,
-        title: String,
-        isRoom: Boolean,
-        isGroup: Boolean,
-        avatarHash: String?,
-        discriminator: String? = null,
-        isBridged: Boolean = false,
-    ): ConversationRow {
-        val last = table.heads[conversationId]
+    private fun rowFor(thread: ConversationTitle): ConversationRow {
+        val last = table.heads[thread.id]
         // A draft only speaks for the row while it is the newest thing in the thread. Once a message
         // lands after it — ours or theirs — the conversation has moved on and the preview says so;
         // the draft is still in the composer, waiting where it was typed. Ties go to the message,
         // and a peer's `sentAt` is their clock, which is the same skew every row here already sorts on.
         val draft =
-            s.inputs.drafts[conversationId]
+            s.inputs.drafts[thread.id]
                 ?.takeIf { it.text.isNotBlank() && it.updatedAt > (last?.sentAt ?: 0L) }
                 ?.text
         // The tick, and only for our own sends. "Ours" means we wrote it: a heard Meshtastic post sits in
@@ -136,82 +94,30 @@ internal class ChatListAssembler(
         // never sent anywhere, so it can never grow one either.
         val mineLast = last?.takeIf { it.senderId == me && it.originNode == null && !it.isStatusNotice }
         val transferLine = transferLineFor(last)
-        return ConversationRow(
-            id = conversationId,
-            title = title,
-            avatarHash = avatarHash,
-            isRoom = isRoom,
-            isGroup = isGroup,
-            lastPreview = previewLineFor(last, transferLine, isDm = !isRoom && !isGroup),
-            previewIsTransfer = transferLine != null,
-            lastMessageAt = last?.sentAt,
-            draft = draft,
-            unreadCount = 0, // filled in by the ViewModel from a per-thread count, once our own id is known
-            lastStatus = mineLast?.let { DeliveryStatus.of(it) },
-            lastDeliveredVia = mineLast?.receivedPlane ?: DeliveryPlane.Unknown,
-            discriminator = discriminator,
-            isBridged = isBridged,
-        )
+        val isGroup = thread.kind == ConversationKind.GROUP
+        val row =
+            ConversationRow(
+                id = thread.id,
+                title = thread.text,
+                avatarHash = thread.avatarHash,
+                isRoom = thread.isRoom,
+                isGroup = isGroup,
+                lastPreview = previewLineFor(last, transferLine, isDm = thread.kind == ConversationKind.DM),
+                previewIsTransfer = transferLine != null,
+                lastMessageAt = last?.sentAt,
+                draft = draft,
+                unreadCount = 0, // filled in by the ViewModel from a per-thread count, once our own id is known
+                lastStatus = mineLast?.let { DeliveryStatus.of(it) },
+                lastDeliveredVia = mineLast?.receivedPlane ?: DeliveryPlane.Unknown,
+                discriminator = thread.discriminator,
+                isBridged = thread.kind == ConversationKind.MESHTASTIC,
+            )
+        // An empty group sorts/labels by its creation time so it isn't stranded at the bottom.
+        val createdAt = thread.group?.createdAt
+        return if (isGroup && row.lastMessageAt == null && createdAt != null) row.copy(lastMessageAt = createdAt) else row
     }
 
-    /**
-     * The Meshtastic room is this phone's own radio's channel, so it exists whenever a radio is bound —
-     * empty until the channel speaks, like Nearby — and stays while history does after the radio goes.
-     * Never on a phone with no radio and no history: a standing empty row there would be an offer of
-     * something this install cannot have. And never at all once the user has switched the room off: that
-     * hides the row **including** its history, which is the whole of what "hidden" means here — the rows
-     * stay in the database and come back with the switch.
-     */
-    private fun bridgedRow(): ConversationRow? {
-        val mesh = s.mesh
-        val hasHistory = Conversations.MESHTASTIC in table.conversations
-        if (!mesh.loraRoom || (mesh.loraPlane == LoraPlane.Off && !hasHistory)) return null
-        return rowFor(
-            Conversations.MESHTASTIC,
-            // The live board's channel, else the newest post's, else the generic label — the same rule
-            // the thread header uses, so the list and the screen agree.
-            title = meshRoomChannel(mesh.publicChannel, s.inputs.bridgedChannel) ?: context.getString(R.string.meshtastic_title),
-            isRoom = true,
-            isGroup = false,
-            avatarHash = null,
-            isBridged = true,
-        )
-    }
-
-    private fun groupRows(): List<ConversationRow> =
-        activeGroups.filter { !isPending(it.groupId) }.map { g ->
-            val title =
-                groupTitle(
-                    storedName = g.name,
-                    memberIds = GroupMembersStore.decode(g.members),
-                    selfId = me,
-                    fallback = context.getString(R.string.group_unnamed),
-                ) { id -> directory.label(id).text }
-            val row = rowFor(g.groupId, title, isRoom = false, isGroup = true, avatarHash = g.photoHash)
-            // An empty group sorts/labels by its creation time so it isn't stranded at the bottom.
-            if (row.lastMessageAt == null) row.copy(lastMessageAt = g.createdAt) else row
-        }
-
-    private fun dmRows(): List<ConversationRow> =
-        table.conversations
-            .filter {
-                it != Conversations.NEARBY &&
-                    it != Conversations.MESHTASTIC &&
-                    it !in blocked &&
-                    it !in groupIds &&
-                    !isPending(it)
-            }.map { conversationId ->
-                rowFor(
-                    conversationId,
-                    title = directory.label(conversationId).text,
-                    isRoom = false,
-                    isGroup = false,
-                    avatarHash = directory.byNode[conversationId]?.avatarHash,
-                    discriminator = directory.label(conversationId).discriminator,
-                )
-            }
-
-    /** Count of threads moved to the requests inbox (mirrors exactly what the two filters above drop). */
+    /** Count of threads moved to the requests inbox (mirrors exactly what `visibleConversations` drops). */
     private fun requestCount(): Int =
         table.conversations.count {
             it != Conversations.NEARBY && it != Conversations.MESHTASTIC && it !in groupIds && isPending(it)
@@ -237,32 +143,15 @@ internal class ChatListAssembler(
         last?.takeIf { it.kind == MessageEntity.KIND_FILE_TRANSFER }?.let { transferPreview(context, it, s.inputs.transfers) }
 
     /**
-     * "Sender: body" preview, mirroring how ChatViewModel resolves names and labels own messages.
-     * In a 1:1 DM the peer's name is already the row title, so an incoming message shows just its body;
-     * our own messages still get the "You: …" prefix (it's not the recipient's name and signals who spoke).
+     * "Sender: body" preview: [speakerLabel]'s speaker, or just the body when it names nobody (an incoming
+     * message in a 1:1 DM, whose sender is already the row title).
      */
     private fun previewFor(
         message: MessageEntity,
         isDm: Boolean,
     ): String {
         val body = messagePreview(context, message)
-        // A heard Meshtastic post's author is the speaker, never us — the row sits in our sender column by
-        // convention, so without this the preview would read "You: …" over somebody else's words. A speaker
-        // whose board a contact's profile claims is named as that contact; a stranger is the NodeDB name the
-        // board had for them, else the `!hex` id every Meshtastic client would show.
-        message.originNode?.let { node ->
-            val contact = message.originPeerId?.let { directory.label(it) }
-            val speaker = contact?.text ?: message.originName?.takeIf { it.isNotBlank() } ?: meshNodeLabel(node)
-            return context.getString(R.string.chat_list_preview_with_sender, speaker, body)
-        }
-        val isOwn = message.senderId == me
-        if (isDm && !isOwn) return body
-        val sender =
-            if (isOwn) {
-                context.getString(R.string.chat_self_name)
-            } else {
-                directory.label(message.senderId).text
-            }
-        return context.getString(R.string.chat_list_preview_with_sender, sender, body)
+        val speaker = speakerLabel(context, message, directory, me, isDm) ?: return body
+        return context.getString(R.string.chat_list_preview_with_sender, speaker, body)
     }
 }

@@ -16,6 +16,7 @@ import app.getknit.knit.data.group.GroupDao
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.MessageDao
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.MessageFtsEntity
 import app.getknit.knit.data.peer.PeerDao
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupKeySendEntity
@@ -45,6 +46,7 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
         GroupSendChainEntity::class, GroupRecvChainEntity::class,
         GroupSkippedKeyEntity::class, GroupKeySendEntity::class,
         GroupRootEntity::class, MessageReceiptEntity::class, DraftEntity::class,
+        MessageFtsEntity::class,
     ],
     // v1: frozen launch baseline. The pre-1.0 alpha schema churn (the old destructive v2…v22 bumps that
     //     rode the wire/crypto breaks) is collapsed; docs/WIRE_COMPAT.md keeps the historical break record.
@@ -112,7 +114,17 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
     //     unreleased, because a shipped migration can never be merged away afterwards). The lab devices that
     //     had already taken v12 were walked back down by a temporary Migration(12, 11), removed once the
     //     fleet was on this schema; no released build ever held v12 (2.5.0 shipped v10).
-    version = 11,
+    // v12: one `messages_fts` virtual table — an FTS4 external-content index over `messages.body` (tokenizer
+    //     unicode61), the engine behind app-wide message search. It holds no text of its own: each body's
+    //     tokens keyed by `messages.rowid`, kept in step by Room's four `room_fts_content_sync_messages_fts_*`
+    //     triggers and backfilled once by `'rebuild'` in the migration, so every message a device already
+    //     holds is searchable on arrival. Every read of it is bounded and index-served (ADR 2026-09.z58t).
+    //     Local only — nothing about it crosses the wire — and it lives in this database rather than anywhere
+    //     else for the drafts' reason (v11): an index of message text is message text. Invariant: `messages`
+    //     has a TEXT primary key, so `VACUUM` may renumber its rowids; never VACUUM, and if one is ever
+    //     needed follow it with `INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`. Migrated by
+    //     KnitMigrations.MIGRATION_11_12.
+    version = 12,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without

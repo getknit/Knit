@@ -437,6 +437,17 @@
         <item quantity="other">%d unread messages</item>
     </plurals>
 
+    <!-- Search: the magnifier on the chat list and the screen behind it -->
+    <string name="search_title">Search</string>
+    <string name="search_hint">Search chats, people and messages</string>
+    <string name="search_clear">Clear search</string>
+    <string name="search_section_chats">Chats</string>
+    <string name="search_section_people">People</string>
+    <string name="search_section_messages">Messages</string>
+    <string name="search_idle">Find a chat, a person, or something someone said.</string>
+    <string name="search_keep_typing">Keep typing to search messages</string>
+    <string name="search_empty">No results for \u201c%1$s\u201d</string>
+
     <!-- Settings, and your own profile behind the header row at the top of it. Two screens, so two titles;
          `profile_details_title` below is a third thing again, the read-only view of somebody else. The
          open-to-chat pair is `profile_`, not `settings_`, because it is a field peers read off your card. -->

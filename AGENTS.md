@@ -67,6 +67,13 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   itself empty the moment it composes. The list shows it in place of the preview only while
   `updatedAt` beats the newest message, and never touches the row's time or sort. Text only: the staged
   attachment, the reply quote and the mention bindings stay draft-local to the screen.
+- **When touching `data/search/`, `messages_fts` / `MessageFtsEntity`, `ui/search/`, the chat route's
+  `messageId` argument, or the shared list rules in `ui/ConversationTitles.kt` / `ui/contacts/ContactUniverse.kt`:**
+  READ ADR 2026-09.wdfz (the FTS4 index: one bounded `MATCH` read, the `term*` builder, the rowid and
+  no-VACUUM invariants) and ADR 2026-09.wnh6 (one screen over the chat list's own universe — its
+  membership, titles, speaker and contacts rules live in those two shared files so search cannot drift
+  from the list; a hit opens the thread through `chat/{id}?messageId=` and the quote-jump machinery,
+  never a second thread view). "Search in this chat" is deferred — CHECK `.agents/memory/roadmap.md`.
 - **When touching contact cards, the Add-by-link / share-link flow, deep links (`getknit.app/c`,
   `knit://`), or `mesh/IntroSync`:** READ `docs/CONTACT_CARD.md` (the card layout + golden vectors, the
   intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);

@@ -83,6 +83,7 @@ class SqlCipherDriverUpgradeTest {
                 opened.messageDao().upsert(MESSAGE)
                 val stored = opened.messageDao().observeById(MESSAGE.id).first()
                 assertEquals(MESSAGE.body, stored?.body)
+                assertEquals("FTS4 + unicode61 run under SQLCipher", listOf(MESSAGE.id), opened.search("written*"))
             } finally {
                 opened.close()
             }
@@ -109,6 +110,7 @@ class SqlCipherDriverUpgradeTest {
                 val stored = migrated.messageDao().observeById(MESSAGE.id).first()
                 assertEquals(MESSAGE.body, stored?.body)
                 assertNull(stored?.arrivedAt)
+                assertEquals("MIGRATION_11_12's triggers index the write", listOf(MESSAGE.id), migrated.search("written*"))
             } finally {
                 migrated.close()
             }
@@ -137,6 +139,11 @@ class SqlCipherDriverUpgradeTest {
             .addMigrations(*KnitMigrations.ALL)
             .build()
 
+    private suspend fun KnitDatabase.search(match: String): List<String> =
+        messageDao()
+            .searchBodies(match, listOf(MESSAGE.conversationId), emptySet(), hideFlagged = false, limit = 10)
+            .map { it.id }
+
     private fun openRawConnection(): SQLiteConnection =
         SQLCipherDriver(passphrase, null, null).open(context.getDatabasePath(DB_NAME).absolutePath)
 
@@ -153,10 +160,17 @@ class SqlCipherDriverUpgradeTest {
             val entity = entities.getJSONObject(i)
             val table = entity.getString("tableName")
             execSQL(entity.getString("createSql").replace(TABLE_NAME_PLACEHOLDER, table))
-            val indices = entity.optJSONArray("indices") ?: continue
-            for (j in 0 until indices.length()) {
-                execSQL(indices.getJSONObject(j).getString("createSql").replace(TABLE_NAME_PLACEHOLDER, table))
+            val indices = entity.optJSONArray("indices")
+            if (indices != null) {
+                for (j in 0 until indices.length()) {
+                    execSQL(indices.getJSONObject(j).getString("createSql").replace(TABLE_NAME_PLACEHOLDER, table))
+                }
             }
+            // An FTS entity's content-sync triggers (v12's `messages_fts`). Room only re-creates its own after
+            // a migration, and case 1 runs none, so a file materialised without them would open fine and
+            // silently never index a message.
+            val triggers = entity.optJSONArray("contentSyncTriggers") ?: continue
+            for (j in 0 until triggers.length()) execSQL(triggers.getString(j))
         }
         val setupQueries = database.getJSONArray("setupQueries")
         for (i in 0 until setupQueries.length()) execSQL(setupQueries.getString(i))
@@ -195,10 +209,10 @@ class SqlCipherDriverUpgradeTest {
         const val TABLE_NAME_PLACEHOLDER = "\${TABLE_NAME}"
 
         /** Bump alongside `KnitDatabase`'s `@Database(version = …)`; its retention is CLASS, so it can't be read. */
-        const val CURRENT_VERSION = 11
+        const val CURRENT_VERSION = 12
 
         /** Tables the migration chain introduces after v1: none of these appear in `1.json`. */
-        val MIGRATED_IN_TABLES = listOf("ratchet_sessions", "group_roots", "message_receipts")
+        val MIGRATED_IN_TABLES = listOf("ratchet_sessions", "group_roots", "message_receipts", "messages_fts")
 
         val MESSAGE =
             MessageEntity(

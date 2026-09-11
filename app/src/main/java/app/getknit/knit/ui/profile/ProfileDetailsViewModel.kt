@@ -13,12 +13,18 @@ import app.getknit.knit.mesh.crypto.ContactCard
 import app.getknit.knit.mesh.crypto.SafetyNumber
 import app.getknit.knit.mesh.crypto.VerifyPayload
 import app.getknit.knit.mesh.meshNodeLabel
+import app.getknit.knit.mesh.spool.SpoolStatus
+import app.getknit.knit.ui.Reach
+import app.getknit.knit.ui.reachOf
+import app.getknit.knit.ui.spoolPresentPeers
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -42,7 +48,9 @@ data class ProfileDetailsUiState(
     val discriminator: String? = null,
     val status: String,
     val avatarHash: String?,
-    val online: Boolean,
+    // Live presence, by the best evidence we have — the same three tiers Diagnostics sorts its sections
+    // by, so a peer it lists under "Reachable via relay" never reads as offline here.
+    val reach: Reach,
     val isBlocked: Boolean,
     // E2E verification: whether we hold the peer's key yet, whether the user has verified it, the
     // human-comparable safety number (null until both keys are known), and our own QR payload.
@@ -62,9 +70,10 @@ data class ProfileDetailsUiState(
 
 /**
  * Backs the read-only Profile Details screen for another peer (keyed by [nodeId]). It surfaces the
- * peer's cached profile (name/status/avatar from the `peers` table), live presence (from the mesh
- * neighbor set), block state, and the end-to-end key-verification state (safety number + QR + verified
- * flag). A peer we've only just met (no cached profile row yet) still resolves to a friendly alias.
+ * peer's cached profile (name/status/avatar from the `peers` table), live presence (the [Reach] tier —
+ * the short-range neighbor set, the long-range reach set and the Internet plane's per-scope presence),
+ * block state, and the end-to-end key-verification state (safety number + QR + verified flag). A peer
+ * we've only just met (no cached profile row yet) still resolves to a friendly alias.
  */
 class ProfileDetailsViewModel(
     private val nodeId: String,
@@ -72,6 +81,13 @@ class ProfileDetailsViewModel(
     meshManager: MeshController,
     private val settings: SettingsStore,
     identity: Identity,
+    // The per-spool status flow, not the repository that produces it: the production flow is an infinite
+    // poller, and under a test's virtual clock its `delay` is instant, so a test driving this VM with
+    // `advanceUntilIdle()` could never reach idle. Taking the flow lets a test supply a finite one.
+    spoolStatuses: Flow<List<SpoolStatus>>,
+    // Wall clock, for ageing the Internet plane's per-scope presence stamps. Injected so a test can drive
+    // the linger; [spoolStatuses] re-emits on its poll, so an expiry lands within one.
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
     private val me = MutableStateFlow<MyIdentity?>(null)
 
@@ -93,14 +109,31 @@ class ProfileDetailsViewModel(
         }
     }
 
+    // The presence tier, pre-combined so the main [state] combine stays within its five-source limit.
+    // `distinctUntilChanged` matters: the spool poller re-emits on a fixed interval whether or not anything
+    // moved, and without it the whole profile would recompute every poll for a tier that rarely changes.
+    private val reach: Flow<Reach> =
+        combine(
+            meshManager.neighbors,
+            meshManager.reachable,
+            spoolStatuses,
+        ) { neighbors, reachable, spools ->
+            reachOf(
+                nodeId,
+                nearby = neighbors.mapTo(mutableSetOf()) { it.nodeId },
+                reachable = reachable.mapTo(mutableSetOf()) { it.nodeId },
+                spoolPresent = spoolPresentPeers(spools, clock()),
+            )
+        }.distinctUntilChanged()
+
     val state: StateFlow<ProfileDetailsUiState> =
         combine(
             peers.observeDirectory(),
-            meshManager.neighbors,
+            reach,
             settings.blockedNodeIds,
             me,
             meshManager.introState(nodeId),
-        ) { directory, neighbors, blocked, myId, intro ->
+        ) { directory, reach, blocked, myId, intro ->
             val peer = directory.byNode[nodeId]
             val label = directory.label(nodeId)
             peerBundle = peer?.pubKey
@@ -118,7 +151,7 @@ class ProfileDetailsViewModel(
                 discriminator = label.discriminator,
                 status = peer?.status.orEmpty(),
                 avatarHash = peer?.avatarHash,
-                online = neighbors.any { it.nodeId == nodeId },
+                reach = reach,
                 isBlocked = nodeId in blocked,
                 hasKey = peer?.pubKey != null,
                 verified = peer?.verified == true,
@@ -136,7 +169,7 @@ class ProfileDetailsViewModel(
                 displayName = displayNameFor(null, nodeId),
                 status = "",
                 avatarHash = null,
-                online = false,
+                reach = Reach.Known,
                 isBlocked = false,
             ),
         )

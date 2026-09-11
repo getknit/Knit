@@ -24,6 +24,7 @@ import app.getknit.knit.mesh.spool.ScopeStatus
 import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.moderation.ModelLoadGuard
 import app.getknit.knit.moderation.ModelLoadPolicy
+import app.getknit.knit.ui.Reach
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk

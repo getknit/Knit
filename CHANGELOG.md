@@ -74,6 +74,9 @@ document:
   something.
 - A new group's first message now opens even when Knit was shut down on your phone between the key arriving
   and the group itself. It used to stay unreadable for up to fifteen minutes after you came back.
+- A contact you could only reach through an Internet relay or a LoRa board showed as Offline on their
+  profile. The status line under their name now says Reachable via relay, and Online still means your own
+  radios can see them.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

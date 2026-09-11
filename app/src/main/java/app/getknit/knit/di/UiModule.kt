@@ -81,7 +81,9 @@ val uiModule =
             SettingsViewModel(get(), get(), get<RelayStatusRepository>().facts, get<LoraStatusRepository>().facts)
         }
         // ProfileDetailsViewModel takes the tapped peer's node id as a runtime param.
-        viewModel { params -> ProfileDetailsViewModel(params.get(), get(), get(), get(), get()) }
+        viewModel { params ->
+            ProfileDetailsViewModel(params.get(), get(), get(), get(), get(), get<RelayStatusRepository>().statuses)
+        }
         // MessageDetailsViewModel takes the long-pressed message's id as a runtime param.
         viewModel { params -> MessageDetailsViewModel(params.get(), get(), get(), get(), get(), get(), get(), get()) }
         // GroupDetailsViewModel takes the group id as a runtime param; the rest are resolved by type.

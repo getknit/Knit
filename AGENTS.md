@@ -74,6 +74,12 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   membership, titles, speaker and contacts rules live in those two shared files so search cannot drift
   from the list; a hit opens the thread through `chat/{id}?messageId=` and the quote-jump machinery,
   never a second thread view). "Search in this chat" is deferred — CHECK `.agents/memory/roadmap.md`.
+- **When touching a presence dot or an online / offline label** (Profile Details, Diagnostics' node
+  sections, the Contacts dot): the three evidence tiers live in `ui/Reach.kt` — `Direct` is
+  `MeshController.neighbors` (a short-range radio saw the peer's own radio), `Relay` is the long-range reach
+  set or a spool scope its peer recently pushed to, `Known` is a bare profile row — and both labelled surfaces
+  derive from `reachOf` so they cannot disagree. READ ADR 2026-09.2ajk before loosening any tier; the
+  Contacts list still draws a binary dot from `neighbors` alone.
 - **When touching `ui/components/Avatar`, `ui/theme/AvatarTint.kt`, or the notification letter avatar in
   `MessageNotifier`:** READ ADR 2026-09.j8c7. A photo-less avatar's colour is keyed on the **node id**
   (`avatarTintIndex`, pinned by `ColorSchemeTest`), from a static twelve-hue palette that

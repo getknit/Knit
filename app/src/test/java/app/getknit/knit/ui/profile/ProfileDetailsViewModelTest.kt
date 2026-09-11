@@ -7,8 +7,12 @@ import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
+import app.getknit.knit.mesh.PRESENCE_LINGER_MS
 import app.getknit.knit.mesh.Peer
 import app.getknit.knit.mesh.crypto.VerifyPayload
+import app.getknit.knit.mesh.spool.ScopeStatus
+import app.getknit.knit.mesh.spool.SpoolStatus
+import app.getknit.knit.ui.Reach
 import app.getknit.knit.ui.directoryOf
 import app.getknit.knit.ui.peer
 import io.mockk.coEvery
@@ -49,6 +53,9 @@ class ProfileDetailsViewModelTest {
     private val peersFlow = MutableStateFlow(emptyList<PeerEntity>())
     private val blockedFlow = MutableStateFlow(emptySet<String>())
 
+    // A finite stand-in for `RelayStatusRepository.statuses` (an infinite poller in production).
+    private val spoolsFlow = MutableStateFlow(emptyList<SpoolStatus>())
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -63,7 +70,7 @@ class ProfileDetailsViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = ProfileDetailsViewModel(nodeId, peers, mesh, settings, identity)
+    private fun vm() = ProfileDetailsViewModel(nodeId, peers, mesh, settings, identity, spoolsFlow, clock = { NOW })
 
     @Test
     fun stateReflectsProfilePresenceBlockAndKeyState() =
@@ -77,10 +84,77 @@ class ProfileDetailsViewModelTest {
 
             val s = vm.state.value
             assertEquals("Ada", s.displayName)
-            assertTrue("in the neighbor set → online", s.online)
+            assertEquals("in the neighbor set → online", Reach.Direct, s.reach)
             assertTrue("id is in the blocked set", s.isBlocked)
             assertTrue("a pinned pubKey → hasKey", s.hasKey)
             assertTrue("peer.verified true → verified", s.verified)
+        }
+
+    /**
+     * The field report: a contact reachable only through an Internet relay sat under "Reachable via relay"
+     * on Diagnostics while their profile said Offline. The profile now sorts by the same three tiers —
+     * a radio's own sighting beats a carried frame, which beats a bare profile row.
+     */
+    @Test
+    fun presenceClimbsFromKnownThroughRelayToDirect() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer(nodeId, name = "Ada"))
+            advanceUntilIdle()
+            assertEquals("a profile row alone is not presence", Reach.Known, vm.state.value.reach)
+
+            // Heard over a long-range plane (a LoRa board carried its frames): relay reach, not nearby.
+            mesh.reachable.value = setOf(Peer(nodeId))
+            advanceUntilIdle()
+            assertEquals(Reach.Relay, vm.state.value.reach)
+
+            // A short-range radio saw the peer itself.
+            mesh.neighbors.value = setOf(Peer(nodeId))
+            advanceUntilIdle()
+            assertEquals(Reach.Direct, vm.state.value.reach)
+
+            mesh.neighbors.value = emptySet()
+            mesh.reachable.value = emptySet()
+            advanceUntilIdle()
+            assertEquals(Reach.Known, vm.state.value.reach)
+        }
+
+    /**
+     * The Internet plane is a path to a peer only when that peer has itself pushed something recent into
+     * the scope we share (ADR 2026-09.2ajk): a converged scope on a connected spool proves nothing about
+     * a phone that has sat in a drawer for a month, and a stamp older than the linger has gone quiet.
+     */
+    @Test
+    fun aSpoolScopeItsPeerRecentlyPushedToIsRelayReach() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer(nodeId, name = "Ada"))
+
+            spoolsFlow.value = listOf(spool(scope(nodeId, peerSeenAt = NOW - 60_000L)))
+            advanceUntilIdle()
+            assertEquals(Reach.Relay, vm.state.value.reach)
+
+            // Connected and converged, but the peer has never pushed: a scope is not its peer.
+            spoolsFlow.value = listOf(spool(scope(nodeId)))
+            advanceUntilIdle()
+            assertEquals(Reach.Known, vm.state.value.reach)
+
+            // Seen, but longer ago than the linger.
+            spoolsFlow.value = listOf(spool(scope(nodeId, peerSeenAt = NOW - PRESENCE_LINGER_MS - 1)))
+            advanceUntilIdle()
+            assertEquals(Reach.Known, vm.state.value.reach)
+
+            // A recent stamp on a spool we have lost the socket to is not a path right now.
+            spoolsFlow.value = listOf(spool(scope(nodeId, peerSeenAt = NOW), connected = false))
+            advanceUntilIdle()
+            assertEquals(Reach.Known, vm.state.value.reach)
+
+            // A drained rotation carries nothing new (spec §3.1/§3.3).
+            spoolsFlow.value = listOf(spool(scope(nodeId, peerSeenAt = NOW, retiring = true)))
+            advanceUntilIdle()
+            assertEquals(Reach.Known, vm.state.value.reach)
         }
 
     @Test
@@ -171,4 +245,35 @@ class ProfileDetailsViewModelTest {
             coVerify { settings.block(nodeId, "tag-1") }
             assertFalse("scan result starts empty", vm.scanResult.value == VerifyScanResult.MATCH)
         }
+
+    private fun spool(
+        vararg scopes: ScopeStatus,
+        connected: Boolean = true,
+    ) = SpoolStatus(
+        url = "wss://spool.example/spool/v1",
+        connected = connected,
+        powBits = 0,
+        lastError = null,
+        scopes = scopes.toList(),
+    )
+
+    private fun scope(
+        label: String,
+        peerSeenAt: Long? = null,
+        retiring: Boolean = false,
+    ) = ScopeStatus(
+        scopeHex = "00",
+        label = label,
+        localCount = 1,
+        spoolCount = 1,
+        converged = true,
+        invalidCount = 0,
+        retiring = retiring,
+        peerSeenAt = peerSeenAt,
+    )
+
+    private companion object {
+        /** Comfortably past every presence window, so an unset stamp can never read as recent. */
+        const val NOW = 100L * 60 * 60_000L
+    }
 }

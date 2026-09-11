@@ -13,6 +13,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.R
 import app.getknit.knit.identity.Alias
+import app.getknit.knit.ui.Reach
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -37,6 +38,7 @@ class ProfileDetailsScreenContentTest {
     private fun state(
         openToChat: Boolean = false,
         loraNodeLabel: String? = null,
+        reach: Reach = Reach.Direct,
     ) = ProfileDetailsUiState(
         openToChat = openToChat,
         loraNodeLabel = loraNodeLabel,
@@ -44,7 +46,7 @@ class ProfileDetailsScreenContentTest {
         displayName = "Ada Lovelace",
         status = "Hiking this weekend",
         avatarHash = null,
-        online = true,
+        reach = reach,
         isBlocked = false,
         hasKey = true,
         verified = true,
@@ -57,11 +59,12 @@ class ProfileDetailsScreenContentTest {
         openToChat: Boolean = false,
         loraNodeLabel: String? = null,
         showLoraRadio: Boolean = true,
+        reach: Reach = Reach.Direct,
     ) {
         compose.setContent {
             KnitTheme {
                 ProfileDetailsScreenContent(
-                    state = state(openToChat, loraNodeLabel),
+                    state = state(openToChat, loraNodeLabel, reach),
                     snackbarHostState = SnackbarHostState(),
                     onBack = {},
                     onMessage = onMessage,
@@ -82,6 +85,29 @@ class ProfileDetailsScreenContentTest {
         compose.onNodeWithText("Hiking this weekend").assertIsDisplayed()
         // The safety number lives in the verification section below the fold; scroll it into view.
         compose.onNodeWithText("12345 67890 12345 67890 12345 67890").performScrollTo().assertIsDisplayed()
+    }
+
+    /**
+     * The presence line names all three tiers, so a contact reachable only through a relay (a LoRa board or
+     * an Internet spool) reads as such rather than as offline — the same split Diagnostics draws.
+     */
+    @Test
+    fun thePresenceLineNamesEachReachTier() {
+        setContent(reach = Reach.Relay)
+        compose.onNodeWithText(context.getString(R.string.profile_details_via_relay)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.profile_details_offline)).assertDoesNotExist()
+    }
+
+    @Test
+    fun aKnownPeerNobodyReachesReadsOffline() {
+        setContent(reach = Reach.Known)
+        compose.onNodeWithText(context.getString(R.string.profile_details_offline)).assertIsDisplayed()
+    }
+
+    @Test
+    fun aNearbyPeerReadsOnline() {
+        setContent()
+        compose.onNodeWithText(context.getString(R.string.profile_details_online)).assertIsDisplayed()
     }
 
     /** The alias is always shown on a profile — it is how a person says which Ada they are (ADR 058). */

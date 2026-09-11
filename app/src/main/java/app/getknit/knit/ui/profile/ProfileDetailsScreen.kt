@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.mesh.IntroState
+import app.getknit.knit.ui.Reach
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.FullscreenImageViewer
 import app.getknit.knit.ui.components.PeerNameText
@@ -61,12 +62,15 @@ import app.getknit.knit.ui.verify.PeerVerification
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
+/** How faded the presence dot draws for a relay-reachable peer — the same as a Diagnostics relay row. */
+private const val RELAY_DOT_ALPHA = 0.45f
+
 /**
  * Read-only "contact details" view of another peer (keyed by [nodeId]): avatar, display name, live
- * online/offline state, free-text status, node id, and end-to-end key verification (safety number + QR
- * scan). Offers a Message action (accepts any pending request from this peer, then opens/starts a DM via
- * [onMessage]) and Block/Unblock in the overflow menu. Reached by tapping a peer's avatar in a chat, or
- * a sender's avatar in the Message Requests inbox.
+ * presence (online / reachable via relay / offline), free-text status, node id, and end-to-end key
+ * verification (safety number + QR scan). Offers a Message action (accepts any pending request from this
+ * peer, then opens/starts a DM via [onMessage]) and Block/Unblock in the overflow menu. Reached by tapping
+ * a peer's avatar in a chat, or a sender's avatar in the Message Requests inbox.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -218,18 +222,23 @@ internal fun ProfileDetailsScreenContent(
                 maxLines = Int.MAX_VALUE,
             )
 
-            // Live presence: a filled dot + label, matching the contact-list online indicator.
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Live presence: a dot + label. Three strengths of evidence, three dots, the same as Diagnostics'
+            // rows: filled = a radio saw this peer itself; faded = something (a LoRa board, an Internet
+            // relay) carried its traffic for us; muted = we only hold its profile.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.testTag("profile_details_presence"),
+            ) {
                 Box(
                     modifier =
                         Modifier
                             .size(10.dp)
                             .clip(CircleShape)
                             .background(
-                                if (state.online) {
-                                    MaterialTheme.knitColors.positive
-                                } else {
-                                    MaterialTheme.colorScheme.outline
+                                when (state.reach) {
+                                    Reach.Direct -> MaterialTheme.knitColors.positive
+                                    Reach.Relay -> MaterialTheme.knitColors.positive.copy(alpha = RELAY_DOT_ALPHA)
+                                    Reach.Known -> MaterialTheme.colorScheme.outline
                                 },
                             ),
                 )
@@ -237,10 +246,10 @@ internal fun ProfileDetailsScreenContent(
                 Text(
                     text =
                         stringResource(
-                            if (state.online) {
-                                R.string.profile_details_online
-                            } else {
-                                R.string.profile_details_offline
+                            when (state.reach) {
+                                Reach.Direct -> R.string.profile_details_online
+                                Reach.Relay -> R.string.profile_details_via_relay
+                                Reach.Known -> R.string.profile_details_offline
                             },
                         ),
                     style = MaterialTheme.typography.bodyMedium,
@@ -378,7 +387,7 @@ fun ProfileDetailsScreenOnlineVerifiedPreview() =
                     displayName = "Ada Lovelace",
                     status = "Hiking this weekend",
                     avatarHash = null,
-                    online = true,
+                    reach = Reach.Direct,
                     isBlocked = false,
                     hasKey = true,
                     verified = true,
@@ -400,7 +409,7 @@ fun ProfileDetailsScreenOnlineVerifiedPreview() =
 
 @Preview(showBackground = true)
 @Composable
-fun ProfileDetailsScreenOfflinePreview() =
+fun ProfileDetailsScreenViaRelayPreview() =
     KnitPreview {
         ProfileDetailsScreenContent(
             state =
@@ -409,7 +418,7 @@ fun ProfileDetailsScreenOfflinePreview() =
                     displayName = "Grace Hopper",
                     status = "",
                     avatarHash = null,
-                    online = false,
+                    reach = Reach.Relay,
                     isBlocked = false,
                     hasKey = true,
                     verified = false,
@@ -439,7 +448,7 @@ fun ProfileDetailsScreenNoKeyPreview() =
                     displayName = "Edsger Dijkstra",
                     status = "",
                     avatarHash = null,
-                    online = false,
+                    reach = Reach.Known,
                     isBlocked = false,
                     hasKey = false,
                     verified = false,

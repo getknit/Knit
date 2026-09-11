@@ -36,8 +36,9 @@ interface MeshController {
 
     /**
      * Every peer we can currently reach over *any* plane — [neighbors] plus the long-range ones. Strictly a
-     * superset. Only the Diagnostics screen reads it, to separate a direct connection from relay reach;
-     * anything asking "is this peer here" wants [neighbors]. Defaulted for the fakes.
+     * superset. Read only through `ui/Reach.kt`'s tiers (Diagnostics' sections, the Profile status line), to
+     * separate a direct connection from relay reach; anything asking "is this peer here" wants [neighbors].
+     * Defaulted for the fakes.
      */
     val reachable: StateFlow<Set<Peer>> get() = neighbors
 

@@ -12,12 +12,14 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
-import app.getknit.knit.mesh.PRESENCE_LINGER_MS
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.TransportStatus
 import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.moderation.ModelLoadGuard
+import app.getknit.knit.ui.Reach
+import app.getknit.knit.ui.reachOf
+import app.getknit.knit.ui.spoolPresentPeers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -30,26 +32,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-
-/**
- * How we can currently get a frame to a node — each backed by evidence, which is the whole point of this
- * screen. Ordered strongest first; a node is classified by the best evidence it has.
- */
-enum class Reach {
-    /** A short-range radio (BLE/NAN) has sighted this peer's **own** radio. The only honest "connected". */
-    Direct,
-
-    /**
-     * Something carried this peer's own recent traffic to us within the linger: a LoRa board put its frames
-     * on air (which may have been a gateway relaying for a peer with no board of its own), or it pushed
-     * into a scope we share on a connected spool. A path, not proximity, and not a route — neither plane
-     * knows how far away it is.
-     */
-    Relay,
-
-    /** Known — we hold a profile — but nothing currently reaches it. */
-    Known,
-}
 
 /** A node in the mesh and the evidence we have for reaching it. */
 data class NodeInfo(
@@ -215,30 +197,14 @@ class DiagnosticsViewModel(
             // node that dropped out of the list for a frame would flicker the whole section.
             val nodeIds = (directory.peers.map { it.nodeId } + extra.reachable + nearby).toSet() - setOfNotNull(me)
             // The Internet plane (ADR 019) is a path to a peer only when that peer has *itself* put
-            // something recent into the scope — `ScopeStatus.peerSeenAt`. A scope existing proves nothing
-            // about them: it is derived from the pairwise ratchet root, so it stays subscribed and
-            // converged while its peer sits switched off in a drawer, and reading that as reach put two
-            // long-dead emulators under "reachable via relay" the day this screen shipped
-            // (ADR 2026-09.2ajk). The label is the DM peer's node id, so a group scope's `g-…` matches no
-            // peer here; a retiring scope is a drained rotation and carries nothing new either way.
-            val now = clock()
-            val viaSpool =
-                extra.spools
-                    .filter { it.connected }
-                    .flatMap { it.scopes }
-                    .filter { !it.retiring && it.peerSeenAt != null && now - it.peerSeenAt <= PRESENCE_LINGER_MS }
-                    .mapTo(mutableSetOf()) { it.label }
-                    .intersect(nodeIds)
+            // something recent into the scope — the rule is [spoolPresentPeers], shared with the Profile
+            // status line so the two screens cannot disagree about who is reachable (ADR 2026-09.2ajk).
+            val viaSpool = spoolPresentPeers(extra.spools, clock())
             val nodes =
                 nodeIds.map { id ->
                     val planes = extra.peerTransports[id].orEmpty()
                     val spooled = id in viaSpool
-                    val reach =
-                        when {
-                            id in nearby -> Reach.Direct
-                            id in extra.reachable || spooled -> Reach.Relay
-                            else -> Reach.Known
-                        }
+                    val reach = reachOf(id, nearby, extra.reachable, viaSpool)
                     NodeInfo(
                         nodeId = id,
                         displayName = directory.label(id).text,

@@ -483,6 +483,7 @@
     <string name="profile_details_title">Profile</string>
     <string name="profile_details_message">Message</string>
     <string name="profile_details_online">Online</string>
+    <string name="profile_details_via_relay">Reachable via relay</string>
     <string name="profile_details_offline">Offline</string>
     <string name="profile_details_open_to_chat">Open to chat</string>
     <string name="profile_details_view_photo">View photo</string>

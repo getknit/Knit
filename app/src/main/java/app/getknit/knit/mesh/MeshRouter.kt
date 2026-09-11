@@ -37,14 +37,13 @@ class MeshRouter(
     /**
      * A relay scheduled but not yet fired. [relayed] is the hop-incremented wrapper (its signed blob +
      * signature are forwarded verbatim); [heardFrom] is every neighbor we've heard this frame id from
-     * (all excluded from the eventual relay — split horizon across every source, not just the first);
-     * [count] is how many copies we've seen so far (starts at 1 for the first sighting); [job] is the
-     * delay-then-send coroutine.
+     * (all excluded from the eventual relay — split horizon across every source, not just the first) and
+     * its size is the overhear count the suppression threshold is judged on; [job] is the delay-then-send
+     * coroutine.
      */
     private class PendingRelay(
         val relayed: WireEnvelope,
         val heardFrom: MutableSet<String>,
-        var count: Int,
         var job: Job? = null,
     )
 
@@ -139,7 +138,6 @@ class MeshRouter(
             PendingRelay(
                 relayed = wire.relayed(), // only ttl/hops mutate; signed + sig pass through verbatim
                 heardFrom = mutableSetOf(fromNodeId),
-                count = 1,
             )
         pendingLock.withLock { pending[id] = entry }
         entry.job =
@@ -157,7 +155,12 @@ class MeshRouter(
 
     /**
      * A duplicate of [frameId] arrived from [fromNodeId]. Record the source (so we never relay back to
-     * it) and bump the overhear count; once it reaches [suppressThreshold], cancel the pending relay.
+     * it) and, once the frame has been heard from [suppressThreshold] **distinct** neighbors, cancel the
+     * pending relay. A second copy from the same neighbor is not an overhear: it says nothing about whether
+     * anyone else has relayed the frame, and it is routine — a link-up pushes a peer's profile live and the
+     * custody digest exchange that follows re-serves the very same frame from the same peer moments later.
+     * Counting that copy cancelled the relay of a newcomer's profile past the first hop, so a node two hops
+     * away learned of it only on the 60 s custody re-offer (found by the `mesh/lab` line-topology case).
      */
     private suspend fun countOverheard(
         frameId: String,
@@ -167,8 +170,7 @@ class MeshRouter(
             pendingLock.withLock {
                 val entry = pending[frameId] ?: return // already fired, or never relayable
                 entry.heardFrom += fromNodeId
-                entry.count += 1
-                if (entry.count >= suppressThreshold) {
+                if (entry.heardFrom.size >= suppressThreshold) {
                     pending.remove(frameId)
                     entry.job
                 } else {

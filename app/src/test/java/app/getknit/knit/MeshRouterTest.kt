@@ -274,6 +274,37 @@ class MeshRouterTest {
             assertEquals(1, metrics.snapshot().framesSuppressed)
         }
 
+    /**
+     * A second copy from the **same** neighbor is not an overhear. The link-up profile exchange produces
+     * exactly this pair — the live push, then the custody re-serve of the same frame after the digest
+     * exchange — and counting it cancelled the relay that carries a newcomer's profile past the first hop.
+     */
+    @Test
+    fun doesNotSuppressOnADuplicateFromTheSameNeighbor() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "c", "d"))
+            val metrics = MeshMetrics()
+            val router =
+                MeshRouter(
+                    transport,
+                    this,
+                    metrics = metrics,
+                    jitterWindowMs = 150L,
+                    suppressThreshold = 2,
+                    jitter = { 100L },
+                ) { _, _, _, _ -> }
+
+            val (wire, env) = frame("m1")
+            router.handleInbound(wire, env, fromNodeId = "b")
+            advanceTimeBy(40)
+            router.handleInbound(wire, env, fromNodeId = "b") // the same source again → still one neighbor
+            advanceUntilIdle()
+
+            assertEquals(setOf("c", "d"), transport.sent.mapNotNull { it.second?.nodeId }.toSet())
+            assertEquals(1, metrics.snapshot().framesRelayed)
+            assertEquals(0, metrics.snapshot().framesSuppressed)
+        }
+
     @Test
     fun relaysAfterJitterWhenNoDuplicateOverheard() =
         runTest {

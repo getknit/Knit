@@ -225,16 +225,20 @@ cluster with O(neighbors²) redundant sends):
 
 - `scheduleRelay` keeps the synchronous early-outs — a frame flagged **not to relay** (`relay = false`,
   e.g. a `blobreq`) and a **TTL-exhausted** frame (`hops >= ttl`) are dropped immediately. Otherwise it
-  records a `PendingRelay { relayed = wire.relayed(), heardFrom, count, job }`
+  records a `PendingRelay { relayed = wire.relayed(), heardFrom, job }`
   in a `Mutex`-guarded `pending` map keyed by frame id, and launches a coroutine that waits a small
   random **`jitter()`** delay, then re-checks under the lock and, if still pending, sends the
   hop-incremented frame to every neighbor **not** in `heardFrom` (split-horizon across every source
   it heard the frame from, not just the first).
-- `countOverheard` adds the duplicate's source to `heardFrom` and bumps `count`; once `count`
-  reaches **`suppressThreshold`** (default 2 — i.e. one *other* node was heard relaying it), the
-  pending relay is **removed and its job cancelled** (cancel happens outside the lock), and
+- `countOverheard` adds the duplicate's source to `heardFrom`; once the frame has been heard from
+  **`suppressThreshold`** *distinct* neighbors (default 2 — i.e. one *other* node was heard relaying it),
+  the pending relay is **removed and its job cancelled** (cancel happens outside the lock), and
   `metrics.onSuppressed()` fires. This is classic counter-based gossip: redundant rebroadcasts are
-  cut in dense meshes while sparse meshes (where no duplicate is overheard) still relay reliably.
+  cut in dense meshes while sparse meshes (where no duplicate is overheard) still relay reliably. A
+  second copy from the **same** neighbor is deliberately not an overhear: a link-up pushes a peer's
+  profile live and the custody digest exchange that follows re-serves the same frame from the same
+  peer moments later, and counting that copy used to cancel the relay that carries a newcomer's
+  profile past the first hop (a node two hops away then waited for the 60 s custody re-offer).
 - Tunables are constructor params with defaults: `jitterWindowMs = 150`
   (`jitter = { Random.nextLong(jitterWindowMs) }`) and `suppressThreshold = 2`. The `jitter` lambda
   is an injection seam so tests use a fixed delay and virtual time. `metrics` is also injected

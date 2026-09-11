@@ -220,6 +220,8 @@ data class MessageEntity(
         // is stored in the database, so recycling one would re-render an old row as a different event.
         // A build that does not know a value renders the row as an ordinary bubble (see
         // `ChatScreen.statusNoticeText`), which is why an unknown kind degrades rather than vanishing.
+        // Kotlin does not object to two constants sharing a value (or to the dead `when` branch that
+        // leaves behind), so `MessageKindTest` pins them distinct.
 
         /** [kind]: a "member left the group" status notice, shown as a centered line. */
         const val KIND_MEMBER_LEFT = 1
@@ -245,12 +247,6 @@ data class MessageEntity(
         const val KIND_GROUP_CREATED = 6
 
         /**
-         * [kind]: a founding member who had left re-added themselves (only their own signed frame can —
-         * the mirror of [KIND_MEMBER_LEFT]), shown as a centered line.
-         */
-        const val KIND_MEMBER_REJOINED = 7
-
-        /**
          * [kind]: a profile update for this contact was refused because it did not match their pinned
          * key. A safety net rather than a routine notice: a profile whose key does not derive to its
          * sender's nodeId is already dropped earlier, so reaching this needs a 128-bit nodeId collision
@@ -265,6 +261,12 @@ data class MessageEntity(
          * Downloads, and the record is local to each side. Drawn as a card (`ui/chat/TransferCard`), not a line.
          */
         const val KIND_FILE_TRANSFER = 8
+
+        /**
+         * [kind]: a founding member who had left re-added themselves (only their own signed frame can —
+         * the mirror of [KIND_MEMBER_LEFT]), shown as a centered line.
+         */
+        const val KIND_MEMBER_REJOINED = 9
     }
 }
 

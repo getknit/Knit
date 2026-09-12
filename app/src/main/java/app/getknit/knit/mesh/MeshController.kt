@@ -146,6 +146,21 @@ interface MeshController {
      */
     suspend fun sendPublicPost(text: String): PublicPostOutcome = PublicPostOutcome.Refused(PublicPostRefusal.NO_BOARD)
 
+    /**
+     * Posts [text] in the commons [conversationId] (docs/SPOOL_PROTOCOL.md §7.4): signed, stored, and handed
+     * to the Internet plane for the one relay that runs the room — never the radios. False when the text is
+     * refused by moderation or the room is not one this device has joined.
+     */
+    suspend fun sendCommons(
+        conversationId: String,
+        text: String,
+        mentions: List<Mention>,
+        replyTo: ReplyRef?,
+    ): Boolean = false
+
+    /** The relay list or a joined commons changed: re-derive the scope table now rather than at the next tick. */
+    fun refreshRelays() {}
+
     /** Floods a group metadata update (e.g. a rename) immediately, independent of any chat message. */
     suspend fun sendGroupUpdate(group: GroupInfo)
 

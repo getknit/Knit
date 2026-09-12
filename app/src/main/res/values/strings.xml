@@ -44,6 +44,8 @@
     <string name="channel_dms_desc">Private 1:1 messages</string>
     <string name="channel_meshtastic_name">Meshtastic public channel</string>
     <string name="channel_meshtastic_desc">Posts on your Meshtastic radio\'s primary channel</string>
+    <string name="channel_commons_name">Commons</string>
+    <string name="channel_commons_desc">Posts in a relay\'s shared room</string>
     <string name="mention_channel_name">Mentions</string>
     <string name="mention_channel_description">Notifications when someone @-mentions you</string>
 
@@ -399,6 +401,8 @@
     <!-- Chat list -->
     <string name="nearby_title">Nearby</string>
     <string name="meshtastic_title">Meshtastic</string>
+    <!-- A commons: a relay's shared room for everyone on it (its operator can name it; this is the fallback). -->
+    <string name="commons_title">Commons</string>
     <string name="chat_list_empty_preview">No messages yet</string>
     <!-- Chat list preview for a thread whose unsent draft is newer than its last message; %1$s is the draft. -->
     <string name="chat_list_draft_preview">Draft: %1$s</string>
@@ -729,6 +733,16 @@
     <string name="relays_add_hint">wss://host/spool/v1</string>
     <string name="relays_add_invalid">Must start with wss://</string>
     <string name="relays_add_duplicate">That relay is already in your list</string>
+    <!-- The commons (docs/SPOOL_PROTOCOL.md §7.4): a relay's shared room, joined with an invite from its operator. -->
+    <string name="relays_commons_label">Commons · %1$s</string>
+    <string name="relays_commons_join">Join</string>
+    <string name="relays_commons_leave">Leave</string>
+    <string name="relays_commons_join_title">Join %1$s</string>
+    <string name="relays_commons_join_body">This relay runs a shared room. Paste the invite its operator gave you. Everyone in the room becomes a contact, and their messages skip your requests inbox.</string>
+    <string name="relays_commons_invite_label">Invite</string>
+    <string name="relays_commons_invite_hint">knit-commons:v1:…</string>
+    <string name="relays_commons_invite_invalid">That is not a commons invite</string>
+    <string name="relays_commons_leave_body">The room and its history leave this phone. The people in it stay in your contacts.</string>
     <string name="relays_remove">Remove</string>
     <string name="relays_remove_desc">Remove relay %1$s</string>
     <string name="relays_status_connected">Connected</string>
@@ -928,6 +942,7 @@
     <string name="chat_mesh_post_length">%1$d/%2$d</string>
     <string name="chat_mesh_post_length_a11y">Post length: %1$d of %2$d</string>
     <string name="chat_mesh_text_only">The radio channel carries text only</string>
+    <string name="chat_commons_text_only">The commons carries text only</string>
     <string name="chat_mesh_consent_title">Post to the radio channel?</string>
     <string name="chat_mesh_consent_can_title">Who can see this</string>
     <string name="chat_mesh_consent_can_body">Anyone with a Meshtastic radio in range. Many radios also pass this channel on to a public Internet server, where it is stored by people you will never meet.</string>
@@ -937,6 +952,7 @@
     <string name="chat_mesh_consent_accept">Post</string>
     <string name="chat_mesh_consent_decline">Not now</string>
     <string name="chat_mesh_subtitle">Your radio\'s primary channel</string>
+    <string name="chat_commons_subtitle">Everyone on this relay</string>
 
     <!-- Message details ("Message info", from a message's long-press menu) -->
     <string name="message_details_title">Message info</string>

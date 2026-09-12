@@ -32,6 +32,17 @@ class PairScopeRoots(
 )
 
 /**
+ * A joined **commons** (spec §7.4): the invite [secret] its scope id and seal keys derive from, the
+ * [spoolUrl] of the one relay that runs it (a commons is a property of a spool, so unlike every other
+ * scope it is subscribed at exactly one), and the [conversationId] its posts land in.
+ */
+class CommonsRoots(
+    val conversationId: String,
+    val spoolUrl: String,
+    val secret: ByteArray,
+)
+
+/**
  * One group's scope inputs: the shared root (`docs/SPOOL_PROTOCOL.md` §3.2) with the [rootVersion] that
  * doubles as the scope epoch, the **founding** roster the frame-set rule vets senders against, and the
  * rotated-away lineage while its drain window is open.
@@ -81,13 +92,31 @@ class ScopeRegistry(
     private val roots: suspend () -> List<ScopeRoots>,
     private val groupRoots: suspend () -> List<GroupScopeRoots> = { emptyList() },
     private val pairs: suspend () -> List<PairScopeRoots> = { emptyList() },
+    private val commons: suspend () -> List<CommonsRoots> = { emptyList() },
     private val bounds: ScopeBounds = DEFAULT_BOUNDS,
 ) {
     /** Every scope this device participates in at [now], newest-secret first, de-duplicated by id. */
     suspend fun scopes(now: Long): List<Scope> {
         val me = selfId()
-        return (dmScopes(me, now) + groupScopes(now) + pairScopes(me)).distinctBy { it.idHex }
+        return (dmScopes(me, now) + groupScopes(now) + pairScopes(me) + commonsScopes()).distinctBy { it.idHex }
     }
+
+    /**
+     * One scope per joined commons (spec §7.4), bound to its relay. The bounds declared here are a
+     * placeholder the spool ignores — it pins the room's own and echoes them in the `digest` — so they are
+     * the daemon's documented defaults, the best guess until a HELLO says otherwise.
+     */
+    private suspend fun commonsScopes(): List<Scope> =
+        commons().map { entry ->
+            Scope(
+                id = ScopeCrypto.commonsScopeId(entry.secret),
+                keys = ScopeCrypto.commonsSealKeys(entry.secret),
+                bounds = COMMONS_DEFAULT_BOUNDS,
+                retiring = false,
+                commonsId = entry.conversationId,
+                spoolUrl = entry.spoolUrl,
+            )
+        }
 
     /** The pair scope for every pending-intro peer: a DM-form scope whose secret is the identity pair secret. */
     private suspend fun pairScopes(me: String): List<Scope> =
@@ -166,5 +195,12 @@ class ScopeRegistry(
 
         val DEFAULT_BOUNDS =
             ScopeBounds(maxFrames = DEFAULT_MAX_FRAMES, ttlMs = DEFAULT_TTL_MS, maxBlob = DEFAULT_MAX_BLOB)
+
+        /** Spec §12.2's commons defaults (`SPOOL_COMMONS_MAX_FRAMES` / `SPOOL_COMMONS_TTL_MS`): 500 frames, one day. */
+        const val COMMONS_DEFAULT_MAX_FRAMES = 500
+        const val COMMONS_DEFAULT_TTL_MS = 24 * 60 * 60_000L
+
+        val COMMONS_DEFAULT_BOUNDS =
+            ScopeBounds(maxFrames = COMMONS_DEFAULT_MAX_FRAMES, ttlMs = COMMONS_DEFAULT_TTL_MS, maxBlob = DEFAULT_MAX_BLOB)
     }
 }

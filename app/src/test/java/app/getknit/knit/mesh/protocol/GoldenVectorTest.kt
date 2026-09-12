@@ -433,6 +433,21 @@ class GoldenVectorTest {
                 ).encode(),
             "linkPreviewBlobTextOnly" to
                 LinkPreviewBlob(v = LinkPreviewBlob.VERSION, url = "https://example.com/", title = "Title").encode(),
+            // The commons post (docs/SPOOL_PROTOCOL.md §7.4): a new `commons` type wrapping an ordinary
+            // ChatContent behind the room's 32-byte scope id. Additive — nothing above changes.
+            "commonsPost" to WireCodec.encodePayload(CommonsPost(scope = bytes(32, 14), chat = ChatContent(body = "hello"))),
+            "commonsPostFull" to
+                WireCodec.encodePayload(
+                    CommonsPost(
+                        scope = bytes(32, 14),
+                        chat =
+                            ChatContent(
+                                body = "hi @Ann",
+                                mentions = listOf(Mention(nodeId(3), "Ann")),
+                                replyTo = ReplyRef(messageId = frameId(6), authorId = nodeId(3), author = "Ann", snippet = "see you"),
+                            ),
+                    ),
+                ),
         )
 
     private fun compact(content: MessageContent): ByteArray =
@@ -651,6 +666,15 @@ class GoldenVectorTest {
                     "a66176016375726c781968747470733a2f2f6578616d706c652e636f6d2f613f623d31657469746c65655469746c656b646573" +
                     "6372697074696f6e644465736365696d616765480c131a21282f363d69696d6167654d696d656a696d6167652f77656270",
                 "linkPreviewBlobTextOnly" to "a36176016375726c7468747470733a2f2f6578616d706c652e636f6d2f657469746c65655469746c65",
+                "commonsPost" to
+                    "a26573636f706558200e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e76463686174a164626f" +
+                    "64796568656c6c6f",
+                "commonsPostFull" to
+                    "a26573636f706558200e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e76463686174a364626f" +
+                    "64796768692040416e6e686d656e74696f6e7381a2666e6f64654964781a616d66626367613765797774696f32636a666966" +
+                    "6f7874666e71646e616d6563416e6e677265706c79546fa4696d65737361676549647642673055477949704d44632d525578" +
+                    "54576d466f627768617574686f724964781a616d66626367613765797774696f32636a6669666f7874666e7166617574686f" +
+                    "7263416e6e67736e69707065746773656520796f75",
             )
 
         const val BUNDLE_ENCODED =

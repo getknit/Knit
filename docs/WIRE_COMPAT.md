@@ -37,9 +37,9 @@ Each evolves independently; bump the right one:
   advert/handshake hint (Wi-Fi Aware `serviceSpecificInfo` / the BLE service-data payload), known at
   connection time, **unauthenticated** — a routing/degradation hint only, never a trust input.
 - **`RelayEnvelope.type` registry**: `chat`, `groupupdate`, `groupleave`, `profile`, `receipt`,
-  `reaction`, `blobreq`, `keyreq`, `typing`. (`meshpost` is **burned**: minted on an unpushed branch in
-  September 2026 and withdrawn before it shipped — never reuse the string, since a lab build may still hold a
-  frame of it.)
+  `reaction`, `blobreq`, `keyreq`, `typing`, `commons` (non-custodial; the spool commons' post, spec §7.4).
+  (`meshpost` is **burned**: minted on an unpushed branch in September 2026 and withdrawn before it
+  shipped — never reuse the string, since a lab build may still hold a frame of it.)
 - **`EncEnvelope.v`**: the E2E crypto scheme — `1` = static keys (AES-GCM + per-recipient HPKE wrap),
   `2` = the ratchet schemes (AES-GCM under a derived key, `keys` empty; the DM form's header rides
   `EncEnvelope.r` — `docs/FORWARD_SECRECY_RATCHET.md` — and the group sender-key form's rides
@@ -566,6 +566,24 @@ it. *Metadata cost:* a room card is cleartext to every carrier — title, descri
 the room body beside it already is; a DM card is "~N opaque bytes" like a photo, its type sealed; and the
 sender's own IP reaches the linked site before the send, which is the setting's disclosure and the reason it
 defaults off.
+
+**Precedent — the first `type` string added since the v1 baseline that shipped (`commons`, the spool commons'
+post, spec §7.4, September 2026), and why it is not the `meshpost` mistake.** It is added as
+**non-custodial**: `FrameType.isCustodial` is untouched, so no build in the field holds a row an older build
+would not, and the digest rule ADR 006 protects is untouched with it. What makes that honest is where the
+frame lives — on the spool that runs the room, sealed under the room's key, entering the app through the
+Internet plane's own door and never `originate`d, custodied or relayed. A stray copy on a radio (a member
+re-flooding by hand) is an unknown type to an older build and an ignored one to a newer: both decode it,
+both relay it (rule 5 — a version or type gate is a delivery gate, never a relay gate), neither delivers it,
+and `dispatchByType` names it explicitly so the `else` stays for types nobody has minted yet. The payload
+(`CommonsPost`, golden vectors `commonsPost`/`commonsPostFull`) wraps an ordinary `ChatContent` behind the
+room's 32-byte scope id: the seal's aad already binds the *blob* to its scope, but the signed bytes are what
+a member of two rooms could re-seal from one into the other, so the room is named inside the signature too
+and refused on open when it does not match. Authentication is the frame signature against the **pinned**
+key like every other frame (members' `profile` frames ride the same scope and pin them), and `enc` stays
+null — every member shares the room key, so there is nobody to seal for, exactly the broadcast room's shape.
+*Metadata cost:* none on the radios, which never see one; to the spool, one more opaque blob in a scope it
+already cannot read.
 
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + every branch that

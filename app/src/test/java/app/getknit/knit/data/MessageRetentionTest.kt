@@ -56,6 +56,28 @@ class MessageRetentionTest : RoomDbTest() {
         }
 
     @Test
+    fun `a commons is capped like a room, never dropped as a stale request`() =
+        runTest {
+            val now = 10_000L
+            val room = Conversations.commonsIdFor("ef".repeat(32))
+            (1..5).forEach { put("c$it", room, sentAt = now - it) }
+            put("old", room, sentAt = now - 5_000L)
+            // Three unaccepted DM threads beside it: the request rule keeps the newest two threads, and the
+            // room must not be counted among them.
+            put("a", "convA", sentAt = now - 1)
+            put("b", "convB", sentAt = now - 2)
+            put("c", "convC", sentAt = now - 3)
+
+            repo().sweepRetention(now, protected = emptySet())
+
+            assertFalse(db.messageDao().exists("old")) // age-swept, like Nearby
+            assertEquals(3, ids(room).size) // the room's count cap (a request thread would be trimmed to 2)
+            assertTrue(ids("convA").isNotEmpty())
+            assertTrue(ids("convB").isNotEmpty())
+            assertTrue(ids("convC").isEmpty()) // the room did not take one of the two request-thread slots
+        }
+
+    @Test
     fun `a stale unaccepted thread is dropped wholesale, a protected one is kept`() =
         runTest {
             val now = 10_000L

@@ -8,6 +8,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.R
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.commons.CommonsEntity
+import app.getknit.knit.data.commons.CommonsRepository
 import app.getknit.knit.data.draft.DraftEntity
 import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
@@ -30,6 +32,7 @@ import app.getknit.knit.ui.group
 import app.getknit.knit.ui.msg
 import app.getknit.knit.ui.peer
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -73,8 +76,10 @@ class ChatListViewModelTest {
     private val mesh = FakeMeshController()
     private val groups = mockk<GroupRepository>(relaxed = true)
     private val drafts = mockk<DraftRepository>(relaxed = true)
+    private val commons = mockk<CommonsRepository>(relaxed = true)
 
     private val blockedFlow = MutableStateFlow(emptySet<String>())
+    private val commonsFlow = MutableStateFlow(emptyList<CommonsEntity>())
     private val groupsFlow = MutableStateFlow(emptyList<GroupEntity>())
     private val peersFlow = MutableStateFlow(emptyList<PeerEntity>())
     private val lastReadFlow = MutableStateFlow(emptyMap<String, Long>())
@@ -98,6 +103,7 @@ class ChatListViewModelTest {
         // Not optional: a relaxed mock hands back a Flow that never emits, and one silent arm stalls the
         // whole combine — every assertion in this class would then read the loading seed.
         every { drafts.all } returns draftsFlow
+        every { commons.observeAll() } returns commonsFlow
     }
 
     @After
@@ -119,7 +125,54 @@ class ChatListViewModelTest {
             relayFlow,
             loraFlow,
             context,
+            commons,
         )
+
+    @Test
+    fun aJoinedCommonsHasARowBeforeAnyoneHasPostedAndLeavesWithTheRoom() =
+        runTest {
+            // A room exists from the join: the row is titled with the relay's name for it and sits with the
+            // rooms, like a freshly created group sits before its first message. Deleting it is leaving it.
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            val room = Conversations.commonsIdFor("ab".repeat(32))
+            commonsFlow.value = listOf(CommonsEntity(room, "wss://home.test/spool/v1", ByteArray(32), "Home", joinedAt = 1L))
+            advanceUntilIdle()
+
+            val row =
+                vm.state.value.conversations
+                    .single { it.id == room }
+            assertEquals("Home", row.title)
+            assertTrue(row.isRoom)
+            assertTrue(
+                vm.state.value.conversations
+                    .indexOf(row) < vm.state.value.conversations.size,
+            )
+
+            // A member's post previews under the member's own name — a pinned peer, not a stranger.
+            peersFlow.value = listOf(peer("peer-a", "Ann"))
+            store.set(
+                msg(
+                    senderId = "peer-a",
+                    body = "dinner at 7?",
+                    sentAt = 100,
+                    conversationId = room,
+                    receivedVia = DeliveryPlane.Internet.code,
+                ),
+            )
+            advanceUntilIdle()
+            assertEquals(
+                "Ann: dinner at 7?",
+                vm.state.value.conversations
+                    .single { it.id == room }
+                    .lastPreview,
+            )
+
+            vm.deleteConversation(room)
+            advanceUntilIdle()
+            coVerify(exactly = 1) { commons.leave(room) }
+            assertTrue(mesh.relaysRefreshed)
+        }
 
     @Test
     fun theRadioRoomIsHiddenOutrightWhenTheUserSwitchesItOff() =

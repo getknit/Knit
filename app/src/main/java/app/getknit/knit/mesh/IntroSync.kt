@@ -118,6 +118,17 @@ class IntroSync(
         trySend(peerId, now)
     }
 
+    /**
+     * [want], for a caller with no urgency behind it: registers the intro only while there is room under
+     * [maxPending], and never evicts one the user asked for. The commons' member sweep uses it — a room of
+     * thirty connects its pairs eight at a time as sessions confirm, rather than churning the set.
+     */
+    suspend fun wantIfRoom(peerId: String) {
+        if (sessionConfirmed(peerId)) return
+        val room = lock.withLock { store.pending().let { peerId in it || it.size < maxPending } }
+        if (room) want(peerId)
+    }
+
     /** A profile for [peerId] was pinned on some plane: if an intro to it is pending, it can be sealed now. */
     suspend fun onProfilePinned(peerId: String) {
         if (peerId !in lock.withLock { store.pending() }) return

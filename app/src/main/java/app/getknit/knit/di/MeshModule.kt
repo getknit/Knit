@@ -232,6 +232,7 @@ val meshModule =
                 get(),
                 get(),
                 get(),
+                commons = get(),
                 publicChannel = { body -> get<PublicChannelSink>().postToPublicChannel(body) },
                 onTransferSignal = { sender, payload, sentAt -> get<TransferManager>().onSignal(sender, payload, sentAt) },
             )

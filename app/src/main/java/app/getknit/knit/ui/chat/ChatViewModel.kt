@@ -16,6 +16,8 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.commons.CommonsEntity
+import app.getknit.knit.data.commons.CommonsRepository
 import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.emoji.RecentReactions
 import app.getknit.knit.data.group.GroupEntity
@@ -370,6 +372,10 @@ data class ChatUiState(
     // that reads that flag is really asking "is this Nearby", and answering yes here would put a stranger's
     // unauthenticated name wherever Knit shows a person it vouches for.
     val isBridged: Boolean = false,
+    // True when this thread is a **commons** — a relay's private room (§7.4). A room: no attachments, no
+    // location, no link cards, no typing cue, no receipts; but its authors are pinned peers, so every bubble
+    // wears a real name and avatar and taps through to a profile.
+    val isCommons: Boolean = false,
     // The UTF-8 bytes a post's words may occupy here, or null in every thread that is not the Meshtastic
     // room. A hard cap rather than the soft LoRa length hint: a Meshtastic frame carries one short line and
     // the transmit path trims a longer one without asking, so the field refuses the overflow while the
@@ -446,12 +452,22 @@ class ChatViewModel(
     private val context: Context,
     // Direct Wi-Fi transfers: the app-wide state machine whose live states overlay this thread's records.
     private val transfers: TransferManager,
+    // The joined commons (docs/SPOOL_PROTOCOL.md §7.4): a room's name and members, for a commons thread.
+    // Nullable and last so every existing test rig that builds this ViewModel positionally still compiles.
+    private val commons: CommonsRepository? = null,
 ) : ViewModel() {
     /** This thread is the broadcast room (vs a 1:1 DM keyed by the peer's node id). */
     private val isRoom = conversationId == Conversations.NEARBY
 
     /** This thread is the Meshtastic room — the paired radio's primary channel; its authors are not peers. */
     private val isBridged = conversationId == Conversations.MESHTASTIC
+
+    /**
+     * This thread is a commons — a relay's private room (§7.4). A room like Nearby (addressed to nobody,
+     * names on every bubble, text only) whose authors are pinned peers like a group's, so their names,
+     * avatars and profiles are real; it has no roster to gate on and no receipts.
+     */
+    private val isCommons = Conversations.kindFor(conversationId) == ConversationKind.COMMONS
 
     private val myNodeId = MutableStateFlow<String?>(null)
 
@@ -756,9 +772,13 @@ class ChatViewModel(
             .map { transports ->
                 when (Conversations.kindFor(conversationId)) {
                     ConversationKind.NEARBY -> LoraAudience.Room(transports.values.any(::isLoraOnly))
+
                     ConversationKind.GROUP -> LoraAudience.Group(transports.filterValues(::isLoraOnly).keys)
+
                     ConversationKind.DM -> LoraAudience.Peer(transports[conversationId])
-                    ConversationKind.MESHTASTIC -> LoraAudience.Bridged
+
+                    // A commons post never leaves by a radio at all, so it has no LoRa audience either.
+                    ConversationKind.MESHTASTIC, ConversationKind.COMMONS -> LoraAudience.Bridged
                 }
             }.distinctUntilChanged()
 
@@ -800,10 +820,23 @@ class ChatViewModel(
             loraThread,
         ) { count, health, typing, relay, lora -> MeshStatus(count, health, typing, relay, lora) }
 
-    // Paired rather than combined separately because `combine`'s typed arity stops at five, and these two
-    // are one question anyway: who this device posts to the foreign public channel as, and whether it may.
-    private val publicIdentity =
-        combine(settings.displayName, settings.meshtasticPostConsented) { name, consented -> name to consented }
+    // Folded ahead of the state combine, whose typed arity stops at five: who this device posts to a room
+    // as, whether it may post to the foreign public channel, and — for a commons thread — the room's row and
+    // its members. The two commons flows are empty everywhere else (`flowOf`), so they cost nothing there.
+    private class PublicInputs(
+        val myName: String,
+        val publicConsented: Boolean,
+        val commonsRoom: CommonsEntity?,
+        val commonsMembers: List<String>,
+    )
+
+    private val publicIdentity: Flow<PublicInputs> =
+        combine(
+            settings.displayName,
+            settings.meshtasticPostConsented,
+            if (isCommons) commons?.observe(conversationId) ?: flowOf(null) else flowOf(null),
+            if (isCommons) commons?.observeMemberIds(conversationId) ?: flowOf(emptyList()) else flowOf(emptyList()),
+        ) { name, consented, room, roster -> PublicInputs(name, consented, room, roster) }
 
     val state: StateFlow<ChatUiState> =
         combine(
@@ -813,7 +846,8 @@ class ChatViewModel(
             myNodeId,
             publicIdentity,
         ) { bundle, directory, mesh, me, publicId ->
-            val (myName, publicConsented) = publicId
+            val myName = publicId.myName
+            val publicConsented = publicId.publicConsented
             val count = mesh.neighborCount
             val health = mesh.transportHealth
             val typingMap = mesh.typing
@@ -829,7 +863,10 @@ class ChatViewModel(
             val group = bundle.group
             val deliveredCounts = bundle.deliveredCounts
             val isGroup = group != null
-            val members = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+            // A thread with one peer behind it — the only shape that can be blocked or verified.
+            val isPeerThread = !isRoom && !isBridged && !isCommons && !isGroup
+            // A group's pinned roster, or a commons' seen members: both feed the @-mention candidates.
+            val members = group?.let { GroupMembersStore.decode(it.members) } ?: publicId.commonsMembers
             val peersByNode = directory.byNode
             // Group once, then tally per emoji within each message's bucket. Orphan reactions (no matching
             // message yet) simply never produce a row until their message arrives.
@@ -990,25 +1027,31 @@ class ChatViewModel(
                                 ?: context.getString(R.string.meshtastic_title)
                         }
 
+                        // The relay's advertised name, one rule with the chat list (`conversationTitle`).
+                        isCommons -> {
+                            publicId.commonsRoom?.name?.takeIf { it.isNotBlank() } ?: context.getString(R.string.commons_title)
+                        }
+
                         else -> {
                             label(conversationId).text
                         }
                     },
-                titleDiscriminator = if (isRoom || isBridged || isGroup) null else label(conversationId).discriminator,
+                titleDiscriminator = if (isPeerThread) label(conversationId).discriminator else null,
                 // A room uses a glyph; a group shows its photo (or the glyph when unset); a DM the peer avatar.
                 avatarHash =
                     when {
-                        isRoom || isBridged -> null
+                        isRoom || isBridged || isCommons -> null
                         else -> group?.photoHash ?: peersByNode[conversationId]?.avatarHash
                     },
-                canSendFile = !isRoom && !isBridged,
+                canSendFile = !isRoom && !isBridged && !isCommons,
                 isBridged = isBridged,
+                isCommons = isCommons,
                 // 166 bytes on a board that signs (so every post leaves signed), the 200-byte client convention on one that does not.
                 publicPostBudget = if (isBridged) PublicPostPolicy.onAirBudget(mesh.lora.facts.signs) else null,
                 publicChannelKeyIsPublic = mesh.lora.facts.primaryKeyIsPublic,
                 needsPublicConsent = isBridged && !publicConsented,
-                isBlocked = !isRoom && !isBridged && !isGroup && conversationId in blocked,
-                verified = !isRoom && !isBridged && !isGroup && peersByNode[conversationId]?.verified == true,
+                isBlocked = isPeerThread && conversationId in blocked,
+                verified = isPeerThread && peersByNode[conversationId]?.verified == true,
                 isGroup = isGroup,
                 memberCount = members.size,
                 groupFaces = faces,
@@ -1212,7 +1255,9 @@ class ChatViewModel(
             settings.linkPreviewsEnabled.first() &&
             // A card is an attachment, and the bridged room takes none — see [stage]. Read from the id rather
             // than from `loraCarry`, which is None here precisely because the room's length rule is its own.
+            // A commons takes none either, in this revision.
             !isBridged &&
+            !isCommons &&
             state.value.loraCarry == LoraCarry.None &&
             !audienceCannotRenderCards()
 
@@ -1405,8 +1450,8 @@ class ChatViewModel(
      * reads the disclosure; after that the screen is asked to clear the grant and start.
      */
     fun attachLocation() {
-        if (isBridged) {
-            _events.tryEmit(R.string.chat_mesh_text_only)
+        if (isBridged || isCommons) {
+            _events.tryEmit(if (isCommons) R.string.chat_commons_text_only else R.string.chat_mesh_text_only)
             return
         }
         viewModelScope.launch {
@@ -1557,24 +1602,7 @@ class ChatViewModel(
             try {
                 // Normalize a self-quote's snapshotted author before it goes on the wire (see the helper).
                 val outgoingReply = normalizeSelfAuthor(replyTo)
-                // Re-read the group at send time so it's never misrouted as a DM in a startup race, and so
-                // a pending rename rides this message (its GroupInfo.name converges last-writer-wins).
-                val group = if (isRoom) null else groups.find(conversationId)
-                val sent =
-                    if (group != null) {
-                        meshManager.sendChat(
-                            body,
-                            attachment,
-                            mentions,
-                            recipientId = null,
-                            group = group.toGroupInfo(),
-                            replyTo = outgoingReply,
-                        )
-                    } else {
-                        // Broadcast room -> no recipient; a DM thread is keyed by the peer's node id.
-                        val recipientId = if (isRoom) null else conversationId
-                        meshManager.sendChat(body, attachment, mentions, recipientId, replyTo = outgoingReply)
-                    }
+                val sent = route(body, attachment, mentions, outgoingReply)
                 // MeshManager applies block-on-send. Clear the input/attachment only once a message is
                 // accepted; a blocked message keeps the draft and surfaces a toast so the user can edit.
                 if (sent) {
@@ -1607,6 +1635,29 @@ class ChatViewModel(
                 if (!accepted) _isSending.value = false
             }
         }
+    }
+
+    /**
+     * Hands one send to the path its thread kind takes. A commons post has its own (spool only, never the
+     * radios): `sendChat` would read a no-recipient, no-group shape as the Nearby room. Text and a quote only
+     * there — the staging funnel refused everything else already. The group is re-read at send time so it is
+     * never misrouted as a DM in a startup race, and so a pending rename rides this message (its
+     * GroupInfo.name converges last-writer-wins).
+     */
+    private suspend fun route(
+        body: String,
+        attachment: AttachmentStore.Ingested?,
+        mentions: List<Mention>,
+        replyTo: ReplyRef?,
+    ): Boolean {
+        if (isCommons) return meshManager.sendCommons(conversationId, body, mentions, replyTo)
+        val group = if (isRoom) null else groups.find(conversationId)
+        if (group != null) {
+            return meshManager.sendChat(body, attachment, mentions, recipientId = null, group = group.toGroupInfo(), replyTo = replyTo)
+        }
+        // Broadcast room -> no recipient; a DM thread is keyed by the peer's node id.
+        val recipientId = if (isRoom) null else conversationId
+        return meshManager.sendChat(body, attachment, mentions, recipientId, replyTo = replyTo)
     }
 
     /**
@@ -1896,6 +1947,12 @@ class ChatViewModel(
                         _events.tryEmit(R.string.chat_mesh_text_only)
                     }
 
+                    // A commons carries text only in this revision (the spool gates attachments separately).
+                    isCommons -> {
+                        blobs.deleteIfUnreferenced(result.ingested.hash)
+                        _events.tryEmit(R.string.chat_commons_text_only)
+                    }
+
                     !result.flagged -> {
                         // A staged card gives way to whatever the user attached on purpose (one slot).
                         _pendingAttachment.value?.takeIf { it.link != null && result.ingested.link == null }?.let { card ->
@@ -2183,7 +2240,8 @@ class ChatViewModel(
     fun onUserTyping(text: String) {
         // Never in the bridged room: there is nobody on the far side to show a cue to, and the frame it would
         // mint carries no room of its own, so `MeshManager.sendTyping` would publish it as a *Nearby* cue.
-        if (isBridged) return
+        // Nor in a commons: its scope carries no typing frame (§7.4), and the same Nearby misroute would follow.
+        if (isBridged || isCommons) return
         // The restore is not a keystroke: the screen's collector reports the stored draft being put back the
         // same way it reports a typed character, and a cue for it shows the peer "typing…" with nothing to
         // follow. The first report past it is the user, and from then on every one is.

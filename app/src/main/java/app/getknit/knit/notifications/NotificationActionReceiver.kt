@@ -104,6 +104,8 @@ class NotificationActionReceiver :
                 // disclosure and the byte budget, which live in the composer, and the notification carries no
                 // reply action for it (MessageNotifier). This is the backstop, not the gate.
                 ConversationKind.MESHTASTIC -> Unit
+
+                ConversationKind.COMMONS -> mesh.sendCommons(conv, text, emptyList(), null)
             }
         }
         val me = identity.nodeId()

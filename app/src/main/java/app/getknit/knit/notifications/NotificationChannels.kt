@@ -33,6 +33,10 @@ object NotificationChannels {
     // plus whatever bots and MQTT uplinks are on it. Its own channel, so muting that firehose costs nothing else.
     const val MESHTASTIC = "knit_msg_meshtastic"
 
+    // A commons — a relay's private room for a household or team. DEFAULT like Nearby: its authors are
+    // pinned peers the user chose to sit in a room with, but it is a room, so a post is not a DM's heads-up.
+    const val COMMONS = "knit_msg_commons"
+
     // Coalesced "message request received" heads-up for a stranger's first (unaccepted) DM/group.
     // Bumped to _v2 to raise importance to HIGH so it pops up (even while the app is foregrounded): a
     // channel's importance is immutable once created, so the LOW-importance `knit_msg_requests` is
@@ -67,6 +71,7 @@ object NotificationChannels {
             ConversationKind.GROUP -> GROUPS
             ConversationKind.DM -> DMS
             ConversationKind.MESHTASTIC -> MESHTASTIC
+            ConversationKind.COMMONS -> COMMONS
         }
 
     /**
@@ -130,6 +135,16 @@ object NotificationChannels {
                 NotificationManagerCompat.IMPORTANCE_LOW,
                 R.string.channel_meshtastic_name,
                 R.string.channel_meshtastic_desc,
+            ),
+        )
+        manager.createNotificationChannel(
+            channel(
+                context,
+                COMMONS,
+                GROUP_MESSAGES,
+                NotificationManagerCompat.IMPORTANCE_DEFAULT,
+                R.string.channel_commons_name,
+                R.string.channel_commons_desc,
             ),
         )
         manager.createNotificationChannel(

@@ -111,7 +111,8 @@ nothing a member cannot refill.
 
 ### 1.4 Non-goals in v1
 
-- Carrying the plaintext Nearby broadcast room (proximity semantic, spam surface).
+- Carrying the plaintext Nearby broadcast room (proximity semantic, spam surface). The **commons** (§7.4)
+  is not that room: it is one keyed room per spool, private to whoever holds its invite, added on 2026-09-12.
 - Contact discovery, or any server-side identity. (A pair that already holds each other's identity —
   from a card exchanged out of band — may rendezvous, §3.5; a spool still learns no identity from it.)
 - Spool-to-spool federation.
@@ -336,6 +337,7 @@ sealOkm  = HKDF(ikm = groupRoot, info = "knit/scope/v1/seal"     ‖ ctx, L = 64
 | group `scopeId`, `sealKey`, `nonceKey` | groupRoot + rootVersion | departure re-mint                   | current members, plus departed until the re-mint |
 | groupRoot                              | minted at random        | never in place; replaced by re-mint | same                                             |
 | pair `scopeId`, `sealKey`, `nonceKey`  | pairSecret (§3.5)       | never (identity-bound); dropped     | the two members                                  |
+| commons `scopeId`, `sealKey`, `nonceKey` | the invite secret (§7.4) | never in place; the operator mints a new invite | every invite holder; the spool holds the id only |
 
 ### 3.5 Pair scopes
 
@@ -918,6 +920,60 @@ Field names are the CBOR map keys. `bstr32`/`bstr8` are byte strings of that len
 > additive
 > and needs no record-layer version bump precisely because the flag carries it.
 
+### 7.4 The commons
+
+One optional **shared scope per spool**: a room for everyone on a private relay — a household, a team,
+one organisation — where the members hold an invite and the spool holds only the invite's hash. The
+reference daemon implements the spool half (`knit-spool commons-invite`, `SPOOL_COMMONS_*`); the
+derivations and the client half are normative here.
+
+**The invite and its two halves.** The invite is `knit-commons:v1:<base64url, unpadded>` around a
+32-byte `secret`.
+
+```
+scopeId = SHA-256(UTF8("knit/spool/v1/commons") ‖ secret)                       // the spool's half
+sealOkm = HKDF(ikm = secret, info = "knit/spool/v1/commons-key", L = 64)         // the members' half
+sealKey = sealOkm[0…32)        nonceKey = sealOkm[32…64)
+```
+
+The id is a bare hash under the transport-plane prefix rather than an HKDF under `knit/scope/v1/…`
+(B-2-8) because the *spool* computes it — from `SPOOL_COMMONS_ID`'s secret, at boot — and the daemon
+owns that derivation; the seal keys follow it into the same family so the two halves read as one
+invite. A spool never learns `secret` and implements no key derivation at all, which is what makes "the
+spool cannot read its own commons" structural rather than a promise.
+
+| ID           | Requirement                                                                                                                                                                                                                                                                                                                                                                               |
+|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **S-7.4-1**  | A spool with a commons advertises it in HELLO as `commons: { name?, maxFrames, ttlMs, maxBlob, attach? }` (`attach` omitted when false). It MUST NOT include the scope id in any form. Presence of the field is the capability signal.                                                                                                                                                       |
+| **S-7.4-2**  | The commons' bounds are the operator's, pinned. A `sub` for it MUST apply those bounds, ignoring what the client declared, and echo the applied bounds in the `digest` (S-6.2-3 unchanged).                                                                                                                                                                                             |
+| **S-7.4-3**  | The scope exists from the spool's boot, so it is never an unknown scope: the §6.4 creation gates (proof of work, the new-scope bucket) MUST NOT apply to it, and a spool MUST NOT shed it under the storage watermark.                                                                                                                                                                       |
+| **S-7.4-4**  | Pushes into the commons are bounded by a **spool-wide** budget in addition to the per-connection one. A refusal under it is `err rate` with `retryMs`, and MUST NOT count as a strike (§6.4) — congestion on a shared room is not evidence any one member misbehaved.                                                                                                                       |
+| **S-7.4-5**  | Attachment records (§7.3) naming the commons are answered `err malformed` unless the spool advertised `attach = true` for it.                                                                                                                                                                                                                                                             |
+| **C-7.4-6**  | The commons frame set: `type = profile` from any sender, and `type = commons` whose payload names *this* scope id and carries no `enc` and no attachment, from a sender whose key is pinned. Both address nobody (`recipientId` and `group` unset). Nothing else — no receipts, no reactions, no DM-form chat. On the push side a member seals only its **own** frames.                        |
+| **C-7.4-7**  | A `profile` pulled from the commons re-enters delivery through §9.4 unchanged (it pins the member). A `commons` post MUST NOT: it is delivered to the room's thread through its own door and is never custodied, originated or relayed on the mesh. §9.4 does not apply to it.                                                                                                              |
+| **C-7.4-8**  | A `commons` post whose sender is not yet pinned MUST be deferred, not quarantined (§9.3): the listing is unordered and the member's profile is on its way. The deferral MUST be bounded, after which the blob is quarantined.                                                                                                                                                              |
+| **C-7.4-9**  | Every accepted blob in a commons is accounted (§9.6), a post because custody never holds it and a profile because the member's push set is its own frames only. The accounted bound MUST clear the pinned `maxFrames`.                                                                                                                                                                      |
+| **C-7.4-10** | A member keeps its own `profile` live in the commons: it is pushed with the member's posts, and when the spool tombstones it (count-evicted inside the member's republish window) the member MUST publish a fresh stamp rather than wait. An id the spool has tombstoned MUST be dropped from the member's local fold for that scope.                                                          |
+| **C-7.4-11** | A commons is subscribed at exactly the spool that runs it, and only once that spool's HELLO has advertised one. A member MUST NOT mine proof of work for it.                                                                                                                                                                                                                              |
+
+> **What it is not.** Not the Nearby room (§1.4): the room is keyed, private to its invite, and its authors are
+> pinned peers — the closest shape in this document is a group whose roster is "whoever the operator gave the
+> invite to". Not a group either: no roster is pinned, so nothing vets membership but the invite, every member
+> shares one key, and there is no forward secrecy inside the room beyond the operator minting a new invite.
+> Removing a member *is* rotating the invite; the old scope ages out on its TTL.
+>
+> **Why posts stay off the mesh.** A custodial frame folds into the mesh's content digest, which every node
+> must compute by identical rules — and a room only some nodes are in can never be one. So a post lives on
+> its spool, enters through a door of its own, and the mesh never sees it; the daemon's 500-frame / 24 h
+> defaults are the room's whole retention. The one consequence a member sees: no delivery ticks. N receipts per
+> post would evict the posts out of a room that size.
+>
+> **Why members are contacts (client policy, non-normative).** The invite is the trust boundary the operator
+> drew, so the reference client accepts every member it sees in the room as a contact, and bootstraps a DM
+> session with each over the §3.5 pair scope — bounded by the intro driver's own cap, eight at a time — so a
+> DM between two members rides the same spool the room does. A member's own first DM to another registers
+> that intro at once.
+
 ## 8. Proof of work [Both]
 
 Stateless Hashcash, the Nostr NIP-13 family, over data both sides already share. No server challenge
@@ -1273,6 +1329,9 @@ Deliberately open, additively reachable, in no particular order.
 | default per-scope `maxAttachBytes`       | 16 MiB                                                  | §6.5 — 2× one maximal attachment, so a scope holds a little history without becoming storage                            |
 | suggested `maxAget`                      | 32                                                      | ≈1.5 MiB per batch. HELLO-advertised, spool-tunable                                                                     |
 | `pairGrace`                              | 48 h                                                    | §3.5 — a pair scope outlives our own confirmation by the spool's default retention, so the answer can still be pulled |
+| commons `maxFrames` / `ttlMs` / `maxBlob` | 500 / 24 h / the spool's `maxBlob`                     | §7.4 — the daemon's `SPOOL_COMMONS_*` defaults; pinned by the operator, echoed in the `digest`                         |
+| commons push budget                      | 20 pushes/s spool-wide, burst 4×                        | §7.4 — `SPOOL_COMMONS_RATE_PUSHES`; refused with `err rate`, never a strike                                            |
+| commons deferral bound                   | 8 rounds                                                | §7.4 — how long a post waits for its author's profile before it is quarantined                                        |
 | `maxPairScopes`                          | 8                                                       | §3.5 — headroom under `maxScopes`                                                                                       |
 | suggested invalid / accounted set bound  | 512 ids per (spool, scope), oldest-first drop           | §9.3, §9.6 — above a full scope (`maxFrames` = 400), so eviction is the pathological case, not the ordinary one       |
 | intro re-send / answer floors            | 20 h / 1 h                                              | §3.5 client policy: re-send an unconfirmed intro under the 24 h custody TTL; answer an init-bearing peer at most hourly |
@@ -1318,6 +1377,17 @@ pairSecret      = 536a5e63f420ed78cd6166913a87d57562938cc18d2992f443ded7e7eca0f7
 pairScopeId     = bf46c96f08e53c8db14c1343c3fac9e5863732addae8baa0de2cf7681ca26855
 pairSealKey     = a9fc082b054b4e903b304143996471960eb3cd3b075e6537e2dc556f4856de95
 pairNonceKey    = e560060de754aa7d3759188568cbbb1cc2a7eccdeba81bfb9bdd68bc35b81285
+```
+
+Commons (§7.4; appended 2026-09-12 — the rows above did not move). The invite secret is `fixture(32, 10)`;
+the invite string is what `knit-spool commons-invite` prints for it:
+
+```
+commonsSecret   = 0a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3
+commonsInvite   = knit-commons:v1:ChEYHyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OM
+commonsScopeId  = a081eddb259895d4b9e26b3142e5ce0d88e08721aed57f9ead6e6eb99b10edd6
+commonsSealKey  = 31fb89763fc57db88b263cc05b47c6546a3aab33e32cd72dcb0a28bf90400c62
+commonsNonceKey = b932a11365737c35238425655e86f3febbc6fe77e1189cb9f13e8a14e565877d
 ```
 
 Seal (§4; keys and scopeId are the DM values above; deterministic, so sealing twice is
@@ -1411,6 +1481,13 @@ helloSpoolAttach = a561746568656c6c6f617601636d696e01666c696d697473a9676d6178426
                    61785265636f72641a00020000696d617853636f7065731840676d617850756c6c18406c6d617846
                    72616d65734361701903e8686d617854746c4d731a240c84006e6d61784174746163684279746573
                    1a01000000696d6178414368756e6b19c045676d617841676574182067706f774269747314
+helloSpoolCommons = a661746568656c6c6f617601636d696e01666c696d697473a6676d6178426c6f621a00010000696d
+                    61785265636f72641a00020000696d617853636f7065731840676d617850756c6c18406c6d617846
+                    72616d65734361701903e8686d617854746c4d731a240c840067706f77426974731467636f6d6d6f
+                    6e73a4646e616d6564486f6d65696d61784672616d65731901f46574746c4d731a05265c00676d6178
+                    426c6f621a00010000
+helloSpoolCommonsAttach = a361746568656c6c6f61760167636f6d6d6f6e73a4696d61784672616d65731901f46574746c4d73
+                    1a05265c00676d6178426c6f621a0001000066617474616368f5
 ahave            = a461746561686176656171056573636f7065582001080f161d242b323940474e555c636a71787f86
                    8d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d545b626970777e858c939a
                    a1a8afb6bdc4cbd2d9e0
@@ -1447,6 +1524,7 @@ wire.
 | §3.1 DM scopes                                  | Shipped                                                                                                                                    | `ScopeCrypto`, `ScopeRegistry`                                   |
 | §3.2 group root, §3.3 group scopes              | Shipped                                                                                                                                    | `GroupRootPolicy`, `GroupRootStore`, `GroupKeyPayload.gr`, DB v3 |
 | §3.5 pair scopes                                | Shipped                                                                                                                                    | `ScopeCrypto.pairSecret`, `ScopeRegistry.pairs`, `IntroSync`      |
+| §7.4 the commons                                | Shipped both sides; text and reply quotes only — the room takes no attachments yet whatever the spool advertises                          | `ScopeCrypto.commons*`, `CommonsInvite`, `ScopeSync`, `knit-spool` |
 | §4.1–§4.4 sealing and frame rules               | Shipped                                                                                                                                    | `ScopeCrypto`, `ScopeFrames`                                     |
 | §4.5 attachments                                | Shipped                                                                                                                                    | `ScopeCrypto.sealChunk`, `ScopeAttachments`                      |
 | §5 scope config ctl                             | **Reserved, not shipped.** `ctl = 7` is named and never recycled; the spool list is a device setting and bounds are §12 defaults meanwhile | `MessageContent`, `ScopeRegistry`, `SettingsStore.spoolUrls`     |
@@ -1486,3 +1564,4 @@ the plane itself was unaffected either time, since a spool never decodes a frame
 | 2026-08-24 | **Capacity refusal (§7.1).** New S-7.1-10 and C-7.1-11 write down what a spool at its connection cap does — refuse the upgrade `503` with `Retry-After`, never a close code — and what a client does about it                                                                                                                                                                                                   | **Spools:** optional; a spool with no cap is unaffected. **Clients:** a refused upgrade is not a close code, so a client that reports only close codes shows a full spool as an unexplained transport error                     |
 | 2026-08-25 | **Pair scopes (ADR 042).** New §3.5: a scope both members derive from their *identity* DH keys, so a pair that has only exchanged a contact card out of band (`docs/CONTACT_CARD.md`) can meet at a spool before a session exists. Carries the §4.4 DM frame set unchanged; subscribed only while an intro is pending plus a 48 h grace. §1.1/§1.4 wording, §3.4 row, §10.1 bullet, §10.3's identity-file row narrowed to *conversation* scopes, §12 constants, four §13 rows appended                                                                                                                                                                                              | None for spools: one more opaque id. Clients: a new label family under `knit/scope/v1/pair/…`; no record, no existing vector moved                                                                                                |
 | 2026-08-30 | **The accounted set (ADR 062).** New §9.6: a pulled blob that passed §4.4, bridged, and that local custody did not keep is counted as held and never pulled again (C-9.6-1…4), with §12.2 gaining the set bound. Closes the divergence §9.3 was written for, arriving through the one door §9.3 does not cover — a *valid* blob in the 24–48 h band between the mesh custody TTL and the scope TTL, which no client could ever fold into its digest | None for spools. Clients: a scope that has been reporting `converged = false` for the back half of the spool's retention should now settle, and stop re-pulling that band on every reconnect |
+| 2026-09-12 | **The commons (§7.4).** One shared scope per spool for a private relay's membership: the invite grammar, the two derivations (the spool's bare-hash id under the transport-plane prefix, the members' HKDF seal keys), the HELLO advertisement that never carries the id, pinned bounds, no creation gates, the non-striking spool-wide push budget, and the client half — a `profile`-plus-`commons` frame set, a post door that bypasses §9.4, bounded deferral of a post ahead of its author's profile, accounted-by-construction, the member's own profile kept live, single-spool affinity. §1.4 wording, §3.4 row, §12.2 defaults, five §13 derivation rows and two record vectors appended | **Spools:** optional; a spool with no commons omits the field and is unaffected. **Clients:** a new `commons` mesh frame type (non-custodial, additive) and a new label family under `knit/spool/v1/commons…`; no existing record, derivation or vector moved |

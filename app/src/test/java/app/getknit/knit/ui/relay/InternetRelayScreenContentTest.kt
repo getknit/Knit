@@ -1,5 +1,6 @@
 package app.getknit.knit.ui.relay
 
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
@@ -11,8 +12,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.mesh.spool.CommonsInvite
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -29,6 +32,11 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class InternetRelayScreenContentTest {
+    private companion object {
+        /** The §13 fixture invite — 32 bytes, unpadded base64url, the daemon's own grammar. */
+        const val INVITE = "knit-commons:v1:ChEYHyYtNDtCSVBXXmVsc3qBiI-WnaSrsrnAx87V3OM"
+    }
+
     @Suppress("DEPRECATION") // junit4.v2 rules swap in StandardTestDispatcher — a test-semantics migration, see roadmap.md
     @get:Rule
     val compose = createComposeRule()
@@ -41,6 +49,8 @@ class InternetRelayScreenContentTest {
         onRemoveRelay: (String) -> Unit = {},
         onSetRelayEnabled: (String, Boolean) -> Unit = { _, _ -> },
         onAcceptConsent: () -> Unit = {},
+        onJoinCommons: (String, String) -> Unit = { _, _ -> },
+        onLeaveCommons: (String) -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
@@ -54,6 +64,9 @@ class InternetRelayScreenContentTest {
                     onRemoveRelay = onRemoveRelay,
                     onSetRelayEnabled = onSetRelayEnabled,
                     isValidUrl = { it.startsWith("wss://") },
+                    onJoinCommons = onJoinCommons,
+                    onLeaveCommons = onLeaveCommons,
+                    isValidInvite = { CommonsInvite.looksLikeInvite(it) },
                 )
             }
         }
@@ -66,6 +79,7 @@ class InternetRelayScreenContentTest {
         scopeCount: Int? = 3,
         carriesPhotos: Boolean? = true,
         lastError: String? = null,
+        commons: RelayCommons? = null,
     ) = RelayRow(
         url = "wss://$host/spool/v1",
         host = host,
@@ -74,6 +88,7 @@ class InternetRelayScreenContentTest {
         scopeCount = scopeCount,
         carriesPhotos = carriesPhotos,
         lastError = lastError,
+        commons = commons,
     )
 
     @Test
@@ -241,6 +256,44 @@ class InternetRelayScreenContentTest {
         compose.onNodeWithContentDescription("Remove relay lax.spool.getknit.app").performClick()
         compose.onAllNodesWithText("Remove").onLast().performClick()
         assertEquals("wss://lax.spool.getknit.app/spool/v1", removed)
+    }
+
+    @Test
+    fun aRelayWithoutACommonsOffersNothingToJoin() {
+        render(InternetRelayUiState(enabled = true, relays = listOf(relay())))
+        compose.onAllNodesWithText("Join").assertCountEquals(0)
+        compose.onAllNodesWithText("Leave").assertCountEquals(0)
+    }
+
+    @Test
+    fun aRelayThatRunsACommonsShowsItsNameAndAJoinThatTakesOnlyARealInvite() {
+        var joined: Pair<String, String>? = null
+        val row = relay(commons = RelayCommons(name = "Home", joinedId = null))
+        render(InternetRelayUiState(enabled = true, relays = listOf(row)), onJoinCommons = { url, invite -> joined = url to invite })
+        compose.onNodeWithText("Commons · Home").assertIsDisplayed()
+        compose.onNodeWithTag("relay_commons_join_${row.host}").performClick()
+        // The invite is the room's whole key: a near-miss is refused at the field, never turned into a scope id.
+        compose.onNodeWithTag("relay_commons_invite_field").performTextInput("knit-commons:v1:not-really")
+        compose.onNodeWithText("That is not a commons invite").assertIsDisplayed()
+        compose.onNodeWithTag("relay_commons_join_confirm").assertIsNotEnabled()
+        assertEquals(null, joined)
+        compose.onNodeWithTag("relay_commons_invite_field").performTextClearance()
+        compose.onNodeWithTag("relay_commons_invite_field").performTextInput(INVITE)
+        compose.onNodeWithTag("relay_commons_join_confirm").performClick()
+        assertEquals(row.url to INVITE, joined)
+    }
+
+    @Test
+    fun aJoinedCommonsOffersLeaveAndNamesWhatStays() {
+        var left: String? = null
+        val row = relay(commons = RelayCommons(name = null, joinedId = "c-abc"))
+        render(InternetRelayUiState(enabled = true, relays = listOf(row)), onLeaveCommons = { left = it })
+        // No operator name: the generic title stands in.
+        compose.onNodeWithText("Commons · Commons").assertIsDisplayed()
+        compose.onNodeWithTag("relay_commons_leave_${row.host}").performClick()
+        compose.onNodeWithText("The people in it stay in your contacts.", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("relay_commons_leave_confirm").performClick()
+        assertEquals("c-abc", left)
     }
 
     @Test

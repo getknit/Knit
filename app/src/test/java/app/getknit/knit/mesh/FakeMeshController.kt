@@ -106,6 +106,27 @@ class FakeMeshController : MeshController {
         return publicPostOutcome
     }
 
+    /** Every commons post handed over, as (conversationId, text). */
+    val sentCommons = mutableListOf<Pair<String, String>>()
+    var sendCommonsResult = true
+
+    override suspend fun sendCommons(
+        conversationId: String,
+        text: String,
+        mentions: List<Mention>,
+        replyTo: ReplyRef?,
+    ): Boolean {
+        sentCommons += conversationId to text
+        return sendCommonsResult
+    }
+
+    /** Whether a screen asked the plane to re-derive its scope table (a commons joined or left). */
+    var relaysRefreshed = false
+
+    override fun refreshRelays() {
+        relaysRefreshed = true
+    }
+
     override suspend fun sendGroupUpdate(group: GroupInfo) {
         sentGroupUpdates += group
     }

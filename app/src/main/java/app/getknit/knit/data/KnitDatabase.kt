@@ -8,6 +8,10 @@ import app.getknit.knit.data.blob.BlobDao
 import app.getknit.knit.data.blob.BlobEntity
 import app.getknit.knit.data.blob.BlobVerdictDao
 import app.getknit.knit.data.blob.BlobVerdictEntity
+import app.getknit.knit.data.commons.CommonsDao
+import app.getknit.knit.data.commons.CommonsEntity
+import app.getknit.knit.data.commons.CommonsMemberEntity
+import app.getknit.knit.data.commons.CommonsOutboxEntity
 import app.getknit.knit.data.draft.DraftDao
 import app.getknit.knit.data.draft.DraftEntity
 import app.getknit.knit.data.forward.ForwardDao
@@ -46,7 +50,8 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
         GroupSendChainEntity::class, GroupRecvChainEntity::class,
         GroupSkippedKeyEntity::class, GroupKeySendEntity::class,
         GroupRootEntity::class, MessageReceiptEntity::class, DraftEntity::class,
-        MessageFtsEntity::class,
+        MessageFtsEntity::class, CommonsEntity::class, CommonsOutboxEntity::class,
+        CommonsMemberEntity::class,
     ],
     // v1: frozen launch baseline. The pre-1.0 alpha schema churn (the old destructive v2…v22 bumps that
     //     rode the wire/crypto breaks) is collapsed; docs/WIRE_COMPAT.md keeps the historical break record.
@@ -124,7 +129,15 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
     //     has a TEXT primary key, so `VACUUM` may renumber its rowids; never VACUUM, and if one is ever
     //     needed follow it with `INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`. Migrated by
     //     KnitMigrations.MIGRATION_11_12.
-    version = 12,
+    // v13: the commons — a spool's shared room (docs/SPOOL_PROTOCOL.md §7.4), three tables and no column
+    //     elsewhere: `commons` (the joined rooms: the invite secret each scope derives from, bound to the
+    //     one relay that runs it), `commons_outbox` (our own posts as the exact signed bytes, because the
+    //     seal is deterministic over them and a post is never in mesh custody — a room only some nodes are
+    //     in can never fold into a digest every node must compute alike), and `commons_members` (who this
+    //     device has seen there — the roster a commons has instead of a pinned one). All three in this
+    //     database for the group roots' reason (v3): the secret is the room. Migrated by
+    //     KnitMigrations.MIGRATION_12_13.
+    version = 13,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without
@@ -155,6 +168,8 @@ abstract class KnitDatabase : RoomDatabase() {
     abstract fun messageReceiptDao(): MessageReceiptDao
 
     abstract fun draftDao(): DraftDao
+
+    abstract fun commonsDao(): CommonsDao
 
     companion object {
         /**

@@ -918,6 +918,31 @@ internal fun ChatScreenContent(
                             }
                         }
 
+                        state.isCommons -> {
+                            // A commons: the room glyph, the relay's name for it, and a subtitle saying what it
+                            // is. Its members are pinned peers, so every bubble below carries a real name and
+                            // avatar — but the header stays a room's: it is nobody's thread in particular.
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RoomAvatar(size = 36.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f, fill = false)) {
+                                    Text(
+                                        text = state.title,
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.chat_commons_subtitle),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+
                         state.isGroup -> {
                             // Group: its photo (or its members' cluster when unset) + name + member count.
                             // Tapping the avatar opens the group details / settings screen.
@@ -1002,7 +1027,7 @@ internal fun ChatScreenContent(
                     // group-details screen as tapping the group avatar (the avatar tap stays too).
                     // Neither room offers anything: the bridged one has no peer to block — its authors are
                     // not peers, and blocking the gateway would silence a contact over somebody else's post.
-                    if (!state.isRoom && !state.isBridged) {
+                    if (!state.isRoom && !state.isBridged && !state.isCommons) {
                         Box {
                             IconButton(onClick = { headerMenuOpen = true }, modifier = Modifier.size(48.dp)) {
                                 Icon(
@@ -1095,8 +1120,9 @@ internal fun ChatScreenContent(
                         // Files are DM/group only, for the reason voice notes are: nothing on the device can screen
                         // one, and the room floods unencrypted to everyone in range. See docs/CONTENT_MODERATION.md §7.
                         fileEnabled = state.canSendFile,
-                        // A position is offered everywhere but the bridged room, whose channel carries one line of text.
-                        locationEnabled = !state.isBridged,
+                        // A position is offered everywhere but the bridged room, whose channel carries one line of
+                        // text — and the commons, text-only in this revision.
+                        locationEnabled = !state.isBridged && !state.isCommons,
                         locationScopeIsRoom = state.isRoom,
                         stagedLocation = stagedLocation,
                         onLocationClick = onLocationClick,
@@ -1140,8 +1166,8 @@ internal fun ChatScreenContent(
                         // Voice notes are DM/group only: the Nearby room floods unencrypted to everyone in range and
                         // no on-device model can screen speech, so it is the one place unscreenable audio is not
                         // offered. See docs/CONTENT_MODERATION.md.
-                        attachEnabled = !state.isBridged,
-                        voiceEnabled = !state.isRoom && !state.isBridged,
+                        attachEnabled = !state.isBridged && !state.isCommons,
+                        voiceEnabled = !state.isRoom && !state.isBridged && !state.isCommons,
                         voiceRecording = voiceRecording,
                         voicePlayback = voicePlayback,
                         onStartVoice = onStartVoice,
@@ -1196,7 +1222,7 @@ internal fun ChatScreenContent(
                     ChatSkeleton(
                         // A DM draws no avatar column (see `showSenderName` below), so neither may its
                         // skeleton, or every bubble shifts sideways as the real rows replace it.
-                        withAvatars = state.isRoom || state.isBridged || state.isGroup,
+                        withAvatars = state.isRoom || state.isBridged || state.isCommons || state.isGroup,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else if (state.rows.isEmpty() && state.typingPeers.isEmpty()) {
@@ -1278,7 +1304,7 @@ internal fun ChatScreenContent(
                                     // Every room and group names its authors; a DM does not (the header already
                                     // does). The bridged room needs it most of all — its posts come from
                                     // strangers, and an unattributed one would read as if Knit knew who sent it.
-                                    showSenderName = state.isRoom || state.isBridged || state.isGroup,
+                                    showSenderName = state.isRoom || state.isBridged || state.isCommons || state.isGroup,
                                     myNodeId = state.myNodeId,
                                     imageRatios = imageRatios,
                                     highlighted = row.id == highlightedMessageId,

@@ -50,6 +50,7 @@ import app.getknit.knit.mesh.lora.BoardOwner
 import app.getknit.knit.mesh.lora.BoardSettings
 import app.getknit.knit.mesh.lora.ProvisionMode
 import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.spool.CommonsInvite
 import app.getknit.knit.mesh.wifiaware.NanFaultInjector
 import app.getknit.knit.moderation.ModelLoadGuard
 import app.getknit.knit.moderation.ModelLoadPolicy
@@ -178,6 +179,7 @@ class DebugBridgeReceiver :
     private val settings: SettingsStore by inject()
     private val contactCards: app.getknit.knit.contacts.ContactCards by inject()
     private val contactImporter: app.getknit.knit.contacts.ContactImporter by inject()
+    private val commons: app.getknit.knit.data.commons.CommonsRepository by inject()
     private val forwardDao: ForwardDao by inject()
     private val digest: StoreDigest by inject()
     private val reviewPrompter: ReviewPrompter by inject()
@@ -282,6 +284,10 @@ class DebugBridgeReceiver :
                             handleIntro(intent)
                         }
 
+                        ACTION_COMMONS -> {
+                            handleCommons(intent)
+                        }
+
                         ACTION_RATCHET -> {
                             handleRatchet(intent)
                         }
@@ -368,6 +374,11 @@ class DebugBridgeReceiver :
                     groups.find(conv)?.let { mesh.sendChat(text, group = it.toGroupInfo(), replyTo = replyTo) }
                 }
 
+                // A commons post goes to the relay that runs the room, never a radio (§7.4).
+                ConversationKind.COMMONS -> {
+                    mesh.sendCommons(conv, text, emptyList(), replyTo)
+                }
+
                 // The Meshtastic room posts through this phone's own board, and the outcome says why not.
                 ConversationKind.MESHTASTIC -> {
                     return when (val outcome = mesh.sendPublicPost(text)) {
@@ -432,6 +443,11 @@ class DebugBridgeReceiver :
                 // The radio channel carries text only.
                 ConversationKind.MESHTASTIC -> {
                     return reply("error", "the Meshtastic room carries text only: $conv")
+                }
+
+                // So does a commons, in this revision.
+                ConversationKind.COMMONS -> {
+                    return reply("error", "a commons carries text only: $conv")
                 }
             }
         return when (sent) {
@@ -1226,7 +1242,18 @@ class DebugBridgeReceiver :
                     // also what makes the UI mark a photo "nearby only" — worth being able to confirm
                     // from the bridge when a field test sees that marker.
                     .put("maxAttachBytes", spool.maxAttachBytes ?: JSONObject.NULL)
-                    .put("scopes", scopes),
+                    // The commons this spool advertised in its HELLO (§7.4), or null: bounds and a name, never the id.
+                    .put(
+                        "commons",
+                        spool.commons?.let {
+                            JSONObject()
+                                .put("name", it.name ?: JSONObject.NULL)
+                                .put("maxFrames", it.maxFrames)
+                                .put("ttlMs", it.ttlMs)
+                                .put("maxBlob", it.maxBlob)
+                                .put("attach", it.attach)
+                        } ?: JSONObject.NULL,
+                    ).put("scopes", scopes),
             )
         }
         return JSONObject()
@@ -1236,6 +1263,47 @@ class DebugBridgeReceiver :
             .put("disabled", JSONArray(settings.disabledSpoolUrls.first().toList()))
             .put("spools", spools)
             .put("counters", metricsJson(metrics.snapshot()))
+    }
+
+    /**
+     * Joins, leaves and inspects the **commons** (docs/SPOOL_PROTOCOL.md §7.4) — the relay row's Join/Leave,
+     * for a locked lab device. `--es url <spoolUrl> --es invite <knit-commons:v1:…>` joins the room that
+     * relay runs (the relay must already be configured, `…debug.SPOOL --es url`); `--es leave <c-…>` leaves
+     * one; no extras dumps every joined room with its members. `…debug.SEND --es conv <c-…>` posts into it
+     * and `…debug.STATE --es conv <c-…>` reads it back; `…debug.SPOOL` shows its scope under the bound relay.
+     */
+    private suspend fun handleCommons(intent: Intent): JSONObject {
+        val url = intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() }?.trim()
+        val invite = intent.getStringExtra("invite")?.takeIf { it.isNotBlank() }?.trim()
+        if (url != null && invite != null) {
+            val secret = CommonsInvite.decode(invite) ?: return reply("error", "not a commons invite")
+            val name =
+                mesh
+                    .spoolStatus()
+                    .firstOrNull { it.url == url }
+                    ?.commons
+                    ?.name
+            val id = commons.join(url, secret, name, System.currentTimeMillis())
+            mesh.refreshRelays()
+            return reply("ok", "joined $id at $url").put("conversation", id)
+        }
+        intent.getStringExtra("leave")?.takeIf { it.isNotBlank() }?.let {
+            commons.leave(it.trim())
+            mesh.refreshRelays()
+            return reply("ok", "left $it")
+        }
+        val rooms = JSONArray()
+        commons.observeAll().first().forEach { room ->
+            rooms.put(
+                JSONObject()
+                    .put("conversation", room.conversationId)
+                    .put("url", room.spoolUrl)
+                    .put("name", room.name ?: JSONObject.NULL)
+                    .put("joinedAt", room.joinedAt)
+                    .put("members", JSONArray(commons.members(room.conversationId))),
+            )
+        }
+        return JSONObject().put("status", "ok").put("rooms", rooms)
     }
 
     /**
@@ -1623,6 +1691,7 @@ class DebugBridgeReceiver :
         const val ACTION_REVIEW = "app.getknit.knit.debug.REVIEW"
         const val ACTION_MODEL = "app.getknit.knit.debug.MODEL"
         const val ACTION_SPOOL = "app.getknit.knit.debug.SPOOL"
+        const val ACTION_COMMONS = "app.getknit.knit.debug.COMMONS"
         const val ACTION_INTRO = "app.getknit.knit.debug.INTRO"
         const val ACTION_RATCHET = "app.getknit.knit.debug.RATCHET"
         const val ACTION_LORA = "app.getknit.knit.debug.LORA"

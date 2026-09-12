@@ -35,7 +35,9 @@ import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
+import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.CommonsPost
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
@@ -50,6 +52,11 @@ import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.mesh.protocol.TransferPayload
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import app.getknit.knit.mesh.spool.CommonsMember
+import app.getknit.knit.mesh.spool.CommonsRoom
+import app.getknit.knit.mesh.spool.CommonsRoots
+import app.getknit.knit.mesh.spool.CommonsStore
+import app.getknit.knit.mesh.spool.hex
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.moderation.ScopedTextModerator
 import app.getknit.knit.moderation.TextVerdict
@@ -73,6 +80,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -203,9 +211,49 @@ class MeshManagerTest {
         fun frames(): List<CarriedFrame> = frames.values.toList()
     }
 
+    /** An in-memory [CommonsStore]: one joined room, everything the manager writes to it recorded. */
+    private class FakeCommonsStore(
+        val conversationId: String,
+        val secret: ByteArray,
+    ) : CommonsStore {
+        val posted = mutableListOf<Triple<MessageEntity, ByteArray, ByteArray>>()
+        val members = mutableListOf<Pair<String, String>>()
+        var swept: Long? = null
+
+        override suspend fun roots(): List<CommonsRoots> = listOf(CommonsRoots(conversationId, "wss://home.test/spool/v1", secret))
+
+        override suspend fun find(conversationId: String): CommonsRoom? =
+            if (conversationId == this.conversationId) CommonsRoom(conversationId, "wss://home.test/spool/v1", secret, "Home") else null
+
+        override suspend fun frames(conversationId: String): List<CarriedFrame> = emptyList()
+
+        override suspend fun post(
+            row: MessageEntity,
+            sig: ByteArray,
+            signed: ByteArray,
+        ) {
+            posted += Triple(row, sig, signed)
+        }
+
+        override suspend fun recordMember(
+            conversationId: String,
+            nodeId: String,
+            now: Long,
+        ) {
+            members += conversationId to nodeId
+        }
+
+        override suspend fun allMembers(): List<CommonsMember> = members.map { CommonsMember(it.first, it.second, 0L) }
+
+        override suspend fun sweepOutbox(before: Long) {
+            swept = before
+        }
+    }
+
     /** The manager under test, wired with real crypto + a recording transport + real custody + mocked repos. */
     private inner class Rig(
         scope: CoroutineScope,
+        val commons: FakeCommonsStore? = null,
     ) {
         val me = party()
         val bob = party()
@@ -320,6 +368,7 @@ class MeshManagerTest {
                         publicPosts += body
                         publicChannelRefusal
                     },
+                    commons = commons,
                 )
         }
 
@@ -539,6 +588,81 @@ class MeshManagerTest {
 
             assertEquals(listOf("hello mesh"), rig.publicPosts)
             assertTrue(rig.saved.isEmpty())
+            assertTrue(rig.transport.sent.isEmpty())
+        }
+
+    // --- the commons (docs/SPOOL_PROTOCOL.md §7.4) ---
+
+    private val roomSecret = ByteArray(32) { (it + 3).toByte() }
+    private val roomId = Conversations.commonsIdFor(hex(ScopeCrypto.commonsScopeId(roomSecret)))
+
+    @Test
+    fun aCommonsPostIsStoredWithItsSignedBytesAndNeverLeavesForTheRadios() =
+        runTest(UnconfinedTestDispatcher()) {
+            val store = FakeCommonsStore(roomId, roomSecret)
+            val rig = Rig(backgroundScope, commons = store)
+
+            assertTrue(rig.manager.sendCommons(roomId, "dinner at 7?", emptyList(), null))
+            advanceUntilIdle()
+
+            val (row, sig, signed) = store.posted.single()
+            assertEquals(roomId, row.conversationId)
+            assertEquals(rig.me.nodeId, row.senderId)
+            assertEquals(DeliveryPlane.Internet.code, row.receivedVia)
+            assertEquals("dinner at 7?", row.body)
+            // The bytes the plane will re-seal on every round: our signature over a `commons` frame naming the room.
+            assertTrue(MessageCrypto.verify(rig.me.bundle, sig, signed))
+            val env = checkNotNull(WireCodec.decodeEnvelope(signed))
+            assertEquals(FrameType.COMMONS, env.type)
+            assertEquals(row.id, env.id)
+            val post = checkNotNull(WireCodec.decodePayload<CommonsPost>(env.payload))
+            assertArrayEquals(ScopeCrypto.commonsScopeId(roomSecret), post.scope)
+            assertEquals("dinner at 7?", post.chat.body)
+            assertNull(post.chat.enc)
+            // Spool only: nothing originated, nothing custodied, and the row went through the commons store.
+            assertTrue(rig.transport.sent.isEmpty())
+            assertTrue(rig.transport.fastFanouts.isEmpty())
+            assertTrue(rig.forwardStore.frames().isEmpty())
+            assertTrue(rig.saved.isEmpty())
+        }
+
+    @Test
+    fun aCommonsPostIsRefusedByRoomModerationAndByARoomThisDeviceIsNotIn() =
+        runTest(UnconfinedTestDispatcher()) {
+            val store = FakeCommonsStore(roomId, roomSecret)
+            val rig = Rig(backgroundScope, commons = store)
+            coEvery { rig.textModeration.classify(any(), true) } returns
+                TextVerdict(allowed = false, category = TextVerdict.Category.TOXICITY)
+
+            assertFalse(rig.manager.sendCommons(roomId, "something vile", emptyList(), null))
+            coEvery { rig.textModeration.classify(any(), any()) } returns TextVerdict.ALLOWED
+            assertFalse(rig.manager.sendCommons(Conversations.commonsIdFor("ff".repeat(32)), "hello?", emptyList(), null))
+            advanceUntilIdle()
+
+            assertTrue(store.posted.isEmpty())
+            assertTrue(rig.transport.sent.isEmpty())
+        }
+
+    @Test
+    fun aCommonsMemberIsRecordedAndBecomesAnAcceptedContactButNeverOurselves() =
+        runTest(UnconfinedTestDispatcher()) {
+            val store = FakeCommonsStore(roomId, roomSecret)
+            val rig = Rig(backgroundScope, commons = store)
+
+            rig.manager.onCommonsMember(roomId, rig.bob.nodeId)
+            rig.manager.onCommonsMember(roomId, rig.me.nodeId)
+            advanceUntilIdle()
+
+            assertEquals(listOf(roomId to rig.bob.nodeId), store.members)
+            coVerify(exactly = 1) { rig.settings.accept(rig.bob.nodeId) }
+            coVerify(exactly = 0) { rig.settings.accept(rig.me.nodeId) }
+        }
+
+    @Test
+    fun aCommonsSendWithoutTheStoreIsRefused() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            assertFalse(rig.manager.sendCommons(roomId, "hi", emptyList(), null))
             assertTrue(rig.transport.sent.isEmpty())
         }
 

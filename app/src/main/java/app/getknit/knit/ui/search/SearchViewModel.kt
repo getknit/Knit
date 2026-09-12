@@ -7,6 +7,8 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.commons.CommonsEntity
+import app.getknit.knit.data.commons.CommonsRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
@@ -34,6 +36,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
@@ -111,6 +114,8 @@ class SearchViewModel(
     // parameter: the production flow is an infinite poller, which a test could never let go idle.
     loraFacts: Flow<LoraFacts>,
     private val context: Context,
+    // The joined commons (§7.4), so a room's posts search like a group's. Nullable and last for the test rigs.
+    commons: CommonsRepository? = null,
 ) : ViewModel() {
     /** The field's text, exactly as typed. */
     val query = MutableStateFlow("")
@@ -137,17 +142,23 @@ class SearchViewModel(
         val groups: List<GroupEntity>,
         val hideFlagged: Boolean,
         val meshRoom: MeshRoomInputs,
+        val commons: List<CommonsEntity> = emptyList(),
     )
+
+    // The two thread tables (groups, joined commons) are paired ahead of the combine below, which sits on
+    // the typed five-flow overload; a sixth argument would drop it onto the untyped vararg one.
+    private val threadTables =
+        combine(groups.observeGroups(), commons?.observeAll() ?: flowOf(emptyList())) { groupList, rooms -> groupList to rooms }
 
     private val inputs =
         combine(
             settings.acceptedConversations.distinctUntilChanged(),
-            groups.observeGroups(),
+            threadTables,
             messages.observeNewestOriginChannel(Conversations.MESHTASTIC).distinctUntilChanged(),
             settings.contentFilteringEnabled.distinctUntilChanged(),
             loraFacts.map { Triple(it.plane, it.primaryChannel, it.room) }.distinctUntilChanged(),
-        ) { accepted, groupList, newestChannel, hideFlagged, (plane, liveChannel, room) ->
-            Inputs(accepted, groupList, hideFlagged, MeshRoomInputs(room, plane, liveChannel, newestChannel))
+        ) { accepted, (groupList, rooms), newestChannel, hideFlagged, (plane, liveChannel, room) ->
+            Inputs(accepted, groupList, hideFlagged, MeshRoomInputs(room, plane, liveChannel, newestChannel), rooms)
         }
 
     // A quarter-second after the last keystroke; clearing is instant, so Back-then-retype never waits.
@@ -183,7 +194,8 @@ class SearchViewModel(
         if (s.query.isEmpty()) return SearchUiState()
         val tokens = SearchQuery.tokens(s.query)
         if (tokens.isEmpty()) return SearchUiState(forQuery = s.query)
-        val visible = visibleConversations(context, s.table, s.inputs.groups, s.directory, s.inputs.accepted, s.inputs.meshRoom)
+        val visible =
+            visibleConversations(context, s.table, s.inputs.groups, s.directory, s.inputs.accepted, s.inputs.meshRoom, s.inputs.commons)
         return SearchUiState(
             forQuery = s.query,
             chats = chatsFor(visible, tokens),

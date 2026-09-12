@@ -238,16 +238,20 @@ class MessageRepository(
         now: Long,
         protected: Set<String>,
     ) {
-        for (room in ROOMS) {
+        // The fixed rooms plus every commons with history: a commons is a room by the same rule (its authors
+        // are a whole relay's membership, and it is nobody's request thread), but its ids are dynamic.
+        val activity = dao.conversationActivity()
+        val rooms = ROOMS + activity.map { it.conversationId }.filter { Conversations.isPublicRoom(it) }
+        for (room in rooms) {
             dao.deleteOlderThan(room, now - nearbyMaxAgeMs)
             dao.deleteOldestInConversation(room, nearbyMaxMessages)
         }
 
         val pending = mutableListOf<ConversationActivity>()
-        for (conv in dao.conversationActivity()) {
+        for (conv in activity) {
             val id = conv.conversationId
             // Rooms were trimmed above; a protected thread is never trimmed.
-            if (id in ROOMS || id in protected) continue
+            if (id in rooms || id in protected) continue
 
             if (conv.lastSentAt < now - pendingThreadMaxAgeMs) {
                 dao.deleteByConversation(id) // a stale request thread — drop it wholesale

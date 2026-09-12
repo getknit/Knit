@@ -338,6 +338,37 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v12 → v13: the commons' three tables — `commons`, `commons_outbox` (indexed by conversation, since
+     * the heal loop reads one room's posts at a time and a leave purges one room's), `commons_members` —
+     * all empty on arrival: a room exists only once the user pastes an invite, so there is nothing to
+     * backfill and every existing thread is untouched. No column moves anywhere else. The SQL must stay
+     * byte-equivalent to what Room generates for `app/schemas/**/13.json`.
+     */
+    val MIGRATION_12_13 =
+        object : Migration(12, 13) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `commons` " +
+                        "(`conversationId` TEXT NOT NULL, `spoolUrl` TEXT NOT NULL, `secret` BLOB NOT NULL, " +
+                        "`name` TEXT, `joinedAt` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `commons_outbox` " +
+                        "(`frameId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `sig` BLOB NOT NULL, " +
+                        "`signed` BLOB NOT NULL, `sentAt` INTEGER NOT NULL, PRIMARY KEY(`frameId`))",
+                )
+                connection.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_commons_outbox_conversationId` ON `commons_outbox` (`conversationId`)",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `commons_members` " +
+                        "(`conversationId` TEXT NOT NULL, `nodeId` TEXT NOT NULL, `seenAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`conversationId`, `nodeId`))",
+                )
+            }
+        }
+
     /** All migrations, applied by Room in order. */
     val ALL: Array<Migration> =
         arrayOf(
@@ -352,5 +383,6 @@ object KnitMigrations {
             MIGRATION_9_10,
             MIGRATION_10_11,
             MIGRATION_11_12,
+            MIGRATION_12_13,
         )
 }

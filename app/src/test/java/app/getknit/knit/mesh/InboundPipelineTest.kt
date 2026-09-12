@@ -16,6 +16,7 @@ import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
@@ -47,6 +48,7 @@ import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.crypto.sealBytes
 import app.getknit.knit.mesh.protocol.BlobReqContent
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.CommonsPost
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
@@ -2658,6 +2660,87 @@ class InboundPipelineTest {
             assertEquals("Bob", notification.captured.senderName)
             assertEquals("keyed on the speaker, not on us", "!1234abcd", notification.captured.senderId)
             assertNull("a stranger wears no face", notification.captured.avatarBytes)
+        }
+
+    // --- The commons door (docs/SPOOL_PROTOCOL.md §7.4) ---
+
+    private val room = Conversations.commonsIdFor("ab".repeat(32))
+
+    private fun commonsEnv(
+        author: Party,
+        id: String,
+        body: String,
+    ): RelayEnvelope =
+        RelayEnvelope(
+            type = FrameType.COMMONS,
+            id = id,
+            senderId = author.nodeId,
+            sentAt = 7L,
+            payload = WireCodec.encodePayload(CommonsPost(scope = ByteArray(32) { 0xab.toByte() }, chat = ChatContent(body = body))),
+        )
+
+    @Test
+    fun aCommonsPostIsARoomPostOverTheInternetFromItsRealAuthorAndIsNeverAcked() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.deliver(alice, rig.profile(alice, name = "Alice"))
+            val scopes = mutableListOf<Boolean>()
+            rig.classifyScopes = scopes
+            val notification = slot<NotifMessage>()
+            val conversation = slot<NotifConversation>()
+            coEvery { rig.notifier.notify(capture(notification), capture(conversation), any(), any(), any()) } returns Unit
+
+            rig.pipeline.deliverCommonsPost(commonsEnv(alice, "cp1", "dinner at 7?"), ChatContent(body = "dinner at 7?"), room)
+            advanceUntilIdle()
+
+            val row = checkNotNull(rig.msgMap["cp1"])
+            assertEquals(room, row.conversationId)
+            assertEquals("the author is the pinned peer, not this phone", alice.nodeId, row.senderId)
+            assertEquals(DeliveryPlane.Internet, row.receivedPlane)
+            assertNull("no Meshtastic origin — the name comes from the peer row", row.originNode)
+            assertEquals(listOf(true), scopes) // room moderation
+            assertTrue("no receipt, no relay, nothing leaves for a commons post", rig.originated.isEmpty())
+            assertEquals("Alice", notification.captured.senderName)
+            assertEquals(ConversationKind.COMMONS, conversation.captured.kind)
+            assertNull("the operator set no name, so the notifier titles it generically", conversation.captured.title)
+            // A second delivery of the same signed post (a reconnect re-pull) is a no-op: one row, one notification.
+            rig.pipeline.deliverCommonsPost(commonsEnv(alice, "cp1", "dinner at 7?"), ChatContent(body = "dinner at 7?"), room)
+            advanceUntilIdle()
+            assertEquals(1, rig.msgMap.size)
+            coVerify(exactly = 1) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun aCommonsPostFromABlockedMemberWritesNothing() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.settings.blocked.value = setOf(alice.nodeId)
+
+            rig.pipeline.deliverCommonsPost(commonsEnv(alice, "cp1", "hi"), ChatContent(body = "hi"), room)
+            advanceUntilIdle()
+
+            assertTrue(rig.msgMap.isEmpty())
+        }
+
+    @Test
+    fun aCommonsFrameMetOnARadioIsNeverDelivered() =
+        runTest {
+            // The spool door is the only way in; a stray copy on a link — pinned author or not — is relayed
+            // like any unknown type and delivered by nobody, and an unpinned one costs no park slot either.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            rig.deliver(alice, commonsEnv(alice, "cp1", "hi"))
+            val mallory = party()
+            rig.deliver(mallory, commonsEnv(mallory, "cp2", "hi"))
+            advanceUntilIdle()
+
+            assertTrue(rig.msgMap.isEmpty())
+            assertEquals(1L, rig.drops(DropReason.NO_SENDER_KEY))
+            assertTrue("not parked: nothing would replay it", rig.pendingInbound.release(mallory.nodeId).isEmpty())
         }
 
     @Test

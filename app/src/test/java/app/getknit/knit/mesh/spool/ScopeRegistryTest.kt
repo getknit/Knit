@@ -20,11 +20,13 @@ class ScopeRegistryTest {
         roots: List<ScopeRoots> = emptyList(),
         groups: List<GroupScopeRoots> = emptyList(),
         pairs: List<PairScopeRoots> = emptyList(),
+        commons: List<CommonsRoots> = emptyList(),
     ) = ScopeRegistry(
         selfId = { me },
         roots = { roots },
         groupRoots = { groups },
         pairs = { pairs },
+        commons = { commons },
     )
 
     private fun root(seed: Byte) = ByteArray(32) { seed }
@@ -209,5 +211,38 @@ class ScopeRegistryTest {
                     groups = listOf(GroupScopeRoots(groupId, setOf(me, bob), root(7), 1)),
                 ).scopes(0L)
             assertEquals(listOf(bob, groupId), scopes.map { it.label })
+        }
+
+    @Test
+    fun `a joined commons is one scope, keyed by its secret, bound to its relay, with the daemon's default bounds`() =
+        runTest {
+            val secret = root(9)
+            val id = "c-" + hex(ScopeCrypto.commonsScopeId(secret))
+            val scopes = registry(commons = listOf(CommonsRoots(id, "wss://home.test/spool/v1", secret))).scopes(0L)
+            assertEquals(1, scopes.size)
+            val scope = scopes.single()
+            assertArrayEquals(ScopeCrypto.commonsScopeId(secret), scope.id)
+            assertArrayEquals(ScopeCrypto.commonsSealKeys(secret).nonceKey, scope.keys.nonceKey)
+            assertEquals(id, scope.commonsId)
+            assertEquals(id, scope.label)
+            assertEquals("wss://home.test/spool/v1", scope.spoolUrl)
+            assertEquals(ScopeRegistry.COMMONS_DEFAULT_MAX_FRAMES, scope.bounds.maxFrames)
+            assertEquals(ScopeRegistry.COMMONS_DEFAULT_TTL_MS, scope.bounds.ttlMs)
+            assertFalse(scope.retiring)
+            assertTrue(scope.peerId == null && scope.groupId == null)
+        }
+
+    @Test
+    fun `every member of a commons derives the same scope from the same invite`() =
+        runTest {
+            val secret = root(9)
+            val id = "c-" + hex(ScopeCrypto.commonsScopeId(secret))
+            val mine = registry(commons = listOf(CommonsRoots(id, "wss://home.test/spool/v1", secret))).scopes(0L).single()
+            val theirs =
+                ScopeRegistry(selfId = {
+                    bob
+                }, roots = { emptyList() }, commons = { listOf(CommonsRoots(id, "wss://home.test/spool/v1", secret)) }).scopes(0L).single()
+            assertEquals(mine.idHex, theirs.idHex)
+            assertArrayEquals(mine.keys.sealKey, theirs.keys.sealKey)
         }
 }

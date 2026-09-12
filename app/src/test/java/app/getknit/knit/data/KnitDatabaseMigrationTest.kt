@@ -46,9 +46,9 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v12) creates and opens from the exported JSON`() =
+    fun `the current schema (v13) creates and opens from the exported JSON`() =
         runTest {
-            val version = 12 // KnitDatabase @Database(version = 12) — bump alongside the DB (its retention is CLASS,
+            val version = 13 // KnitDatabase @Database(version = 13) — bump alongside the DB (its retention is CLASS,
             // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
             helper.createDatabase(version).close()
         }
@@ -456,6 +456,40 @@ class KnitDatabaseMigrationTest {
                     assertTrue(s.step())
                     assertEquals(1L, s.getLong(0))
                     assertEquals("half a sentence", s.getText(1))
+                }
+            }
+        }
+
+    @Test
+    fun `migrate 12 to 13 preserves existing rows and adds the three empty commons tables`() =
+        runTest {
+            // A room exists only once an invite is pasted, so an upgrading device has none: three empty tables
+            // are the whole correct state, and every thread it already holds is untouched.
+            helper.createDatabase(12).use { c ->
+                c.execSQL(
+                    "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, receivedVia, " +
+                        "mentions, replyToHasAttachment, moderation, pendingKey, kind, originViaMqtt, originSigned) " +
+                        "VALUES ('m1','n1','peer-1','hello',1,1,0,'[]',0,0,0,0,0,0)",
+                )
+            }
+            helper.runMigrationsAndValidate(13, listOf(KnitMigrations.MIGRATION_12_13)).use { c ->
+                c.prepare("SELECT body FROM messages WHERE id = 'm1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("hello", s.getText(0))
+                }
+                for (table in listOf("commons", "commons_outbox", "commons_members")) {
+                    c.prepare("SELECT COUNT(*) FROM $table").use { s ->
+                        assertTrue(s.step())
+                        assertEquals(0L, s.getLong(0))
+                    }
+                }
+                // A member is one row per (room, node): a second sighting replaces, never duplicates.
+                c.execSQL("INSERT INTO commons_members (conversationId, nodeId, seenAt) VALUES ('c-1','n1',1)")
+                c.execSQL("INSERT OR REPLACE INTO commons_members (conversationId, nodeId, seenAt) VALUES ('c-1','n1',2)")
+                c.prepare("SELECT COUNT(*), MAX(seenAt) FROM commons_members").use { s ->
+                    assertTrue(s.step())
+                    assertEquals(1L, s.getLong(0))
+                    assertEquals(2L, s.getLong(1))
                 }
             }
         }

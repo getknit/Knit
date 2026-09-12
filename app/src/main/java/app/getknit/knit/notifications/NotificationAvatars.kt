@@ -86,7 +86,7 @@ internal class NotificationAvatars(
         faces: List<NotifFace>,
     ): Bitmap =
         when (kind) {
-            ConversationKind.NEARBY, ConversationKind.MESHTASTIC -> roomAvatar()
+            ConversationKind.NEARBY, ConversationKind.MESHTASTIC, ConversationKind.COMMONS -> roomAvatar()
             ConversationKind.GROUP -> if (faces.size >= GROUP_FACES_MIN) clusterAvatar(faces) else groupGlyphAvatar(key)
             ConversationKind.DM -> letterAvatar(title, key)
         }

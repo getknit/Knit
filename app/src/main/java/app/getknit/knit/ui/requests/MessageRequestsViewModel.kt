@@ -183,9 +183,9 @@ class MessageRequestsViewModel(
 
                 ConversationKind.DM -> messages.deleteByConversation(conversationId)
 
-                // Neither public room is ever a request (Conversations.isAccepted), so neither can be
-                // declined here; the arms exist so the compiler keeps saying so.
-                ConversationKind.NEARBY, ConversationKind.MESHTASTIC -> Unit
+                // No room is ever a request (Conversations.isAccepted), so none can be declined here; the
+                // arms exist so the compiler keeps saying so.
+                ConversationKind.NEARBY, ConversationKind.MESHTASTIC, ConversationKind.COMMONS -> Unit
             }
         }
     }

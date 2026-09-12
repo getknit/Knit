@@ -183,6 +183,9 @@ class InboundPipeline(
     // A sealed CTL_TRANSFER landed (transfer/TransferManager.onSignal): direct-transfer signaling, handed on
     // post-commit like the rest. True when it admitted a live incoming OFFER, which is what earns a notification.
     private val onTransferCtl: suspend (senderId: String, payload: TransferPayload, sentAt: Long) -> Boolean = { _, _, _ -> false },
+    // A commons' advertised name for its notification title (`CommonsStore.find`), null when the operator
+    // set none — the notifier then uses the generic room title.
+    private val commonsTitle: suspend (conversationId: String) -> String? = { null },
 ) {
     // nodeId -> avatar hash a non-direct peer advertised but whose bytes we're still pulling, so a blob
     // arriving via the multi-hop BlobExchange can be attributed back to the peer that advertised it.
@@ -322,8 +325,39 @@ class InboundPipeline(
                 handleTyping(env)
             }
 
+            // A commons post reaches this device through the spool plane's own door ([deliverCommonsPost]),
+            // never a radio: a copy met on a link is a stray (a member re-flooding by hand) and is relayed
+            // like any unknown type by the router and delivered by nobody. Named so the `else` below stays
+            // for types nobody has minted yet.
+            FrameType.COMMONS -> {}
+
             else -> {}
         }
+    }
+
+    /**
+     * The commons door (spec §7.4): a post the spool plane pulled from a room this device joined, already
+     * opened under the room's key and authenticated by [canCarry] against the author's pinned key. It is
+     * delivered as the room post it is — the ordinary chat shell, the conversation the room's id names,
+     * the Internet as its plane, room moderation — and **never** custodied, relayed or acknowledged: the
+     * spool is the room's store, and a receipt from every member would evict the posts out of it.
+     */
+    internal suspend fun deliverCommonsPost(
+        env: RelayEnvelope,
+        chat: ChatContent,
+        conversationId: String,
+    ) {
+        // The carry gate already refused a blocked author; re-checked here because this door is public
+        // to the plane and the gate is not the only way in during a test.
+        if (env.senderId in settings.blockedNodeIds.first()) return
+        deliverChat(
+            env = env,
+            content = chat,
+            me = identity.nodeId(),
+            conversationId = conversationId,
+            plane = DeliveryPlane.Internet,
+            ack = false,
+        )
     }
 
     /**
@@ -509,7 +543,9 @@ class InboundPipeline(
                 // pinned key we can't render the peer's avatar anyway, so drop it silently rather than spend a
                 // key request / park slot on a frame that's worthless a moment later). Safe inside
                 // verifyInbound's runCatching — never throws.
-                if (env.type != FrameType.KEY_REQ && env.type != FrameType.PROFILE && env.type != FrameType.TYPING) {
+                // … and a commons post: it never arrives here on purpose (the spool door verifies and
+                // delivers it), so one on a radio is a stray copy that no key request should be spent on.
+                if (env.type !in NO_KEY_REQUEST_TYPES) {
                     keyExchange.want(env.senderId)
                     // Park a deliverable frame so it's replayed once the key arrives (handleProfile), instead of
                     // being lost — the inbound complement of the outbound pendingKey/flushPendingFor retransmit.
@@ -2784,6 +2820,12 @@ class InboundPipeline(
                 NotifConversation(conversationId, null, null, ConversationKind.MESHTASTIC)
             }
 
+            // A room too: the relay's advertised name as the title (the notifier's generic one when the
+            // operator set none), the room glyph, and never the speaker as the conversation.
+            ConversationKind.COMMONS -> {
+                NotifConversation(conversationId, commonsTitle(conversationId), null, ConversationKind.COMMONS)
+            }
+
             ConversationKind.DM -> {
                 NotifConversation(conversationId, displayNameFor(dmName, senderId), dmAvatar, ConversationKind.DM)
             }
@@ -3164,6 +3206,9 @@ class InboundPipeline(
     }
 
     private companion object {
+        /** Types a missing sender key never spends a key request on — see the comment in `verifyInbound`. */
+        val NO_KEY_REQUEST_TYPES = setOf(FrameType.KEY_REQ, FrameType.PROFILE, FrameType.TYPING, FrameType.COMMONS)
+
         // Same tag as MeshManager on purpose: these inbound verify/drop log lines are grepped in field
         // diagnostics, so the extraction must not change them.
         const val TAG = "MeshManager"

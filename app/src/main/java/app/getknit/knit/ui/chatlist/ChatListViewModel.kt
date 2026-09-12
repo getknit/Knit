@@ -7,6 +7,8 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.commons.CommonsEntity
+import app.getknit.knit.data.commons.CommonsRepository
 import app.getknit.knit.data.draft.DraftEntity
 import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
@@ -36,6 +38,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
@@ -124,7 +127,7 @@ class ChatListViewModel(
     peers: PeerRepository,
     settings: SettingsStore,
     identity: Identity,
-    meshManager: MeshController,
+    private val meshManager: MeshController,
     private val groups: GroupRepository,
     private val drafts: DraftRepository,
     // Live direct-transfer state, for the one thing the persisted row cannot say: a record left non-terminal
@@ -136,6 +139,9 @@ class ChatListViewModel(
     relayFacts: Flow<RelayFacts>,
     loraFacts: Flow<LoraFacts>,
     private val context: Context,
+    // The joined commons (§7.4): a row per room from the join on, and the leave behind "delete". Nullable and
+    // last so the positional test rigs still compile; production always passes it.
+    private val commons: CommonsRepository? = null,
 ) : ViewModel() {
     private val myNodeId = MutableStateFlow<String?>(null)
 
@@ -152,6 +158,7 @@ class ChatListViewModel(
         val drafts: Map<String, DraftEntity>,
         val transfers: Map<String, TransferState>,
         val bridgedChannel: String?,
+        val commons: List<CommonsEntity> = emptyList(),
     )
 
     // Neighbor count + radio health + the (already-dismissal-aware) banner + Internet-plane state, folded
@@ -185,7 +192,8 @@ class ChatListViewModel(
             groups.observeGroups(),
             draftsAndTransfers,
             messages.observeNewestOriginChannel(Conversations.MESHTASTIC).distinctUntilChanged(),
-        ) { accepted, groupList, (draftRows, live), channel -> ListInputs(accepted, groupList, draftRows, live, channel) }
+            commons?.observeAll() ?: flowOf(emptyList()),
+        ) { accepted, groupList, (draftRows, live), channel, rooms -> ListInputs(accepted, groupList, draftRows, live, channel, rooms) }
 
     // Radio-off banner: which warning the per-radio statuses imply, and whether the user has dismissed it.
     // The critical AllRadiosOff warning is never stored in [dismissed], so it always shows (not dismissible).
@@ -298,15 +306,26 @@ class ChatListViewModel(
             // An unsent line belongs to the thread it was typed in, and goes when the thread does.
             drafts.clear(conversationId)
             when (Conversations.kindFor(conversationId)) {
-                ConversationKind.NEARBY -> Unit
-
                 // the broadcast room can't be deleted
-                ConversationKind.GROUP -> groups.delete(conversationId)
+                ConversationKind.NEARBY -> {}
+
+                ConversationKind.GROUP -> {
+                    groups.delete(conversationId)
+                }
 
                 // Unlike Nearby, the Meshtastic room *is* clearable: the history goes, and the row stays
                 // only while a radio is bound — the honest way to say "not interested" in a channel that
                 // arrives unasked.
-                ConversationKind.MESHTASTIC, ConversationKind.DM -> messages.deleteByConversation(conversationId)
+                ConversationKind.MESHTASTIC, ConversationKind.DM -> {
+                    messages.deleteByConversation(conversationId)
+                }
+
+                // A commons goes as a whole — the room, its key, its history — and its relay is told to stop
+                // subscribing it now rather than at the next tick.
+                ConversationKind.COMMONS -> {
+                    commons?.leave(conversationId)
+                    meshManager.refreshRelays()
+                }
             }
         }
     }

@@ -121,6 +121,22 @@ class SpoolLimits(
     val attachments: Boolean get() = maxAttachBytes != null && maxAChunk != null && maxAget != null
 }
 
+/**
+ * The commons a spool runs, advertised in its HELLO (spec §7.4): a display [name], the room's pinned
+ * bounds, and whether it takes attachments. Present iff the spool has a commons — the same
+ * present-or-absent capability signal as the attachment triad — and it **never** carries the scope id:
+ * the id is the hash of the invite, and a spool that published it would turn a room only invite holders
+ * can find into one anybody who connects can flood. Field order matches the daemon's `CommonsInfo`.
+ */
+@Serializable
+class SpoolCommonsInfo(
+    val name: String? = null,
+    val maxFrames: Int,
+    val ttlMs: Long,
+    val maxBlob: Int,
+    val attach: Boolean = false,
+)
+
 /** A mined `SpoolPow` stamp: counter [n] for UTC day [d]. */
 @Serializable
 class PowStamp(
@@ -146,8 +162,8 @@ class ScopeSub(
 
 /**
  * First record in each direction. Spool→client: [v] is the highest supported version, with [min],
- * [limits], and [powBits] (0 = PoW off). Client→spool: [v] is the chosen version, everything else
- * omitted — a client identifies itself no further than that.
+ * [limits], [powBits] (0 = PoW off), and [commons] when the spool runs one (§7.4). Client→spool: [v] is
+ * the chosen version, everything else omitted — a client identifies itself no further than that.
  */
 @Serializable
 class SpoolHello(
@@ -156,6 +172,7 @@ class SpoolHello(
     val min: Int? = null,
     val limits: SpoolLimits? = null,
     val powBits: Int? = null,
+    val commons: SpoolCommonsInfo? = null,
 )
 
 /** Client→spool: subscribe to scopes (responded to with one DIGEST or scoped ERR each). */

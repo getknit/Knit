@@ -572,6 +572,7 @@ class MessageNotifier(
         title?.takeIf { it.isNotBlank() } ?: when (kind) {
             ConversationKind.NEARBY -> context.getString(R.string.notif_title_nearby)
             ConversationKind.MESHTASTIC -> context.getString(R.string.notif_title_meshtastic)
+            ConversationKind.COMMONS -> context.getString(R.string.commons_title)
             ConversationKind.GROUP -> context.getString(R.string.group_unnamed)
             ConversationKind.DM -> "?"
         }

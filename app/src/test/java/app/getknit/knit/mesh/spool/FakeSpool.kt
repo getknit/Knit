@@ -4,6 +4,7 @@ import app.getknit.knit.mesh.CarriedFrame
 import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.CommonsPost
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
@@ -46,6 +47,9 @@ class FakeSpool(
     private val maxAget: Int = 32,
     private val maxAChunk: Int = 49_221,
     private val maxAttachBytes: Int = 16_777_216,
+    // The commons this spool runs (§7.4): its scope id and what the HELLO advertises about it. Null = no
+    // commons, the HELLO omits the field, and a SUB for one is an ordinary unknown scope.
+    private val commons: Pair<ByteArray, SpoolCommonsInfo>? = null,
 ) : SpoolDialer {
     private class Attachment(
         val total: Int,
@@ -75,6 +79,9 @@ class FakeSpool(
     /** SUB stamps the spool was handed, by scope hex — lets a test assert PoW actually rode along. */
     val stamps = ConcurrentHashMap<String, PowStamp>()
 
+    /** Every scope any connection ever SUBbed, by hex — proves a scope was (or was never) asked for here. */
+    val subscribedScopes: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     override suspend fun dial(url: String): SpoolSocket {
         val socket = FakeSocket()
         synchronized(sockets) { sockets.add(socket) }
@@ -97,11 +104,17 @@ class FakeSpool(
                             maxAget = maxAget.takeIf { attachments },
                         ),
                     powBits = powBits,
+                    commons = commons?.second,
                 ),
             ),
         )
         return socket
     }
+
+    private fun isCommons(scopeHex: String): Boolean = commons != null && hex(commons.first) == scopeHex
+
+    /** The room's own cap for the commons, the spool-wide one for everything else. */
+    private fun maxFramesFor(scopeHex: String): Int = if (isCommons(scopeHex)) commons!!.second.maxFrames else maxFrames
 
     /**
      * Says something the client never asked for. The one hostile primitive on this otherwise honest
@@ -137,14 +150,26 @@ class FakeSpool(
 
     /** The `digest` the spool would answer a SUB for [scope] with — shared by SUB and [expire]. */
     private fun digestRecord(scope: ByteArray): SpoolDigest {
-        val state = scopes.getOrPut(hex(scope)) { ScopeState() }
+        val scopeHex = hex(scope)
+        val state = scopes.getOrPut(scopeHex) { ScopeState() }
+        val cap = maxFramesFor(scopeHex)
+        // The commons answers with the bounds the operator pinned, whatever the SUB declared (§7.4).
+        val bounds =
+            commons
+                ?.takeIf {
+                    isCommons(
+                        scopeHex,
+                    )
+                }?.second
+                ?.let { ScopeBounds(maxFrames = it.maxFrames, ttlMs = it.ttlMs, maxBlob = it.maxBlob) }
+                ?: ScopeBounds(maxFrames = maxFrames, ttlMs = ScopeRegistry.DEFAULT_TTL_MS, maxBlob = maxBlob)
         return SpoolDigest(
             t = SpoolRecordType.DIGEST,
             scope = scope,
             digest = ScopeCrypto.digestBytes(ScopeCrypto.scopeDigest(state.live.keys.map(::unhex))),
             count = state.live.size,
-            full = state.live.size >= maxFrames,
-            bounds = ScopeBounds(maxFrames = maxFrames, ttlMs = ScopeRegistry.DEFAULT_TTL_MS, maxBlob = maxBlob),
+            full = state.live.size >= cap,
+            bounds = bounds,
         )
     }
 
@@ -294,6 +319,7 @@ class FakeSpool(
                 val scopeHex = hex(entry.scope)
                 entry.pow?.let { stamps[scopeHex] = it }
                 subscribed.add(scopeHex)
+                subscribedScopes.add(scopeHex)
                 scopes.getOrPut(scopeHex) { ScopeState() }
                 emit(SpoolCodec.encode(digestFor(entry.scope)))
             }
@@ -348,7 +374,7 @@ class FakeSpool(
             }
             val fresh = state.live.put(idHex, push.data) == null
             if (fresh) pushed.add(idHex)
-            while (state.live.size > maxFrames) {
+            while (state.live.size > maxFramesFor(scopeHex)) {
                 val eldest = state.live.keys.first()
                 state.live.remove(eldest)
                 state.tombstones.add(eldest)
@@ -653,6 +679,29 @@ fun profileFrame(
             senderId = from,
             sentAt = sentAt,
             payload = WireCodec.encodePayload(ProfileContent(name = name, status = "", version = version)),
+        ),
+    )
+
+/**
+ * Builds a commons post (spec §7.4): a `commons` frame naming [scope], addressed to nobody, carrying a
+ * cleartext [ChatContent] inside what will be the room's seal. Like [profileFrame] the signature is a
+ * fixture — authentication is the injected carry gate's job, not the frame-set rule's.
+ */
+fun commonsFrame(
+    id: String,
+    from: String,
+    scope: ByteArray,
+    sentAt: Long = 1_000L,
+    body: String = "hello room",
+): CarriedFrame =
+    carried(
+        id,
+        RelayEnvelope(
+            type = FrameType.COMMONS,
+            id = id,
+            senderId = from,
+            sentAt = sentAt,
+            payload = WireCodec.encodePayload(CommonsPost(scope = scope, chat = ChatContent(body = body))),
         ),
     )
 

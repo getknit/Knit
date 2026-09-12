@@ -36,6 +36,9 @@ class ScopeVectorTest {
 
     private fun sealedChunk() = ScopeCrypto.sealChunk(dmKeys(), dmScopeId(), attachHash, index = 0, total = 1, chunk = bytes(48, 7))
 
+    // The commons (§7.4): the invite secret an operator mints, hashed by the daemon and stretched by the client.
+    private val commonsSecret = bytes(32, 10)
+
     // The pair scope (§3.5): fixture X25519 scalars stand in for the two identity DH keys.
     private fun pairSecret() = ScopeCrypto.pairSecret(bytes(32, 3), X25519.publicFromPrivate(bytes(32, 8)))
 
@@ -64,6 +67,11 @@ class ScopeVectorTest {
             "pairScopeId" to ScopeCrypto.pairScopeId(pairSecret(), NODE_A, NODE_B).toHex(),
             "pairSealKey" to ScopeCrypto.pairSealKeys(pairSecret(), NODE_A, NODE_B).sealKey.toHex(),
             "pairNonceKey" to ScopeCrypto.pairSealKeys(pairSecret(), NODE_A, NODE_B).nonceKey.toHex(),
+            // Appended (§7.4, 2026-09-12) — the commons: a bare SHA-256 id under the transport-plane label
+            // (the daemon's derivation, pinned so the two repos cannot drift) and an HKDF seal with no context.
+            "commonsScopeId" to ScopeCrypto.commonsScopeId(commonsSecret).toHex(),
+            "commonsSealKey" to ScopeCrypto.commonsSealKeys(commonsSecret).sealKey.toHex(),
+            "commonsNonceKey" to ScopeCrypto.commonsSealKeys(commonsSecret).nonceKey.toHex(),
         )
     }
 
@@ -135,6 +143,9 @@ class ScopeVectorTest {
                 "pairScopeId" to "bf46c96f08e53c8db14c1343c3fac9e5863732addae8baa0de2cf7681ca26855",
                 "pairSealKey" to "a9fc082b054b4e903b304143996471960eb3cd3b075e6537e2dc556f4856de95",
                 "pairNonceKey" to "e560060de754aa7d3759188568cbbb1cc2a7eccdeba81bfb9bdd68bc35b81285",
+                "commonsScopeId" to "a081eddb259895d4b9e26b3142e5ce0d88e08721aed57f9ead6e6eb99b10edd6",
+                "commonsSealKey" to "31fb89763fc57db88b263cc05b47c6546a3aab33e32cd72dcb0a28bf90400c62",
+                "commonsNonceKey" to "b932a11365737c35238425655e86f3febbc6fe77e1189cb9f13e8a14e565877d",
             )
     }
 }

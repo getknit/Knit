@@ -5,6 +5,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -61,6 +62,35 @@ class SpoolRecordsTest {
                                 maxAget = 32,
                             ),
                         powBits = 20,
+                    ),
+                ),
+            // §7.4: a spool that runs a commons advertises its name and pinned bounds — never its id — and
+            // `attach` only when true, so a room without attachments is the shorter map.
+            "helloSpoolCommons" to
+                SpoolCodec.encode(
+                    SpoolHello(
+                        t = SpoolRecordType.HELLO,
+                        v = SPOOL_RECORD_VERSION,
+                        min = 1,
+                        limits =
+                            SpoolLimits(
+                                maxBlob = 65_536,
+                                maxRecord = 131_072,
+                                maxScopes = 64,
+                                maxPull = 64,
+                                maxFramesCap = 1_000,
+                                maxTtlMs = 604_800_000L,
+                            ),
+                        powBits = 20,
+                        commons = SpoolCommonsInfo(name = "Home", maxFrames = 500, ttlMs = 86_400_000L, maxBlob = 65_536),
+                    ),
+                ),
+            "helloSpoolCommonsAttach" to
+                SpoolCodec.encode(
+                    SpoolHello(
+                        t = SpoolRecordType.HELLO,
+                        v = SPOOL_RECORD_VERSION,
+                        commons = SpoolCommonsInfo(maxFrames = 500, ttlMs = 86_400_000L, maxBlob = 65_536, attach = true),
                     ),
                 ),
             "helloClient" to SpoolCodec.encode(SpoolHello(t = SpoolRecordType.HELLO, v = SPOOL_RECORD_VERSION)),
@@ -257,6 +287,25 @@ class SpoolRecordsTest {
     }
 
     @Test
+    fun aCommonsIsAdvertisedWithoutItsId() {
+        val plain = SpoolCodec.decode<SpoolHello>(vectors().getValue("helloSpool"))!!
+        val room = SpoolCodec.decode<SpoolHello>(vectors().getValue("helloSpoolCommons"))!!
+        val attaching = SpoolCodec.decode<SpoolHello>(vectors().getValue("helloSpoolCommonsAttach"))!!
+
+        assertNull(plain.commons)
+        assertEquals("Home", room.commons!!.name)
+        assertEquals(500, room.commons.maxFrames)
+        assertEquals(86_400_000L, room.commons.ttlMs)
+        assertEquals(false, room.commons.attach)
+        assertNull(attaching.commons!!.name)
+        assertEquals(true, attaching.commons.attach)
+        // The field is `commons` and nothing in it is 32 bytes long: the daemon never sends the scope id.
+        val bytes = vectors().getValue("helloSpoolCommons")
+        assertTrue(String(bytes, Charsets.ISO_8859_1).contains("commons"))
+        assertTrue(bytes.none { it == 0x58.toByte() }) // no CBOR byte string of 1-byte length anywhere in it
+    }
+
+    @Test
     fun attachmentRecordsRoundTrip() {
         val ahas = SpoolCodec.decode<SpoolAhas>(vectors().getValue("ahas"))!!
         assertEquals(3, ahas.total)
@@ -320,6 +369,15 @@ class SpoolRecordsTest {
                     "7850756c6c18406c6d61784672616d65734361701903e8686d617854746c4d731a24" +
                     "0c84006e6d617841747461636842797465731a01000000696d6178414368756e6b19" +
                     "c045676d617841676574182067706f774269747314",
+                "helloSpoolCommons" to
+                    "a661746568656c6c6f617601636d696e01666c696d697473a6676d6178426c6f621a" +
+                    "00010000696d61785265636f72641a00020000696d617853636f7065731840676d61" +
+                    "7850756c6c18406c6d61784672616d65734361701903e8686d617854746c4d731a24" +
+                    "0c840067706f77426974731467636f6d6d6f6e73a4646e616d6564486f6d65696d61" +
+                    "784672616d65731901f46574746c4d731a05265c00676d6178426c6f621a00010000",
+                "helloSpoolCommonsAttach" to
+                    "a361746568656c6c6f61760167636f6d6d6f6e73a4696d61784672616d65731901f4" +
+                    "6574746c4d731a05265c00676d6178426c6f621a0001000066617474616368f5",
                 "helloClient" to "a261746568656c6c6f617601",
                 "sub" to
                     "a3617463737562617101647375627381a36573636f7065582001080f161d242b3239" +

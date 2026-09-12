@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.spool
 
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.CommonsPost
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
@@ -300,4 +301,102 @@ class ScopeFramesTest {
     }
 
     private fun EncEnvelope.copyWithoutDmHeader() = EncEnvelope(v = v, nonce = nonce, ct = ct, keys = keys, r = null)
+
+    // The commons form (§7.4): a room keyed by an invite secret, no roster.
+    private val commonsSecret = ByteArray(32) { (it + 40).toByte() }
+    private val commonsId = ScopeCrypto.commonsScopeId(commonsSecret)
+
+    private fun commonsScope() =
+        Scope(
+            id = commonsId,
+            keys = ScopeCrypto.commonsSealKeys(commonsSecret),
+            bounds = ScopeRegistry.COMMONS_DEFAULT_BOUNDS,
+            commonsId = "c-" + hex(commonsId),
+            spoolUrl = "wss://home.test/spool/v1",
+        )
+
+    @Test
+    fun `a commons takes a post naming it and a profile from anyone`() {
+        val scope = commonsScope()
+        assertTrue(ScopeFrames.eligibleFor(commonsFrame("p1", mallory, commonsId).envelope, alice, scope))
+        assertTrue(ScopeFrames.eligibleFor(profileFrame("pr", mallory).envelope, alice, scope))
+        assertTrue(ScopeFrames.eligibleFor(profileFrame("me", alice).envelope, alice, scope))
+    }
+
+    @Test
+    fun `a commons refuses a post naming another room, a sealed post, an attachment, and every other type`() {
+        val scope = commonsScope()
+        val otherRoom = ScopeCrypto.commonsScopeId(ByteArray(32) { (it + 41).toByte() })
+        assertFalse(ScopeFrames.eligibleFor(commonsFrame("x1", alice, otherRoom).envelope, alice, scope))
+        val sealed =
+            RelayEnvelope(
+                type = FrameType.COMMONS,
+                id = "s1",
+                senderId = alice,
+                payload =
+                    WireCodec.encodePayload(
+                        CommonsPost(
+                            scope = commonsId,
+                            chat = ChatContent(enc = EncEnvelope(v = 1, nonce = ByteArray(12), ct = ByteArray(4), keys = emptyList())),
+                        ),
+                    ),
+            )
+        assertFalse(ScopeFrames.eligibleFor(sealed, alice, scope))
+        val withImage =
+            RelayEnvelope(
+                type = FrameType.COMMONS,
+                id = "i1",
+                senderId = alice,
+                payload = WireCodec.encodePayload(CommonsPost(scope = commonsId, chat = ChatContent(body = "pic", attachmentHash = "ab"))),
+            )
+        assertFalse(ScopeFrames.eligibleFor(withImage, alice, scope))
+        // Addressed to someone, or to a group: not a room post, whatever the payload says.
+        val addressed = commonsFrame("a1", alice, commonsId).envelope
+        assertFalse(
+            ScopeFrames.eligibleFor(
+                RelayEnvelope(addressed.type, addressed.id, alice, recipientId = bob, payload = addressed.payload),
+                alice,
+                scope,
+            ),
+        )
+        assertFalse(ScopeFrames.eligibleFor(dmFrame("d1", from = alice, to = bob).envelope, alice, scope))
+        assertFalse(
+            ScopeFrames.eligibleFor(
+                groupChatFrame("g1", from = alice, groupId = groupId, members = founding.toList()).envelope,
+                alice,
+                scope,
+            ),
+        )
+        assertFalse(ScopeFrames.eligibleFor(RelayEnvelope(FrameType.REACTION, "r1", alice, payload = ByteArray(0)), alice, scope))
+    }
+
+    @Test
+    fun `only our own frames are pushable into a commons`() {
+        val scope = commonsScope()
+        assertTrue(ScopeFrames.pushableToCommons(profileFrame("me", alice).envelope, alice, commonsId))
+        assertTrue(ScopeFrames.pushableToCommons(commonsFrame("p1", alice, commonsId).envelope, alice, commonsId))
+        assertFalse(ScopeFrames.pushableToCommons(profileFrame("pr", bob).envelope, alice, commonsId))
+        assertFalse(ScopeFrames.pushableToCommons(commonsFrame("p2", bob, commonsId).envelope, alice, commonsId))
+    }
+
+    @Test
+    fun `a commons scope belongs at its relay and nowhere else`() {
+        val scope = commonsScope()
+        assertTrue(scope.belongsAt("wss://home.test/spool/v1"))
+        assertFalse(scope.belongsAt("wss://other.test/spool/v1"))
+        assertTrue(scope().belongsAt("wss://other.test/spool/v1"))
+        assertEquals("c-" + hex(commonsId), scope.label)
+    }
+
+    @Test
+    fun `open refuses a post re-sealed from another room even under the right key`() {
+        val scope = commonsScope()
+        val otherRoom = ScopeCrypto.commonsScopeId(ByteArray(32) { (it + 41).toByte() })
+        val foreign = commonsFrame("x1", alice, otherRoom)
+        val blob = ScopeCrypto.seal(scope.keys, scope.id, foreign.sig, foreign.signed)
+        assertNull(ScopeFrames.open(scope, alice, ScopeCrypto.blobId(blob), blob))
+        val own = commonsFrame("p1", alice, commonsId)
+        val good = ScopeCrypto.seal(scope.keys, scope.id, own.sig, own.signed)
+        assertNotNull(ScopeFrames.open(scope, alice, ScopeCrypto.blobId(good), good))
+    }
 }

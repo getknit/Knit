@@ -63,6 +63,9 @@ object ScopeCrypto {
     /** HKDF output for [sealKeysInternal]: first 32 bytes seal, second 32 key the synthetic nonce. */
     const val SEAL_OKM_BYTES = 64
 
+    /** The commons invite secret (spec §7.4): 32 random bytes, the daemon's `Commons.SECRET_BYTES`. */
+    const val COMMONS_SECRET_BYTES = 32
+
     private const val MAC = "HMACSHA256"
     private const val TAG_BITS = 128
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
@@ -87,6 +90,8 @@ object ScopeCrypto {
     private val LABEL_NONCE = "knit/scope/v1/nonce".toByteArray()
     private val LABEL_AID = "knit/scope/v1/aid".toByteArray()
     private val LABEL_ANONCE = "knit/scope/v1/anonce".toByteArray()
+    private val LABEL_COMMONS_ID = "knit/spool/v1/commons".toByteArray()
+    private val LABEL_COMMONS_KEY = "knit/spool/v1/commons-key".toByteArray()
     private val AAD_PREFIX = "knit/scope/v1".toByteArray()
     private val AAD_ATTACH_PREFIX = "knit/scope/v1/attach".toByteArray()
 
@@ -185,6 +190,31 @@ object ScopeCrypto {
         groupId: String,
         rootVersion: Int,
     ): SealKeys = sealKeysInternal(groupRoot, groupContext(groupId, rootVersion))
+
+    /**
+     * A commons scope's id (spec §7.4): the plain hash of the invite secret under the transport-plane
+     * label, exactly as the `knit-spool` daemon computes it from `SPOOL_COMMONS_ID`'s secret — the one
+     * scope id an operator holds, and the only half of the invite a spool is ever given. The daemon owns
+     * this derivation (`Commons.scopeId` in that repo), which is why it sits under `knit/spool/v1/…`
+     * rather than the key plane's `knit/scope/v1/…`, and why it is a bare SHA-256 rather than HKDF.
+     */
+    fun commonsScopeId(secret: ByteArray): ByteArray {
+        require(secret.size == COMMONS_SECRET_BYTES) { "commons secret must be $COMMONS_SECRET_BYTES bytes" }
+        return sha256(LABEL_COMMONS_ID + secret)
+    }
+
+    /**
+     * A commons scope's sealing secret (spec §7.4): the half of the invite the spool never sees. Derived
+     * from the same 32-byte secret under its own label with no context — the secret is unique per
+     * commons and the seal's aad already binds the scope id — and split like every other [SealKeys].
+     * Deliberately not routed through the `knit/scope/v1/seal` helper: the daemon's documentation names
+     * this label, and the two halves of the invite are meant to read as one derivation family.
+     */
+    fun commonsSealKeys(secret: ByteArray): SealKeys {
+        require(secret.size == COMMONS_SECRET_BYTES) { "commons secret must be $COMMONS_SECRET_BYTES bytes" }
+        val okm = Hkdf.computeHkdf(MAC, secret, ZERO_SALT, LABEL_COMMONS_KEY, SEAL_OKM_BYTES)
+        return SealKeys(sealKey = okm.copyOfRange(0, KEY_BYTES), nonceKey = okm.copyOfRange(KEY_BYTES, SEAL_OKM_BYTES))
+    }
 
     /**
      * Seals a custody unit for a scope. Deterministic: the nonce is HKDF-derived from the plaintext

@@ -206,6 +206,28 @@ class IntroSyncTest {
         }
 
     @Test
+    fun `wantIfRoom fills the free slots and never evicts what was asked for`() =
+        runTest {
+            val rig = Rig(maxPending = 2)
+            rig.sync.want("a-peer")
+            rig.now += 1
+            rig.sync.wantIfRoom("b-peer")
+            rig.now += 1
+            rig.sync.wantIfRoom("c-peer")
+            assertEquals(setOf("a-peer", "b-peer"), rig.store.pending.keys)
+            // A peer already pending is left alone; a confirmed one is never registered.
+            rig.sync.wantIfRoom("a-peer")
+            rig.confirmed += "d-peer"
+            rig.sync.wantIfRoom("d-peer")
+            assertEquals(setOf("a-peer", "b-peer"), rig.store.pending.keys)
+            // Once a slot frees up, the next sweep fills it.
+            rig.confirmed += "a-peer"
+            rig.sync.retry()
+            rig.sync.wantIfRoom("c-peer")
+            assertTrue("c-peer" in rig.store.pending.keys)
+        }
+
+    @Test
     fun `the store is the source of truth across a restart`() =
         runTest {
             val first = Rig()

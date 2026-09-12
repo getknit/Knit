@@ -1,5 +1,6 @@
 package app.getknit.knit.data.relay
 
+import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.spool.ScopeAttachments
@@ -121,9 +122,17 @@ fun reachFor(
 ): RelayReach =
     when {
         conversationId == Conversations.MESHTASTIC -> RelayReach.Silent
+
         !facts.enabled || facts.active == 0 || facts.connected == 0 -> RelayReach.Silent
+
         conversationId == Conversations.NEARBY -> RelayReach.Room
+
         conversationId in facts.coveredLabels -> RelayReach.Covered
+
+        // A commons lives on one relay and nothing else could ever carry it: while that relay is down there
+        // is no "becoming eligible" to promise, only silence.
+        Conversations.kindFor(conversationId) == ConversationKind.COMMONS -> RelayReach.Silent
+
         else -> RelayReach.Pending
     }
 

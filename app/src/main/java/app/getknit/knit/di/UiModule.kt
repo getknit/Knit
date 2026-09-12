@@ -1,9 +1,11 @@
 package app.getknit.knit.di
 
 import app.getknit.knit.data.LinkCardStore
+import app.getknit.knit.data.commons.CommonsRepository
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.linkpreview.LinkPreviewService
 import app.getknit.knit.location.LocationSource
+import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.RadioSupport
 import app.getknit.knit.mesh.lora.LoraStatusRepository
 import app.getknit.knit.transfer.TransferManager
@@ -56,6 +58,7 @@ val uiModule =
                 get<LoraStatusRepository>().facts,
                 androidContext(),
                 get<TransferManager>(),
+                get<CommonsRepository>(),
             )
         }
         viewModel {
@@ -71,10 +74,22 @@ val uiModule =
                 get<RelayStatusRepository>().facts,
                 get<LoraStatusRepository>().facts,
                 androidContext(),
+                get<CommonsRepository>(),
             )
         }
         viewModel { ContactsViewModel(get(), get(), get(), get(), get(), get()) }
-        viewModel { SearchViewModel(get(), get(), get(), get(), get(), get<LoraStatusRepository>().facts, androidContext()) }
+        viewModel {
+            SearchViewModel(
+                get(),
+                get(),
+                get(),
+                get(),
+                get(),
+                get<LoraStatusRepository>().facts,
+                androidContext(),
+                get<CommonsRepository>(),
+            )
+        }
         viewModel {
             DiagnosticsViewModel(
                 get(),
@@ -107,6 +122,6 @@ val uiModule =
         viewModel { BlockedUsersViewModel(get(), get()) }
         viewModel { MessageRequestsViewModel(get(), get(), get(), get(), get(), get(), androidContext()) }
         viewModel { AddContactViewModel(get(), get(), get(), get(), get()) }
-        viewModel { InternetRelayViewModel(get(), get()) }
+        viewModel { InternetRelayViewModel(get(), get(), get<CommonsRepository>(), get<MeshController>()) }
         viewModel { LoraRadioViewModel(get(), get(), get(), get()) }
     }

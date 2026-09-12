@@ -3,6 +3,7 @@ package app.getknit.knit.ui
 import android.content.Context
 import app.getknit.knit.R
 import app.getknit.knit.data.PeerDirectory
+import app.getknit.knit.data.commons.CommonsEntity
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
@@ -40,7 +41,7 @@ internal data class ConversationTitle(
      */
     val faces: List<GroupFace> = emptyList(),
 ) {
-    val isRoom: Boolean get() = kind == ConversationKind.NEARBY || kind == ConversationKind.MESHTASTIC
+    val isRoom: Boolean get() = kind == ConversationKind.NEARBY || kind == ConversationKind.MESHTASTIC || kind == ConversationKind.COMMONS
 }
 
 /**
@@ -68,6 +69,8 @@ internal fun conversationTitle(
     directory: PeerDirectory,
     me: String?,
     meshRoomChannel: String?,
+    // The commons' advertised name, for a commons; null titles it generically.
+    commonsName: String? = null,
 ): ConversationTitle =
     when (val kind = Conversations.kindFor(conversationId)) {
         ConversationKind.NEARBY -> {
@@ -76,6 +79,16 @@ internal fun conversationTitle(
 
         ConversationKind.MESHTASTIC -> {
             ConversationTitle(conversationId, kind, meshRoomChannel ?: context.getString(R.string.meshtastic_title), null, null)
+        }
+
+        ConversationKind.COMMONS -> {
+            ConversationTitle(
+                conversationId,
+                kind,
+                commonsName?.takeIf { it.isNotBlank() } ?: context.getString(R.string.commons_title),
+                null,
+                null,
+            )
         }
 
         ConversationKind.GROUP -> {
@@ -133,6 +146,9 @@ internal fun visibleConversations(
     directory: PeerDirectory,
     accepted: Set<String>,
     meshRoom: MeshRoomInputs,
+    // Every commons this device has joined (`CommonsRepository.observeAll`): a row each, present from the
+    // join on, like a freshly created group — the room exists before anyone has posted in it.
+    commons: List<CommonsEntity> = emptyList(),
 ): List<ConversationTitle> {
     val verified = directory.verified
     val groupIds = groups.mapTo(HashSet()) { it.groupId }
@@ -145,6 +161,7 @@ internal fun visibleConversations(
             val channel = meshRoomChannel(meshRoom.liveChannel, meshRoom.newestChannel)
             conversationTitle(context, Conversations.MESHTASTIC, null, directory, table.me, channel)
         }
+    val commonsTitles = commons.map { conversationTitle(context, it.conversationId, null, directory, table.me, null, it.name) }
     val groupTitles =
         groups
             .filter { !it.left && !table.isPending(it.groupId, accepted, verified) }
@@ -152,13 +169,12 @@ internal fun visibleConversations(
     val dms =
         table.conversations
             .filter {
-                it != Conversations.NEARBY &&
-                    it != Conversations.MESHTASTIC &&
+                Conversations.kindFor(it) == ConversationKind.DM &&
                     it !in table.blocked &&
                     it !in groupIds &&
                     !table.isPending(it, accepted, verified)
             }.map { conversationTitle(context, it, null, directory, table.me, null) }
-    return listOf(nearby) + listOfNotNull(bridged) + groupTitles + dms
+    return listOf(nearby) + listOfNotNull(bridged) + commonsTitles + groupTitles + dms
 }
 
 /**

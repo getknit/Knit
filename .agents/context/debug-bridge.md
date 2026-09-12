@@ -73,6 +73,19 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   much of `local` is the §9.6 band — blobs the spool still holds that our custody has aged out, counted
   as held on purpose (ADR 062) so `local == spool` keeps meaning converged; a scope stuck unconverged
   with a large `accounted` means the fold or the prune is broken, not the network.
+- `…debug.COMMONS` — joins, leaves and inspects the **commons** (spec §7.4, ADR 2026-09.wx8e) — the relay
+  row's Join/Leave, for a locked lab device. `--es url <spoolUrl> --es invite <knit-commons:v1:…>` joins the
+  room that relay runs (add the relay with `…debug.SPOOL --es url` first; the reply carries the `c-…`
+  conversation id), `--es leave <c-…>` leaves one, no extras dumps every joined room with its members.
+  `…debug.SEND --es conv <c-…>` posts into it (with `--es replyTo <id>` for a quote), `…debug.STATE --es conv
+  <c-…>` reads it back, and `…debug.SPOOL` shows the room's scope under the **bound relay only** plus the
+  relay's advertised `commons` block. The convergence oracle is the same `local`/`spool` pair — everything a
+  member pulls from a room is *accounted* (nothing is ever custodied), so `accounted` climbing to the room
+  size on a restart is the expected re-pull, not a leak. Two traps from the first trial: the daemon's
+  `commons-fanout` conformance check leaves a random blob in the room, which every client quarantines
+  (`invalid 1`, and the scope then never reads `converged`) — restart an in-memory daemon before a
+  convergence trial; and there is no `unsub` record, so the daemon's `knit_spool_commons_subscribers` still
+  counts a member that left until its connection drops.
 - `…debug.LORA` — configures and inspects the **LoRa (Meshtastic-over-BLE) plane** (ADR 038,
   `context/lora-bridge.md`), off by default and needing a paired board, so this is how you drive it on a
   locked lab device. `--es address <MAC>` (+ `--es name <n>`) binds a bonded board, `--ei channel <idx>`

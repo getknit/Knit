@@ -6,7 +6,11 @@ import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.crypto.scope.SpoolPow
 import app.getknit.knit.mesh.isPresenceEvidence
+import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.CommonsPost
+import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.RelayEnvelope
+import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -116,6 +120,9 @@ class SpoolStatus(
     val lastError: String?,
     val scopes: List<ScopeStatus>,
     val maxAttachBytes: Int? = null,
+    // The commons this spool advertised in its HELLO (§7.4), null while disconnected or when it runs none —
+    // what the relay row's Join reads.
+    val commons: SpoolCommonsInfo? = null,
 )
 
 /**
@@ -156,6 +163,21 @@ class ScopeSync(
     // Internet this round (§9.5). A deferral, never a veto — see [AttachmentDeferPolicy]. The default
     // never defers, which is the pre-gate behaviour every existing test asserts.
     private val deferAttachment: suspend (Scope, ScopeAttachments.Ref) -> Boolean = { _, _ -> false },
+    // The commons half (§7.4): the joined rooms' own posts and their member roster. Null switches it off —
+    // no commons scope is ever derived without it, so the frame plane is unaffected.
+    private val commons: CommonsStore? = null,
+    // Whether the mesh has pinned a key for this node id — the one question `canCarry` folds into a bare
+    // `false`. A commons post from a sender not pinned *yet* is deferred for the profile that is on its
+    // way, never quarantined as a forgery.
+    private val hasKey: suspend (String) -> Boolean = { true },
+    // The commons door: a verified post, the chat content it carries, its conversation, the source. Posts
+    // never go through [deliver] — that door relays onto the radios, and a commons post lives on its spool.
+    private val deliverCommons: suspend (RelayEnvelope, ChatContent, String, String) -> Unit = { _, _, _, _ -> },
+    // A node's frame (profile or post) was pulled from a commons: (conversationId, nodeId).
+    private val onCommonsMember: suspend (String, String) -> Unit = { _, _ -> },
+    // A commons refused our own profile as tombstoned — count-evicted inside the republish window — so a
+    // fresh stamp is owed now rather than at the 12 h mark.
+    private val onOwnProfileTombstoned: suspend () -> Unit = {},
     private val metrics: MeshMetrics = MeshMetrics(),
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val jitter: () -> Long = { Random.nextLong(RECONNECT_JITTER_MS) },
@@ -208,6 +230,14 @@ class ScopeSync(
         return workers.values.map { it.status(current) }
     }
 
+    /**
+     * The scope table's inputs changed under us (a commons joined or left): re-derive it now instead of at
+     * the next 15 s tick, so a freshly pasted invite is subscribed while the user is still looking at it.
+     */
+    fun onScopeTableChanged() {
+        session?.launch { reconcile() }
+    }
+
     /** Starts a worker per configured URL, stops the ones that fell out of the config, refreshes scopes. */
     private suspend fun reconcile() {
         val host = session ?: return
@@ -218,8 +248,10 @@ class ScopeSync(
             return
         }
         scopes = registry.scopes(clock())
+        val live = scopes.mapTo(HashSet()) { it.idHex }
         wanted.forEach { url ->
             val worker = workers.computeIfAbsent(url) { Worker(it) }
+            worker.forgetScopesNotIn(live)
             worker.ensureRunning(host)
             worker.wake() // a scope may have appeared since this worker last subscribed
         }
@@ -232,8 +264,14 @@ class ScopeSync(
     ): Map<String, Held> {
         val me = selfId()
         return frames
-            .filter { ScopeFrames.eligibleFor(it.envelope, me, scope) }
-            .associate { carried ->
+            .filter { carried ->
+                // The one asymmetric rule (§7.4): a commons takes anyone's profile in, but only our own out.
+                if (scope.commonsId != null) {
+                    ScopeFrames.pushableToCommons(carried.envelope, me, scope.id)
+                } else {
+                    ScopeFrames.eligibleFor(carried.envelope, me, scope)
+                }
+            }.associate { carried ->
                 val sealed = sealCache.get(scope, carried)
                 hex(sealed.blobId) to Held(sealed, carried)
             }
@@ -249,7 +287,7 @@ class ScopeSync(
      * One spool: its connection, its per-scope digest anchors, and its own invalid set — §9.3 is
      * explicitly per-spool, so a garbage blob at one spool cannot poison the others.
      */
-    @Suppress("TooManyFunctions") // one small method per protocol step; collapsing them would hide the §9 loop
+    @Suppress("TooManyFunctions", "LargeClass") // one small method per protocol step; the §7.4 door sits beside the §9.4 one on purpose
     private inner class Worker(
         val url: String,
     ) {
@@ -266,6 +304,23 @@ class ScopeSync(
         private val accounted = ConcurrentHashMap<String, LinkedHashMap<String, Long>>()
         private val stamps = ConcurrentHashMap<String, PowStamp>()
         private val invalidAttachments = ConcurrentHashMap<String, LinkedHashSet<String>>()
+
+        // A commons' bounds as the spool pinned them in its DIGEST (§7.4) — the truth this worker sizes
+        // events and dead-on-arrival against, since what the scope table declared was only a guess.
+        private val pinnedBounds = ConcurrentHashMap<String, ScopeBounds>()
+
+        // Commons posts held back because their author is not pinned yet, per scope: blob id hex → how many
+        // rounds it has waited. Bounded like the other sets; a post whose profile never comes is quarantined
+        // after MAX_PARK_ROUNDS rather than re-pulled forever.
+        private val parked = ConcurrentHashMap<String, LinkedHashMap<String, Int>>()
+
+        // Own-profile blobs a commons has tombstoned that we have already asked for a re-stamp over.
+        private val reportedTombstones = ConcurrentHashMap<String, LinkedHashSet<String>>()
+
+        // Ids a commons has tombstoned that we still hold — evicted by the room's own count rule while our
+        // custody or outbox keeps the frame for its own TTL. Left in the local fold they would keep the
+        // room unconverged (and every round listing) until we happened to drop them; a tombstone is final.
+        private val tombstonesSeen = ConcurrentHashMap<String, LinkedHashSet<String>>()
 
         // scopeHex → when this scope's own peer last put something recent into it (see [notePeerPresence]).
         // The ONLY thing on this plane that says anything about the peer rather than about the spool, and the
@@ -310,6 +365,27 @@ class ScopeSync(
             wakeup.trySend(Unit)
         }
 
+        /**
+         * Drops every per-scope set for a scope that left the table — a commons left, a retiring DM scope
+         * past its drain window. The sets are keyed by scope and otherwise never pruned, and for a commons
+         * the accounted set is load-bearing the other way: a room left and rejoined on the same connection
+         * would otherwise never re-pull what it had already accounted, and its history would stay gone. The
+         * spool's own subscription outlives this (there is no `unsub` record); [mine] keeps its events out.
+         */
+        fun forgetScopesNotIn(live: Set<String>) {
+            for (map in listOf(spoolDigests, spoolCounts, localDigests, localCounts, peerSeenAt, stamps, pinnedBounds)) {
+                map.keys.retainAll(live)
+            }
+            for (sets in listOf(invalid, accepted, invalidAttachments, reportedTombstones, tombstonesSeen)) {
+                synchronized(sets) { sets.keys.retainAll(live) }
+            }
+            synchronized(accounted) { accounted.keys.retainAll(live) }
+            synchronized(parked) { parked.keys.retainAll(live) }
+            // And the connection's own record, or a scope that comes back is never SUBbed again and its heal
+            // round waits forever for a digest that was already answered before it left.
+            connection?.retainSubscriptions(live)
+        }
+
         fun status(all: List<Scope>): SpoolStatus =
             SpoolStatus(
                 url = url,
@@ -319,8 +395,9 @@ class ScopeSync(
                 // Gated on the whole capability, not the single field: §7.3's three limits arrive
                 // together or not at all, and a partial set means we must send no attachment record.
                 maxAttachBytes = connection?.limits?.takeIf { it.attachments }?.maxAttachBytes,
+                commons = connection?.commons,
                 scopes =
-                    all.map { scope ->
+                    mine(all, connection).map { scope ->
                         ScopeStatus(
                             scopeHex = scope.idHex,
                             label = scope.label,
@@ -367,7 +444,7 @@ class ScopeSync(
             val ready = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { conn.awaitReady() } == true
             if (ready) {
                 lastError = null
-                subscribe(conn, scopes)
+                subscribe(conn, mine(scopes, conn))
                 while (pump.isActive && currentCoroutineContext().isActive) {
                     withTimeoutOrNull(TICK_INTERVAL_MS) { wakeup.receive() }
                     healAll(conn)
@@ -382,6 +459,7 @@ class ScopeSync(
             socket.close(NORMAL_CLOSE, "done")
             connection = null
             spoolDigests.clear()
+            pinnedBounds.clear()
             // The per-connection race guard goes; the §9.6 accounted set deliberately does NOT. Dropping
             // `accepted` is what lets a custody wipe re-converge by the ordinary route (everything still
             // live is simply re-pulled); dropping `accounted` only re-pulls what can never be held, which
@@ -404,11 +482,45 @@ class ScopeSync(
             wanted: List<Scope>,
         ) {
             if (wanted.isEmpty()) return
-            conn.sub(wanted.map { ScopeSub(scope = it.id, bounds = it.bounds, pow = stampFor(it, conn.powBits)) })
+            conn.sub(wanted.map { ScopeSub(scope = it.id, bounds = declaredBounds(it, conn), pow = stampFor(it, conn.powBits)) })
         }
 
+        /**
+         * The scopes this worker carries: every scope, minus a commons bound to another relay, minus a
+         * commons at a spool that advertised none — a SUB for it there would read as an unknown scope and
+         * meet the §6.4 creation gates (PoW, the new-scope bucket) for a room that does not exist.
+         */
+        private fun mine(
+            all: List<Scope>,
+            conn: SpoolConnection?,
+        ): List<Scope> = all.filter { it.belongsAt(url) && (it.commonsId == null || conn?.commons != null) }
+
+        /**
+         * What we declare at SUB. For a commons the spool ignores the declaration and pins its own (§7.4),
+         * so we declare exactly what its HELLO advertised — then [SpoolConnection.inboundCap] and the pinned
+         * truth agree and no honest event is dropped as oversize.
+         */
+        private fun declaredBounds(
+            scope: Scope,
+            conn: SpoolConnection,
+        ): ScopeBounds {
+            if (scope.commonsId == null) return scope.bounds
+            val advertised = conn.commons ?: return scope.bounds
+            return ScopeBounds(maxFrames = advertised.maxFrames, ttlMs = advertised.ttlMs, maxBlob = advertised.maxBlob)
+        }
+
+        /** The bounds to size against: the spool's pinned truth for a commons once a DIGEST has said, else what we declared. */
+        private fun boundsFor(scope: Scope): ScopeBounds =
+            if (scope.commonsId !=
+                null
+            ) {
+                pinnedBounds[scope.idHex] ?: scope.bounds
+            } else {
+                scope.bounds
+            }
+
         private suspend fun healAll(conn: SpoolConnection) {
-            val current = scopes
+            val current = mine(scopes, conn)
             // Sub-before-use is per connection, and the scope table changes as sessions are established.
             subscribe(conn, current.filterNot { conn.isSubscribed(it.idHex) })
             current.forEach { heal(conn, it) }
@@ -422,8 +534,9 @@ class ScopeSync(
             // One custody read serves both halves of the round: the frames, and the attachments they
             // reference. Attachments are healed even when the frame digests already agree — they are
             // outside the digest by design (§6.5), so it can never signal them.
-            val frames = store.liveFrames(clock())
-            val local = held(scope, frames)
+            val frames = if (scope.commonsId != null) commonsFrames(scope.commonsId) else store.liveFrames(clock())
+            val dead = if (scope.commonsId != null) tombstonesSeen[scope.idHex].orEmpty() else emptySet()
+            val local = held(scope, frames).filterKeys { it !in dead }
             // §9.6: fold the accounted band in beside what we hold, so a scope whose spool keeps blobs our
             // custody has aged out can still reach digest equality. Never both — an id that came back into
             // custody would otherwise XOR itself out of the fold and diverge us permanently.
@@ -435,13 +548,17 @@ class ScopeSync(
             localCounts[scope.idHex] = local.size + accountedHere.size
             val anchor = spoolDigests[scope.idHex] ?: return // the SUB hasn't been answered yet
             if (anchor == localFold) {
-                healAttachments(conn, scope, frames)
+                if (scope.commonsId == null) healAttachments(conn, scope, frames)
                 return
             }
             val listing = conn.list(scope.id) ?: return
             val quarantined = invalid[scope.idHex].orEmpty()
             val spoolIds = listing.blobIds.associateBy { hex(it) }
             val tombstoned = listing.tombstones.mapTo(mutableSetOf()) { hex(it) }
+            if (scope.commonsId != null) {
+                local.keys.filter { it in tombstoned }.forEach { remember(tombstonesSeen, scope.idHex, it) }
+                noteOwnProfileTombstones(scope, local, tombstoned)
+            }
             // The listing is the scope's whole live set, so it is also the only chance to notice that an
             // accounted blob finally expired at the spool. Drop those: keeping them would leave our fold
             // carrying an id the spool no longer counts — the same permanent divergence, mirrored.
@@ -460,7 +577,38 @@ class ScopeSync(
             val gone = pullMissing(conn, scope, wanted)
             val pushed = pushMissing(conn, scope, local, spoolIds.keys, tombstoned, quarantined)
             reanchor(scope, spoolIds, gone, pushed)
-            healAttachments(conn, scope, frames)
+            // Text only in this revision: a commons never exchanges attachment records, whatever its HELLO says.
+            if (scope.commonsId == null) healAttachments(conn, scope, frames)
+        }
+
+        /**
+         * Our profile was count-evicted from a busy commons (§7.4): its tombstone outlives the 12 h republish,
+         * so the same bytes are refused for a day and a fresh stamp is owed now. Reported once per blob — the
+         * old frame stays in custody (and so in `local`) until its own TTL, and every round would otherwise
+         * ask for another stamp.
+         */
+        private suspend fun noteOwnProfileTombstones(
+            scope: Scope,
+            local: Map<String, Held>,
+            tombstoned: Set<String>,
+        ) {
+            val fresh =
+                local
+                    .filter { (id, held) -> id in tombstoned && held.carried.envelope.type == FrameType.PROFILE }
+                    .keys
+                    .filter { remember(reportedTombstones, scope.idHex, it) }
+            if (fresh.isNotEmpty()) onOwnProfileTombstoned()
+        }
+
+        /**
+         * What this device pushes into a commons (§7.4): its own custodied profile — the frame that pins us
+         * for every other member, kept live by the 12 h republish — and its own posts from the outbox. Never
+         * custody at large: the room is not a mirror of everything this device carries.
+         */
+        private suspend fun commonsFrames(conversationId: String): List<CarriedFrame> {
+            val me = selfId()
+            val ownProfile = store.liveFrames(clock()).filter { it.envelope.type == FrameType.PROFILE && it.envelope.senderId == me }
+            return ownProfile + commons?.frames(conversationId).orEmpty()
         }
 
         /** Pulls the ids we lack, in `maxPull` batches (an overshoot is silently truncated, never an error). */
@@ -472,15 +620,20 @@ class ScopeSync(
             val gone = mutableSetOf<String>()
             if (ids.isEmpty()) return gone
             val cap = (conn.limits?.maxPull ?: DEFAULT_MAX_PULL).coerceAtLeast(1)
+            // A commons post pulled ahead of its author's profile in the same listing (the listing is
+            // unordered) is held for one more try at the end of the round, once the profile has had its
+            // chance to land — the common case for a backlog pull into a room someone else has been using.
+            val deferred = mutableListOf<SpoolBlob>()
             ids.chunked(cap).forEach { batch ->
                 val outcome = conn.pull(scope.id, batch) ?: return gone
-                outcome.blobs.forEach { blob -> accept(scope, blob.blobId, blob.data) }
+                outcome.blobs.forEach { blob -> if (accept(scope, blob.blobId, blob.data) == Accept.PARKED) deferred.add(blob) }
                 outcome.missing.forEach { gone.add(hex(it)) }
                 // An id we asked for and got an unusable answer for is quarantined, not merely dropped
                 // (§9.3) — and deliberately not added to `gone`, since the spool still holds it and
                 // `reanchor` must keep folding it into the digest we compare against.
                 outcome.oversize.forEach { quarantine(scope, hex(it)) }
             }
+            deferred.forEach { blob -> accept(scope, blob.blobId, blob.data, retry = true) }
             return gone
         }
 
@@ -524,12 +677,13 @@ class ScopeSync(
         ): List<Held> {
             // The tighter of the two, not the spool's: pushing past the bound we declared at SUB is wrong
             // whatever the spool says it would accept.
-            val maxBlob = minOf(conn.limits?.maxBlob ?: Int.MAX_VALUE, scope.bounds.maxBlob)
+            val bounds = boundsFor(scope)
+            val maxBlob = minOf(conn.limits?.maxBlob ?: Int.MAX_VALUE, bounds.maxBlob)
             val now = clock()
             return local
                 .filterKeys { it !in spoolIds && it !in tombstoned && it !in quarantined }
                 .values
-                .filterNot { ScopeFrames.deadOnArrival(it.carried.envelope, scope.bounds.ttlMs, now) }
+                .filterNot { ScopeFrames.deadOnArrival(it.carried.envelope, bounds.ttlMs, now) }
                 .filter { it.sealed.blob.size <= maxBlob }
         }
 
@@ -790,9 +944,11 @@ class ScopeSync(
             val scopeHex = hex(digest.scope)
             // Anchors are keyed by scope with no other bound, so a spool naming scopes we do not carry
             // would grow these maps without limit. We only ever asked about our own.
-            if (scopes.none { it.idHex == scopeHex }) return
+            val scope = scopes.firstOrNull { it.idHex == scopeHex } ?: return
             spoolDigests[scopeHex] = ScopeCrypto.digestValue(digest.digest)
             spoolCounts[scopeHex] = digest.count
+            // A commons SUB is answered with the bounds the spool pinned, not the ones we declared (§7.4).
+            if (scope.commonsId != null) pinnedBounds[scopeHex] = digest.bounds
             wake()
         }
 
@@ -803,9 +959,9 @@ class ScopeSync(
          * `accept` writes — evicting genuine entries and re-opening the §9.3 re-pull loop.
          */
         private suspend fun handleEvent(event: SpoolEvent) {
-            val scope = scopes.firstOrNull { it.idHex == hex(event.scope) } ?: return
-            if (event.data.size > scope.bounds.maxBlob) return
-            if (accept(scope, event.blobId, event.data)) wake()
+            val scope = mine(scopes, connection).firstOrNull { it.idHex == hex(event.scope) } ?: return
+            if (event.data.size > boundsFor(scope).maxBlob) return
+            if (accept(scope, event.blobId, event.data) == Accept.DELIVERED) wake()
         }
 
         private fun handleScopeError(
@@ -833,25 +989,100 @@ class ScopeSync(
             scope: Scope,
             blobId: ByteArray,
             data: ByteArray,
-        ): Boolean {
+            // The end-of-round second look at a parked post: it does not count against the park budget.
+            retry: Boolean = false,
+        ): Accept {
             val idHex = hex(blobId)
-            if (!remember(accepted, scope.idHex, idHex)) return false
+            if (!remember(accepted, scope.idHex, idHex)) return Accept.SKIPPED
             val opened = ScopeFrames.open(scope, selfId(), blobId, data)
-            if (opened == null || !canCarry(opened.wire, opened.env)) {
+            if (opened == null) {
                 quarantine(scope, idHex)
-                return false
+                return Accept.SKIPPED
+            }
+            if (scope.commonsId != null && opened.env.type == FrameType.COMMONS) {
+                return acceptCommonsPost(scope, scope.commonsId, idHex, blobId, opened, countPark = !retry)
+            }
+            if (!canCarry(opened.wire, opened.env)) {
+                quarantine(scope, idHex)
+                return Accept.SKIPPED
             }
             metrics.onSpoolPulled()
             deliver(opened.wire, opened.env, SPOOL_SOURCE_PREFIX + url)
             metrics.onSpoolBridged()
             notePeerPresence(scope, opened.env)
+            if (scope.commonsId != null) {
+                // A member's profile (the only other frame a commons carries). Custody keeps it — it is a
+                // profile — so the store-asks rule below would never account it, and our own push set holds
+                // only our own; without this the room's digest could never match ours.
+                onCommonsMember(scope.commonsId, opened.env.senderId)
+                if (account(scope.idHex, idHex, blobId)) metrics.onSpoolAccounted()
+                return Accept.DELIVERED
+            }
             // §9.6. Delivery is done and it was worth doing — but if custody did not keep the frame, no
             // future round can ever fold this blob into `local`, so re-pulling it can only repeat this
             // work. Asking the store rather than re-deriving the rule is deliberate: "will custody hold
             // it" is the store's own dead-on-arrival + quota decision (`ForwardRepository.store`), and a
             // second copy of a convergence-critical TTL rule here is exactly how the two drift apart.
             if (!store.has(opened.env.id) && account(scope.idHex, idHex, blobId)) metrics.onSpoolAccounted()
-            return true
+            return Accept.DELIVERED
+        }
+
+        /**
+         * The commons door (§7.4). A post is authenticated by exactly the carry gate every frame meets —
+         * pinned key, not blocked, signature byte-exact — but delivered through [deliverCommons], never
+         * [deliver]: the router's door relays onto the radios and custodies, and a commons post does
+         * neither. The one thing the gate cannot say is *why* it refused, so a sender we have not pinned
+         * yet is asked about first and the post parked for the profile that is on its way — every member
+         * keeps one live in the room — rather than quarantined for the life of the connection.
+         */
+        private suspend fun acceptCommonsPost(
+            scope: Scope,
+            conversationId: String,
+            idHex: String,
+            blobId: ByteArray,
+            opened: ScopeFrames.Opened,
+            countPark: Boolean,
+        ): Accept {
+            val sender = opened.env.senderId
+            if (!hasKey(sender)) {
+                forget(accepted, scope.idHex, idHex)
+                if (!countPark || park(scope.idHex, idHex)) return Accept.PARKED
+                quarantine(scope, idHex)
+                return Accept.SKIPPED
+            }
+            val post = WireCodec.decodePayload<CommonsPost>(opened.env.payload)
+            if (post == null || !canCarry(opened.wire, opened.env)) {
+                quarantine(scope, idHex)
+                return Accept.SKIPPED
+            }
+            unpark(scope.idHex, idHex)
+            metrics.onSpoolPulled()
+            deliverCommons(opened.env, post.chat, conversationId, SPOOL_SOURCE_PREFIX + url)
+            metrics.onSpoolBridged()
+            onCommonsMember(conversationId, sender)
+            // Never custodied, so never in `local`: accounted unconditionally, or the room never converges.
+            if (account(scope.idHex, idHex, blobId)) metrics.onSpoolAccounted()
+            return Accept.DELIVERED
+        }
+
+        /** Counts a park for [blobIdHex]; false once it has waited [MAX_PARK_ROUNDS] tries and should be given up on. */
+        private fun park(
+            scopeHex: String,
+            blobIdHex: String,
+        ): Boolean =
+            synchronized(parked) {
+                val waiting = parked.getOrPut(scopeHex) { LinkedHashMap() }
+                while (waiting.size >= BLOB_SET_MAX) waiting.remove(waiting.keys.first())
+                val tries = (waiting[blobIdHex] ?: 0) + 1
+                waiting[blobIdHex] = tries
+                tries <= MAX_PARK_ROUNDS
+            }
+
+        private fun unpark(
+            scopeHex: String,
+            blobIdHex: String,
+        ) {
+            synchronized(parked) { parked[scopeHex]?.remove(blobIdHex) }
         }
 
         /**
@@ -899,6 +1130,15 @@ class ScopeSync(
                 set.add(blobIdHex)
             }
 
+        /** Undoes [remember] for a blob that was claimed and then parked, so the next round may claim it again. */
+        private fun forget(
+            sets: ConcurrentHashMap<String, LinkedHashSet<String>>,
+            scopeHex: String,
+            blobIdHex: String,
+        ) {
+            synchronized(sets) { sets[scopeHex]?.remove(blobIdHex) }
+        }
+
         /**
          * Records [blobIdHex] as accounted for [scopeHex] (§9.6): folded into our local digest as if held,
          * and never pulled again. Bounded and oldest-first-evicting like [remember] — the bound is above a
@@ -912,9 +1152,16 @@ class ScopeSync(
         ): Boolean =
             synchronized(accounted) {
                 val fold = accounted.getOrPut(scopeHex) { LinkedHashMap() }
-                while (fold.size >= BLOB_SET_MAX) fold.remove(fold.keys.first())
+                while (fold.size >= accountBound(scopeHex)) fold.remove(fold.keys.first())
                 fold.put(blobIdHex, ScopeCrypto.fnv64(blobId)) == null
             }
+
+        /**
+         * The accounted set's ceiling. Every blob in a commons is accounted (none is ever held), so its
+         * bound must clear the room's pinned `maxFrames` with headroom, or a full room churns the set and
+         * re-pulls posts it already has; every other scope keeps the §12 suggestion.
+         */
+        private fun accountBound(scopeHex: String): Int = maxOf(BLOB_SET_MAX, (pinnedBounds[scopeHex]?.maxFrames ?: 0) + ACCOUNT_HEADROOM)
 
         /** A snapshot of [scopeHex]'s accounted set — copied under the lock, since `accept` runs off the pump. */
         private fun accountedFor(scopeHex: String): Map<String, Long> = synchronized(accounted) { accounted[scopeHex]?.toMap().orEmpty() }
@@ -932,7 +1179,9 @@ class ScopeSync(
             scope: Scope,
             bits: Int,
         ): PowStamp? {
-            if (bits <= 0) return null
+            // A commons exists from the spool's boot, so it is never an unknown scope and never gated (§7.4):
+            // mining for it would spend a phone's battery on a stamp the spool ignores.
+            if (bits <= 0 || scope.commonsId != null) return null
             val day = SpoolPow.utcDay(clock())
             stamps[scope.idHex]?.let { if (it.d == day) return it }
             val n = SpoolPow.stamp(scope.id, day, bits, POW_BUDGET) ?: return null
@@ -955,6 +1204,18 @@ class ScopeSync(
         ): ScopeFrames.Sealed = getOrPut("${scope.idHex}|${carried.envelope.id}") { ScopeFrames.seal(scope, carried.sig, carried.signed) }
 
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ScopeFrames.Sealed>?): Boolean = size > max
+    }
+
+    /** What [Worker.accept] did with a blob. */
+    private enum class Accept {
+        /** Opened, authenticated and handed to a door. */
+        DELIVERED,
+
+        /** Already seen, quarantined, or refused — nothing more to do with it on this connection. */
+        SKIPPED,
+
+        /** A commons post whose author is not pinned yet: left unclaimed for a later try. */
+        PARKED,
     }
 
     companion object {
@@ -994,6 +1255,12 @@ class ScopeSync(
         /** Used when a frame names an attachment but no mime; Coil sniffs the real format anyway. */
         private const val FALLBACK_MIME = "image/jpeg"
         private const val BLOB_SET_MAX = 512
+
+        /** How many rounds a commons post waits for its author's profile before it is written off (§7.4). */
+        private const val MAX_PARK_ROUNDS = 8
+
+        /** Above a commons' pinned `maxFrames`, so a full room fits in the accounted set with room to spare. */
+        private const val ACCOUNT_HEADROOM = 64
         private const val SEAL_CACHE_MAX = 2_048
         private const val INITIAL_CACHE_CAPACITY = 64
         private const val LOAD_FACTOR = 0.75f

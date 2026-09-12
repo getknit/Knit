@@ -84,6 +84,9 @@ fun InternetRelayScreen(
         onRemoveRelay = viewModel::removeRelay,
         onSetRelayEnabled = viewModel::setRelayEnabled,
         isValidUrl = viewModel::isValidUrl,
+        onJoinCommons = viewModel::joinCommons,
+        onLeaveCommons = viewModel::leaveCommons,
+        isValidInvite = viewModel::isValidInvite,
     )
 }
 
@@ -100,9 +103,14 @@ internal fun InternetRelayScreenContent(
     onRemoveRelay: (String) -> Unit = {},
     onSetRelayEnabled: (String, Boolean) -> Unit = { _, _ -> },
     isValidUrl: (String) -> Boolean = { it.startsWith("wss://") },
+    onJoinCommons: (String, String) -> Unit = { _, _ -> },
+    onLeaveCommons: (String) -> Unit = {},
+    isValidInvite: (String) -> Boolean = { it.startsWith("knit-commons:v1:") },
 ) {
     var addDialogOpen by remember { mutableStateOf(false) }
     var pendingRemoval by remember { mutableStateOf<RelayRow?>(null) }
+    var joining by remember { mutableStateOf<RelayRow?>(null) }
+    var leaving by remember { mutableStateOf<RelayRow?>(null) }
 
     Scaffold(
         modifier = Modifier.testTag("screen_internet_relays"),
@@ -157,6 +165,8 @@ internal fun InternetRelayScreenContent(
                         planeEnabled = state.enabled,
                         onSetEnabled = { onSetRelayEnabled(relay.url, it) },
                         onRemove = { pendingRemoval = relay },
+                        onJoinCommons = { joining = relay },
+                        onLeaveCommons = { leaving = relay },
                     )
                 }
             }
@@ -181,6 +191,43 @@ internal fun InternetRelayScreenContent(
                 addDialogOpen = false
             },
             onDismiss = { addDialogOpen = false },
+        )
+    }
+
+    joining?.let { relay ->
+        JoinCommonsDialog(
+            relay = relay,
+            isValidInvite = isValidInvite,
+            onJoin = {
+                onJoinCommons(relay.url, it)
+                joining = null
+            },
+            onDismiss = { joining = null },
+        )
+    }
+
+    leaving?.let { relay ->
+        val joinedId = relay.commons?.joinedId
+        AlertDialog(
+            onDismissRequest = { leaving = null },
+            title = { Text(stringResource(R.string.relays_commons_leave)) },
+            text = { Text(stringResource(R.string.relays_commons_leave_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (joinedId != null) onLeaveCommons(joinedId)
+                        leaving = null
+                    },
+                    modifier = Modifier.testTag("relay_commons_leave_confirm"),
+                ) {
+                    Text(stringResource(R.string.relays_commons_leave))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { leaving = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
         )
     }
 
@@ -265,6 +312,47 @@ private fun MasterSwitchRow(
  */
 @Composable
 private fun RelayListRow(
+    relay: RelayRow,
+    planeEnabled: Boolean,
+    onSetEnabled: (Boolean) -> Unit,
+    onRemove: () -> Unit,
+    onJoinCommons: () -> Unit = {},
+    onLeaveCommons: () -> Unit = {},
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        RelayHeadRow(relay, planeEnabled, onSetEnabled, onRemove)
+        // The relay's commons (§7.4), once its HELLO has advertised one: the room's name and one verb —
+        // Join while this device is outside it, Leave once inside. Below the head row rather than in it, so
+        // the switch and the delete button stay the two controls a screen reader already knows there.
+        relay.commons?.let { room ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 22.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.relays_commons_label, room.name ?: stringResource(R.string.commons_title)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (room.joinedId == null) {
+                    TextButton(onClick = onJoinCommons, modifier = Modifier.testTag("relay_commons_join_${relay.host}")) {
+                        Text(stringResource(R.string.relays_commons_join))
+                    }
+                } else {
+                    TextButton(onClick = onLeaveCommons, modifier = Modifier.testTag("relay_commons_leave_${relay.host}")) {
+                        Text(stringResource(R.string.relays_commons_leave))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RelayHeadRow(
     relay: RelayRow,
     planeEnabled: Boolean,
     onSetEnabled: (Boolean) -> Unit,
@@ -454,6 +542,63 @@ private fun AddRelayDialog(
                 enabled = trimmed.isNotEmpty() && !malformed && !duplicate,
             ) {
                 Text(stringResource(R.string.relays_add))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+/**
+ * Pasting a commons invite for one relay. The invite is the room's whole key, so the field validates the
+ * exact grammar the daemon mints (`CommonsInvite`) and never lets a near-miss through: a typo would be a
+ * subscription to a room nobody else is in. The copy says the one thing worth knowing before joining —
+ * everyone in the room becomes a contact.
+ */
+@Composable
+private fun JoinCommonsDialog(
+    relay: RelayRow,
+    isValidInvite: (String) -> Boolean,
+    onJoin: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var invite by remember { mutableStateOf("") }
+    val trimmed = invite.trim()
+    val malformed = trimmed.isNotEmpty() && !isValidInvite(trimmed)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.relays_commons_join_title, relay.commons?.name ?: stringResource(R.string.commons_title))) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = stringResource(R.string.relays_commons_join_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = invite,
+                    onValueChange = { invite = it },
+                    singleLine = true,
+                    isError = malformed,
+                    label = { Text(stringResource(R.string.relays_commons_invite_label)) },
+                    supportingText = {
+                        if (malformed) {
+                            Text(stringResource(R.string.relays_commons_invite_invalid))
+                        } else {
+                            Text(stringResource(R.string.relays_commons_invite_hint))
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("relay_commons_invite_field").noAutofillMenu(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onJoin(trimmed) },
+                enabled = trimmed.isNotEmpty() && !malformed,
+                modifier = Modifier.testTag("relay_commons_join_confirm"),
+            ) {
+                Text(stringResource(R.string.relays_commons_join))
             }
         },
         dismissButton = {

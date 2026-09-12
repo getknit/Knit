@@ -19,14 +19,16 @@ class FrameTypeTest {
     @Test
     fun `isReplayable is exactly the locally-delivered family`() {
         replayable.forEach { assertTrue(it, FrameType.isReplayable(it)) }
-        listOf(FrameType.PROFILE, FrameType.BLOB_REQ, FrameType.KEY_REQ, FrameType.TYPING)
+        listOf(FrameType.PROFILE, FrameType.BLOB_REQ, FrameType.KEY_REQ, FrameType.TYPING, FrameType.COMMONS)
             .forEach { assertFalse(it, FrameType.isReplayable(it)) }
     }
 
     @Test
     fun `isCustodial is the replayable family plus profile`() {
         (replayable + FrameType.PROFILE).forEach { assertTrue(it, FrameType.isCustodial(it)) }
-        listOf(FrameType.BLOB_REQ, FrameType.KEY_REQ, FrameType.TYPING)
+        // COMMONS is the one type added since the v1 baseline, and it is added as non-custodial on purpose:
+        // a commons post lives on its spool, so custody never folds it and the fixed list stays fixed.
+        listOf(FrameType.BLOB_REQ, FrameType.KEY_REQ, FrameType.TYPING, FrameType.COMMONS)
             .forEach { assertFalse(it, FrameType.isCustodial(it)) }
     }
 
@@ -41,6 +43,7 @@ class FrameTypeTest {
         assertTrue(envelope(FrameType.CHAT).isStorable())
         assertTrue(envelope(FrameType.PROFILE).isStorable())
         assertFalse(envelope(FrameType.TYPING).isStorable())
+        assertFalse(envelope(FrameType.COMMONS).isStorable())
         assertFalse(envelope("something-new").isStorable())
     }
 

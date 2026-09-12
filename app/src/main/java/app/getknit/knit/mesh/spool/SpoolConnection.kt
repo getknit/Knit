@@ -172,6 +172,15 @@ class SpoolConnection(
     var powBits: Int = 0
         private set
 
+    /**
+     * The commons this spool runs (§7.4), or null when it runs none — read after [awaitReady]. The bounds
+     * are what the spool will pin regardless of what a SUB declares, clamped to our own ceilings like
+     * [limits]; a spool cannot talk us into a bigger inbound record by advertising one on the room.
+     */
+    @Volatile
+    var commons: SpoolCommonsInfo? = null
+        private set
+
     @Volatile
     private var negotiated = false
 
@@ -182,6 +191,15 @@ class SpoolConnection(
     suspend fun awaitReady(): Boolean = handshake.await()
 
     fun isSubscribed(scopeHex: String): Boolean = scopeHex in subscriptions.keys
+
+    /**
+     * Forgets every subscription not in [live], so a scope that left the table and comes back is SUBbed
+     * again and answered with a fresh `digest`. The spool keeps its side of the subscription (there is no
+     * `unsub` record) and a repeat SUB is an ordinary re-declaration (S-6.2-2); only this record moves.
+     */
+    fun retainSubscriptions(live: Set<String>) {
+        subscriptions.keys.retainAll(live)
+    }
 
     /**
      * Subscribes [subs] and declares their bounds. Deliberately **not** awaited: the spool answers with
@@ -342,6 +360,7 @@ class SpoolConnection(
             return
         }
         limits = hello.limits?.clamped()
+        commons = hello.commons?.clamped(limits)
         // A difficulty beyond what a phone will attempt is refused outright rather than mined for: the
         // work is spent per scope on every round that re-subscribes, so believing an absurd one is a
         // remote battery denial that costs the spool a single integer.
@@ -477,6 +496,7 @@ class SpoolConnection(
          * Only the upper end matters. A spool that declares an unusably *small* cap needs no defense: our
          * own hello reply then fails [send], the handshake completes false, and the worker backs off.
          */
+
         fun SpoolLimits.clamped() =
             SpoolLimits(
                 maxBlob = maxBlob.coerceAtMost(MAX_INBOUND_RECORD),
@@ -490,6 +510,16 @@ class SpoolConnection(
                 maxAttachBytes = maxAttachBytes?.coerceAtMost(MAX_ATTACH_BYTES_CEILING),
                 maxAChunk = maxAChunk?.coerceAtMost(ScopeCrypto.SEALED_CHUNK_BYTES),
                 maxAget = maxAget?.coerceIn(1, ScopeAttachments.MAX_CHUNKS),
+            )
+
+        /** The room's pinned bounds (§7.4), held to the same ceilings as the spool-wide caps they sit under. */
+        fun SpoolCommonsInfo.clamped(limits: SpoolLimits?) =
+            SpoolCommonsInfo(
+                name = name?.takeIf { it.isNotBlank() },
+                maxFrames = maxFrames.coerceAtLeast(1),
+                ttlMs = ttlMs.coerceAtLeast(1L),
+                maxBlob = maxBlob.coerceIn(1, limits?.maxBlob ?: MAX_INBOUND_RECORD),
+                attach = attach,
             )
     }
 }

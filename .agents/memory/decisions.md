@@ -134,6 +134,7 @@ carries; never renumber an old one.
 | [2026-09.wnh6](decisions/2026-09-wnh6-search-is-one-screen-over-the-chat-list-s-own-universe.md) | Search is one screen over the chat list's own universe, and a hit opens the thread on one message | ui, search, navigation |
 | [2026-09.wtmz](decisions/2026-09-wtmz-a-large-file-goes-off-the-mesh.md) | A large file goes off the mesh, over a Wi-Fi group the two phones raise | transfer, mesh, wifi |
 | [2026-09.wuqj](decisions/2026-09-wuqj-an-alias-is-a-word-encoded-digest-prefix-that-grows-when-matched.md) | An alias is a word-encoded digest prefix that grows when matched | identity, ui, security |
+| [2026-09.wx8e](decisions/2026-09-wx8e-the-commons-is-a-private-spool-s-group-chat.md) | The commons is a private spool's group chat | spool, commons |
 | [2026-09.x52a](decisions/2026-09-x52a-the-meshtastic-room-is-a-switch.md) | The Meshtastic room is a switch, and off means unread | lora, ui, settings |
 | [2026-09.xdm2](decisions/2026-09-xdm2-a-queued-snapshot-is-replaced-by-its-own-newer-copy.md) | A queued snapshot is replaced by its own newer copy | lora, airtime, mesh |
 | [2026-09.y8pu](decisions/2026-09-y8pu-a-lora-fan-out-nobody-heard-does-not-suppress-its-own-backfill.md) | A LoRa fan-out nobody heard does not suppress its own backfill | lora, custody, reliability |

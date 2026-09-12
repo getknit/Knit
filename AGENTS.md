@@ -101,6 +101,12 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);
   decision record ADR 042. The card is versioned by `v` and additive under the WIRE_COMPAT rules; import
   never sets `verified`.
+- **When touching `data/commons/`, `mesh/spool/Commons*`, `ConversationKind.COMMONS`, or the relay row's
+  Join/Leave:** READ ADR 2026-09.wx8e and `docs/SPOOL_PROTOCOL.md` §7.4. The commons is a private relay's
+  group chat: members' `profile` frames pin them through the ordinary door and make them accepted contacts,
+  posts are a non-custodial `commons` frame that lives on the one spool that runs the room and never touches
+  the radios (`ScopeSync`'s second door, `InboundPipeline.deliverCommonsPost`), and a post ahead of its
+  author's profile is parked, never quarantined. `Conversations.isPublicRoom` is true for it on purpose.
 - **When touching `mesh/crypto/scope/`, `mesh/spool/`, or the spool/internet-relay plane:** READ
   `docs/SPOOL_PROTOCOL.md` (the normative public spec; its §13 vectors are pinned by
   `ScopeVectorTest`/`SpoolRecordsTest` — change them only together), then the `ScopeSync` invariants in

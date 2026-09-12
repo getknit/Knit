@@ -43,6 +43,15 @@ object FrameType {
     const val TYPING = "typing"
 
     /**
+     * A post in a **commons** — a spool's shared room (docs/SPOOL_PROTOCOL.md §7.4). Payload is a
+     * [CommonsPost]. Deliberately **not** replayable and **not** custodial: a commons post lives on the
+     * spool that runs the room and enters the app through the Internet plane's own door, never the
+     * radios — so an older build that meets one on a link decodes it, relays it like any unknown type,
+     * and delivers nothing, while `isCustodial` stays the fixed list it is (the `meshpost` lesson below).
+     */
+    const val COMMONS = "commons"
+
+    /**
      * Whether a frame of [type] is worth parking for replay when it's dropped for a missing sender key
      * (see `app.getknit.knit.mesh.PendingInbound`): the locally-delivered types only. PROFILE and KEY_REQ
      * are excluded (they bootstrap keys, never wait on one), as are the point-to-point BLOB_REQ and any
@@ -164,6 +173,24 @@ data class ChatContent(
     // DM/group the quote rides inside [enc] ([MessageContent.replyTo]) so it stays private, and this is
     // left null — mirroring how [body]/[mentions] are blank on an encrypted frame.
     val replyTo: ReplyRef? = null,
+)
+
+/**
+ * Content of a [FrameType.COMMONS] frame: one post in a spool's commons (docs/SPOOL_PROTOCOL.md §7.4).
+ * [scope] is the commons' 32-byte scope id, inside the signed bytes on purpose: the outer seal's aad
+ * already binds the *blob* to its scope, but a member of two rooms holds both keys and could re-seal
+ * room X's signed post into room Y — naming the room here is what makes that fail on open. [chat] is an
+ * ordinary [ChatContent] — body, mentions, reply quote — cleartext inside the scope's seal, exactly the
+ * broadcast room's shape: every member shares the room key, so there is no recipient to seal for and
+ * [ChatContent.enc] MUST be null. Attachments are not carried in this revision (the spool gates them
+ * separately); a post naming one is refused.
+ *
+ * `class` rather than `data class` for the same reason as [WrappedKey]: the byte-string field.
+ */
+@Serializable
+class CommonsPost(
+    @ByteString val scope: ByteArray,
+    val chat: ChatContent,
 )
 
 /**

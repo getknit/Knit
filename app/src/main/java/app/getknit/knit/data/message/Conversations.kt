@@ -15,6 +15,14 @@ enum class ConversationKind {
      * post. Keeping the two apart is what stops any of that leaking either way.
      */
     MESHTASTIC,
+
+    /**
+     * A **commons** ([Conversations.COMMONS_PREFIX]) — a spool's shared room (docs/SPOOL_PROTOCOL.md §7.4),
+     * the private instance's group chat with every peer on that relay. Its authors are pinned Knit peers
+     * like a group's, but it has no roster, no receipts and no ratchet: whoever holds the invite is in,
+     * every member shares the room key, and a post lives on the spool rather than in custody.
+     */
+    COMMONS,
 }
 
 /**
@@ -88,16 +96,20 @@ object Conversations {
             conversationId == NEARBY -> ConversationKind.NEARBY
             conversationId == MESHTASTIC -> ConversationKind.MESHTASTIC
             conversationId.startsWith(GROUP_ID_PREFIX) -> ConversationKind.GROUP
+            conversationId.startsWith(COMMONS_PREFIX) -> ConversationKind.COMMONS
             else -> ConversationKind.DM
         }
 
     /**
-     * Whether [conversationId] is a **public room** — open to whoever is in range, addressed to nobody, and
-     * never encrypted. The two rooms differ in almost everything else, so this exists for the handful of rules
-     * that genuinely turn on publicness: profanity screening (a room is read by strangers, so the lexical pass
-     * runs there and only there), retention by volume rather than by thread, and never being a message request.
+     * Whether [conversationId] is a **room** — addressed to nobody, with no recipient to seal for. The rooms
+     * differ in almost everything else, so this exists for the handful of rules that genuinely turn on that
+     * shape: profanity screening (a room is read by people who did not choose its every author, so the
+     * lexical pass runs there and only there), retention by volume rather than by thread, and never being a
+     * message request. A commons counts: it is private to its invite, but inside it every member reads every
+     * post, and its posts are cleartext inside the room's seal exactly as the Nearby room's are on the air.
      */
-    fun isPublicRoom(conversationId: String): Boolean = conversationId == NEARBY || conversationId == MESHTASTIC
+    fun isPublicRoom(conversationId: String): Boolean =
+        conversationId == NEARBY || conversationId == MESHTASTIC || conversationId.startsWith(COMMONS_PREFIX)
 
     /**
      * Whether [conversationId] is an accepted/known chat rather than a stranger's **message request** —
@@ -162,6 +174,17 @@ object Conversations {
 
     /** Prefix marking a derived group id; the hyphen guarantees it can't equal a node id. */
     const val GROUP_ID_PREFIX: String = "g-"
+
+    /**
+     * Prefix marking a **commons** — a spool's shared room (docs/SPOOL_PROTOCOL.md §7.4), one per relay the
+     * user has joined, keyed as `c-` + the room's 64-hex scope id. The same hyphen trick as
+     * [GROUP_ID_PREFIX]: it can never be a node id, and `c-` never collides with `g-` or `m-`.
+     */
+    const val COMMONS_PREFIX: String = "c-"
+
+    /** The conversation id of the commons whose scope id is [scopeIdHex]. */
+    fun commonsIdFor(scopeIdHex: String): String = COMMONS_PREFIX + scopeIdHex
+
     private const val GROUP_ID_SALT = "knit-group-id-v1:"
     private const val GROUP_ID_BYTES = 12 // 24 hex chars — ample to avoid collisions
     private const val HEX = "0123456789abcdef"

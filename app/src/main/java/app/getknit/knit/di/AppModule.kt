@@ -22,6 +22,7 @@ import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.commons.CommonsRepository
 import app.getknit.knit.data.crypto.DatabaseKey
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.crypto.KeystoreSecret
@@ -47,6 +48,7 @@ import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 import app.getknit.knit.mesh.crypto.ratchet.RatchetStore
+import app.getknit.knit.mesh.spool.CommonsStore
 import app.getknit.knit.mesh.spool.GroupRootStore
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.moderation.ScopedTextModerator
@@ -158,6 +160,7 @@ val appModule =
         single { get<KnitDatabase>().groupRootDao() }
         single { get<KnitDatabase>().messageReceiptDao() }
         single { get<KnitDatabase>().draftDao() }
+        single { get<KnitDatabase>().commonsDao() }
         single { MessageRepository(get()) }
         single { PeerRepository(get(), get<SettingsStore>(), get<Identity>()) }
         // Crash reports. The capture-side CrashStore is built by hand in KnitApplication.onCreate BEFORE
@@ -194,4 +197,6 @@ val appModule =
         // Unsent composer text, one row per thread. App-scoped on purpose: the write that keeps a draft is
         // started as the user leaves the chat, so it cannot run on the screen's own scope.
         single { DraftRepository(get(), get<CoroutineScope>()) }
+        single { CommonsRepository(get(), get(), get()) }
+        single<CommonsStore> { get<CommonsRepository>() }
     }

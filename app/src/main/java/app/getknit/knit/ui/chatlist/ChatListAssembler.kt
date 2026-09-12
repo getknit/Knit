@@ -45,7 +45,16 @@ internal class ChatListAssembler(
         // the Nearby room always, the Meshtastic room by the radio's state, active non-request groups, and
         // DM threads once they have a message. Most-recent first.
         val meshRoom = MeshRoomInputs(s.mesh.loraRoom, s.mesh.loraPlane, s.mesh.publicChannel, s.inputs.bridgedChannel)
-        val rows = visibleConversations(context, table, s.inputs.groups, directory, s.inputs.accepted, meshRoom).map(::rowFor)
+        val rows =
+            visibleConversations(
+                context,
+                table,
+                s.inputs.groups,
+                directory,
+                s.inputs.accepted,
+                meshRoom,
+                s.inputs.commons,
+            ).map(::rowFor)
         val requestCount = requestCount()
         // The list is never literally empty — the Nearby room always has a row — so a fresh install
         // reads as a working screen with nothing to do on it. Nudge until there is: any Nearby message,

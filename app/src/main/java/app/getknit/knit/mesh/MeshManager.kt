@@ -43,6 +43,7 @@ import app.getknit.knit.mesh.lora.LoraCtl
 import app.getknit.knit.mesh.lora.LoraFramePolicy
 import app.getknit.knit.mesh.lora.LoraSizeHint
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.CommonsPost
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
@@ -65,6 +66,7 @@ import app.getknit.knit.mesh.protocol.TypingContent
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.mesh.spool.AttachmentDeferPolicy
+import app.getknit.knit.mesh.spool.CommonsStore
 import app.getknit.knit.mesh.spool.GroupRootPolicy
 import app.getknit.knit.mesh.spool.GroupRootStore
 import app.getknit.knit.mesh.spool.GroupScopeRoots
@@ -148,6 +150,9 @@ class MeshManager(
     // without the Internet plane at all — which is what every unit test wants, and what keeps the mesh
     // seam free of any transitive knowledge of it.
     private val spoolDialer: SpoolDialer? = null,
+    // The commons (docs/SPOOL_PROTOCOL.md §7.4): the joined rooms, their outbox and their members. Null —
+    // every test, and a build with no Internet plane — derives no commons scope and refuses a commons send.
+    private val commons: CommonsStore? = null,
     // Injectable wall clock so the send path's timestamps (a frame and its stored local copy share one
     // sentAt) are deterministic under test. Defaults to the real clock, so production wiring (the Koin
     // module) is unchanged; mirrors the house convention — ForwardSync(clock = …), AckSync, KeyExchange.
@@ -366,6 +371,7 @@ class MeshManager(
             onProfilePinned = { introSync.onProfilePinned(it) },
             onPeerFrameOpened = { senderId, carriesInit -> introSync.onPeerFrameOpened(senderId, carriesInit) },
             onTransferCtl = onTransferSignal,
+            commonsTitle = { commons?.find(it)?.name },
         )
 
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
@@ -409,12 +415,18 @@ class MeshManager(
                         },
                         groupRoots = ::groupScopeRoots,
                         pairs = ::pairScopeRoots,
+                        commons = { commons?.roots().orEmpty() },
                     ),
                 dialer = dialer,
                 store = forwardStore,
                 selfId = { identity.nodeId() },
                 urls = { settings.activeSpoolUrls.first().toList() },
                 canCarry = pipeline::canCarry,
+                commons = commons,
+                hasKey = { peers.find(it)?.pubKey != null },
+                deliverCommons = { env, chat, conversationId, _ -> pipeline.deliverCommonsPost(env, chat, conversationId) },
+                onCommonsMember = ::onCommonsMember,
+                onOwnProfileTombstoned = { republishProfile(force = true) },
                 blobs = scopeBlobs(),
                 // The same hook a radio pull fires, so NSFW screening, the message rows, and the UI all
                 // run unchanged for a spool-delivered image (§9.5).
@@ -572,6 +584,60 @@ class MeshManager(
         demoSpools = statuses
     }
 
+    override fun refreshRelays() {
+        scopeSync?.onScopeTableChanged()
+    }
+
+    /**
+     * A node's frame was pulled from a commons this device joined (§7.4): it is a member, and a member of
+     * the private instance's room is a contact — accepted, so it sits in Contacts, its DMs skip the
+     * requests inbox and its peer row is protected from the sweep — exactly what importing their contact
+     * card would do, minus the card. Never for our own frames coming back round.
+     */
+    internal suspend fun onCommonsMember(
+        conversationId: String,
+        nodeId: String,
+    ) {
+        if (nodeId == identity.nodeId()) return
+        commons?.recordMember(conversationId, nodeId, clock())
+        settings.accept(nodeId)
+    }
+
+    /**
+     * The DM half of a commons membership: a session with every member, so a DM between two of them can
+     * ride the spool (a DM scope needs a confirmed session, and before one exists only the §3.5 pair scope
+     * carries the first frame). Registered without urgency — eight at a time, the intro driver's own bound —
+     * for the members whose prekey is pinned and whose session is not confirmed; a member with no prekey
+     * yet has a profile on the way and is picked up next heal.
+     */
+    private suspend fun bootstrapCommonsSessions() {
+        val members =
+            commons
+                ?.allMembers()
+                ?.map { it.nodeId }
+                ?.toSet()
+                .orEmpty()
+        if (members.isEmpty()) return
+        val me = identity.nodeId()
+        members
+            .filter { it != me && ratchet.sessionFor(it)?.confirmed != true }
+            .filter { ratchetPrekeyOf(peers.find(it)) != null }
+            .forEach { introSync.wantIfRoom(it) }
+    }
+
+    /**
+     * A DM to a commons member whose session is not confirmed yet: this frame carries the X3DH init and
+     * would confirm the session on arrival, but over the Internet only a §3.5 pair scope can carry it
+     * before then. Registering the intro is what names the pair scope — with urgency, the way a card
+     * import does, because the user just pressed send. A non-member, or a confirmed session, is untouched.
+     */
+    private suspend fun wantCommonsIntro(recipientId: String) {
+        if (commons == null) return
+        if (ratchet.sessionFor(recipientId)?.confirmed == true) return
+        if (commons.allMembers().none { it.nodeId == recipientId }) return
+        introSync.want(recipientId)
+    }
+
     override suspend fun importContact(peerId: String) {
         introSync.want(peerId)
         // The radio half of the bootstrap: ask neighbors for the profile (hop-by-hop), so a pair that shares
@@ -630,6 +696,7 @@ class MeshManager(
             rotatePrekeyIfDue()
             republishProfileIfStale() // refresh the publish stamp before custody would refuse the frame
             broadcastSealedProfile() // catch sessions that only confirmed after the edit fired
+            bootstrapCommonsSessions() // a session with every commons member, eight intros at a time (§7.4)
             introSync.retry() // re-send stale contact-card intros, settle confirmed ones, expire pair-scope grace
             mintGroupRootsIfDue() // mint a group's spool root when it is our turn (spec §3.2)
         }
@@ -789,6 +856,7 @@ class MeshManager(
             Log.w(TAG, "no known keys for recipient(s) of chat $id; not flooded yet")
             return true
         }
+        if (recipientId != null && group == null) wantCommonsIntro(recipientId)
         // Expose the (ciphertext) attachment hash — and ONLY the hash — in the cleartext frame alongside the
         // sealed content, so a relaying carrier, blind to the encrypted refs, can still custody the blob.
         // The mime stays sealed in MessageContent (ADR 035): custody addresses bytes by hash and never needed
@@ -1742,7 +1810,8 @@ class MeshManager(
         // carries its scope in `recipientId` or `TypingContent.groupId` and this room is neither, so an
         // unguarded cue from here would arrive on every phone in the pocket as a *Nearby* one. The UI
         // already refuses to raise it; this is the net under that, at the layer that mints the frame.
-        if (kind == ConversationKind.MESHTASTIC) return
+        // The same net under a commons: its scope carries no typing frame at all (§7.4).
+        if (kind == ConversationKind.MESHTASTIC || kind == ConversationKind.COMMONS) return
         val recipientId = if (kind == ConversationKind.DM) conversationId else null
         val groupId = if (kind == ConversationKind.GROUP) conversationId else null
         val env =
@@ -1793,6 +1862,7 @@ class MeshManager(
                 pendingGroupKeys.sweepExpired()
                 keyExchange.sweepExpired()
                 blobExchange.sweepExpired()
+                commons?.sweepOutbox(clock() - ScopeRegistry.COMMONS_DEFAULT_TTL_MS) // the room has long expired them
                 sweepLocalStorage()
             }
         }
@@ -2236,9 +2306,16 @@ class MeshManager(
      * bug this fixes — the plane only made it load-bearing. Bumps no [SettingsStore.profileVersion], so a
      * re-publish is not an edit and cannot advance any receiver's LWW watermark.
      */
-    private suspend fun republishProfileIfStale() {
+    private suspend fun republishProfileIfStale() = republishProfile(force = false)
+
+    /**
+     * [republishProfileIfStale]'s body, with [force] for the one caller that knows the current stamp is
+     * already useless: a commons that count-evicted our profile tombstones its bytes for the room's TTL, so
+     * only a fresh stamp — a fresh frame id — can put us back in front of its members (§7.4).
+     */
+    private suspend fun republishProfile(force: Boolean) {
         val now = clock()
-        if (now - settings.profilePublishedAt.first() < PROFILE_REPUBLISH_MS) return
+        if (!force && now - settings.profilePublishedAt.first() < PROFILE_REPUBLISH_MS) return
         settings.setProfilePublishedAt(now)
         // Seed the refreshed frame into custody rather than flooding it: it carries no new information, so
         // the custody digest divergence is enough to move it to neighbors on the next contact. The previous
@@ -2341,6 +2418,57 @@ class MeshManager(
             ),
         )
         return PublicPostOutcome.Queued
+    }
+
+    /**
+     * A post in a commons (docs/SPOOL_PROTOCOL.md §7.4). Moderated as a room post, signed like every frame,
+     * stored as the message row plus the exact signed bytes the plane re-seals on every heal round — and then
+     * **not** originated: no radio flood, no custody, no fan-out. The spool that runs the room is its only
+     * carrier, and the plane is woken to push it now. Cleartext inside the room's seal, like a Nearby post
+     * on the air: every member holds the room key, so there is nobody to seal for.
+     */
+    override suspend fun sendCommons(
+        conversationId: String,
+        text: String,
+        mentions: List<Mention>,
+        replyTo: ReplyRef?,
+    ): Boolean {
+        val room = commons?.find(conversationId) ?: return false
+        if (isTextFlagged(text, "outgoing", isRoom = true)) return false
+        val me = identity.nodeId()
+        val id = FrameId.new()
+        val sentAt = clock()
+        val env =
+            RelayEnvelope(
+                type = FrameType.COMMONS,
+                id = id,
+                senderId = me,
+                sentAt = sentAt,
+                payload =
+                    WireCodec.encodePayload(
+                        CommonsPost(
+                            scope = ScopeCrypto.commonsScopeId(room.secret),
+                            chat = ChatContent(body = text, mentions = mentions, replyTo = replyTo),
+                        ),
+                    ),
+            )
+        val wire = sign(env)
+        commons.post(
+            MessageEntity(
+                id = id,
+                senderId = me,
+                conversationId = conversationId,
+                body = text,
+                sentAt = sentAt,
+                received = false,
+                receivedVia = DeliveryPlane.Internet.code,
+                mentions = MentionStore.encode(mentions),
+            ).withReply(replyTo),
+            sig = wire.sig,
+            signed = wire.signed,
+        )
+        scopeSync?.onCustodyChanged()
+        return true
     }
 
     /**

@@ -30,11 +30,25 @@ class ConversationsKindTest {
     }
 
     @Test
-    fun `both rooms are public, and nothing else is`() {
+    fun `the rooms are public, and nothing else is`() {
         assertTrue(Conversations.isPublicRoom(Conversations.NEARBY))
         assertTrue(Conversations.isPublicRoom(Conversations.MESHTASTIC))
+        assertTrue(Conversations.isPublicRoom(Conversations.commonsIdFor("ab".repeat(32))))
         assertFalse(Conversations.isPublicRoom(Conversations.groupIdFor(listOf("alice", "bob"))))
         assertFalse(Conversations.isPublicRoom("node1234"))
+    }
+
+    @Test
+    fun `a commons is its own kind, always accepted, and cannot collide with anything else`() {
+        val id = Conversations.commonsIdFor("ab".repeat(32))
+        assertEquals(ConversationKind.COMMONS, Conversations.kindFor(id))
+        assertTrue(id.startsWith(Conversations.COMMONS_PREFIX))
+        assertTrue(id.contains('-'))
+        assertFalse(id.length == NodeId.LENGTH)
+        assertFalse(id.startsWith(Conversations.GROUP_ID_PREFIX))
+        assertFalse(id == Conversations.NEARBY || id == Conversations.MESHTASTIC)
+        // A room is never a stranger's request, whoever posted in it.
+        assertTrue(Conversations.isAccepted(id, accepted = emptySet(), verifiedNodeIds = emptySet(), authoredConversationIds = emptySet()))
     }
 
     @Test

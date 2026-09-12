@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.spool
 
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.ChatContent
+import app.getknit.knit.mesh.protocol.CommonsPost
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
@@ -29,12 +30,19 @@ class Scope(
     val peerId: String? = null,
     val groupId: String? = null,
     val roster: Set<String> = emptySet(),
+    // The third form (spec §7.4): a commons, named by the conversation its posts land in, and bound to the
+    // one spool that runs it — the only scope that is not subscribed at every relay.
+    val commonsId: String? = null,
+    val spoolUrl: String? = null,
 ) {
     /** The spec's display form — lowercase hex — and this scope's identity in maps/logs/diagnostics. */
     val idHex: String = hex(id)
 
-    /** What this scope is *of*, for diagnostics: the DM peer's node id or the group id. */
-    val label: String = peerId ?: groupId.orEmpty()
+    /** What this scope is *of*, for diagnostics: the DM peer's node id, the group id, or the commons' thread id. */
+    val label: String = peerId ?: groupId ?: commonsId.orEmpty()
+
+    /** Whether [url] is a relay this scope belongs at: every relay, unless it is a commons bound to one. */
+    fun belongsAt(url: String): Boolean = spoolUrl == null || spoolUrl == url
 
     override fun equals(other: Any?): Boolean = other is Scope && other.idHex == idHex
 
@@ -77,8 +85,53 @@ object ScopeFrames {
         when {
             scope.peerId != null -> eligibleForDm(env, selfId, scope.peerId)
             scope.groupId != null -> eligibleForGroup(env, scope.groupId, scope.roster)
+            scope.commonsId != null -> eligibleForCommons(env, scope.id)
             else -> false
         }
+
+    /**
+     * The commons half of the §4.4 rule (spec §7.4). A commons has no roster — whoever holds the invite is
+     * in — so the rule is about shape, not membership:
+     *
+     * - `type = profile` — from **anyone** on the way in (self-certifying, the [eligibleForDm] argument),
+     *   and **only our own** on the way out: every member keeps its own profile live in the room, and
+     *   re-pushing every pinned peer's profile from custody would turn the room into a directory of
+     *   everyone this device ever met.
+     * - `type = commons` — a [CommonsPost] naming *this* scope, addressed to nobody, in the clear inside
+     *   the room's seal (every member shares the key; `enc` set is a frame from nowhere). The scope check
+     *   is what stops a member of two rooms re-sealing one room's signed post into the other.
+     *
+     * Nothing else: no receipts (N of them per post would evict the posts out of a 500-frame room), no
+     * reactions, no DM-form chat — a pair's DM has its own scope. The in-direction asymmetry on `profile`
+     * is deliberate and is the one place [eligibleFor] is not the same rule both ways.
+     */
+    fun eligibleForCommons(
+        env: RelayEnvelope,
+        scopeId: ByteArray,
+    ): Boolean {
+        if (env.recipientId != null || env.group != null) return false
+        return when (env.type) {
+            FrameType.PROFILE -> {
+                true
+            }
+
+            FrameType.COMMONS -> {
+                val post = WireCodec.decodePayload<CommonsPost>(env.payload)
+                post != null && post.scope.contentEquals(scopeId) && post.chat.enc == null && post.chat.attachmentHash == null
+            }
+
+            else -> {
+                false
+            }
+        }
+    }
+
+    /** The push-side narrowing of [eligibleForCommons]: only our own frames leave this device for a commons. */
+    fun pushableToCommons(
+        env: RelayEnvelope,
+        selfId: String,
+        scopeId: ByteArray,
+    ): Boolean = env.senderId == selfId && eligibleForCommons(env, scopeId)
 
     /**
      * The DM half of the §4.4 frame-set rule. Two forms ride a DM scope:

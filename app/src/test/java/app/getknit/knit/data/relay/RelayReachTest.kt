@@ -80,6 +80,16 @@ class RelayReachTest {
     }
 
     @Test
+    fun `a commons is covered by its relay and silent without it, never pending`() {
+        // Its scope is bound to one relay: covered while that relay carries it, and while it does not
+        // there is no other relay that could, so "becoming eligible" would be a promise nothing can keep.
+        val room = Conversations.commonsIdFor("cd".repeat(32))
+        assertEquals(RelayReach.Covered, reachFor(room, covered.copy(coveredLabels = setOf(room))))
+        assertEquals(RelayReach.Silent, reachFor(room, covered))
+        assertEquals(RelayReach.Silent, reachFor(room, covered.copy(connected = 0)))
+    }
+
+    @Test
     fun `dismissing the room notice silences it for good`() {
         assertEquals(RelayReach.Room, noticeFor(Conversations.NEARBY, covered, roomNoticeDismissed = false))
         assertEquals(RelayReach.Silent, noticeFor(Conversations.NEARBY, covered, roomNoticeDismissed = true))

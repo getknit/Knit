@@ -474,4 +474,33 @@ class SpoolConnectionTest {
             assertEquals(ScopeAttachments.MAX_CHUNKS, conn.limits?.maxAget)
             assertTrue("clamping must not collapse the all-three-or-none gate", conn.limits?.attachments == true)
         }
+
+    @Test
+    fun `a hello that advertises a commons is read, clamped to the spool's own caps, and absent means none`() =
+        runTest {
+            val plain = connection(RecordingLink())
+            plain.onMessage(serverHello())
+            assertTrue(plain.awaitReady())
+            assertNull(plain.commons)
+
+            val link = RecordingLink()
+            val conn = connection(link)
+            conn.onMessage(
+                SpoolCodec.encode(
+                    SpoolHello(
+                        t = SpoolRecordType.HELLO,
+                        v = SPOOL_RECORD_VERSION,
+                        limits = SpoolLimits(maxBlob = 64, maxRecord = 4096, maxScopes = 8, maxPull = 2, maxFramesCap = 10, maxTtlMs = 1),
+                        commons = SpoolCommonsInfo(name = " ", maxFrames = 0, ttlMs = 0L, maxBlob = 1 shl 20, attach = true),
+                    ),
+                ),
+            )
+            assertTrue(conn.awaitReady())
+            val room = conn.commons!!
+            assertNull("a blank name is no name", room.name)
+            assertEquals(1, room.maxFrames)
+            assertEquals(1L, room.ttlMs)
+            assertEquals("the room's blob cap cannot exceed the spool's", 64, room.maxBlob)
+            assertTrue(room.attach)
+        }
 }

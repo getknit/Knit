@@ -31,9 +31,14 @@ object Protocol {
      * every oldest-by-`sentAt` eviction (a handful of Sybil identities would otherwise displace all honest
      * custody mesh-wide), and an inbound chat's stored `sentAt` is clamped to it
      * ([app.getknit.knit.mesh.InboundPipeline.deliverChat]) so a future-dated frame can't pin itself to the
-     * top of a conversation forever. 5 min tolerates an unsynced device without giving an attacker a usable
-     * window. Every node compares against its own `now`, exactly like the dead-on-arrival lower bound, so an
-     * honest frame (`sentAt ≈ now`) passes on every node and only the attacker's window closes.
+     * top of a conversation forever. The same clamp bounds every other sender-supplied number the pipeline
+     * keeps as a last-writer-wins watermark — a profile version (both the cleartext frame and the sealed
+     * ctl), a reaction's stamp, a group's name and photo clocks, a member's leave and rejoin
+     * (`InboundPipeline.clampFuture`) — because stored raw, one far-future value outranks every honest
+     * update after it for good, including the sender's own. 5 min tolerates an unsynced device without
+     * giving an attacker a usable window. Every node compares against its own `now`, exactly like the
+     * dead-on-arrival lower bound, so an honest frame (`sentAt ≈ now`) passes on every node and only the
+     * attacker's window closes.
      */
     const val MAX_FUTURE_SKEW_MS = 5 * 60_000L
 

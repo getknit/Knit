@@ -544,6 +544,22 @@ class InboundPipeline(
         }
 
     /**
+     * Bounds a sender-supplied clock before it becomes a local last-writer-wins watermark. Every such
+     * clock — a profile version, a reaction's stamp, a group's name/photo clock, a member's leave/rejoin —
+     * is the sender's self-attested, unverifiable number, and stored raw it is a permanent wedge: one
+     * `Long.MAX_VALUE` outranks every honest update after it, including the sender's own. Pulled back to
+     * [Protocol.MAX_FUTURE_SKEW_MS] past our own clock, the worst a far-future stamp can do is win for
+     * that window; honest skew inside it is kept as-is, so honest peers never see the clamp. The
+     * local-ordering complement of [app.getknit.knit.data.forward.ForwardRepository.store]'s refusing
+     * half — delivery runs regardless of custody, so that guard alone protects nothing here. Past the
+     * window this turns sender order into arrival order for that one sender (a re-served older frame from
+     * a peer whose clock runs far ahead can briefly win until their next update) — bounded and
+     * self-healing, which the wedge is not. Never applied to the envelope itself: the era gate, ack ids and
+     * signatures need the raw value.
+     */
+    private fun clampFuture(stamp: Long): Long = minOf(stamp, clock() + Protocol.MAX_FUTURE_SKEW_MS)
+
+    /**
      * Applies an inbound reaction. [ReactionRepository.apply] is last-writer-wins, so duplicates and
      * out-of-order add/retract/replace frames are idempotent. The target message may not exist yet
      * (reactions can outrun the message over the mesh) — the row persists regardless and the UI joins.
@@ -564,7 +580,7 @@ class InboundPipeline(
                 messageId = content.messageId,
                 reactorNodeId = env.senderId,
                 emoji = content.emoji,
-                updatedAt = env.sentAt,
+                updatedAt = clampFuture(env.sentAt),
             ),
         )
     }
@@ -601,7 +617,9 @@ class InboundPipeline(
         // handled before the DM check below (which would otherwise treat them as broadcast).
         val group = env.group
         if (group != null) {
-            if (reconcileGroup(group, env.senderId, env.sentAt, me)) decryptAndDeliver(env, content, me, group.id, plane, signed)
+            if (reconcileGroup(group, env.senderId, clampFuture(env.sentAt), me)) {
+                decryptAndDeliver(env, content, me, group.id, plane, signed)
+            }
             return
         }
         // A DM addressed to someone else: we're only relaying it (the router floods it onward). It
@@ -1196,9 +1214,12 @@ class InboundPipeline(
         // frame we just decrypted under their session — but a missing row is a no-op, never an insert:
         // this path must not be able to mint a peer that skipped the key pin.
         val existing = peers.find(env.senderId) ?: return null
+        // The version is the peer's own number and becomes our watermark, so it is bounded first — the
+        // same clamp the cleartext writer applies, or a far-future one would freeze this peer's row.
+        val version = clampFuture(payload.version)
         // A payload predating this build's version field reads 0 and is ignored rather than treated as
         // ancient-but-valid — an unversioned update cannot be ordered, so it must not be applied.
-        if (payload.version <= 0L || payload.version < existing.updatedAt) return null
+        if (version <= 0L || version < existing.updatedAt) return null
         val advertised = payload.avatarHash
         val haveAvatar = advertised != null && blobStore.has(advertised)
         val name = payload.name.take(TextLimits.DISPLAY_NAME)
@@ -1208,7 +1229,7 @@ class InboundPipeline(
                 name = name,
                 status = payload.status.take(TextLimits.STATUS),
                 avatarHash = resolveAvatarHash(advertised, haveAvatar, existing.avatarHash),
-                updatedAt = payload.version,
+                updatedAt = version,
                 // The whole presentation set moves together (see ProfilePayload): a field this path did not
                 // copy would be reverted by every sealed update after the cleartext frame that set it.
                 openToChat = payload.openToChat,
@@ -1220,7 +1241,7 @@ class InboundPipeline(
         // rather than in a writer of their own because this is the point where both the old and the new
         // presentation exist at once — a moment nothing else in the profile paths preserves. Free of the
         // wire: the change is a pure function of two values both ends already hold.
-        peerPresentationNotices(env.senderId, existing, name, advertised, payload.version)
+        peerPresentationNotices(env.senderId, existing, name, advertised, version)
         reclaimRemovedAvatarIfCleared(env.senderId, advertised, existing.avatarHash)
         return advertised?.takeIf { !haveAvatar }
     }
@@ -1252,9 +1273,9 @@ class InboundPipeline(
 
     /**
      * Applies a sealed `CTL_REACTION` (DM or group form): same LWW convergence as the cleartext frame
-     * (reactor = authenticated sender, clock = the frame's signed sentAt), committed atomically with
-     * the ratchet/chain advance. Orphan-permissive like the cleartext path — the target may not have
-     * arrived yet; the 24 h orphan reaper bounds junk.
+     * (reactor = authenticated sender, clock = the frame's signed sentAt, bounded by [clampFuture]),
+     * committed atomically with the ratchet/chain advance. Orphan-permissive like the cleartext path — the
+     * target may not have arrived yet; the 24 h orphan reaper bounds junk.
      */
     private suspend fun applySealedReaction(
         env: RelayEnvelope,
@@ -1266,7 +1287,7 @@ class InboundPipeline(
             metrics.onDropped(DropReason.REACTION_REFUSED)
             return
         }
-        reactions.apply(ReactionEntity(rp.messageId, env.senderId, rp.emoji, env.sentAt))
+        reactions.apply(ReactionEntity(rp.messageId, env.senderId, rp.emoji, clampFuture(env.sentAt)))
     }
 
     /**
@@ -1822,7 +1843,7 @@ class InboundPipeline(
      */
     private suspend fun handleGroupUpdate(env: RelayEnvelope) {
         val group = env.group ?: return
-        reconcileGroup(group, env.senderId, env.sentAt, identity.nodeId())
+        reconcileGroup(group, env.senderId, clampFuture(env.sentAt), identity.nodeId())
     }
 
     /**
@@ -1836,12 +1857,16 @@ class InboundPipeline(
     private suspend fun handleGroupLeave(env: RelayEnvelope) {
         if (env.senderId in settings.blockedNodeIds.first()) return
         val groupId = WireCodec.decodePayload<GroupLeaveContent>(env.payload)?.groupId ?: return
-        groups.recordDeparture(groupId, env.senderId, env.sentAt)
+        // The leave clock is what the member's own rejoin must beat ([rejoinBy]); bounded, or a far-future
+        // leave locks them out of their own group for good.
+        groups.recordDeparture(groupId, env.senderId, clampFuture(env.sentAt))
     }
 
     /**
      * Brings the locally-stored group in line with a self-describing [group] roster carried on a frame
-     * from [senderId] (stamped [sentAt]). Returns true when the group is active for us (so a chat frame
+     * from [senderId] (stamped [sentAt] — the frame's clock already bounded by [clampFuture] at both call
+     * sites, since it becomes the name, creation, rename-notice and rejoin clocks below and none of those
+     * may hold a sender's far-future number). Returns true when the group is active for us (so a chat frame
      * should be delivered), false when the frame must be ignored: blocked sender, a group we've left
      * (never re-upserted, so a frame can't resurrect it), a roster [vetRoster] refuses, or a *new* group
      * whose creator we've blocked (covers the proxy case where a non-blocked member relays the first
@@ -2161,7 +2186,10 @@ class InboundPipeline(
         group: GroupInfo,
     ): PhotoDecision {
         val incomingPhoto = group.photoHash
-        val incomingPhotoClock = group.photoUpdatedAt ?: 0L
+        // A payload field every member re-asserts in every frame, so a far-future one would circulate as
+        // the group's photo clock forever; bounded here, and the pull/adopt equality check reads the same
+        // bounded value back through [PhotoDecision.clock].
+        val incomingPhotoClock = clampFuture(group.photoUpdatedAt ?: 0L)
         val keepPhoto = existing?.photoHash
         val keepPhotoClock = existing?.photoUpdatedAt ?: 0L
         val takePhoto =
@@ -2359,7 +2387,7 @@ class InboundPipeline(
                 // Clamp a future-dated sentAt for local ordering so a bogus far-future frame can't pin itself to
                 // the top of the conversation forever (the local-display complement of ForwardRepository's custody
                 // guard). Honest clock skew within the window is kept as-is.
-                sentAt = minOf(env.sentAt, System.currentTimeMillis() + Protocol.MAX_FUTURE_SKEW_MS),
+                sentAt = clampFuture(env.sentAt),
                 // Our own clock, unlike the sender's sentAt just above: the one honest answer to "when did
                 // this get here", and the gap between the two is the store-and-forward latency. Null when the
                 // frame is one of OUR room posts looping back after the SeenSet lapsed — we did not receive
@@ -2800,7 +2828,9 @@ class InboundPipeline(
         // stamp the sender refreshes on a cadence to keep the frame inside custody's `sentAt + ttl` window
         // (ADR 022), so it moves without the profile having changed. A peer predating the field sends no
         // `version`, and for those `sentAt` is exactly what it used to mean, which makes the fallback exact.
-        val version = content.version ?: env.sentAt
+        // Bounded before it becomes either watermark below: the peer picks this number, and stored raw a
+        // far-future one would outrank every later profile of theirs, on both paths, for good.
+        val version = clampFuture(content.version ?: env.sentAt)
         // Last-writer-wins, split across two watermarks. The key is immutable per nodeId (a different key
         // would be a hash collision, excluded above), so an out-of-order or re-served copy can never change
         // the pinned key — it could only revert name/status. A first profile (existing == null) is always
@@ -2826,7 +2856,7 @@ class InboundPipeline(
             // by design — a key that doesn't derive back to the sender's nodeId was already dropped
             // above, so arriving here needs a 128-bit collision or a corrupted pin — which is exactly why
             // it should be visible if it ever does happen rather than silent.
-            savePeerNotice(env.senderId, StatusNotices.keyPinRefused(env.senderId, env.sentAt))
+            savePeerNotice(env.senderId, StatusNotices.keyPinRefused(env.senderId, clampFuture(env.sentAt)))
             return
         }
         val advertised = content.avatarHash

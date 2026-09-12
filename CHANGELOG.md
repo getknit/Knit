@@ -77,6 +77,9 @@ document:
 - A contact you could only reach through an Internet relay or a LoRa board showed as Offline on their
   profile. The status line under their name now says Reachable via relay, and Online still means your own
   radios can see them.
+- A contact whose phone dated a profile, reaction, group name or photo far in the future could keep that
+  version stuck on your phone for good. Knit now caps such dates at a few minutes past its own clock, the
+  way it already does for messages.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

@@ -12,7 +12,9 @@ import kotlinx.serialization.json.Json
  * explicit group name, or blank (`""`) when unnamed — an unnamed group's title is generated locally per
  * device from its members (see [app.getknit.knit.data.message.groupTitle]). [nameUpdatedAt] is the
  * name's last-writer-wins clock (the `sentAt` of the routing envelope that last set it, or the wall
- * clock for a local rename) so concurrent renames converge.
+ * clock for a local rename) so concurrent renames converge. Both it and [photoUpdatedAt] are sender-supplied
+ * numbers, so the inbound path bounds them to `Protocol.MAX_FUTURE_SKEW_MS` past our own clock before they
+ * are stored — one far-future stamp must not hold the name or photo against every honest change after it.
  *
  * [members] is a JSON-encoded `List<String>` of node ids (the fixed roster, capped at 8 incl. the
  * creator); kept as a TEXT column so Room needs no TypeConverter and (de)serialization lives with the

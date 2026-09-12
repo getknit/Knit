@@ -594,12 +594,13 @@ class InboundPipelineTest {
         fun groupLeave(
             author: Party,
             groupId: String,
+            sentAt: Long = 7L,
         ): RelayEnvelope =
             RelayEnvelope(
                 type = FrameType.GROUP_LEAVE,
                 id = "leave-$groupId-${author.nodeId}",
                 senderId = author.nodeId,
-                sentAt = 7L,
+                sentAt = sentAt,
                 payload = WireCodec.encodePayload(GroupLeaveContent(groupId = groupId)),
             )
 
@@ -2839,21 +2840,266 @@ class InboundPipelineTest {
             val rig = Rig(backgroundScope)
             val alice = party()
             rig.pin(alice)
-            val farFuture = System.currentTimeMillis() + 3_650L * 24 * 60 * 60_000 // ~10 years ahead
             val env =
                 RelayEnvelope(
                     type = FrameType.CHAT,
                     id = "fut",
                     senderId = alice.nodeId,
-                    sentAt = farFuture,
+                    sentAt = Long.MAX_VALUE,
                     payload = WireCodec.encodePayload(ChatContent(body = "from the future")),
                 )
 
             rig.deliver(alice, env)
 
-            val stored = rig.msgMap["fut"]!!.sentAt
-            assertTrue("a far-future sentAt must be clamped down", stored < farFuture)
-            assertTrue(stored <= System.currentTimeMillis() + Protocol.MAX_FUTURE_SKEW_MS)
+            // Bounded on the pipeline's own clock, so the edge is exact rather than "somewhere below".
+            assertEquals(rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS, rig.msgMap["fut"]!!.sentAt)
+        }
+
+    // Every sender-supplied last-writer-wins clock the pipeline stores is bounded by the same window as
+    // the message row above (work item #25): a far-future stamp may win for at most MAX_FUTURE_SKEW_MS,
+    // after which an honest update from the same sender takes the row back. Each test below pins one
+    // writer — the bound it stores, that it holds inside the window, and that it yields after it.
+
+    @Test
+    fun aFarFutureSealedProfileVersionCannotFreezeThePeersRow() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val author = V2Author(alice, rig)
+            val edge = rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS
+
+            rig.deliver(
+                alice,
+                author.dm(
+                    "ctl-far",
+                    "",
+                    ctl = MessageContent.CTL_PROFILE,
+                    pr = ProfilePayload(name = "Far", status = "", version = Long.MAX_VALUE),
+                ),
+            )
+            assertEquals("Far", rig.peerMap[alice.nodeId]?.name)
+            assertEquals(edge, rig.peerMap[alice.nodeId]?.updatedAt)
+
+            // Inside the window the bounded stamp still holds: it is a ceiling, not a rollback.
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = rig.nowMs, prekey = null, version = rig.nowMs, name = "Now"))
+            assertEquals("Far", rig.peerMap[alice.nodeId]?.name)
+
+            // Past it, an honest update wins on either path — the wedge the raw value would have been.
+            rig.nowMs = edge + 1
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = rig.nowMs, prekey = null, version = rig.nowMs, name = "Clear"))
+            assertEquals("Clear", rig.peerMap[alice.nodeId]?.name)
+            assertEquals(edge + 1, rig.peerMap[alice.nodeId]?.updatedAt)
+            rig.deliver(
+                alice,
+                author.dm(
+                    "ctl-after",
+                    "",
+                    ctl = MessageContent.CTL_PROFILE,
+                    pr =
+                        ProfilePayload(
+                            name = "Sealed",
+                            status = "",
+                            version =
+                                edge + 2,
+                        ),
+                ),
+            )
+            assertEquals("Sealed", rig.peerMap[alice.nodeId]?.name)
+            assertEquals(edge + 2, rig.peerMap[alice.nodeId]?.updatedAt)
+        }
+
+    @Test
+    fun aFarFutureCleartextProfileVersionIsBoundedOnBothWatermarks() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val edge = rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS
+
+            rig.deliver(
+                alice,
+                rig.profileWithPrekey(alice, sentAt = 10L, prekey = signedPrekey(alice), version = Long.MAX_VALUE, name = "Far"),
+            )
+
+            // One clamp feeds both the presentation and the prekey watermark (ADR 022's split).
+            assertEquals("Far", rig.peerMap[alice.nodeId]?.name)
+            assertEquals(edge, rig.peerMap[alice.nodeId]?.updatedAt)
+            assertEquals(edge, rig.peerMap[alice.nodeId]?.prekeyProfileAt)
+
+            // A sealed update inside the window is stale against the bound, as the raw path would say.
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("ctl-in", "", ctl = MessageContent.CTL_PROFILE, pr = ProfilePayload(name = "In", status = "", version = rig.nowMs)),
+            )
+            assertEquals("Far", rig.peerMap[alice.nodeId]?.name)
+
+            rig.nowMs = edge + 1
+            val rotated = signedPrekey(alice, id = 9)
+            rig.deliver(alice, rig.profileWithPrekey(alice, sentAt = rig.nowMs, prekey = rotated, version = rig.nowMs, name = "Clear"))
+            assertEquals("Clear", rig.peerMap[alice.nodeId]?.name)
+            assertEquals(9, rig.peerMap[alice.nodeId]?.prekeyId)
+            assertEquals(edge + 1, rig.peerMap[alice.nodeId]?.prekeyProfileAt)
+
+            // A peer predating the version field orders on its frame's sentAt — bounded the same way.
+            val bob = party()
+            rig.deliver(bob, rig.profileWithPrekey(bob, sentAt = Long.MAX_VALUE, prekey = null, version = null, name = "Legacy"))
+            assertEquals(rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS, rig.peerMap[bob.nodeId]?.updatedAt)
+        }
+
+    @Test
+    fun aFarFutureReactionCannotOutrankTheSendersOwnRetraction() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val edge = rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS
+
+            // Cleartext form.
+            rig.deliver(alice, rig.reaction(alice, messageId = "m1", emoji = "👍", sentAt = Long.MAX_VALUE))
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", alice.nodeId, "👍", edge)) }
+
+            // Sealed DM form.
+            val author = V2Author(alice, rig)
+            rig.deliver(
+                alice,
+                author.dm("ctl-far", "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m2", "🔥"), sentAt = Long.MAX_VALUE),
+            )
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m2", alice.nodeId, "🔥", edge)) }
+
+            // Past the window the sender's retraction carries a later clock than the bounded add, so the
+            // repository's strict last-writer-wins (ReactionRepositoryTest) lets it through — with the raw
+            // value it would have lost to the add forever, on every recipient.
+            rig.nowMs = edge + 1
+            rig.deliver(alice, rig.reaction(alice, messageId = "m1", emoji = null, sentAt = rig.nowMs))
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m1", alice.nodeId, null, edge + 1)) }
+            rig.deliver(
+                alice,
+                author.dm("ctl-retract", "", ctl = MessageContent.CTL_REACTION, rp = ReactionPayload("m2"), sentAt = rig.nowMs),
+            )
+            coVerify(exactly = 1) { rig.reactions.apply(ReactionEntity("m2", alice.nodeId, null, edge + 1)) }
+        }
+
+    @Test
+    fun aFarFutureSealedGroupReactionIsBoundedInsideTheChainCommit() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+            rig.deliver(
+                alice,
+                V2Author(
+                    alice,
+                    rig,
+                ).dm("seed-far", "", ctl = MessageContent.CTL_GROUP_KEY, gk = GroupKeyPayload(group.id, keys = listOf(author.seed()))),
+            )
+
+            rig.deliver(
+                alice,
+                author.groupFrame(
+                    group,
+                    id = "ctl-gfar",
+                    body = "",
+                    ctl = MessageContent.CTL_REACTION,
+                    rp = ReactionPayload("gm1", "🔥"),
+                    sentAt = Long.MAX_VALUE,
+                ),
+            )
+
+            coVerify(
+                exactly = 1,
+            ) { rig.reactions.apply(ReactionEntity("gm1", alice.nodeId, "🔥", rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS)) }
+        }
+
+    @Test
+    fun aFarFutureLeaveCannotLockAMemberOutOfTheirOwnRejoin() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val edge = rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS
+            val group = rig.seedRatchetGroup(alice)
+
+            // The leave is recorded on the bounded clock…
+            rig.deliver(alice, rig.groupLeave(alice, groupId = group.id, sentAt = Long.MAX_VALUE))
+            coVerify(exactly = 1) { rig.groups.recordDeparture(group.id, alice.nodeId, edge) }
+
+            // …so the member's own rejoin needs only to beat that edge, not Long.MAX_VALUE. Inside the
+            // window a far-future rejoin clamps to the same edge and does not beat it (strict >).
+            rig.depart(group, alice, leftAt = edge)
+            rig.deliver(alice, rig.groupUpdate(alice, group, sentAt = Long.MAX_VALUE))
+            assertEquals(setOf(alice.nodeId), rig.departed(group.id))
+            coVerify(exactly = 0) { rig.groups.recordRejoin(any(), any(), any(), any()) }
+
+            rig.nowMs = edge + 1
+            rig.deliver(alice, rig.groupUpdate(alice, group, sentAt = rig.nowMs))
+            assertEquals(setOf(rig.self.nodeId, alice.nodeId), rig.members(group.id))
+            assertTrue(rig.departed(group.id).isEmpty())
+            coVerify(exactly = 1) { rig.groups.recordRejoin(group.id, alice.nodeId, edge + 1, rekey = true) }
+        }
+
+    @Test
+    fun aFarFutureGroupRenameCannotFreezeTheName() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val edge = rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS
+            val members = listOf(rig.self.nodeId, alice.nodeId)
+            rig.seedGroup("g-far", members = members, createdBy = alice.nodeId, name = "Old", nameUpdatedAt = 10L)
+
+            val far = rig.group(members = members, createdBy = alice.nodeId, id = "g-far", name = "Far")
+            rig.deliver(alice, rig.groupUpdate(alice, far, sentAt = Long.MAX_VALUE))
+            assertEquals("Far", rig.groupMap["g-far"]?.name)
+            assertEquals(edge, rig.groupMap["g-far"]?.nameUpdatedAt)
+            // The rename notice sits at the bound too, not pinned to the top of the thread forever.
+            assertEquals(edge, rig.msgMap["grename:g-far:$edge"]?.sentAt)
+
+            val now = rig.group(members = members, createdBy = alice.nodeId, id = "g-far", name = "Now")
+            rig.deliver(alice, rig.groupUpdate(alice, now, sentAt = rig.nowMs))
+            assertEquals("Far", rig.groupMap["g-far"]?.name)
+
+            rig.nowMs = edge + 1
+            val clear = rig.group(members = members, createdBy = alice.nodeId, id = "g-far", name = "Clear")
+            rig.deliver(alice, rig.groupUpdate(alice, clear, sentAt = rig.nowMs))
+            assertEquals("Clear", rig.groupMap["g-far"]?.name)
+            assertEquals(edge + 1, rig.groupMap["g-far"]?.nameUpdatedAt)
+        }
+
+    @Test
+    fun aFarFutureGroupPhotoClockIsBoundedAndStillAdoptsOnArrival() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val edge = rig.nowMs + Protocol.MAX_FUTURE_SKEW_MS
+            val members = listOf(rig.self.nodeId, alice.nodeId)
+
+            val far = rig.group(members = members, createdBy = alice.nodeId, photoHash = "photoFar", photoUpdatedAt = Long.MAX_VALUE)
+            rig.deliver(alice, rig.groupUpdate(alice, far))
+            assertEquals(edge, rig.groupMap[far.id]?.photoUpdatedAt)
+            // The pull was armed on the bounded clock, so the adopt-on-arrival equality check still matches.
+            assertNull(rig.groupMap[far.id]?.photoHash)
+            rig.pipeline.onObtained("photoFar")
+            assertEquals("photoFar", rig.groupMap[far.id]?.photoHash)
+
+            // Inside the window an honest newer photo is still behind the bound…
+            coEvery { rig.blobStore.has("photoNow") } returns true
+            val now = rig.group(members = members, createdBy = alice.nodeId, photoHash = "photoNow", photoUpdatedAt = rig.nowMs)
+            rig.deliver(alice, rig.groupUpdate(alice, now, sentAt = 8L))
+            assertEquals("photoFar", rig.groupMap[far.id]?.photoHash)
+
+            // …and past it, it wins.
+            rig.nowMs = edge + 1
+            coEvery { rig.blobStore.has("photoClear") } returns true
+            val clear = rig.group(members = members, createdBy = alice.nodeId, photoHash = "photoClear", photoUpdatedAt = rig.nowMs)
+            rig.deliver(alice, rig.groupUpdate(alice, clear, sentAt = 9L))
+            assertEquals("photoClear", rig.groupMap[far.id]?.photoHash)
+            assertEquals(edge + 1, rig.groupMap[far.id]?.photoUpdatedAt)
         }
 
     @Test

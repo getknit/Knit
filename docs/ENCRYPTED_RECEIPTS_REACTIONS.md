@@ -87,8 +87,11 @@ land atomically; a crash re-processes cleanly on re-serve):
   frame (the exists-gate stops a re-delivery before the decrypt, so nothing re-applies).
 - `CTL_REACTION` → `ReactionRepository.apply(messageId, sender, emoji, frame.sentAt)` — the same
   table and the same LWW clock as the cleartext path, so mixed-form retract/replace races converge
-  regardless of which form each emit rode. Orphan-permissive (target may not have arrived; the 24 h
-  reaper bounds junk). Group-form sender authenticity is the chain itself (an adopted seed implies
+  regardless of which form each emit rode. The clock is bounded to `now + Protocol.MAX_FUTURE_SKEW_MS`
+  on both paths before it is stored (the sender picks it; raw, one far-future stamp would outrank every
+  later reaction on that message for every recipient, the sender's own retraction included).
+  Orphan-permissive (target may not have arrived; the 24 h reaper bounds junk). Group-form sender
+  authenticity is the chain itself (an adopted seed implies
   roster membership at adoption); a departed member can still seal reactions under the draining
   chain for ≤48 h — the same window as their in-flight chats, accepted. A refused emoji (§2) is a
   chain-advancing no-op exactly like an unknown ctl code: consumed, counted, nothing applied.

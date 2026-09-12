@@ -88,7 +88,12 @@ free). Two invariants that are easy to break:
   `CTL_PROFILE` sealed inside v2 chat, which is what makes them cross the Internet plane. Both writers
   gate on the sender's **profile version** (`ProfilePayload.version`, the same value the cleartext
   frame puts in its envelope `sentAt`, stored as `PeerEntity.updatedAt`) — never on the carrying
-  frame's own `sentAt`, or a re-sent ctl outranks a genuinely newer profile. The sealed path never
+  frame's own `sentAt`, or a re-sent ctl outranks a genuinely newer profile. Both writers bound that
+  number to `now + Protocol.MAX_FUTURE_SKEW_MS` before it becomes a watermark (`InboundPipeline.clampFuture`,
+  ADR 2026-09.gdhp) — the peer picks it, and stored raw one far-future value freezes their row for good.
+  The same clamp covers every other sender-supplied last-writer-wins clock the pipeline keeps: a reaction's
+  stamp, a group's name and photo clocks, a member's leave and rejoin. Never on the envelope itself (the era
+  gate, ack ids and signatures need the raw `sentAt`). The sealed path never
   touches the pinned key, the prekey, the device tag or the capabilities, and never inserts a peer row.
   **A presentation field rides all three profile layouts together** — `ProfileContent`, `ProfilePayload`
   and the compact `ProfileV2` — or the next sealed update silently reverts it (the `openToChat` precedent in

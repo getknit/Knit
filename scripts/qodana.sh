@@ -13,8 +13,9 @@
 # Neither is `./gradlew lint` / detekt / ktlint: those are different engines with different rules.
 #
 # COST. The linter image is several GB and the first run also does a full Gradle sync inside the
-# container, so budget ~15-30 min cold. Later runs reuse .qodana/cache. Give Docker >= 8 GB of RAM;
-# the engine is an IDE and will OOM below roughly 6.
+# container, so budget ~15-30 min cold. Later runs reuse .qodana/cache. Give Docker >= 14 GB of RAM:
+# the engine is an IDE, and the Gradle + Kotlin daemons its sync spawns live under the same cgroup
+# ceiling — at 8 GB the sync itself was OOM-killed (exit 137, 2026-09-12) before analysis began.
 #
 # Usage:
 #   scripts/qodana.sh                 Scan; write the HTML report + SARIF under .qodana/results.
@@ -26,8 +27,9 @@
 # Env overrides:
 #   QODANA_RESULTS  Results dir (default: .qodana/results)
 #   QODANA_CACHE    Cache dir   (default: .qodana/cache)
-#   QODANA_HEAP     Engine heap        (default: 6g)
-#   QODANA_MEMORY   Container ceiling  (default: 8g; must exceed QODANA_HEAP)
+#   QODANA_HEAP     Engine heap        (default: 8g)
+#   QODANA_MEMORY   Container ceiling  (default: 14g; must exceed QODANA_HEAP by enough for the
+#                                       Gradle and Kotlin daemons the sync spawns — ~6 GB)
 #   QODANA_TOKEN    Optional. Only needed to publish to Qodana Cloud; the Community linter this
 #                   project pins runs fine without one.
 set -euo pipefail
@@ -40,10 +42,12 @@ CACHE="${QODANA_CACHE:-$REPO_ROOT/.qodana/cache}"
 # Heap for the engine, and a hard container ceiling above it. BOTH matter, and the ceiling is not
 # belt-and-braces: uncapped, the IDE grew to 29 GB RSS and tripped the *global* OOM killer, which on
 # this host picks a victim from everything running — the GitLab runner and the spool DB included.
-# --memory turns that into a contained failure that kills only this scan. Keep HEAP under MEMORY:
-# the JVM should hit its own limit and GC, not get SIGKILLed by the cgroup.
-HEAP="${QODANA_HEAP:-6g}"
-MEMORY="${QODANA_MEMORY:-8g}"
+# --memory turns that into a contained failure that kills only this scan. Keep HEAP well under
+# MEMORY: the JVM should hit its own limit and GC, not get SIGKILLed by the cgroup — and the gap is
+# not slack, it is where the Gradle and Kotlin daemons run during the in-container sync. 6g/8g was
+# not enough for that sync (killed at 137 mid-dependency-resolution, 2026-09-12); 8g/14g is.
+HEAP="${QODANA_HEAP:-8g}"
+MEMORY="${QODANA_MEMORY:-14g}"
 SHOW=0
 BASELINE=0
 EXTRA=()

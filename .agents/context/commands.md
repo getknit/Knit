@@ -22,7 +22,7 @@ python3 scripts/adr.py new "<title>" --topics a,b  # scaffold an ADR (mints a co
 python3 scripts/adr.py index                      # regenerate .agents/memory/decisions.md (--check to verify, as CI does)
 bash scripts/ide-diagnostics.sh --list          # changed .kt/.kts/.java files — what to iterate for IDE inspections
 bash scripts/ide-diagnostics.sh <file>          # ...focus one in the RUNNING Studio, then read it via getDiagnostics
-bash scripts/qodana.sh                          # the SAME engine over the whole tree, headless in Docker (~8 GB, slow)
+bash scripts/qodana.sh                          # the SAME engine over the whole tree, headless in Docker (~14 GB, slow)
 bash scripts/qodana.sh --baseline               # ...accept today's findings as qodana.sarif.json, so later runs show only new ones
 # Accessibility (ATF) suite — same checks as the Play pre-launch report; needs API 34+ (@SdkSuppress skips below):
 ./gradlew :app:pixel8api34DebugAndroidTest -PseedDemo=true -Pandroid.testInstrumentationRunnerArguments.package=app.getknit.knit.a11y  # headless emulator

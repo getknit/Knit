@@ -31,8 +31,6 @@ class CommonsRepository(
 
     fun observeMemberIds(conversationId: String): Flow<List<String>> = dao.observeMemberIds(conversationId)
 
-    suspend fun findRow(conversationId: String): CommonsEntity? = dao.find(conversationId)
-
     override suspend fun find(conversationId: String): CommonsRoom? = dao.find(conversationId)?.toRoom()
 
     override suspend fun roots(): List<CommonsRoots> = dao.all().map { CommonsRoots(it.conversationId, it.spoolUrl, it.secret) }

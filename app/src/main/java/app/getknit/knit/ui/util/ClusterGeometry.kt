@@ -25,7 +25,7 @@ fun clusterCells(
     gap: Float,
 ): List<Rect> {
     require(count in GROUP_FACES_MIN..GROUP_FACES_MAX) { "a cluster holds $GROUP_FACES_MIN..$GROUP_FACES_MAX faces, not $count" }
-    require(gap >= 0f && gap < HALF) { "gap must be a fraction in [0, ½), not $gap" }
+    require(gap in 0f..<HALF) { "gap must be a fraction in [0, ½), not $gap" }
     val h = gap / 2f
     val left = Rect(left = 0f, top = 0f, right = HALF - h, bottom = 1f)
     val right = Rect(left = HALF + h, top = 0f, right = 1f, bottom = 1f)

@@ -81,19 +81,19 @@ object Snippets {
     ) {
         /** The original-text range of the earliest token-start occurrence of any token, or null. */
         fun firstHit(tokens: List<String>): IntRange? {
-            var bestAt = -1
+            var bestAt: Int? = null
             var bestLength = 0
             for (token in tokens) {
                 if (token.isEmpty()) continue
                 var at = text.indexOf(token)
                 while (at >= 0 && !SearchQuery.isTokenStart(text, at)) at = text.indexOf(token, at + 1)
-                if (at >= 0 && (bestAt < 0 || at < bestAt)) {
+                if (at >= 0 && (bestAt == null || at < bestAt)) {
                     bestAt = at
                     bestLength = token.length
                 }
             }
-            if (bestAt < 0) return null
-            return starts[bestAt]..(ends[bestAt + bestLength - 1] - 1)
+            val hitAt = bestAt ?: return null
+            return starts[hitAt]..<ends[hitAt + bestLength - 1]
         }
 
         companion object {

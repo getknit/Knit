@@ -453,8 +453,9 @@ class ChatViewModel(
     // Direct Wi-Fi transfers: the app-wide state machine whose live states overlay this thread's records.
     private val transfers: TransferManager,
     // The joined commons (docs/SPOOL_PROTOCOL.md §7.4): a room's name and members, for a commons thread.
-    // Nullable and last so every existing test rig that builds this ViewModel positionally still compiles.
-    private val commons: CommonsRepository? = null,
+    // Nullable and last so every existing test rig that builds this ViewModel positionally still compiles;
+    // a plain parameter, because only the [publicIdentity] initializer reads it.
+    commons: CommonsRepository? = null,
 ) : ViewModel() {
     /** This thread is the broadcast room (vs a 1:1 DM keyed by the peer's node id). */
     private val isRoom = conversationId == Conversations.NEARBY

@@ -148,8 +148,8 @@ class MeshManager(
     private val db: KnitDatabase,
     // Opens WebSocket sessions to spools for [scopeSync]. Null (the default) means the app is built
     // without the Internet plane at all — which is what every unit test wants, and what keeps the mesh
-    // seam free of any transitive knowledge of it.
-    private val spoolDialer: SpoolDialer? = null,
+    // seam free of any transitive knowledge of it. A plain parameter: only the [scopeSync] initializer reads it.
+    spoolDialer: SpoolDialer? = null,
     // The commons (docs/SPOOL_PROTOCOL.md §7.4): the joined rooms, their outbox and their members. Null —
     // every test, and a build with no Internet plane — derives no commons scope and refuses a commons send.
     private val commons: CommonsStore? = null,

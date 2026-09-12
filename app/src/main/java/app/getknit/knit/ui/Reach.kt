@@ -60,8 +60,8 @@ fun reachOf(
     reachable: Set<String>,
     spoolPresent: Set<String>,
 ): Reach =
-    when {
-        nodeId in nearby -> Reach.Direct
-        nodeId in reachable || nodeId in spoolPresent -> Reach.Relay
+    when (nodeId) {
+        in nearby -> Reach.Direct
+        in reachable, in spoolPresent -> Reach.Relay
         else -> Reach.Known
     }

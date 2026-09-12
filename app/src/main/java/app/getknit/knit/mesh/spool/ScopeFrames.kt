@@ -109,14 +109,17 @@ object ScopeFrames {
     fun eligibleForCommons(
         env: RelayEnvelope,
         scopeId: ByteArray,
-    ): Boolean {
-        if (env.recipientId != null || env.group != null) return false
-        return when (env.type) {
-            FrameType.PROFILE -> {
+    ): Boolean =
+        when {
+            env.recipientId != null || env.group != null -> {
+                false
+            }
+
+            env.type == FrameType.PROFILE -> {
                 true
             }
 
-            FrameType.COMMONS -> {
+            env.type == FrameType.COMMONS -> {
                 val post = WireCodec.decodePayload<CommonsPost>(env.payload)
                 post != null && post.scope.contentEquals(scopeId) && post.chat.enc == null && post.chat.attachmentHash == null
             }
@@ -125,7 +128,6 @@ object ScopeFrames {
                 false
             }
         }
-    }
 
     /** The push-side narrowing of [eligibleForCommons]: only our own frames leave this device for a commons. */
     fun pushableToCommons(

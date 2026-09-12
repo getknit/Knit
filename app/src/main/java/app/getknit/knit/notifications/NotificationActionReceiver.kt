@@ -12,6 +12,7 @@ import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.di.isKoinStarted
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.MeshController
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +49,12 @@ class NotificationActionReceiver :
         intent: Intent,
     ) {
         val action = intent.action ?: return
+        // A tap that lands in a restricted-backup-mode process has no graph to act with — see [isKoinStarted].
+        // Dropping it beats crashing: the notification stays, and the user's next tap lands in a normal process.
+        if (!isKoinStarted()) {
+            Log.w(TAG, "notification action $action in a process without the app graph — dropped")
+            return
+        }
         val pending = goAsync()
         scope.launch {
             runCatching {

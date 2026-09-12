@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Log
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.di.isKoinStarted
 import app.getknit.knit.ui.hasAllMeshPermissions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
@@ -37,6 +38,12 @@ class BootReceiver :
         intent: Intent,
     ) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        // Delivered into a restricted-backup-mode process (a setup-wizard restore can straddle boot): there is
+        // no graph to inject from, and the mesh is a job for a normal process — see [isKoinStarted].
+        if (!isKoinStarted()) {
+            Log.w(TAG, "boot broadcast in a process without the app graph — ignoring")
+            return
+        }
         val appContext = context.applicationContext
         val pending = goAsync()
         scope.launch {

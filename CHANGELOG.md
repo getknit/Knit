@@ -81,6 +81,9 @@ document:
 - Someone two phones away from you now shows up as nearby as soon as they arrive. Before, the phone in the
   middle sometimes held on to their details, so you saw them only after a minute or once they had sent
   something.
+- Knit no longer crashes if Android is backing it up at the moment the mesh tries to restart. The restart
+  now waits for the backup to finish, and the mesh comes back on its own rather than staying off until you
+  next open Knit.
 - A new group's first message now opens even when Knit was shut down on your phone between the key arriving
   and the group itself. It used to stay unreadable for up to fifteen minutes after you came back.
 - A contact you could only reach through an Internet relay or a LoRa board showed as Offline on their

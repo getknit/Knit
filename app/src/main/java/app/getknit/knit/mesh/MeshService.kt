@@ -23,6 +23,7 @@ import androidx.lifecycle.lifecycleScope
 import app.getknit.knit.MainActivity
 import app.getknit.knit.R
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.di.isKoinStarted
 import app.getknit.knit.mesh.power.PowerMonitor
 import app.getknit.knit.notifications.NotificationChannels
 import app.getknit.knit.ui.isIgnoringBatteryOptimizations
@@ -56,6 +57,14 @@ class MeshService : LifecycleService() {
      */
     private var foregrounded = false
 
+    /**
+     * The other stillbirth: the system created us in a process that never ran `KnitApplication.onCreate`
+     * (restricted backup mode — see [isKoinStarted]), so there is no graph to resolve and every `by inject()`
+     * above would throw. Unlike a refused foreground start it leaves the heartbeat alarm armed: nothing was
+     * refused, and its next tick lands in a normal process and starts the mesh properly.
+     */
+    private var graphless = false
+
     private val motionListener =
         object : TriggerEventListener() {
             override fun onTrigger(event: TriggerEvent?) {
@@ -66,6 +75,14 @@ class MeshService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
+        // No graph in this process (restricted backup mode): decline before anything resolves it. stopSelf()
+        // clears the sticky restart record; the heartbeat stays armed (see [graphless]).
+        if (!isKoinStarted()) {
+            Log.w(TAG, "created without the app graph (restricted backup mode?) — declining until a normal start")
+            graphless = true
+            stopSelf()
+            return
+        }
         // Channels are normally created at app startup (KnitApplication); ensure defensively in case
         // the process is started straight into the service.
         NotificationChannels.ensure(this)
@@ -122,9 +139,10 @@ class MeshService : LifecycleService() {
         // Nothing was ever started (see [onCreate]); touching the injected fields here would build the very
         // Koin graph the stillbirth path exists to skip. The heartbeat alarm is still cancelled: it needs no
         // graph, and a live one left armed by an earlier ungraceful death would otherwise keep waking the
-        // device every 15 minutes to attempt a background service start the system will refuse.
+        // device every 15 minutes to attempt a background service start the system will refuse. A [graphless]
+        // instance keeps it: that start was never refused, only landed in the wrong process.
         if (!foregrounded) {
-            cancelHeartbeat()
+            if (!graphless) cancelHeartbeat()
             super.onDestroy()
             return
         }

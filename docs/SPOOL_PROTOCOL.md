@@ -976,6 +976,40 @@ spool cannot read its own commons" structural rather than a promise.
 > DM between two members rides the same spool the room does. A member's own first DM to another registers
 > that intro at once.
 
+### 7.5 Send-side moderation
+
+An operator who answers for the people on a spool — a school, a workplace, a household — may require
+that what members send through it has passed the client's own on-device content screen. The spool
+holds ciphertext and can screen nothing itself (§10.2); what it can do is state the requirement in
+HELLO, and a conforming client honours it before it seals. The reference daemon exposes it as
+`SPOOL_REQUIRE_MODERATION`.
+
+| ID          | Requirement                                                                                                                                                                                                                                                                                              |
+|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **S-7.5-1** | A spool that requires send-side moderation advertises `moderation: true` in HELLO. A spool that does not MUST omit the field; `false` is never sent. Presence is the signal.                                                                                                                             |
+| **S-7.5-2** | Nothing else changes at the spool: no record, error code, close code or bound is added, and a spool MUST NOT attempt to infer or enforce compliance — it holds ciphertext and cannot.                                                                                                                    |
+| **C-7.5-3** | A client MUST run its send-side content screen on every frame and attachment it *originates* into a scope that any `moderation`-advertising spool carries, and MUST NOT push content the screen flags — to any spool of that scope, not only the requiring one.                                          |
+| **C-7.5-4** | The block MUST NOT be overridable by the sender. A client that ordinarily offers a "send anyway" confirmation withdraws it for such a scope.                                                                                                                                                              |
+| **C-7.5-5** | Strictest wins: the rule applies while *any* spool the client would push the scope to advertises `moderation`, judged from the HELLOs of the current connections. A client MUST NOT carry a remembered absence past a reconnect.                                                                        |
+| **C-7.5-6** | Receive-side behaviour is the recipient's own: what a client does with content it *receives* — hide, blur, reveal — stays under the recipient's setting, and a spool's `moderation` MUST NOT force or forbid it.                                                                                         |
+| **C-7.5-7** | Frames a client relays but did not originate — the §9.4 mesh bridge, a §9.1 re-push — are outside the rule: the relaying client may not hold the plaintext, and the originator's client was the one bound.                                                                                               |
+
+> **A request, not an enforcement.** A tampered client can ignore the field exactly as it can skip
+> any sender-side check, and no spool can tell. Receive-side screening is what survives a hostile
+> sender, which is why C-7.5-6 leaves it in the recipient's hands rather than letting an operator
+> switch it off along with the sender's override. What the flag buys is that every *conforming*
+> client on the spool refuses the same content the same way, with nothing for a well-meaning sender
+> to click past.
+>
+> **Why strictest wins.** The sender seals a frame once and pushes identical bytes to every spool it
+> knows (§1.2, §4.3). A per-spool split — withhold from the requiring spool, deliver to the rest — would
+> let one operator's policy silently fork the conversation, with the members who reach it only
+> through that spool never learning what they missed.
+>
+> **Why "originates".** The bridge and the heal loop relay sealed bytes. A relaying member may be
+> unable to open them at all, and where it can, the frame was already screened by the client that
+> was bound to screen it.
+
 ## 8. Proof of work [Both]
 
 Stateless Hashcash, the Nostr NIP-13 family, over data both sides already share. No server challenge
@@ -1253,6 +1287,8 @@ a relay.
   unsealing.
 - Replay usefully: content-addressed ids, idempotent delivery, the dead-on-arrival TTL.
 - Withhold *undetectably* when the scope is multi-homed: members see spool divergence via digests.
+- Screen content. `moderation` (§7.5) is a request a conforming client honours, not a check the
+  spool can perform or verify.
 
 ### 10.3 Compromise horizons
 
@@ -1490,6 +1526,10 @@ helloSpoolCommons = a661746568656c6c6f617601636d696e01666c696d697473a6676d617842
                     426c6f621a00010000
 helloSpoolCommonsAttach = a361746568656c6c6f61760167636f6d6d6f6e73a4696d61784672616d65731901f46574746c4d73
                     1a05265c00676d6178426c6f621a0001000066617474616368f5
+helloSpoolModeration = a661746568656c6c6f617601636d696e01666c696d697473a6676d6178426c6f621a00010000696d
+                    61785265636f72641a00020000696d617853636f7065731840676d617850756c6c18406c6d617846
+                    72616d65734361701903e8686d617854746c4d731a240c840067706f7742697473146a6d6f646572
+                    6174696f6ef5
 ahave            = a461746561686176656171056573636f7065582001080f161d242b323940474e555c636a71787f86
                    8d949ba2a9b0b7bec5ccd3da636169645820070e151c232a31383f464d545b626970777e858c939a
                    a1a8afb6bdc4cbd2d9e0
@@ -1527,6 +1567,7 @@ wire.
 | §3.2 group root, §3.3 group scopes              | Shipped                                                                                                                                    | `GroupRootPolicy`, `GroupRootStore`, `GroupKeyPayload.gr`, DB v3 |
 | §3.5 pair scopes                                | Shipped                                                                                                                                    | `ScopeCrypto.pairSecret`, `ScopeRegistry.pairs`, `IntroSync`      |
 | §7.4 the commons                                | Shipped both sides; text and reply quotes only — the room takes no attachments yet whatever the spool advertises                          | `ScopeCrypto.commons*`, `CommonsInvite`, `ScopeSync`, `knit-spool` |
+| §7.5 send-side moderation                       | Spool side shipped (`SPOOL_REQUIRE_MODERATION`); client half not yet implemented — a current client tolerates the field and ignores it (B-2-2) | `knit-spool`                                                     |
 | §4.1–§4.4 sealing and frame rules               | Shipped                                                                                                                                    | `ScopeCrypto`, `ScopeFrames`                                     |
 | §4.5 attachments                                | Shipped                                                                                                                                    | `ScopeCrypto.sealChunk`, `ScopeAttachments`                      |
 | §5 scope config ctl                             | **Reserved, not shipped.** `ctl = 7` is named and never recycled; the spool list is a device setting and bounds are §12 defaults meanwhile | `MessageContent`, `ScopeRegistry`, `SettingsStore.spoolUrls`     |
@@ -1567,3 +1608,4 @@ the plane itself was unaffected either time, since a spool never decodes a frame
 | 2026-08-25 | **Pair scopes (ADR 042).** New §3.5: a scope both members derive from their *identity* DH keys, so a pair that has only exchanged a contact card out of band (`docs/CONTACT_CARD.md`) can meet at a spool before a session exists. Carries the §4.4 DM frame set unchanged; subscribed only while an intro is pending plus a 48 h grace. §1.1/§1.4 wording, §3.4 row, §10.1 bullet, §10.3's identity-file row narrowed to *conversation* scopes, §12 constants, four §13 rows appended                                                                                                                                                                                              | None for spools: one more opaque id. Clients: a new label family under `knit/scope/v1/pair/…`; no record, no existing vector moved                                                                                                |
 | 2026-08-30 | **The accounted set (ADR 062).** New §9.6: a pulled blob that passed §4.4, bridged, and that local custody did not keep is counted as held and never pulled again (C-9.6-1…4), with §12.2 gaining the set bound. Closes the divergence §9.3 was written for, arriving through the one door §9.3 does not cover — a *valid* blob in the 24–48 h band between the mesh custody TTL and the scope TTL, which no client could ever fold into its digest | None for spools. Clients: a scope that has been reporting `converged = false` for the back half of the spool's retention should now settle, and stop re-pulling that band on every reconnect |
 | 2026-09-12 | **The commons (§7.4).** One shared scope per spool for a private relay's membership: the invite grammar, the two derivations (the spool's bare-hash id under the transport-plane prefix, the members' HKDF seal keys), the HELLO advertisement that never carries the id, pinned bounds, no creation gates, the non-striking spool-wide push budget, and the client half — a `profile`-plus-`commons` frame set, a post door that bypasses §9.4, bounded deferral of a post ahead of its author's profile, accounted-by-construction, the member's own profile kept live, single-spool affinity. §1.4 wording, §3.4 row, §12.2 defaults, five §13 derivation rows and two record vectors appended | **Spools:** optional; a spool with no commons omits the field and is unaffected. **Clients:** a new `commons` mesh frame type (non-custodial, additive) and a new label family under `knit/spool/v1/commons…`; no existing record, derivation or vector moved |
+| 2026-09-12 | **Send-side moderation (§7.5).** One optional HELLO bool, `moderation`, by which an operator asks clients to run their on-device content screen before sending and to withhold what it flags, with no sender override; strictest wins across a multi-homed scope; receive-side behaviour untouched; no data-path change at the spool. §10.2 bullet, one §13 record vector appended | **Spools:** optional; a spool that does not set it omits the field and is unaffected. **Clients:** tolerate-and-ignore until the client half lands; no existing record, derivation or vector moved |

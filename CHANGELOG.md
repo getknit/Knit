@@ -37,6 +37,8 @@ document:
 - Tap the magnifier at the top of the chat list to find a chat, a contact, or a message by what it said.
   Open a message from the results and its chat lands on that message. A stranger's message request stays
   out of the results until you accept it.
+- The Support Knit screen now offers GitHub Sponsors alongside Ko-fi and Liberapay. Pick whichever you
+  already have an account on.
 
 ### Changed
 

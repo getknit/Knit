@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Coffee
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Share
@@ -136,6 +137,11 @@ private val DONATION_PLATFORMS =
             R.string.donate_liberapay,
             Icons.Filled.VolunteerActivism,
             "https://liberapay.com/zaventh/",
+        ),
+        DonationPlatform(
+            R.string.donate_github_sponsors,
+            Icons.Filled.Code,
+            "https://github.com/sponsors/getknit",
         ),
         // Add Buy Me a Coffee etc. here later — nothing else changes.
     )

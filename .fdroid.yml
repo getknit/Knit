@@ -27,6 +27,8 @@ WebSite: https://github.com/getknit/knit
 SourceCode: https://github.com/getknit/knit
 IssueTracker: https://github.com/getknit/knit/issues
 Changelog: https://github.com/getknit/knit/releases
+# One free-form URL is all the schema allows, so GitHub Sponsors (github.com/sponsors/getknit) has no
+# field here; the in-app Support screen and the store description list it.
 Donate: https://ko-fi.com/getknit
 # Bare user/group name, not a URL — F-Droid builds the link itself. Field order matters to
 # fdroidserver's canonical writer: Liberapay goes directly after Donate.

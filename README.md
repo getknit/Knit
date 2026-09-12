@@ -471,10 +471,11 @@ security problems.
 
 Knit is free and open source, with no ads, no tracking, and nothing to sell you — it's funded entirely
 by tips. If it's useful to you and you'd like to chip in, you can leave a one-off tip on Ko-fi or set up
-a recurring one on Liberapay:
+a recurring one on Liberapay or GitHub Sponsors:
 
 [![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-leave%20a%20tip-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/zaventh)
 [![Support on Liberapay](https://img.shields.io/badge/Liberapay-give%20recurring-F6C915?logo=liberapay&logoColor=black)](https://liberapay.com/zaventh/)
+[![Sponsor on GitHub](https://img.shields.io/badge/GitHub%20Sponsors-sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/getknit)
 
 Tips are optional and buy no special treatment — Knit is GPLv3 and stays that way. Reporting bugs and
 telling people it exists helps just as much.

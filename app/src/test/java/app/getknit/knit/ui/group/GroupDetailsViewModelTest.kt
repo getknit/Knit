@@ -11,6 +11,7 @@ import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.FakeMeshController
@@ -90,6 +91,21 @@ class GroupDetailsViewModelTest {
                     .first()
                     .isSelf,
             )
+        }
+
+    @Test
+    fun headerFacesFollowNodeIdNotPresenceAndLeaveSelfOut() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer("z", name = "Zed", avatarHash = "hz"), peer("a", name = "Alice"))
+            groupFlow.value = group(groupId = groupId, members = listOf("me", "z", "a"), name = "Trip")
+            mesh.neighbors.value = setOf(Peer("z")) // Zed is online, so the list puts him first
+            advanceUntilIdle()
+
+            val state = vm.state.value
+            assertEquals(listOf("me", "z", "a"), state.members.map { it.nodeId })
+            assertEquals(listOf(GroupFace("a", "Alice", null), GroupFace("z", "Zed", "hz")), state.faces)
         }
 
     @Test

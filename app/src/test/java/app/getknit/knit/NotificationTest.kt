@@ -1,6 +1,9 @@
 package app.getknit.knit
 
+import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.identity.Alias
+import app.getknit.knit.notifications.NotifConversation
+import app.getknit.knit.notifications.NotifFace
 import app.getknit.knit.notifications.NotifMessage
 import app.getknit.knit.notifications.NotificationHistory
 import app.getknit.knit.notifications.incomingNotification
@@ -15,6 +18,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NotificationTest {
+    @Test
+    fun conversationsCompareTheirFacesByContent() {
+        // The hand-written equals must reach into each face's bytes, or two renders of the same cluster differ.
+        fun conv(bytes: ByteArray) =
+            NotifConversation(
+                "g-1",
+                "Crew",
+                null,
+                ConversationKind.GROUP,
+                faces = listOf(NotifFace("a", "Ada", bytes), NotifFace("b", "Bea", null)),
+            )
+        assertEquals(conv(byteArrayOf(1, 2)), conv(byteArrayOf(1, 2)))
+        assertEquals(conv(byteArrayOf(1, 2)).hashCode(), conv(byteArrayOf(1, 2)).hashCode())
+        assertNotEquals(conv(byteArrayOf(1, 2)), conv(byteArrayOf(1, 3)))
+    }
+
     private val bobAvatar = byteArrayOf(1, 2, 3, 4)
 
     private fun msg(

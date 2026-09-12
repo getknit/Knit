@@ -18,6 +18,7 @@ import androidx.core.graphics.createBitmap
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.crash.ProcessExitReasons
 import app.getknit.knit.data.AttachmentStore
+import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
@@ -31,6 +32,8 @@ import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.groupFaceIds
+import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.KnitBoardSetup
 import app.getknit.knit.data.settings.SettingsStore
@@ -51,6 +54,9 @@ import app.getknit.knit.mesh.wifiaware.NanFaultInjector
 import app.getknit.knit.moderation.ModelLoadGuard
 import app.getknit.knit.moderation.ModelLoadPolicy
 import app.getknit.knit.moderation.modelGuardStamp
+import app.getknit.knit.notifications.NotifConversation
+import app.getknit.knit.notifications.NotifFace
+import app.getknit.knit.notifications.NotifMessage
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.review.ReviewPromptPolicy
 import app.getknit.knit.review.ReviewPrompter
@@ -123,6 +129,11 @@ import java.nio.ByteBuffer
  * - [ACTION_REQNOTIF] — posts the coalesced "message request received" heads-up: writes `--ei count N`
  *   (default 1) synthetic unaccepted inbound DMs from unknown peers and calls [Notifier.notifyMessageRequests],
  *   so the UIAutomator suite can drive the real system notification + Requests inbox. Needs POST_NOTIFICATIONS.
+ * - [ACTION_MSGNOTIF] — posts one real incoming-message notification for `--es conv <id>` (a group or DM
+ *   conversation id) from `--es from <peerNodeId>` (default the roster's first other member) with body
+ *   `--es text <body>`, resolving the conversation the way [app.getknit.knit.mesh.InboundPipeline] would —
+ *   title, photo, and for a photo-less group its members' faces — so the shade's avatar can be checked on the
+ *   radio-less build (ADR 2026-09.zapp). Needs POST_NOTIFICATIONS.
  * - [ACTION_FLAGMSG] — injects one synthetic **inbound message the on-device text moderator flagged** (the UI
  *   collapses it behind a tap-to-reveal) as the newest row of `--es conv <id>` (default the broadcast room),
  *   from `--es from <peerNodeId>` (default a synthetic sender, named on upsert) with body `--es text <body>`:
@@ -160,6 +171,7 @@ class DebugBridgeReceiver :
     private val reactions: ReactionRepository by inject()
     private val peers: PeerRepository by inject()
     private val groups: GroupRepository by inject()
+    private val blobs: BlobRepository by inject()
     private val metrics: MeshMetrics by inject()
     private val startGate: MeshStartGate by inject()
     private val identity: Identity by inject()
@@ -236,6 +248,10 @@ class DebugBridgeReceiver :
 
                         ACTION_REQNOTIF -> {
                             handleReqNotif(intent)
+                        }
+
+                        ACTION_MSGNOTIF -> {
+                            handleMsgNotif(intent)
                         }
 
                         ACTION_FLAGMSG -> {
@@ -851,6 +867,63 @@ class DebugBridgeReceiver :
         // The exact call InboundPipeline makes when it silences a stranger's first contact as a request.
         notifier.notifyMessageRequests(count)
         return reply("ok", "posted $count message request(s)").put("count", count)
+    }
+
+    /**
+     * Posts one incoming-message notification for a seeded conversation, the seam for checking the shade's
+     * avatar on the radio-less build — the twin of what [app.getknit.knit.mesh.InboundPipeline.resolveConversation]
+     * hands the notifier: a DM's peer name and avatar, a group's title and photo, and for a photo-less group the
+     * `groupFaceIds` pick resolved to bytes, so `NotificationAvatars.clusterAvatar` draws what the list does.
+     * `--es conv <id>` (required), `--es from <peerNodeId>` (default the first other member / the DM peer),
+     * `--es text <body>`. The app must hold `POST_NOTIFICATIONS` or the post silently no-ops.
+     */
+    private suspend fun handleMsgNotif(intent: Intent): JSONObject {
+        val conv = intent.getStringExtra(EXTRA_CONV) ?: return JSONObject().put("error", "missing --es conv <id>")
+        val me = identity.nodeId()
+        val kind = Conversations.kindFor(conv)
+        val group = if (kind == ConversationKind.GROUP) groups.find(conv) else null
+        val memberIds = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+        val labels = peers.labelIndex()
+        val from = intent.getStringExtra(EXTRA_FROM) ?: memberIds.firstOrNull { it != me } ?: conv
+        val fromName = labels.labelFor(from).text
+        val fromAvatar = peers.find(from)?.avatarHash?.let { blobs.bytes(it) }
+        val body = intent.getStringExtra(EXTRA_TEXT) ?: "Shade check"
+        val conversation =
+            when (kind) {
+                ConversationKind.GROUP -> {
+                    val title =
+                        group?.let {
+                            groupTitle(it.name, memberIds, me, fallback = "") { id -> labels.labelFor(id).text }.ifBlank { null }
+                        }
+                    val photo = group?.photoHash?.let { blobs.bytes(it) }
+                    val faces =
+                        if (photo != null) {
+                            emptyList()
+                        } else {
+                            groupFaceIds(memberIds, me).map { id ->
+                                NotifFace(id, labels.labelFor(id).text, peers.find(id)?.avatarHash?.let { blobs.bytes(it) })
+                            }
+                        }
+                    NotifConversation(conv, title, photo, kind, faces)
+                }
+
+                ConversationKind.DM -> {
+                    NotifConversation(conv, fromName, fromAvatar, kind)
+                }
+
+                else -> {
+                    NotifConversation(conv, null, null, kind)
+                }
+            }
+        val incoming = NotifMessage(from, fromName, body, System.currentTimeMillis(), conv, fromAvatar)
+        notifier.createChannel()
+        notifier.notify(incoming, conversation, me, settings.displayName.first(), settings.ownAvatarHash.first()?.let { blobs.bytes(it) })
+        return JSONObject()
+            .put("conv", conv)
+            .put("kind", kind.name)
+            .put("title", conversation.title)
+            .put("faces", JSONArray(conversation.faces.map { it.nodeId }))
+            .put("photo", conversation.avatarBytes != null)
     }
 
     /**
@@ -1543,6 +1616,7 @@ class DebugBridgeReceiver :
         const val ACTION_NANFAIL = "app.getknit.knit.debug.NANFAIL"
         const val ACTION_NANSTORM = "app.getknit.knit.debug.NANSTORM"
         const val ACTION_REQNOTIF = "app.getknit.knit.debug.REQNOTIF"
+        const val ACTION_MSGNOTIF = "app.getknit.knit.debug.MSGNOTIF"
         const val ACTION_FLAGMSG = "app.getknit.knit.debug.FLAGMSG"
         const val ACTION_MKGROUP = "app.getknit.knit.debug.MKGROUP"
         const val ACTION_LEAVE = "app.getknit.knit.debug.LEAVE"

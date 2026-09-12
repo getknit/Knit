@@ -24,4 +24,13 @@ object KnitIcons {
     val DirectTransfer: ImageVector
         @Composable
         get() = ImageVector.vectorResource(R.drawable.ic_direct_transfer)
+
+    /**
+     * A group with no photo and too few members to draw as a cluster: Material's own "group" glyph, but as
+     * a resource rather than `Icons.Filled.Group`, because the notification shade paints the same fallback
+     * disc onto a `Bitmap` and an [ImageVector] cannot be drawn there. ADR 2026-09.zapp.
+     */
+    val Group: ImageVector
+        @Composable
+        get() = ImageVector.vectorResource(R.drawable.ic_group_glyph)
 }

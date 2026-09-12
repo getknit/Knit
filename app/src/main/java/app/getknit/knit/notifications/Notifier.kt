@@ -43,28 +43,58 @@ data class NotifMessage(
 }
 
 /**
+ * One member of a photo-less group's cluster as the shade draws it (ADR 2026-09.zapp): the shade's twin of
+ * `GroupFace`, carrying the member's raw avatar bytes (or null for their tinted initial) in place of a hash,
+ * for the same reason [NotifMessage] does.
+ */
+data class NotifFace(
+    val nodeId: String,
+    val name: String,
+    val avatarBytes: ByteArray?,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is NotifFace) return false
+        return nodeId == other.nodeId &&
+            name == other.name &&
+            avatarBytes.contentEquals(other.avatarBytes)
+    }
+
+    override fun hashCode(): Int {
+        var result = nodeId.hashCode()
+        result = 31 * result + name.hashCode()
+        result = 31 * result + (avatarBytes?.contentHashCode() ?: 0)
+        return result
+    }
+}
+
+/**
  * Conversation-level context for a notification: the resolved thread [title] and its avatar (group photo
  * / DM peer avatar) shown as the notification's large icon, plus the [kind] used to pick the channel and
  * MessagingStyle shape. [title] is `null` when the caller has no dynamic name to offer — [MessageNotifier]
  * then substitutes a per-kind default (the Nearby room title, or an unnamed-group fallback). [avatarBytes]
  * are raw image bytes from the encrypted blob store (decoded directly, since notifications can't use Coil),
- * or null for the letter/glyph fallback.
+ * or null for the letter/glyph fallback. [faces] is the cluster a photo-less group draws instead — the
+ * caller's `groupFaceIds` pick, already ordered, resolved to bytes; empty for anything else, and for a
+ * group whose [avatarBytes] cover it.
  */
 data class NotifConversation(
     val conversationId: String,
     val title: String?,
     val avatarBytes: ByteArray?,
     val kind: ConversationKind,
+    val faces: List<NotifFace> = emptyList(),
 ) {
     // ByteArray needs content-based equals/hashCode (the generated reference comparison would make two
-    // otherwise-identical conversations unequal).
+    // otherwise-identical conversations unequal). The faces delegate to NotifFace's, which does the same.
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is NotifConversation) return false
         return conversationId == other.conversationId &&
             title == other.title &&
             kind == other.kind &&
-            avatarBytes.contentEquals(other.avatarBytes)
+            avatarBytes.contentEquals(other.avatarBytes) &&
+            faces == other.faces
     }
 
     override fun hashCode(): Int {
@@ -72,6 +102,7 @@ data class NotifConversation(
         result = 31 * result + (title?.hashCode() ?: 0)
         result = 31 * result + kind.hashCode()
         result = 31 * result + (avatarBytes?.contentHashCode() ?: 0)
+        result = 31 * result + faces.hashCode()
         return result
     }
 }

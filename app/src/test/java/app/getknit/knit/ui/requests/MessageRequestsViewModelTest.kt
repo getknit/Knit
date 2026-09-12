@@ -114,6 +114,21 @@ class MessageRequestsViewModelTest {
         }
 
     @Test
+    fun aStrangerGroupRequestCarriesTheOtherMembersAsFaces() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.requests.collect {} }
+            // Two strangers the peer table has never named: the faces still come, labelled by alias, no photos.
+            groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "river7x2", "noah9q1"), name = "Ridge Run"))
+            store.set(msg(senderId = "river7x2", sentAt = 100, conversationId = "g-1", body = "join us"))
+            advanceUntilIdle()
+
+            val row = vm.requests.value.single()
+            assertEquals(listOf("noah9q1", "river7x2"), row.faces.map { it.nodeId })
+            assertTrue(row.faces.all { it.avatarHash == null && it.name.isNotBlank() })
+        }
+
+    @Test
     fun aGroupAKnownPeerHasPostedInIsNotARequest() =
         runTest {
             val vm = vm()

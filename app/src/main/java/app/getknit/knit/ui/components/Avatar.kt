@@ -148,20 +148,24 @@ fun Avatar(
 
 /**
  * The fallback shown when there's no usable avatar image: a single uppercased initial of [name],
- * centered in the circle. Scaled to ~half the circle's diameter (Google/Signal-style fill) instead of
- * a fixed type ramp that looks tiny in large avatars — the size is derived from the dp diameter via
- * [androidx.compose.ui.unit.Dp.toSp] so it ignores the user's font scale and always fits the fixed-size
- * circle. The inherited lineHeight is reset so the (now much larger) glyph isn't clipped by the base
- * style's box.
+ * centered in the circle. Scaled to [initialFraction] of the circle's diameter — half by default, the
+ * Google/Signal-style fill — instead of a fixed type ramp that looks tiny in large avatars; the size is
+ * derived from the dp diameter via [androidx.compose.ui.unit.Dp.toSp] so it ignores the user's font scale
+ * and always fits the fixed-size circle. The inherited lineHeight is reset so the (now much larger) glyph
+ * isn't clipped by the base style's box.
+ *
+ * Shared with [GroupAvatar]'s member cells, which pass the cell's short side as [size]; the fraction is
+ * the knob a cell can turn without touching the disc.
  */
 @Composable
-private fun AvatarInitial(
+internal fun AvatarInitial(
     name: String,
     size: Dp,
     textStyle: TextStyle,
     contentColor: Color,
+    initialFraction: Float = INITIAL_FRACTION,
 ) {
-    val initialSize = with(LocalDensity.current) { (size * 0.5f).toSp() }
+    val initialSize = with(LocalDensity.current) { (size * initialFraction).toSp() }
     Text(
         text = avatarInitial(name),
         style = textStyle.copy(fontSize = initialSize, lineHeight = TextUnit.Unspecified),
@@ -181,8 +185,11 @@ private fun AvatarInitial(
  * sequence, skin-tone modifier, or a regional-indicator flag pair); taking the first `Char` would
  * slice off a lone surrogate that the font then draws as a missing-glyph "?". The iterator advances
  * by extended grapheme cluster (ICU-backed on Android), so the whole cluster is taken as one unit.
+ *
+ * The one initial rule: `MessageNotifier` draws its letter avatars from it too, so the shade's face is the
+ * list's.
  */
-private fun avatarInitial(name: String): String {
+internal fun avatarInitial(name: String): String {
     val trimmed = name.trimStart()
     if (trimmed.isEmpty()) return "?"
     val boundary = BreakIterator.getCharacterInstance().apply { setText(trimmed) }
@@ -190,6 +197,9 @@ private fun avatarInitial(name: String): String {
     val grapheme = if (end == BreakIterator.DONE) trimmed else trimmed.substring(0, end)
     return grapheme.uppercase()
 }
+
+/** The initial's height as a fraction of the disc — or, in a cluster cell, of the cell's short side. */
+private const val INITIAL_FRACTION = 0.5f
 
 // Previews use the initial-letter fallback (avatarHash = null); a real hash would render through Coil,
 // which has no DB-backed blob bytes in a preview and so would only show a placeholder.

@@ -279,7 +279,7 @@ private fun RequestRowItem(
 }
 
 /**
- * Leading glyph: the group photo (or people glyph) for a group request, an [Avatar] for a DM request.
+ * Leading glyph: the group photo (or its members' cluster) for a group request, an [Avatar] for a DM request.
  * The DM avatar is tappable — it opens the sender's profile (where Message accepts the request and opens
  * the DM). A group request has no single peer, so its glyph stays non-interactive.
  */
@@ -290,7 +290,7 @@ private fun RequestLeadingVisual(
 ) {
     val size = 44.dp
     if (row.isGroup) {
-        GroupAvatar(photoHash = row.avatarHash, size = size)
+        GroupAvatar(photoHash = row.avatarHash, groupId = row.conversationId, faces = row.faces, size = size)
     } else {
         Avatar(
             avatarHash = row.avatarHash,

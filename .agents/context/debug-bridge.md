@@ -163,6 +163,13 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   (default a synthetic sender) with body `--es text <body>`. The radio-less build never receives a real
   flagged message and the marketing seed carries none, so this is the only way to drive the
   `moderation_text_hidden` reveal path (used by `uiauto/ModerationRevealUiAutomatorTest`).
+- `…debug.MSGNOTIF` — posts one **real incoming-message notification** for `--es conv <id>` (a `g-…` group or
+  a DM peer id) from `--es from <peerNodeId>` (default the roster's first other member) with `--es text <body>`,
+  resolving the conversation the way `InboundPipeline` would — title, photo, and for a photo-less group its
+  members' faces (ADR 2026-09.zapp) — so the **shade's avatar** can be checked on the radio-less build, which
+  never runs the pipeline. The reply names the `faces` it sent. Needs `POST_NOTIFICATIONS`
+  (`pm grant app.getknit.knit android.permission.POST_NOTIFICATIONS`); expand the shade with
+  `cmd statusbar expand-notifications` and screencap.
 
 ```
 # send on A, then confirm it landed on B — no UI, no screenshots. Outer quotes matter: adb re-parses

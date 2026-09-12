@@ -13,7 +13,9 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.groupFaces
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
@@ -44,6 +46,8 @@ data class RequestRow(
     val lastMessageAt: Long?,
     // The ` (Alias)` suffix already inside [title] when another known peer shares this DM peer's name (ADR 058).
     val discriminator: String? = null,
+    // The other members a photo-less group request draws as its glyph (`groupFaces`, ADR 2026-09.zapp); empty for a DM.
+    val faces: List<GroupFace> = emptyList(),
 )
 
 /**
@@ -121,11 +125,12 @@ class MessageRequestsViewModel(
         val isGroup = Conversations.kindFor(conversationId) == ConversationKind.GROUP
         // A group we've already left (or that has no roster row yet) isn't an active request.
         if (isGroup && (group == null || group.left)) return null
+        val memberIds = if (isGroup) GroupMembersStore.decode(group?.members ?: "") else emptyList()
         val title =
             if (isGroup) {
                 groupTitle(
                     storedName = group?.name ?: "",
-                    memberIds = GroupMembersStore.decode(group?.members ?: ""),
+                    memberIds = memberIds,
                     selfId = me,
                     fallback = context.getString(R.string.group_unnamed),
                 ) { id -> directory.label(id).text }
@@ -140,6 +145,7 @@ class MessageRequestsViewModel(
             lastPreview = last?.let { previewFor(it, directory, isGroup) },
             lastMessageAt = last?.sentAt,
             discriminator = if (isGroup) null else directory.label(conversationId).discriminator,
+            faces = if (isGroup) groupFaces(memberIds, me, directory) else emptyList(),
         )
     }
 

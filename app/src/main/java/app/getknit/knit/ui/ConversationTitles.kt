@@ -7,7 +7,9 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.groupFaces
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.meshRoomChannel
 import app.getknit.knit.mesh.lora.LoraPlane
@@ -31,6 +33,12 @@ internal data class ConversationTitle(
     val avatarHash: String?,
     /** The group's row, for a group; null otherwise. */
     val group: GroupEntity? = null,
+    /**
+     * The other members a photo-less group draws as its avatar (`groupFaces`: self left out, by node id, at
+     * most four; empty under two), so every list built from these titles shows the same cluster. Empty for
+     * a DM or a room.
+     */
+    val faces: List<GroupFace> = emptyList(),
 ) {
     val isRoom: Boolean get() = kind == ConversationKind.NEARBY || kind == ConversationKind.MESHTASTIC
 }
@@ -71,18 +79,20 @@ internal fun conversationTitle(
         }
 
         ConversationKind.GROUP -> {
+            val memberIds = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
             ConversationTitle(
                 conversationId,
                 kind,
                 groupTitle(
                     storedName = group?.name.orEmpty(),
-                    memberIds = group?.let { GroupMembersStore.decode(it.members) }.orEmpty(),
+                    memberIds = memberIds,
                     selfId = me,
                     fallback = context.getString(R.string.group_unnamed),
                 ) { id -> directory.label(id).text },
                 discriminator = null,
                 avatarHash = group?.photoHash,
                 group = group,
+                faces = groupFaces(memberIds, me, directory),
             )
         }
 

@@ -10,6 +10,7 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
@@ -221,6 +222,33 @@ class SearchViewModelTest {
             val chats = vm.state.value.chats
             assertEquals(setOf("g-1"), chats.map { it.id }.toSet())
             assertEquals("Sam Rivera & Dani Cho", chats.single().title)
+        }
+
+    @Test
+    fun aGroupHitAndItsMessagesCarryTheSameFacesAsTheChatList() =
+        runTest {
+            seedHistory()
+            groupsFlow.value = listOf(group("g-1", members = listOf("me", "sam", "dani"), createdAt = 5))
+            store.add(msg("sam", 50, "g-1", body = "Carpool from the usual spot?", id = "g1"))
+            val vm = vm()
+            start(vm)
+
+            search(vm, "carpool")
+            val faces = listOf(GroupFace("dani", "Dani Cho", null), GroupFace("sam", "Sam Rivera", null))
+            assertEquals(
+                faces,
+                vm.state.value.messages
+                    .single()
+                    .faces,
+            )
+
+            search(vm, "dani")
+            assertEquals(
+                faces,
+                vm.state.value.chats
+                    .single()
+                    .faces,
+            )
         }
 
     @Test

@@ -8,6 +8,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.TransferPhase
 import app.getknit.knit.location.GeoPoint
@@ -554,6 +556,29 @@ class ChatScreenContentTest {
 
         compose.onNodeWithTag("chat_verified_shield", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("You verified Bob", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    /** The cluster branch must leave the tappable root — and its tag, which five device tests wait on — in place. */
+    @Test
+    fun aGroupHeaderDrawingItsMembersClusterKeepsItsTappableAvatar() {
+        val faces = listOf("a", "b", "c").map { GroupFace(nodeId = it, name = it.uppercase(), avatarHash = null) }
+        compose.setContent(
+            content(
+                input = "",
+                state =
+                    ChatUiState(
+                        isRoom = false,
+                        isGroup = true,
+                        myNodeId = "me",
+                        title = "Trailhead Crew",
+                        memberCount = 4,
+                        groupFaces = faces,
+                        rows = rows(1),
+                    ),
+            ),
+        )
+
+        compose.onNodeWithTag("chat_group_avatar").assertIsDisplayed().assertHasClickAction()
     }
 
     @Test

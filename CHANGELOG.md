@@ -58,6 +58,9 @@ document:
 - A contact with no photo now gets their own colour behind their initial, and Knit picks the same one on
   every phone and in your notifications. A chat list full of people without photos no longer looks like a
   row of identical grey circles.
+- A group with no photo now shows the people in it, up to four faces in one circle, where a grey icon used
+  to sit. Its notifications carry the same faces, and a group with only one other person gets a coloured
+  group icon instead.
 - Enter in the message field now starts a new line instead of sending. The send button sends, so you can
   write a message across several lines before you tap it, and on a hardware keyboard Ctrl+Enter sends too.
 - The menu that pops up over a text field no longer offers Autofill. Android puts it on any box that could

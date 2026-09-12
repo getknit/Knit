@@ -13,6 +13,7 @@ import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.relay.RelayFacts
@@ -392,6 +393,23 @@ class ChatListViewModelTest {
             // ada DM (200) > nearby (100) > empty group (createdAt 50, its stand-in lastMessageAt).
             assertEquals(listOf("ada", Conversations.NEARBY, "g-1"), convos.map { it.id })
             assertEquals(50L, convos.first { it.id == "g-1" }.lastMessageAt)
+        }
+
+    @Test
+    fun aPhotoLessGroupRowCarriesItsOtherMembersFacesByNodeId() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer("x", name = "Xi"), peer("b", name = "Bea", avatarHash = "hb"))
+            // Roster order is x-first; the faces are by node id, and never include us.
+            groupsFlow.value = listOf(group(groupId = "g-1", members = listOf("me", "x", "b"), createdAt = 50))
+            acceptedFlow.value = setOf("g-1")
+            advanceUntilIdle()
+
+            val row =
+                vm.state.value.conversations
+                    .single { it.id == "g-1" }
+            assertEquals(listOf(GroupFace("b", "Bea", "hb"), GroupFace("x", "Xi", null)), row.faces)
         }
 
     @Test

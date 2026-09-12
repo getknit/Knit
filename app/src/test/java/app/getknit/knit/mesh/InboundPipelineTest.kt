@@ -74,6 +74,7 @@ import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import app.getknit.knit.mesh.spool.ScopeSync
 import app.getknit.knit.moderation.ImageScreeningService
+import app.getknit.knit.notifications.NotifConversation
 import app.getknit.knit.notifications.NotifMessage
 import app.getknit.knit.notifications.Notifier
 import com.google.crypto.tink.InsecureSecretKeyAccess
@@ -93,6 +94,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -2079,6 +2081,62 @@ class InboundPipelineTest {
 
             assertEquals("team hi", rig.msgMap["gm1"]?.body)
             coVerify { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun aPhotoLessGroupNotificationCarriesItsOtherMembersFacesByNodeId() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pin(alice)
+            rig.pin(bob)
+            // Alice has a photo the blob store can hand over; Bob has none and will get a tinted initial.
+            rig.peerMap[alice.nodeId] = rig.peerMap.getValue(alice.nodeId).copy(name = "Alice", avatarHash = "av-alice")
+            coEvery { rig.blobs.bytes("av-alice") } returns byteArrayOf(1, 2, 3)
+            // Roster order puts Bob first; the faces must not.
+            val group = rig.group(members = listOf(rig.self.nodeId, bob.nodeId, alice.nodeId), createdBy = alice.nodeId, name = "Crew")
+            rig.settings.accepted.value = setOf(group.id)
+
+            rig.deliver(alice, rig.groupChat(alice, group, id = "gm2", body = "faces?"))
+
+            val conv = slot<NotifConversation>()
+            coVerify { rig.notifier.notify(any(), capture(conv), any(), any(), any()) }
+            val faces = conv.captured.faces
+            assertEquals(listOf(alice.nodeId, bob.nodeId).sorted(), faces.map { it.nodeId })
+            val aliceFace = faces.single { it.nodeId == alice.nodeId }
+            assertEquals("Alice", aliceFace.name)
+            assertArrayEquals(byteArrayOf(1, 2, 3), aliceFace.avatarBytes)
+            assertNull("no photo, no bytes — the shade draws Bob's initial", faces.single { it.nodeId == bob.nodeId }.avatarBytes)
+        }
+
+    @Test
+    fun aGroupWithAPhotoCarriesNoFacesToTheShade() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pin(alice)
+            rig.pin(bob)
+            // A stored photoHash always renders, so the pipeline adopts one only once its bytes are local.
+            coEvery { rig.blobStore.has("group-photo") } returns true
+            coEvery { rig.blobs.bytes("group-photo") } returns byteArrayOf(9)
+            val group =
+                rig.group(
+                    members = listOf(rig.self.nodeId, alice.nodeId, bob.nodeId),
+                    createdBy = alice.nodeId,
+                    name = "Crew",
+                    photoHash = "group-photo",
+                    photoUpdatedAt = 3L,
+                )
+            rig.settings.accepted.value = setOf(group.id)
+
+            rig.deliver(alice, rig.groupChat(alice, group, id = "gm3", body = "photo covers us"))
+
+            val conv = slot<NotifConversation>()
+            coVerify { rig.notifier.notify(any(), capture(conv), any(), any(), any()) }
+            assertArrayEquals(byteArrayOf(9), conv.captured.avatarBytes)
+            assertTrue("the photo is the icon; the members are not read", conv.captured.faces.isEmpty())
         }
 
     // --- direct-transfer signaling (CTL_TRANSFER, transfer/TransferManager) ---

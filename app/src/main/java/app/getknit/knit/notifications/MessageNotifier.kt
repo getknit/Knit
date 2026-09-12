@@ -7,17 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.format.Formatter
 import android.text.style.StyleSpan
-import android.util.LruCache
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.ui.graphics.toArgb
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -26,17 +21,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
-import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.IconCompat
 import app.getknit.knit.MainActivity
 import app.getknit.knit.R
-import app.getknit.knit.data.decodeBoundedFromBytes
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
-import app.getknit.knit.ui.theme.AvatarTintsLight
 import app.getknit.knit.ui.theme.ThemePreferences
-import app.getknit.knit.ui.theme.avatarTintIndex
-import java.text.BreakIterator
 
 /**
  * Builds and posts "new message" notifications, Signal-style: **one MessagingStyle notification per
@@ -58,11 +48,14 @@ import java.text.BreakIterator
  */
 class MessageNotifier(
     private val context: Context,
-    // Only read for the letter avatar: whether the app is on the wallpaper palette, so the tile in the shade
+    // Only read by the avatar painter: whether the app is on the wallpaper palette, so the tile in the shade
     // can be harmonized the way the one in the list is.
-    private val themePrefs: ThemePreferences,
+    themePrefs: ThemePreferences,
 ) : Notifier {
     private val manager = NotificationManagerCompat.from(context)
+
+    /** Every bitmap a notification shows — decoded photos and the generated fallbacks — lives in here. */
+    private val avatars = NotificationAvatars(context, themePrefs)
 
     /** The conversation currently on screen, or null when none is. */
     @Volatile
@@ -95,6 +88,9 @@ class MessageNotifier(
         var kind: ConversationKind = ConversationKind.DM
         var title: String? = null
         var avatarBytes: ByteArray? = null
+
+        /** A photo-less group's cluster; kept here so an inline reply's re-render draws it too. */
+        var faces: List<NotifFace> = emptyList()
     }
 
     /** Immutable snapshot of a [ConvState] captured under the lock, so building/posting stays lock-free. */
@@ -105,27 +101,12 @@ class MessageNotifier(
         val isMention: Boolean,
         val title: String?,
         val avatarBytes: ByteArray?,
+        val faces: List<NotifFace>,
         val messages: List<NotifMessage>,
     )
 
     /** Guards [states]; every mutation + snapshot happens under it. */
     private val states = LinkedHashMap<String, ConvState>()
-
-    /**
-     * Decoded avatars, keyed by the content hash of their bytes. One post decodes the same JPEG once per
-     * message ([NotificationHistory] holds 8) plus self, and [postSummary] posts again right after — so
-     * without this a busy thread re-decodes one avatar ten times. Content-keyed, so a peer *changing*
-     * their avatar simply misses. Budgeted in bytes rather than entries because a 256² ARGB_8888 bitmap
-     * is 256 kB; [LruCache] is internally synchronized, which matters because [bitmapFor] runs outside
-     * the [states] lock.
-     */
-    private val avatarCache =
-        object : LruCache<Int, Bitmap>(AVATAR_CACHE_BYTES) {
-            override fun sizeOf(
-                key: Int,
-                value: Bitmap,
-            ): Int = value.allocationByteCount
-        }
 
     override fun createChannel() = NotificationChannels.ensure(context)
 
@@ -164,6 +145,7 @@ class MessageNotifier(
                 state.kind = conversation.kind
                 state.title = conversation.title
                 state.avatarBytes = conversation.avatarBytes
+                state.faces = conversation.faces
                 state.count += 1
                 renderOf(state, state.history.add(incoming))
             }
@@ -259,7 +241,7 @@ class MessageNotifier(
             }
         // One person: their face (keyed on the name for the letter fallback — no identity reaches here);
         // several: the room the cue points at.
-        val largeIcon = if (single) bitmapFor(avatarBytes) ?: letterAvatar(names[0], names[0]) else roomAvatar()
+        val largeIcon = if (single) avatars.bitmapFor(avatarBytes) ?: avatars.letterAvatar(names[0], names[0]) else avatars.roomAvatar()
         val notification =
             NotificationCompat
                 .Builder(context, NotificationChannels.OPEN_TO_CHAT)
@@ -298,7 +280,7 @@ class MessageNotifier(
                 .Builder(context, NotificationChannels.DMS)
                 // The feature's own mark, which is the whole reason this is not a line in the thread.
                 .setSmallIcon(R.drawable.ic_direct_transfer)
-                .setLargeIcon(bitmapFor(peerAvatarBytes) ?: letterAvatar(peerName, peerId))
+                .setLargeIcon(avatars.bitmapFor(peerAvatarBytes) ?: avatars.letterAvatar(peerName, peerId))
                 .setContentTitle(peerName)
                 .setContentText(text)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -374,6 +356,7 @@ class MessageNotifier(
         isMention = state.isMention,
         title = state.title,
         avatarBytes = state.avatarBytes,
+        faces = state.faces,
         messages = messages,
     )
 
@@ -399,7 +382,7 @@ class MessageNotifier(
         // notification at it — that gives the Signal-style avatar in the collapsed, group-child, and heads-up
         // views (Conversations section).
         val title = displayTitle(r.kind, r.title)
-        val avatar = bitmapFor(r.avatarBytes) ?: fallbackAvatar(r.kind, title, key = r.conversationId)
+        val avatar = avatars.bitmapFor(r.avatarBytes) ?: avatars.fallbackAvatar(r.kind, title, key = r.conversationId, faces = r.faces)
         pushConversationShortcut(r.conversationId, title, avatar)
 
         val channelId = if (r.isMention) NotificationChannels.MENTIONS else NotificationChannels.channelFor(r.kind)
@@ -577,7 +560,7 @@ class MessageNotifier(
             .Builder()
             .setKey(id)
             .setName(display)
-            .setIcon(IconCompat.createWithAdaptiveBitmap(bitmapFor(avatarBytes) ?: letterAvatar(display, key = id)))
+            .setIcon(IconCompat.createWithAdaptiveBitmap(avatars.bitmapFor(avatarBytes) ?: avatars.letterAvatar(display, key = id)))
             .build()
     }
 
@@ -592,109 +575,6 @@ class MessageNotifier(
             ConversationKind.GROUP -> context.getString(R.string.group_unnamed)
             ConversationKind.DM -> "?"
         }
-
-    /**
-     * Decodes an avatar for the notification, **bounded** to [AVATAR_PX] on each edge via
-     * [decodeBoundedFromBytes] — these bytes are peer-supplied (a profile frame off the mesh), and while
-     * the blob's byte size is bounded its *pixel* count is not, so a small, highly compressible image
-     * would otherwise decode to hundreds of MB. Null (unreadable bytes) falls back to a generated avatar
-     * at the caller; only successes are cached.
-     */
-    private fun bitmapFor(bytes: ByteArray?): Bitmap? {
-        if (bytes == null) return null
-        val key = bytes.contentHashCode()
-        avatarCache.get(key)?.let { return it }
-        val bitmap = runCatching { decodeBoundedFromBytes(bytes, AVATAR_PX) }.getOrNull() ?: return null
-        avatarCache.put(key, bitmap)
-        return bitmap
-    }
-
-    /**
-     * The photoless avatar for a conversation: a public room gets the Knit mesh mark (matching the chat
-     * list's room glyph), everything else gets a [letterAvatar] on its title initial, colored by
-     * the conversation [key].
-     */
-    private fun fallbackAvatar(
-        kind: ConversationKind,
-        title: String,
-        key: String,
-    ): Bitmap =
-        if (kind == ConversationKind.NEARBY || kind == ConversationKind.MESHTASTIC) {
-            roomAvatar()
-        } else {
-            letterAvatar(title, key)
-        }
-
-    /**
-     * The Nearby/broadcast room's icon: the Knit mesh mark ([R.drawable.ic_knit_room], the circular variant)
-     * drawn edge-to-edge, the notification twin of the chat list's room glyph (`CircleGlyph` — a
-     * `secondaryContainer` background with the `onSecondaryContainer`-tinted logo filling the circle). The
-     * logo's own disc is the [logoTint] color and its mesh cut-outs reveal the [background] beneath, so the
-     * two-tone circle carries its own contrast — fixed to the light-scheme pair to stay legible on either a
-     * light or dark notification shade. The adaptive mask rounds the square bitmap to the same circle.
-     */
-    private fun roomAvatar(): Bitmap {
-        // CoralSecondaryContainerLight / CoralOnSecondaryContainerLight — the chat-list room glyph colors.
-        val background = 0xFFE0E0EC.toInt()
-        val logoTint = 0xFF181824.toInt()
-        val bitmap = createBitmap(AVATAR_PX, AVATAR_PX)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(background)
-        ContextCompat.getDrawable(context, R.drawable.ic_knit_room)?.mutate()?.apply {
-            setTint(logoTint)
-            setBounds(0, 0, AVATAR_PX, AVATAR_PX)
-            draw(canvas)
-        }
-        return bitmap
-    }
-
-    /**
-     * A generated avatar for [name] when it has no photo: a circle (the adaptive mask rounds the filled
-     * square) colored deterministically by the identity [key] — the node id, or a conversation id — with the
-     * leading grapheme initial, the same initial rule as the in-app [app.getknit.knit.ui.components.Avatar]
-     * fallback. Keyed on the identity rather than the name so two people with the same name at least
-     * differ in shade (ADR 058), and drawn from the same palette and slot as the in-app avatar
-     * ([AvatarTintsLight] via [avatarTintIndex], ADR 2026-09.j8c7), so the face in the shade is the face in
-     * the list. Fixed to the light pair for the same reason [roomAvatar] is: the shade's own polarity is
-     * the system's, not the app's, and a tone-85 disc with a tone-10 initial reads on either. When the app
-     * is on the wallpaper palette the tint is harmonized toward the same primary `KnitTheme` uses, so the
-     * two stay identical there too.
-     */
-    private fun letterAvatar(
-        name: String,
-        key: String,
-    ): Bitmap {
-        val tint =
-            AvatarTintsLight[avatarTintIndex(key)].let { base ->
-                if (onWallpaperPalette()) base.harmonizedToward(dynamicLightColorScheme(context).primary) else base
-            }
-        val bitmap = createBitmap(AVATAR_PX, AVATAR_PX)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(tint.container.toArgb())
-        val paint =
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = tint.onContainer.toArgb()
-                textAlign = Paint.Align.CENTER
-                textSize = AVATAR_PX * 0.5f
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-            }
-        val baseline = AVATAR_PX / 2f - (paint.descent() + paint.ascent()) / 2f
-        canvas.drawText(avatarInitial(name), AVATAR_PX / 2f, baseline, paint)
-        return bitmap
-    }
-
-    /** Whether `KnitTheme` is drawing the wallpaper palette: the Material You switch, on a release that has one. */
-    private fun onWallpaperPalette(): Boolean = themePrefs.dynamicColor.value && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-
-    /** The leading grapheme of [name], uppercased (emoji-safe), or "?" when blank — mirrors the in-app avatar. */
-    private fun avatarInitial(name: String): String {
-        val trimmed = name.trimStart()
-        if (trimmed.isEmpty()) return "?"
-        val boundary = BreakIterator.getCharacterInstance().apply { setText(trimmed) }
-        val end = boundary.next()
-        val grapheme = if (end == BreakIterator.DONE) trimmed else trimmed.substring(0, end)
-        return grapheme.uppercase()
-    }
 
     /** Deep-link tap: opens (or brings forward) [MainActivity] straight to `chat/<conversationId>`. */
     private fun openChatIntent(
@@ -825,12 +705,6 @@ class MessageNotifier(
 
         /** Groups every message notification under one stack with the summary. */
         private const val GROUP_KEY_MESSAGES = "app.getknit.knit.MESSAGES"
-
-        // Generated letter-avatar geometry/palette (source avatars are 256²; this matches closely enough).
-        private const val AVATAR_PX = 256
-
-        // ~8 distinct 256² ARGB_8888 avatars resident — more than one notification ever shows.
-        private const val AVATAR_CACHE_BYTES = 2 * 1024 * 1024
 
         // Request-code action slots (per tag), so open/reply/mark-read/dismiss don't collide.
         private const val CODE_OPEN = 0

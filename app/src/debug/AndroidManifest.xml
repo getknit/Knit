@@ -30,6 +30,7 @@
                 <action android:name="app.getknit.knit.debug.WEBPCONV" />
                 <action android:name="app.getknit.knit.debug.WEBPCHECK" />
                 <action android:name="app.getknit.knit.debug.REQNOTIF" />
+                <action android:name="app.getknit.knit.debug.MSGNOTIF" />
                 <action android:name="app.getknit.knit.debug.FLAGMSG" />
                 <action android:name="app.getknit.knit.debug.MKGROUP" />
                 <action android:name="app.getknit.knit.debug.LEAVE" />

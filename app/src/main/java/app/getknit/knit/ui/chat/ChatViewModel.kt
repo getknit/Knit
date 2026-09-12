@@ -24,8 +24,10 @@ import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.groupFaces
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.meshRoomChannel
 import app.getknit.knit.data.message.newestOriginChannel
@@ -326,6 +328,9 @@ data class ChatUiState(
     // offers "Rename group" / "Leave group" instead of Block/Unblock.
     val isGroup: Boolean = false,
     val memberCount: Int = 0,
+    // The other members a photo-less group's header avatar draws as a cluster (`groupFaces`, ADR
+    // 2026-09.zapp); empty for a DM or a group with fewer than two others.
+    val groupFaces: List<GroupFace> = emptyList(),
     // Peers currently typing in this thread, shown as an animated indicator above the input. Ephemeral
     // (TTL'd in the mesh layer) and best-effort; empty most of the time.
     val typingPeers: List<TypingPeer> = emptyList(),
@@ -941,6 +946,9 @@ class ChatViewModel(
                         )
                     }.sortedBy { it.displayName.lowercase() }
                     .toList()
+            // The header's cluster: the roster minus us, by node id. Up to four directory lookups, so the
+            // memoised label() above is not worth threading through.
+            val faces = if (isGroup) groupFaces(members, me, directory) else emptyList()
             // Peers typing in THIS thread, resolved for the indicator row. Skip ourselves (defensive — our
             // own cue never lands here) and blocked senders (as their messages are already filtered out).
             val typingPeers =
@@ -1003,6 +1011,7 @@ class ChatViewModel(
                 verified = !isRoom && !isBridged && !isGroup && peersByNode[conversationId]?.verified == true,
                 isGroup = isGroup,
                 memberCount = members.size,
+                groupFaces = faces,
                 typingPeers = typingPeers,
                 relayReach = noticeFor(conversationId, relay, mesh.relay.roomNoticeDismissed),
                 relayPlane = planeFor(relay),

@@ -10,6 +10,7 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.search.SearchQuery
 import app.getknit.knit.data.search.Snippets
@@ -45,6 +46,8 @@ data class ChatHit(
     val discriminator: String?,
     val avatarHash: String?,
     val kind: ConversationKind,
+    /** A photo-less group's cluster, as the chat list draws it (`ConversationTitle.faces`); empty otherwise. */
+    val faces: List<GroupFace> = emptyList(),
 )
 
 /** A contact that matched by name or alias. The alias is shown outright — a precision surface (ADR 058). */
@@ -62,6 +65,8 @@ data class MessageHit(
     val conversationTitle: String,
     val kind: ConversationKind,
     val avatarHash: String?,
+    /** A photo-less group's cluster, as the chat list draws it (`ConversationTitle.faces`); empty otherwise. */
+    val faces: List<GroupFace> = emptyList(),
     /** Who said it, as the chat list would name them; null when the DM's peer did (the title already names them). */
     val sender: String?,
     /** One line around the match — [Snippets]. */
@@ -197,7 +202,7 @@ class SearchViewModel(
             .filter { (_, folded) -> SearchQuery.matches(tokens, folded) }
             .sortedWith(compareBy({ (_, folded) -> SearchQuery.rank(folded, tokens) }, { (thread, _) -> thread.text.lowercase() }))
             .take(CHAT_LIMIT)
-            .map { (thread, _) -> ChatHit(thread.id, thread.text, thread.discriminator, thread.avatarHash, thread.kind) }
+            .map { (thread, _) -> ChatHit(thread.id, thread.text, thread.discriminator, thread.avatarHash, thread.kind, thread.faces) }
             .toList()
 
     /** The picker's contacts, matched on the name or the alias — "riv sam" and "quiet lantern" both find Sam. */
@@ -255,6 +260,7 @@ class SearchViewModel(
             conversationTitle = thread.text,
             kind = thread.kind,
             avatarHash = thread.avatarHash,
+            faces = thread.faces,
             sender = speakerLabel(context, row, s.directory, s.table.me, isDm = thread.kind == ConversationKind.DM),
             snippet = snippet.text,
             hit = snippet.hit,

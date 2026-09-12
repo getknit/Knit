@@ -13,6 +13,7 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.relay.RelayPlane
@@ -59,6 +60,9 @@ data class ConversationRow(
     val avatarHash: String?,
     val isRoom: Boolean,
     val isGroup: Boolean,
+    // The other members a photo-less group draws as its avatar (`groupFaces`, ADR 2026-09.zapp); empty for
+    // a DM, a room, or a group with fewer than two others, which wears a tinted glyph instead.
+    val faces: List<GroupFace> = emptyList(),
     val lastPreview: String?,
     // Whether [lastPreview] is a direct transfer's line, so the row draws the feature's mark beside it
     // rather than an emoji. The glyph itself stays in the UI layer; this only says which line it belongs to.

@@ -198,10 +198,12 @@ internal fun GroupDetailsScreenContent(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // Tappable only when a custom photo is set: the default people glyph has nothing to enlarge,
-            // so onClick stays null and GroupAvatar renders non-interactive (no ripple / no touch target).
+            // Tappable only when a custom photo is set: the members' cluster (or the glyph) has nothing to
+            // enlarge, so onClick stays null and GroupAvatar renders non-interactive (no ripple / no touch target).
             GroupAvatar(
                 photoHash = state.photoHash,
+                groupId = state.groupId,
+                faces = state.faces,
                 size = 96.dp,
                 contentDescription = if (state.photoHash != null) state.title else null,
                 onClickLabel = stringResource(R.string.group_details_view_photo),

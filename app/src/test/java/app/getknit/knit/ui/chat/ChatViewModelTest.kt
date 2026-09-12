@@ -21,6 +21,7 @@ import app.getknit.knit.data.emoji.RecentReactions
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.GroupFace
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.TransferPhase
 import app.getknit.knit.data.message.TransferRecord
@@ -991,6 +992,21 @@ class ChatViewModelTest {
                     .first { it.id == "g1" }
             assertEquals(0, theirs.deliveredCount)
             assertEquals(0, theirs.recipientTotal)
+        }
+
+    @Test
+    fun aGroupHeaderCarriesTheOtherMembersFacesByNodeId() =
+        runTest {
+            val vm = vm(GROUP)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer("sam", name = "Sam", avatarHash = "sam-avatar"), peer("priya", name = "Priya"))
+            // Roster order is sam-first; the header's cells are by node id, and never include us.
+            groupFlow.value = group(GROUP, members = listOf("me", "sam", "priya"))
+            advanceUntilIdle()
+
+            val state = vm.state.value
+            assertTrue(state.isGroup)
+            assertEquals(listOf(GroupFace("priya", "Priya", null), GroupFace("sam", "Sam", "sam-avatar")), state.groupFaces)
         }
 
     @Test

@@ -919,11 +919,13 @@ internal fun ChatScreenContent(
                         }
 
                         state.isGroup -> {
-                            // Group: its photo (or a people glyph when unset) + name + member count.
+                            // Group: its photo (or its members' cluster when unset) + name + member count.
                             // Tapping the avatar opens the group details / settings screen.
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 GroupAvatar(
                                     photoHash = state.avatarHash,
+                                    groupId = conversationId,
+                                    faces = state.groupFaces,
                                     size = 36.dp,
                                     modifier = Modifier.testTag("chat_group_avatar"),
                                     contentDescription = stringResource(R.string.chat_view_group_info),

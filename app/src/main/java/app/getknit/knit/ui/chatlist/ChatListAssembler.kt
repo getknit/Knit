@@ -102,6 +102,7 @@ internal class ChatListAssembler(
                 avatarHash = thread.avatarHash,
                 isRoom = thread.isRoom,
                 isGroup = isGroup,
+                faces = thread.faces,
                 lastPreview = previewLineFor(last, transferLine, isDm = thread.kind == ConversationKind.DM),
                 previewIsTransfer = transferLine != null,
                 lastMessageAt = last?.sentAt,

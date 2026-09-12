@@ -80,12 +80,16 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   set or a spool scope its peer recently pushed to, `Known` is a bare profile row — and both labelled surfaces
   derive from `reachOf` so they cannot disagree. READ ADR 2026-09.2ajk before loosening any tier; the
   Contacts list still draws a binary dot from `neighbors` alone.
-- **When touching `ui/components/Avatar`, `ui/theme/AvatarTint.kt`, or the notification letter avatar in
-  `MessageNotifier`:** READ ADR 2026-09.j8c7. A photo-less avatar's colour is keyed on the **node id**
-  (`avatarTintIndex`, pinned by `ColorSchemeTest`), from a static twelve-hue palette that
+- **When touching `ui/components/Avatar`, `ui/components/GroupAvatar`, `ui/theme/AvatarTint.kt`,
+  `data/message/GroupFaces.kt`, `ui/util/ClusterGeometry.kt`, or the notification avatars in
+  `notifications/NotificationAvatars`:** READ ADR 2026-09.j8c7. A photo-less avatar's colour is keyed on the
+  **node id** (`avatarTintIndex`, pinned by `ColorSchemeTest`), from a static twelve-hue palette that
   `scripts/gen-avatar-palette.py` generates; under Material You `KnitTheme` harmonizes it toward the
   wallpaper's primary (a 15°-capped Oklch hue turn, tone kept), and the shade draws the same slot the same
-  way. Pass a name as the key only for a face with no identity behind it.
+  way. Pass a name as the key only for a face with no identity behind it. A photo-less **group** is a
+  cluster of its other members (`groupFaceIds`: self out, by node id, at most four, at least two — else a
+  people glyph on a disc tinted by the group id) laid out by `clusterCells`, which the shade draws from the
+  same cells; renderers never re-sort — READ ADR 2026-09.zapp.
 - **When touching a group's roster — `reconcileGroup`/`vetRoster`, `groupleave`, `GroupRepository.recordDeparture`
   / `recordRejoin`, `PendingGroupKeys`, or how a member learns of a new group:** READ
   `docs/GROUP_FORWARD_SECRECY.md` §1 (the pinned founding roster) and §6.1 (leave-rekey), then ADR

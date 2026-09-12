@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NetworkCheck
@@ -68,7 +67,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -99,12 +97,12 @@ import app.getknit.knit.ui.chat.deliveryLabel
 import app.getknit.knit.ui.chat.resolve
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
+import app.getknit.knit.ui.components.GroupAvatar
 import app.getknit.knit.ui.components.PeerNameText
 import app.getknit.knit.ui.components.RoomAvatar
 import app.getknit.knit.ui.components.skeletonBlockColor
 import app.getknit.knit.ui.components.skeletonPulseAlpha
 import app.getknit.knit.ui.icons.KnitIcons
-import app.getknit.knit.ui.image.BlobImage
 import app.getknit.knit.ui.invite.ShareKnitDialog
 import app.getknit.knit.ui.invite.ShareStorageException
 import app.getknit.knit.ui.invite.launchApkShareChooser
@@ -114,7 +112,6 @@ import app.getknit.knit.ui.preview.PREVIEW_NOW
 import app.getknit.knit.ui.theme.KnitMotion
 import app.getknit.knit.ui.util.compactTimeAgo
 import app.getknit.knit.ui.util.rememberCurrentTimeMillis
-import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
@@ -723,59 +720,25 @@ internal fun ConversationListItem(
 }
 
 /**
- * The circular leading glyph: the knit logo for the room, a group's photo (or a people glyph when unset)
- * for a group, an [Avatar] for a DM.
+ * The circular leading glyph: the knit logo for the room, a [GroupAvatar] (the photo, else the members'
+ * cluster) for a group, an [Avatar] for a DM.
  */
 @Composable
 private fun LeadingVisual(row: ConversationRow) {
     val size = 52.dp
-    val groupPhoto = row.avatarHash
     when {
         row.isRoom -> {
             RoomAvatar(size = size)
         }
 
-        row.isGroup && groupPhoto != null -> {
-            AsyncImage(
-                model = BlobImage(groupPhoto),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(size).clip(CircleShape),
-            )
-        }
-
         row.isGroup -> {
-            CircleGlyph(size) {
-                Icon(
-                    Icons.Filled.Group,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-            }
+            GroupAvatar(photoHash = row.avatarHash, groupId = row.id, faces = row.faces, size = size)
         }
 
         else -> {
             // A DM's conversation id is the peer's node id.
             Avatar(avatarHash = row.avatarHash, name = row.title, nodeId = row.id, size = size)
         }
-    }
-}
-
-/** A circular tinted container for a leading glyph (room logo / group icon). */
-@Composable
-private fun CircleGlyph(
-    size: androidx.compose.ui.unit.Dp,
-    content: @Composable () -> Unit,
-) {
-    Box(
-        modifier =
-            Modifier
-                .size(size)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.secondaryContainer),
-        contentAlignment = Alignment.Center,
-    ) {
-        content()
     }
 }
 

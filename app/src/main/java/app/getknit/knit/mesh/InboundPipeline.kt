@@ -20,6 +20,7 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.StatusNotices
+import app.getknit.knit.data.message.groupFaceIds
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.message.withReply
 import app.getknit.knit.data.peer.PeerEntity
@@ -74,6 +75,7 @@ import app.getknit.knit.mesh.protocol.mention
 import app.getknit.knit.mesh.spool.ScopeSync
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.notifications.NotifConversation
+import app.getknit.knit.notifications.NotifFace
 import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.notifications.incomingNotification
 import app.getknit.knit.notifications.mentionNotification
@@ -2756,8 +2758,10 @@ class InboundPipeline(
      * Resolves the conversation-level title + avatar a Signal-style notification shows (the group photo /
      * DM peer avatar as its large icon, the real thread name as its title). A DM uses the sender's
      * name/avatar; a group looks up its stored name/photo (falling back to member names via [groupTitle],
-     * resolved through [labels] so two same-named members read apart); the Nearby room leaves both null so
-     * [notifier] substitutes its own defaults.
+     * resolved through [labels] so two same-named members read apart), and without a photo carries the
+     * members the shade draws as a cluster — [groupFaceIds]'s pick, the same one the chat list makes, with
+     * each face's avatar bytes (ADR 2026-09.zapp); the Nearby room leaves both null so [notifier]
+     * substitutes its own defaults.
      */
     private suspend fun resolveConversation(
         conversationId: String,
@@ -2795,7 +2799,19 @@ class InboundPipeline(
                     group?.let {
                         groupTitle(it.name, memberIds, me, fallback = "") { id -> namesByNode[id] ?: id }.ifBlank { null }
                     }
-                NotifConversation(conversationId, title, group?.photoHash?.let { blobs.bytes(it) }, ConversationKind.GROUP)
+                val photo = group?.photoHash?.let { blobs.bytes(it) }
+                // Only a photo-less group draws its members, so the reads (at most four peer rows and four
+                // blobs) are skipped when a photo will cover them. The order is groupFaceIds's; the shade
+                // places faces in cells as given.
+                val faces =
+                    if (photo != null) {
+                        emptyList()
+                    } else {
+                        groupFaceIds(memberIds, me).map { id ->
+                            NotifFace(id, namesByNode[id] ?: id, peers.find(id)?.avatarHash?.let { blobs.bytes(it) })
+                        }
+                    }
+                NotifConversation(conversationId, title, photo, ConversationKind.GROUP, faces)
             }
         }
 

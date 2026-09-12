@@ -16,6 +16,8 @@ import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
+import app.getknit.knit.data.message.GroupFace
+import app.getknit.knit.data.message.groupFaces
 import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.MeshController
@@ -51,6 +53,9 @@ data class GroupDetailsUiState(
     val title: String,
     val photoHash: String?,
     val members: List<GroupMemberRow>,
+    // The header avatar's cluster when there is no photo: the roster minus us, by node id (`groupFaces`,
+    // ADR 2026-09.zapp) — not [members]' self-first, online-first order, which is the list's, not the disc's.
+    val faces: List<GroupFace> = emptyList(),
     // Display names of members whose pinned profile can't yet do the group ratchet (missing
     // capability or prekey) — they pin the whole group's traffic at v1. Empty = forward secrecy active.
     // Mirrors MeshManager.groupRatchetEligible's per-member conditions against the same peers table.
@@ -136,6 +141,7 @@ class GroupDetailsViewModel(
                     ) { id -> directory.label(id).text },
                 photoHash = group?.photoHash,
                 members = listOfNotNull(self) + others,
+                faces = groupFaces(members, myId, directory),
                 exists = group != null,
             )
         }.stateIn(

@@ -10,6 +10,8 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.util.Collections
 
 /** A shared, ordered log of what a side did — signals sent and radio calls — for ordering assertions. */
@@ -78,9 +80,16 @@ class FakeDirectWifi(
         swept += Unit
     }
 
-    private companion object {
-        val V4: InetAddress = InetAddress.getByName("127.0.0.1")
-        val V6: InetAddress = InetAddress.getByName("::1")
+    companion object {
+        private val V4: InetAddress = InetAddress.getByName("127.0.0.1")
+        private val V6: InetAddress = InetAddress.getByName("::1")
+
+        /**
+         * Whether this JVM can listen on IPv6 loopback at all. Some CI hosts boot with IPv6 off at the kernel,
+         * and there `::1` binds with "Protocol family unavailable" — the host then only ever listens on IPv4
+         * and a receiver dialling `::1` is refused, which is the environment, not the code.
+         */
+        fun ipv6LoopbackUsable(): Boolean = runCatching { ServerSocket().use { it.bind(InetSocketAddress(V6, 0)) } }.isSuccess
     }
 }
 

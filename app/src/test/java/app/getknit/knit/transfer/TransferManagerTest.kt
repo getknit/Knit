@@ -21,6 +21,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
@@ -407,6 +408,7 @@ class TransferManagerTest {
     @Test
     fun aReceiverThatArrivesOverIpv6StillGetsTheFile() =
         runBlocking {
+            assumeTrue("this JVM cannot listen on ::1", FakeDirectWifi.ipv6LoopbackUsable())
             val (a, b) = pair()
             a.withClip()
             // A receiver on Android 13+ may join with IPv6 link-local provisioning and hold no IPv4 at all;

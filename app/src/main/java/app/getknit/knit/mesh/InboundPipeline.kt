@@ -339,8 +339,10 @@ class InboundPipeline(
      * The commons door (spec §7.4): a post the spool plane pulled from a room this device joined, already
      * opened under the room's key and authenticated by [canCarry] against the author's pinned key. It is
      * delivered as the room post it is — the ordinary chat shell, the conversation the room's id names,
-     * the Internet as its plane, room moderation — and **never** custodied, relayed or acknowledged: the
-     * spool is the room's store, and a receipt from every member would evict the posts out of it.
+     * the Internet as its plane, room moderation — and **never** custodied or relayed: the spool is the
+     * room's store. It *is* acknowledged, the group way ([acknowledge]): a delay-tolerant tick that
+     * batches and escalates into one sealed receipt DM to the author, riding that pair's own scope —
+     * never a receipt frame in the room, where N of them per post would evict the posts.
      */
     internal suspend fun deliverCommonsPost(
         env: RelayEnvelope,
@@ -356,7 +358,6 @@ class InboundPipeline(
             me = identity.nodeId(),
             conversationId = conversationId,
             plane = DeliveryPlane.Internet,
-            ack = false,
         )
     }
 
@@ -2540,8 +2541,10 @@ class InboundPipeline(
             // it has a path — no NDP required (a fast-fanned message gets its receipt too). A GROUP tick
             // toward an absent sealed-capable author additionally escalates (escalatable): AckSync batches
             // the acks and originates ONE sealed ctl frame into custody/flood/spool, so the tick converges
-            // exactly like the message it acks. Broadcast-room ticks stay best-effort-only by design.
-            ackSync.owe(env.id, env.senderId, escalatable = env.group != null)
+            // exactly like the message it acks. Broadcast-room ticks stay best-effort-only by design. A
+            // COMMONS post escalates like a group's: its author is reachable through the relay far more
+            // often than through a radio, and the sealed tick rides the pair's DM scope, not the room's.
+            ackSync.owe(env.id, env.senderId, escalatable = env.group != null || env.type == FrameType.COMMONS)
         }
     }
 

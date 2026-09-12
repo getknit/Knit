@@ -19,7 +19,7 @@ enum class ConversationKind {
     /**
      * A **commons** ([Conversations.COMMONS_PREFIX]) — a spool's shared room (docs/SPOOL_PROTOCOL.md §7.4),
      * the private instance's group chat with every peer on that relay. Its authors are pinned Knit peers
-     * like a group's, but it has no roster, no receipts and no ratchet: whoever holds the invite is in,
+     * like a group's, but it has no roster and no ratchet: whoever holds the invite is in,
      * every member shares the room key, and a post lives on the spool rather than in custody.
      */
     COMMONS,

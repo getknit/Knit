@@ -373,7 +373,7 @@ data class ChatUiState(
     // unauthenticated name wherever Knit shows a person it vouches for.
     val isBridged: Boolean = false,
     // True when this thread is a **commons** — a relay's private room (§7.4). A room: no attachments, no
-    // location, no link cards, no typing cue, no receipts; but its authors are pinned peers, so every bubble
+    // location, no link cards, no typing cue; but its authors are pinned peers, so every bubble
     // wears a real name and avatar and taps through to a profile.
     val isCommons: Boolean = false,
     // The UTF-8 bytes a post's words may occupy here, or null in every thread that is not the Meshtastic
@@ -465,7 +465,7 @@ class ChatViewModel(
     /**
      * This thread is a commons — a relay's private room (§7.4). A room like Nearby (addressed to nobody,
      * names on every bubble, text only) whose authors are pinned peers like a group's, so their names,
-     * avatars and profiles are real; it has no roster to gate on and no receipts.
+     * avatars and profiles are real; it has no roster to gate on, and its ticks take the group's route.
      */
     private val isCommons = Conversations.kindFor(conversationId) == ConversationKind.COMMONS
 

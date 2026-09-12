@@ -2680,7 +2680,7 @@ class InboundPipelineTest {
         )
 
     @Test
-    fun aCommonsPostIsARoomPostOverTheInternetFromItsRealAuthorAndIsNeverAcked() =
+    fun aCommonsPostIsARoomPostOverTheInternetFromItsRealAuthor() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
@@ -2700,7 +2700,7 @@ class InboundPipelineTest {
             assertEquals(DeliveryPlane.Internet, row.receivedPlane)
             assertNull("no Meshtastic origin — the name comes from the peer row", row.originNode)
             assertEquals(listOf(true), scopes) // room moderation
-            assertTrue("no receipt, no relay, nothing leaves for a commons post", rig.originated.isEmpty())
+            assertTrue("the post itself never leaves for the radios", rig.originated.none { it.type == FrameType.COMMONS })
             assertEquals("Alice", notification.captured.senderName)
             assertEquals(ConversationKind.COMMONS, conversation.captured.kind)
             assertNull("the operator set no name, so the notifier titles it generically", conversation.captured.title)
@@ -2709,6 +2709,33 @@ class InboundPipelineTest {
             advanceUntilIdle()
             assertEquals(1, rig.msgMap.size)
             coVerify(exactly = 1) { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun aCommonsPostTicksItsAuthorTheGroupWayNeverThroughTheRoom() =
+        runTest {
+            // The author is absent from the radios and sealed-capable, as a commons member usually is: the
+            // tick batches, then escalates into ONE sealed receipt DM to the author — which rides the pair's
+            // own DM scope over the relay. Nothing is ever put into the room's scope for it.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            val escalated = mutableListOf<Pair<String, List<String>>>()
+            rig.canSealTick = { true }
+            rig.originateTickHook = { authorId, ids ->
+                escalated += authorId to ids
+                true
+            }
+
+            rig.pipeline.deliverCommonsPost(commonsEnv(alice, "cp1", "dinner at 7?"), ChatContent(body = "dinner at 7?"), room)
+            advanceUntilIdle()
+            assertTrue("no unicast tick while the batch debounces", rig.originated.none { it.type == FrameType.RECEIPT })
+            assertTrue(escalated.isEmpty())
+
+            rig.ackNowMs += AckSync.TICK_BATCH_DEBOUNCE_MS + 1
+            rig.ackSync.retryPending()
+
+            assertEquals(listOf(alice.nodeId to listOf("cp1")), escalated)
         }
 
     @Test

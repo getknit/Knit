@@ -101,7 +101,8 @@ object ScopeFrames {
      *   the room's seal (every member shares the key; `enc` set is a frame from nowhere). The scope check
      *   is what stops a member of two rooms re-sealing one room's signed post into the other.
      *
-     * Nothing else: no receipts (N of them per post would evict the posts out of a 500-frame room), no
+     * Nothing else: no receipts (N of them per post would evict the posts out of a 500-frame room — a post's
+     * tick takes the group's route, a sealed DM to the author in the pair's own scope), no
      * reactions, no DM-form chat — a pair's DM has its own scope. The in-direction asymmetry on `profile`
      * is deliberate and is the one place [eligibleFor] is not the same rule both ways.
      */

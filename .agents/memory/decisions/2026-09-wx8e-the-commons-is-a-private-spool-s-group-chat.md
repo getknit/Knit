@@ -60,7 +60,11 @@ roster: whoever holds the invite is in.
 re-seals each round, since custody is off-limits — and `commons_members`); one mesh frame type; a fourth
 `ConversationKind`; auto-acceptance of every member (there is no `unaccept`, so leaving a room keeps its
 people as contacts — on purpose); a restart re-pull of the whole room (≤ `maxFrames` opens, silent on the
-exists-gate); and no delivery ticks — N receipts per post would evict a 500-frame room's posts.
+exists-gate). Delivery ticks are the **group's**: a post is acknowledged with the delay-tolerant tick that
+batches and escalates into one sealed receipt DM to the author, riding that pair's DM scope over the relay —
+never a receipt frame in the room, where N per post would evict a 500-frame room's posts. So ✓✓ arrives from
+a member once a session with them exists (the intro sweep's job), and a chatty room shares each pair's DM
+scope with their receipts, the trade groups already make.
 
 **What it does not cover.** Attachments (`hello.commons.attach` is read and refused for now — the
 `ScopeAttachments` commons arm is the follow-on), reactions, typing, a members list, deep-linked invites,

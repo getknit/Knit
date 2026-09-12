@@ -950,6 +950,7 @@ spool cannot read its own commons" structural rather than a promise.
 | **S-7.4-4**  | Pushes into the commons are bounded by a **spool-wide** budget in addition to the per-connection one. A refusal under it is `err rate` with `retryMs`, and MUST NOT count as a strike (§6.4) — congestion on a shared room is not evidence any one member misbehaved.                                                                                                                       |
 | **S-7.4-5**  | Attachment records (§7.3) naming the commons are answered `err malformed` unless the spool advertised `attach = true` for it.                                                                                                                                                                                                                                                             |
 | **C-7.4-6**  | The commons frame set: `type = profile` from any sender, and `type = commons` whose payload names *this* scope id and carries no `enc` and no attachment, from a sender whose key is pinned. Both address nobody (`recipientId` and `group` unset). Nothing else — no receipts, no reactions, no DM-form chat. On the push side a member seals only its **own** frames.                        |
+| **C-7.4-12** | A post's delivery receipt MUST NOT enter the commons scope. A member that wants to acknowledge one does so as it would a group message: a sealed receipt to the author, carried by the pair's own DM scope (§3.1) once a session exists.                                                                                                                                              |
 | **C-7.4-7**  | A `profile` pulled from the commons re-enters delivery through §9.4 unchanged (it pins the member). A `commons` post MUST NOT: it is delivered to the room's thread through its own door and is never custodied, originated or relayed on the mesh. §9.4 does not apply to it.                                                                                                              |
 | **C-7.4-8**  | A `commons` post whose sender is not yet pinned MUST be deferred, not quarantined (§9.3): the listing is unordered and the member's profile is on its way. The deferral MUST be bounded, after which the blob is quarantined.                                                                                                                                                              |
 | **C-7.4-9**  | Every accepted blob in a commons is accounted (§9.6), a post because custody never holds it and a profile because the member's push set is its own frames only. The accounted bound MUST clear the pinned `maxFrames`.                                                                                                                                                                      |
@@ -965,8 +966,9 @@ spool cannot read its own commons" structural rather than a promise.
 > **Why posts stay off the mesh.** A custodial frame folds into the mesh's content digest, which every node
 > must compute by identical rules — and a room only some nodes are in can never be one. So a post lives on
 > its spool, enters through a door of its own, and the mesh never sees it; the daemon's 500-frame / 24 h
-> defaults are the room's whole retention. The one consequence a member sees: no delivery ticks. N receipts per
-> post would evict the posts out of a room that size.
+> defaults are the room's whole retention. Receipts take the group's route for the same reason (C-7.4-12): N
+> of them per post inside the room would evict the posts out of a room that size, while a sealed tick in the
+> pair's DM scope costs the room nothing.
 >
 > **Why members are contacts (client policy, non-normative).** The invite is the trust boundary the operator
 > drew, so the reference client accepts every member it sees in the room as a contact, and bootstraps a DM

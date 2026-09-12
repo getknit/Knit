@@ -78,7 +78,8 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   room that relay runs (add the relay with `…debug.SPOOL --es url` first; the reply carries the `c-…`
   conversation id), `--es leave <c-…>` leaves one, no extras dumps every joined room with its members.
   `…debug.SEND --es conv <c-…>` posts into it (with `--es replyTo <id>` for a quote), `…debug.STATE --es conv
-  <c-…>` reads it back, and `…debug.SPOOL` shows the room's scope under the **bound relay only** plus the
+  <c-…>` reads it back (`received` flips once a member's sealed tick lands over that pair's DM scope — the
+  group's route, never the room's), and `…debug.SPOOL` shows the room's scope under the **bound relay only** plus the
   relay's advertised `commons` block. The convergence oracle is the same `local`/`spool` pair — everything a
   member pulls from a room is *accounted* (nothing is ever custodied), so `accounted` climbing to the room
   size on a restart is the expected re-pull, not a leak. Two traps from the first trial: the daemon's

@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-120 decisions.
+121 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |

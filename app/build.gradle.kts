@@ -79,6 +79,15 @@ val internetPlane = (project.findProperty("internetPlane") as? String)?.toBoolea
 // a board has to be paired and set up before a single frame leaves over the radio.
 val loraPlane = (project.findProperty("loraPlane") as? String)?.toBoolean()
 
+// The commons (a private relay's group chat, ADR 2026-09.wx8e, spec §7.4) — the same kind of visibility
+// switch at the start of its life: ON in debug, OFF in a shipped artifact, overridable with
+// `-Pcommons=true|false`. It gates the store the mesh and the relay editor are handed (`CommonsStore`
+// stays null, so no room is ever subscribed, posted to or listed), the relay row's Join / Leave line, and
+// the room's notification channel. Not a code strip (R8 prunes the `if (COMMONS)` branches), and the
+// defaults live in source so F-Droid's -P-free rebuild stays identical. Flip the release default to ON
+// when the feature is introduced, the way ADR 064 and ADR 2026-09.6gtm did for the two planes.
+val commons = (project.findProperty("commons") as? String)?.toBoolean()
+
 // ABIs packaged into the **debug** APK. Debug is unminified and carries both tflite models, so it is
 // ~150 MB before native libs; the four-ABI default adds ~28 MB more, of which the two 32-bit slices are
 // dead weight — every lab Pixel is arm64-v8a and every Gradle-managed emulator image is x86_64, so
@@ -200,6 +209,8 @@ android {
         // the screen, and opens no socket until someone says so.
         buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: true).toString())
         buildConfigField("boolean", "LORA_PLANE", (loraPlane ?: true).toString())
+        // The commons is ON here so the unit suite and the lab run the real thing; see `commons` above.
+        buildConfigField("boolean", "COMMONS", (commons ?: true).toString())
         // Fault injection for the model poison-pill's acceptance test (ADR 037):
         // `-PmodelFaultOnLoad=segv` raises SIGSEGV, `=kill` sends SIGKILL, inside ModelLoadGuard right
         // after the in-flight marker is durably written. They test opposite things: only `segv` produces
@@ -288,6 +299,9 @@ android {
             // visible and reachable, switched off, and inert until the user pairs a Meshtastic board.
             buildConfigField("boolean", "INTERNET_PLANE", (internetPlane ?: true).toString())
             buildConfigField("boolean", "LORA_PLANE", (loraPlane ?: true).toString())
+            // The commons is not introduced yet: a shipped artifact hides it (`-Pcommons=true` lights it
+            // for a maintainer build). Staging and nonMinifiedRelease inherit this through initWith.
+            buildConfigField("boolean", "COMMONS", (commons ?: false).toString())
             // Never ship a fault injector, whatever `-PmodelFaultOnLoad` said.
             buildConfigField("String", "MODEL_FAULT_ON_LOAD", "\"\"")
             // Unsigned when no keystore.properties / KNIT_UPLOAD_* creds are present (see signingConfigs).

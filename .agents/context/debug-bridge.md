@@ -86,7 +86,8 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   `commons-fanout` conformance check leaves a random blob in the room, which every client quarantines
   (`invalid 1`, and the scope then never reads `converged`) — restart an in-memory daemon before a
   convergence trial; and there is no `unsub` record, so the daemon's `knit_spool_commons_subscribers` still
-  counts a member that left until its connection drops.
+  counts a member that left until its connection drops. Refused with `error` in a build that hides the
+  commons (`BuildConfig.COMMONS` — off in release, and in a `-Pcommons=false` debug build).
 - `…debug.LORA` — configures and inspects the **LoRa (Meshtastic-over-BLE) plane** (ADR 038,
   `context/lora-bridge.md`), off by default and needing a paired board, so this is how you drive it on a
   locked lab device. `--es address <MAC>` (+ `--es name <n>`) binds a bonded board, `--ei channel <idx>`

@@ -1273,6 +1273,9 @@ class DebugBridgeReceiver :
      * and `…debug.STATE --es conv <c-…>` reads it back; `…debug.SPOOL` shows its scope under the bound relay.
      */
     private suspend fun handleCommons(intent: Intent): JSONObject {
+        // A `-Pcommons=false` debug build hands the mesh no store, so a row written here would never be
+        // subscribed — refuse rather than leave a room that looks joined and stays silent.
+        if (!BuildConfig.COMMONS) return reply("error", "the commons is hidden in this build (BuildConfig.COMMONS)")
         val url = intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() }?.trim()
         val invite = intent.getStringExtra("invite")?.takeIf { it.isNotBlank() }?.trim()
         if (url != null && invite != null) {

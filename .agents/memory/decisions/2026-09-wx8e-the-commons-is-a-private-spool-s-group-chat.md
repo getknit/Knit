@@ -9,6 +9,13 @@ topics: [spool, commons]
 # ADR 2026-09.wx8e — The commons is a private spool's group chat
 
 Status: Accepted (2026-09-12) — branch `feat/spool-commons`; spec `docs/SPOOL_PROTOCOL.md` §7.4.
+**Hidden in shipped builds** (2026-09-12): `BuildConfig.COMMONS` is true in debug and false in release
+(`-Pcommons=true|false` overrides either way, defaults in source for F-Droid), the posture the two planes
+began under (ADR 064, ADR 2026-09.6gtm). The gate is the `CommonsStore` the DI hands `MeshManager` and
+`InternetRelayViewModel` — null while dark, so no room is derived into the scope table, subscribed, posted
+to or listed, the relay row draws no Join / Leave line, and `NotificationChannels` registers no room
+channel; the debug bridge refuses a join. Not a code strip. Flip the release default when the feature is
+introduced; see `.agents/memory/roadmap.md`.
 
 **What was observed.** `knit-spool` 0.2.0 shipped a **commons** — one operator-declared shared scope per
 spool, joined by an invite `knit-commons:v1:<32 B>` whose hash is the scope id and whose secret the spool

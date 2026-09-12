@@ -241,6 +241,14 @@ doc). **Don't start a deferred item without explicit direction.**
   contact-card intro) were **not** complete at the flip — see ADR 064 for what was, and for the residual
   risk that carries.
 
+- **The commons is built but hidden in shipped builds** (2026-09-12, ADR 2026-09.wx8e) —
+  `BuildConfig.COMMONS` is true in debug and false in release, `-Pcommons=true` lights it for a maintainer
+  build. It gates the `CommonsStore` the DI hands `MeshManager` and `InternetRelayViewModel` (null while
+  dark: no room in the scope table, no subscription, no post, no member sweep, no Join / Leave line on the
+  relay row) and the room's notification channel. The code is **not** stripped (R8 prunes the
+  `if (COMMONS)` branches), and DB v13's three tables ship empty. **To introduce it:** flip the release
+  default in `app/build.gradle.kts`, the way ADR 064 / ADR 2026-09.6gtm did for the two planes, after the
+  follow-ons the ADR lists (attachments, reactions, a members list, deep-linked invites) are decided.
 - **The spool plane beyond the spec** — everything that makes the protocol run, in order: ~~the
   `knit-spool` reference daemon + conformance suite~~ (**done 2026-08-16** in the `knit-spool`
   repo — full v1 daemon with SQLite persistence, rate limits, watermark, ops surface, plus the

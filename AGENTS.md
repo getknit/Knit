@@ -107,6 +107,9 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   posts are a non-custodial `commons` frame that lives on the one spool that runs the room and never touches
   the radios (`ScopeSync`'s second door, `InboundPipeline.deliverCommonsPost`), and a post ahead of its
   author's profile is parked, never quarantined. `Conversations.isPublicRoom` is true for it on purpose.
+  **Hidden in shipped builds** behind `BuildConfig.COMMONS` (on in debug, off in release, `-Pcommons=`
+  overrides): the one seam is the `CommonsStore` the DI hands `MeshManager` and `InternetRelayViewModel`,
+  null while dark — don't add a second gate downstream of it; flip the release default when it is introduced.
 - **When touching `mesh/crypto/scope/`, `mesh/spool/`, or the spool/internet-relay plane:** READ
   `docs/SPOOL_PROTOCOL.md` (the normative public spec; its §13 vectors are pinned by
   `ScopeVectorTest`/`SpoolRecordsTest` — change them only together), then the `ScopeSync` invariants in

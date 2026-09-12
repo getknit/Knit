@@ -68,7 +68,8 @@ class InternetRelayViewModel(
     private val settings: SettingsStore,
     relayStatus: RelayStatusRepository,
     // The joined commons (§7.4) and the plane to nudge when one is joined or left. Nullable and last so the
-    // screen tests' two-argument rig keeps compiling; production passes both.
+    // screen tests' two-argument rig keeps compiling; production passes a store only while
+    // `BuildConfig.COMMONS` is on, and without one the row shows no room and the verbs are no-ops.
     private val commons: CommonsRepository? = null,
     private val mesh: MeshController? = null,
 ) : ViewModel() {
@@ -95,7 +96,14 @@ class InternetRelayViewModel(
                             scopeCount = live?.scopes?.count { !it.retiring },
                             carriesPhotos = live?.let { it.maxAttachBytes != null },
                             lastError = byUrl[url]?.lastError,
-                            commons = live?.commons?.let { RelayCommons(name = it.name, joinedId = joinedByUrl[url]?.conversationId) },
+                            // Drawn only when this build can join one: a Join that could not join is worse
+                            // than no line, so a store-less build (`BuildConfig.COMMONS` off) shows no room.
+                            commons =
+                                if (commons != null) {
+                                    live?.commons?.let { RelayCommons(name = it.name, joinedId = joinedByUrl[url]?.conversationId) }
+                                } else {
+                                    null
+                                },
                         )
                     },
             )

@@ -232,7 +232,10 @@ val meshModule =
                 get(),
                 get(),
                 get(),
-                commons = get(),
+                // The commons store is the feature's one seam into the mesh: null while the build hides the
+                // feature (`BuildConfig.COMMONS`), so no room is derived into the scope table, subscribed,
+                // posted to, or swept for members — the plane behaves exactly as it did before §7.4.
+                commons = if (BuildConfig.COMMONS) get() else null,
                 publicChannel = { body -> get<PublicChannelSink>().postToPublicChannel(body) },
                 onTransferSignal = { sender, payload, sentAt -> get<TransferManager>().onSignal(sender, payload, sentAt) },
             )

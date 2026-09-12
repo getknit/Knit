@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationChannelGroupCompat
 import androidx.core.app.NotificationManagerCompat
+import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.data.message.ConversationKind
 
@@ -137,16 +138,20 @@ object NotificationChannels {
                 R.string.channel_meshtastic_desc,
             ),
         )
-        manager.createNotificationChannel(
-            channel(
-                context,
-                COMMONS,
-                GROUP_MESSAGES,
-                NotificationManagerCompat.IMPORTANCE_DEFAULT,
-                R.string.channel_commons_name,
-                R.string.channel_commons_desc,
-            ),
-        )
+        // A channel is a row in the OS's notification settings, so a build that hides the commons
+        // (`BuildConfig.COMMONS`) registers none; no post can arrive there to need it.
+        if (BuildConfig.COMMONS) {
+            manager.createNotificationChannel(
+                channel(
+                    context,
+                    COMMONS,
+                    GROUP_MESSAGES,
+                    NotificationManagerCompat.IMPORTANCE_DEFAULT,
+                    R.string.channel_commons_name,
+                    R.string.channel_commons_desc,
+                ),
+            )
+        }
         manager.createNotificationChannel(
             channel(
                 context,

@@ -65,6 +65,7 @@ import org.junit.runner.RunWith
  * dispatcher as Main, so a seeded write reaches `state.value` before `store.set` returns.
  */
 @RunWith(AndroidJUnit4::class)
+@Suppress("LargeClass") // cohesive single-SUT suite over one shared vm()/InMemoryMessages harness, as ChatViewModelTest
 class ChatListViewModelTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val mainDispatcher = UnconfinedTestDispatcher()

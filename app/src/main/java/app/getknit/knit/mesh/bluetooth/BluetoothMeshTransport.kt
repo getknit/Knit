@@ -23,11 +23,13 @@ import app.getknit.knit.mesh.InboundFrame
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.MeshTransport
 import app.getknit.knit.mesh.Peer
+import app.getknit.knit.mesh.PlaneSupport
 import app.getknit.knit.mesh.ReceivedDigest
 import app.getknit.knit.mesh.ReceivedFile
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
+import app.getknit.knit.mesh.bleSupport
 import app.getknit.knit.mesh.link.FramedLink
 import app.getknit.knit.mesh.link.LinkCallbacks
 import app.getknit.knit.mesh.link.LinkHandshake
@@ -853,10 +855,20 @@ class BluetoothMeshTransport(
     companion object {
         const val TAG = "BluetoothMeshTransport"
 
+        /**
+         * Whether this device has a Bluetooth adapter + BLE. The one probe of the adapter, kept here because
+         * nothing outside `mesh/bluetooth/` imports `android.bluetooth.*` (rules/mesh.md); `RadioSupport.probe`
+         * reads it so the Diagnostics row and this gate can never disagree.
+         */
+        fun support(context: Context): PlaneSupport =
+            bleSupport(
+                hasHardware =
+                    context.getSystemService(BluetoothManager::class.java)?.adapter != null &&
+                        context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE),
+            )
+
         /** True on a device with a Bluetooth adapter + BLE — the composite includes this plane only if so. */
-        fun isSupported(context: Context): Boolean =
-            context.getSystemService(BluetoothManager::class.java)?.adapter != null &&
-                context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
+        fun isSupported(context: Context): Boolean = support(context) == PlaneSupport.Supported
 
         // Connection-engine cadence: re-evaluate promotions at least this often (also woken by healSignal).
         private const val CONNECT_TICK_MS = 5_000L

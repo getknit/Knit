@@ -72,7 +72,7 @@
     <string name="onboarding_blurb">Knit connects directly to nearby phones over Wi-Fi Aware to relay encrypted messages — no internet, no servers. It needs the nearby-devices permission to find peers, and works best when allowed to run in the background.</string>
     <string name="onboarding_grant_permissions">Grant permissions</string>
     <string name="onboarding_permissions_granted">Permissions granted</string>
-    <string name="onboarding_unsupported">This device doesn\'t support Wi-Fi Aware, so it can\'t join the mesh. You can still open the app, but it won\'t connect to nearby phones.</string>
+    <string name="onboarding_unsupported">This phone has neither Wi-Fi Aware nor Bluetooth LE, so Knit can\'t reach phones nearby. You can still open the app and read what you already have.</string>
     <string name="onboarding_start">Start meshing</string>
 
     <!-- Chat -->
@@ -618,6 +618,11 @@
     <string name="diagnostics_status_degraded_hint">The radio may be in use by another app like Quick Share. Tap Restart mesh if it doesn\'t recover on its own.</string>
     <string name="diagnostics_status_unavailable">Mesh status: Radios off</string>
     <string name="diagnostics_status_unavailable_hint">Wi-Fi and Bluetooth are both off (or airplane mode is on). Turn one on to join the mesh.</string>
+    <!-- The same hint on a phone that only has one of the two radios, or neither — named so it never tells
+         someone to turn on a radio the Transports section below says they do not have. -->
+    <string name="diagnostics_status_unavailable_hint_ble_only">Bluetooth is off (or airplane mode is on). This phone has no Wi-Fi Aware, so Bluetooth is its only way onto the mesh. Turn it on to join.</string>
+    <string name="diagnostics_status_unavailable_hint_nan_only">Wi-Fi is off (or airplane mode is on). This phone has no Bluetooth LE, so Wi-Fi is its only way onto the mesh. Turn it on to join.</string>
+    <string name="diagnostics_status_unavailable_hint_no_radios">This phone has neither Wi-Fi Aware nor Bluetooth LE, so it can\'t reach phones nearby.</string>
     <string name="diagnostics_restart_mesh">Restart mesh</string>
     <string name="diagnostics_scan_now">Scan for nearby devices</string>
     <string name="diagnostics_mesh_restarted">Mesh restarted</string>
@@ -630,6 +635,11 @@
     <string name="diagnostics_transport_lora">LoRa</string>
     <string name="diagnostics_transport_counts">%1$d nearby · %2$d linked</string>
     <string name="diagnostics_transport_heard">%1$d heard</string>
+    <!-- Where the counts go on a plane the phone cannot run, or a LoRa plane with a board that is bound but
+         not up (no board at all reads lora_status_off, shared with the LoRa screen). -->
+    <string name="diagnostics_transport_unsupported">Not supported by this phone</string>
+    <string name="diagnostics_transport_needs_android_12">Needs Android 12 or newer</string>
+    <string name="diagnostics_transport_lora_down">Board not connected</string>
     <string name="diagnostics_tag_ble">BLE</string>
     <string name="diagnostics_tag_nan">NAN</string>
     <string name="diagnostics_tag_lora">LoRa</string>

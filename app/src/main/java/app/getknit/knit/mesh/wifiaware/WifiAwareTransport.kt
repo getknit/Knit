@@ -42,6 +42,7 @@ import app.getknit.knit.mesh.InboundFrame
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.MeshTransport
 import app.getknit.knit.mesh.Peer
+import app.getknit.knit.mesh.PlaneSupport
 import app.getknit.knit.mesh.ReceivedDigest
 import app.getknit.knit.mesh.ReceivedFile
 import app.getknit.knit.mesh.StoreDigest
@@ -60,6 +61,7 @@ import app.getknit.knit.mesh.power.PowerStateSource
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import app.getknit.knit.mesh.wifiAwareSupport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -2626,16 +2628,15 @@ class WifiAwareTransport(
 
         /**
          * True on an **API 31+** device with Wi-Fi Aware hardware — the composite includes this plane only if
-         * so. The floor is 31, not the app's minSdk 29, because the accept-any responder the NDP data path
-         * depends on (`WifiAwareNetworkSpecifier.Builder(publishSession)`) is API 31; 29-30 devices mesh over
-         * Bluetooth LE only. `@ChecksSdkIntAtLeast` lets lint treat this as the SDK guard for the
-         * `@RequiresApi(S)` constructor at its single call site (`di/MeshModule`).
+         * so. The verdict itself is `wifiAwareSupport` (`mesh/RadioSupport.kt`), shared with the Diagnostics
+         * row that explains an absent plane, so the two cannot disagree; the floor and the hardware facts are
+         * documented there. The literal `SDK_INT` comparison is redundant with the verdict but is what lint
+         * reads: `@ChecksSdkIntAtLeast` lets it treat this as the SDK guard for the `@RequiresApi(S)`
+         * constructor at its single call site (`di/MeshModule`).
          */
         @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.S)
         fun isSupported(context: Context): Boolean =
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                context.getSystemService(Context.WIFI_AWARE_SERVICE) != null &&
-                context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_WIFI_AWARE)
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && wifiAwareSupport(context) == PlaneSupport.Supported
 
         // The NAN service both nodes publish/subscribe — an Apple-`WiFiAwareServices`-conformant DNS-SD name
         // (`_name._proto`, name label ≤15 chars; `_tcp` matches the NDP's TCP data path) so a future iOS client

@@ -12,9 +12,12 @@ import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
+import app.getknit.knit.mesh.RadioSupport
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.TransportStatus
+import app.getknit.knit.mesh.lora.LoraFacts
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.moderation.ModelLoadGuard
 import app.getknit.knit.ui.Reach
@@ -29,7 +32,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -61,8 +66,10 @@ data class DiagnosticsUiState(
     /** How many [Reach.Known] nodes there are in total, so the screen can say how many it left out. */
     val knownTotal: Int = 0,
     val metrics: MeshMetrics.Snapshot = MeshMetrics.Snapshot(0, 0, 0, 0, 0, 0),
-    // Per-radio status (Bluetooth vs Wi-Fi Aware), one entry per active transport.
-    val transports: List<TransportStatus> = emptyList(),
+    // One row per radio plane: the live ones the composite built, plus the phone radios it could not.
+    val transports: List<TransportRow> = emptyList(),
+    /** Which phone radios this device has, so the "radios off" hint can name the one that matters. */
+    val radios: RadioSupport = RadioSupport.ALL,
     // Per-spool status for the Internet plane; empty whenever the plane is parked.
     val spools: List<SpoolStatus> = emptyList(),
 )
@@ -74,6 +81,7 @@ private data class DiagExtras(
     val peerTransports: Map<String, Set<TransportKind>>,
     val spools: List<SpoolStatus>,
     val reachable: Set<String>,
+    val loraPlane: LoraPlane,
 )
 
 /**
@@ -97,6 +105,12 @@ class DiagnosticsViewModel(
     relayStatus: RelayStatusRepository,
     private val crashes: CrashReports,
     private val modelGuard: ModelLoadGuard,
+    // Which phone radios this device has — a static fact, probed once at wiring. No default: a test states
+    // the device it is describing.
+    private val radios: RadioSupport,
+    // The LoRa plane as the UI sees it (`LoraStatusRepository.facts`): tells "no board bound" from "board
+    // out of reach", which the transport's health folds together.
+    loraFacts: Flow<LoraFacts>,
     // Wall clock, for ageing the Internet plane's per-scope presence stamps. Injected so a test can drive
     // the linger; the combine re-runs on the [REFRESH_MS] metrics ticker, so an expiry lands within a tick.
     private val clock: () -> Long = System::currentTimeMillis,
@@ -169,17 +183,25 @@ class DiagnosticsViewModel(
             }
         }
 
-    // Metrics + per-transport status + per-peer transport map + the full reach set, pre-combined so the main
-    // [state] combine stays within its five-source limit.
+    // Metrics + per-transport status + per-peer transport map + the full reach set + the LoRa plane,
+    // pre-combined so the main [state] combine stays within its five-source limit. The reach set and the
+    // LoRa plane pair up first for the same reason: this combine is at that limit too.
     private val extras: Flow<DiagExtras> =
         combine(
             metricsTicker,
             meshManager.transportStatuses,
             meshManager.peerTransports,
             relayStatus.statuses,
-            meshManager.reachable,
-        ) { snapshot, statuses, peerTransports, spools, reachable ->
-            DiagExtras(snapshot, statuses, peerTransports, spools, reachable.mapTo(mutableSetOf()) { it.nodeId })
+            combine(meshManager.reachable, loraFacts.map { it.plane }.distinctUntilChanged()) { r, l -> r to l },
+        ) { snapshot, statuses, peerTransports, spools, (reachable, loraPlane) ->
+            DiagExtras(
+                snapshot,
+                statuses,
+                peerTransports,
+                spools,
+                reachable.mapTo(mutableSetOf()) { it.nodeId },
+                loraPlane,
+            )
         }
 
     val state: StateFlow<DiagnosticsUiState> =
@@ -231,7 +253,8 @@ class DiagnosticsViewModel(
                 knownNodes = known.take(KNOWN_LIMIT),
                 knownTotal = known.size,
                 metrics = extra.metrics,
-                transports = extra.statuses,
+                transports = transportRows(extra.statuses, radios, extra.loraPlane),
+                radios = radios,
                 spools = extra.spools,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DiagnosticsUiState())

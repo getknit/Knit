@@ -1,11 +1,16 @@
 package app.getknit.knit.ui.onboarding
 
+import android.content.Context
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.R
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -79,5 +84,8 @@ class OnboardingScreenContentTest {
         // Start gates only on permissions (enabled = granted, independent of meshSupported) — the app
         // degrades gracefully rather than dead-ending, so the user can still reach the app.
         compose.onNodeWithTag("onboarding_start").assertIsEnabled()
+        // And the notice names the gate that fired it: neither radio, not "no Wi-Fi Aware" (work item 18).
+        val context: Context = ApplicationProvider.getApplicationContext()
+        compose.onNodeWithText(context.getString(R.string.onboarding_unsupported)).assertIsDisplayed()
     }
 }

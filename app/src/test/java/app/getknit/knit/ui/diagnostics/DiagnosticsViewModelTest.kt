@@ -19,7 +19,13 @@ import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.PRESENCE_LINGER_MS
 import app.getknit.knit.mesh.Peer
+import app.getknit.knit.mesh.PlaneSupport
+import app.getknit.knit.mesh.RadioSupport
+import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
+import app.getknit.knit.mesh.TransportStatus
+import app.getknit.knit.mesh.lora.LoraFacts
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.spool.ScopeStatus
 import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.moderation.ModelLoadGuard
@@ -110,6 +116,8 @@ class DiagnosticsViewModelTest {
                     relayStatus = RelayStatusRepository(settings, controller),
                     crashes = mockk(relaxed = true),
                     modelGuard = unlatchedGuard(journal),
+                    radios = RadioSupport.ALL,
+                    loraFacts = MutableStateFlow(LoraFacts()),
                 )
 
             val seen = mutableListOf<Int>()
@@ -149,6 +157,8 @@ class DiagnosticsViewModelTest {
                     relayStatus = RelayStatusRepository(settings, controller),
                     crashes = mockk(relaxed = true),
                     modelGuard = unlatchedGuard(),
+                    radios = RadioSupport.ALL,
+                    loraFacts = MutableStateFlow(LoraFacts()),
                 )
 
             vm.rescan()
@@ -187,6 +197,8 @@ class DiagnosticsViewModelTest {
                     relayStatus = RelayStatusRepository(settings, controller),
                     crashes = crashes,
                     modelGuard = unlatchedGuard(),
+                    radios = RadioSupport.ALL,
+                    loraFacts = MutableStateFlow(LoraFacts()),
                 )
 
             assertEquals(ref, vm.lastCrash.value)
@@ -209,6 +221,8 @@ class DiagnosticsViewModelTest {
         controller: FakeMeshController,
         peers: List<PeerEntity>,
         clock: () -> Long = { NOW },
+        radios: RadioSupport = RadioSupport.ALL,
+        loraFacts: Flow<LoraFacts> = MutableStateFlow(LoraFacts()),
     ): DiagnosticsViewModel {
         val settings = mockk<SettingsStore>(relaxed = true)
         every { settings.spoolEnabled } returns MutableStateFlow(false)
@@ -231,6 +245,8 @@ class DiagnosticsViewModelTest {
             relayStatus = RelayStatusRepository(settings, controller),
             crashes = mockk(relaxed = true),
             modelGuard = unlatchedGuard(),
+            radios = radios,
+            loraFacts = loraFacts,
             clock = clock,
         )
     }
@@ -346,6 +362,52 @@ class DiagnosticsViewModelTest {
             assertEquals(DiagnosticsViewModel.KNOWN_LIMIT, state.knownNodes.size)
             assertEquals(listOf("n8", "n7", "n6", "n5", "n4"), state.knownNodes.map { it.nodeId })
             assertFalse("a known row claims no plane", state.knownNodes.any { it.transports.isNotEmpty() })
+            job.cancel()
+        }
+
+    /**
+     * Work item 18: a phone without Wi-Fi Aware never gets a `WifiAware` status from the composite, so the
+     * Transports section used to just have one fewer row — indistinguishable from "Wi-Fi off". The row is now
+     * filled in from the device verdict, and the LoRa row (always constructed) carries the board verdict so
+     * "no board" reads differently from "board out of reach".
+     */
+    @Test
+    fun aPlaneTheCompositeCouldNotBuildIsListedWithItsReason() =
+        runTest {
+            val controller = FakeMeshController()
+            controller.transportStatuses.value =
+                listOf(
+                    TransportStatus(TransportKind.LoRa, TransportHealth.Unavailable, linked = 0, nearby = 0),
+                    TransportStatus(TransportKind.Bluetooth, TransportHealth.Healthy, linked = 1, nearby = 2),
+                )
+            val lora = MutableStateFlow(LoraFacts())
+            val vm =
+                reachVm(
+                    controller,
+                    peers = emptyList(),
+                    radios = RadioSupport(bluetooth = PlaneSupport.Supported, wifiAware = PlaneSupport.NoHardware),
+                    loraFacts = lora,
+                )
+            val job = backgroundScope.launch { vm.state.collect { } }
+            runCurrent()
+
+            assertEquals(
+                listOf(
+                    TransportRow.Live(TransportStatus(TransportKind.Bluetooth, TransportHealth.Healthy, linked = 1, nearby = 2)),
+                    TransportRow.Absent(TransportKind.WifiAware, PlaneSupport.NoHardware),
+                    TransportRow.Live(
+                        TransportStatus(TransportKind.LoRa, TransportHealth.Unavailable, linked = 0, nearby = 0),
+                        lora = LoraPlane.Off,
+                    ),
+                ),
+                vm.state.value.transports,
+            )
+
+            // A board comes up: the LoRa row follows the plane, the phone radios are untouched.
+            lora.value = LoraFacts(plane = LoraPlane.Live)
+            runCurrent()
+            val rows = vm.state.value.transports
+            assertEquals(LoraPlane.Live, (rows.last() as TransportRow.Live).lora)
             job.cancel()
         }
 

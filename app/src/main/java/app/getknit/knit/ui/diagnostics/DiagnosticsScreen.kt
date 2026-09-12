@@ -58,9 +58,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.crash.CrashReportRef
 import app.getknit.knit.mesh.MeshMetrics
+import app.getknit.knit.mesh.PlaneSupport
+import app.getknit.knit.mesh.RadioSupport
 import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.TransportStatus
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.mesh.spool.SpoolUrl
 import app.getknit.knit.ui.Reach
@@ -204,6 +207,7 @@ internal fun DiagnosticsScreenContent(
             item {
                 MeshControlsSection(
                     health = health,
+                    radios = state.radios,
                     onRestart = onRestartMesh,
                     onScan = onScan,
                 )
@@ -277,6 +281,7 @@ private fun SelfSection(
 @Composable
 private fun MeshControlsSection(
     health: TransportHealth,
+    radios: RadioSupport,
     onRestart: () -> Unit,
     onScan: () -> Unit,
 ) {
@@ -287,11 +292,13 @@ private fun MeshControlsSection(
             TransportHealth.Degraded -> R.string.diagnostics_status_degraded
             TransportHealth.Unavailable -> R.string.diagnostics_status_unavailable
         }
+    // The off hint names the radio this phone actually has: "turn on Wi-Fi or Bluetooth" on a phone with no
+    // Wi-Fi Aware would contradict the Transports row a few lines down.
     val hintRes =
         when (health) {
             TransportHealth.Healthy -> null
             TransportHealth.Degraded -> R.string.diagnostics_status_degraded_hint
-            TransportHealth.Unavailable -> R.string.diagnostics_status_unavailable_hint
+            TransportHealth.Unavailable -> unavailableHintFor(radios)
         }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Text(
@@ -495,18 +502,24 @@ private fun MetricRow(
 }
 
 @Composable
-private fun TransportsSection(statuses: List<TransportStatus>) {
-    if (statuses.isEmpty()) {
+private fun TransportsSection(rows: List<TransportRow>) {
+    if (rows.isEmpty()) {
         EmptyLine(stringResource(R.string.diagnostics_none_transports))
         return
     }
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        statuses.forEach { TransportRow(it) }
+        rows.forEach { row ->
+            when (row) {
+                is TransportRow.Live -> LiveTransportRow(row)
+                is TransportRow.Absent -> AbsentTransportRow(row)
+            }
+        }
     }
 }
 
 @Composable
-private fun TransportRow(status: TransportStatus) {
+private fun LiveTransportRow(row: TransportRow.Live) {
+    val status = row.status
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -534,14 +547,53 @@ private fun TransportRow(status: TransportStatus) {
         }
         // A long-range plane has no links by design and its count is *authors heard*, not people nearby —
         // a gateway relays for peers whose own radio is nowhere near. Saying "nearby · linked" there read
-        // as two facts that were both false. (The board count itself is on the LoRa settings screen.)
+        // as two facts that were both false. (The board count itself is on the LoRa settings screen.) And
+        // that plane exists whether or not a board is bound, so its off states are named rather than counted:
+        // "0 heard" under a grey dot had meant both "no board" and "board out of reach".
         Text(
             text =
-                if (status.kind == TransportKind.LoRa) {
-                    stringResource(R.string.diagnostics_transport_heard, status.nearby)
-                } else {
-                    stringResource(R.string.diagnostics_transport_counts, status.nearby, status.linked)
+                when (row.lora) {
+                    null -> stringResource(R.string.diagnostics_transport_counts, status.nearby, status.linked)
+                    LoraPlane.Off -> stringResource(R.string.lora_status_off)
+                    LoraPlane.Down -> stringResource(R.string.diagnostics_transport_lora_down)
+                    LoraPlane.Live -> stringResource(R.string.diagnostics_transport_heard, status.nearby)
                 },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * A plane the composite never built. Same shape as a live row so the section reads as one list, but muted
+ * throughout — the outline dot a switched-off radio gets (absence isn't a fault either) and the name in the
+ * secondary colour — with the reason where the counts would be. Plain text only: an icon with a description
+ * here would fail the accessibility audit for announcing twice.
+ */
+@Composable
+private fun AbsentTransportRow(row: TransportRow.Absent) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(MaterialTheme.colorScheme.outline))
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = transportName(row.kind),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text =
+                stringResource(
+                    if (row.why == PlaneSupport.NeedsAndroid12) {
+                        R.string.diagnostics_transport_needs_android_12
+                    } else {
+                        R.string.diagnostics_transport_unsupported
+                    },
+                ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -794,21 +846,33 @@ fun SelfSectionPreview() =
 @Composable
 fun MeshControlsSectionHealthyPreview() =
     KnitPreview {
-        MeshControlsSection(health = TransportHealth.Healthy, onRestart = {}, onScan = {})
+        MeshControlsSection(health = TransportHealth.Healthy, radios = RadioSupport.ALL, onRestart = {}, onScan = {})
     }
 
 @Preview(showBackground = true)
 @Composable
 fun MeshControlsSectionDegradedPreview() =
     KnitPreview {
-        MeshControlsSection(health = TransportHealth.Degraded, onRestart = {}, onScan = {})
+        MeshControlsSection(health = TransportHealth.Degraded, radios = RadioSupport.ALL, onRestart = {}, onScan = {})
     }
 
 @Preview(showBackground = true)
 @Composable
 fun MeshControlsSectionUnavailablePreview() =
     KnitPreview {
-        MeshControlsSection(health = TransportHealth.Unavailable, onRestart = {}, onScan = {})
+        MeshControlsSection(health = TransportHealth.Unavailable, radios = RadioSupport.ALL, onRestart = {}, onScan = {})
+    }
+
+@Preview(showBackground = true)
+@Composable
+fun MeshControlsSectionUnavailableBleOnlyPreview() =
+    KnitPreview {
+        MeshControlsSection(
+            health = TransportHealth.Unavailable,
+            radios = RadioSupport(bluetooth = PlaneSupport.Supported, wifiAware = PlaneSupport.NoHardware),
+            onRestart = {},
+            onScan = {},
+        )
     }
 
 @Preview(showBackground = true)
@@ -850,10 +914,34 @@ fun MetricsSectionEmptyPreview() =
 fun TransportsSectionPreview() =
     KnitPreview {
         TransportsSection(
-            statuses =
+            rows =
                 listOf(
-                    TransportStatus(TransportKind.Bluetooth, TransportHealth.Healthy, linked = 3, nearby = 5, contended = true),
-                    TransportStatus(TransportKind.WifiAware, TransportHealth.Healthy, linked = 1, nearby = 4),
+                    TransportRow.Live(
+                        TransportStatus(TransportKind.Bluetooth, TransportHealth.Healthy, linked = 3, nearby = 5, contended = true),
+                    ),
+                    TransportRow.Live(TransportStatus(TransportKind.WifiAware, TransportHealth.Healthy, linked = 1, nearby = 4)),
+                    TransportRow.Live(
+                        TransportStatus(TransportKind.LoRa, TransportHealth.Healthy, linked = 0, nearby = 2),
+                        lora = LoraPlane.Live,
+                    ),
+                ),
+        )
+    }
+
+/** A phone with no Wi-Fi Aware (the RedMagic 11 case), LoRa shipped but no board bound. */
+@Preview(showBackground = true)
+@Composable
+fun TransportsSectionAbsentPreview() =
+    KnitPreview {
+        TransportsSection(
+            rows =
+                listOf(
+                    TransportRow.Live(TransportStatus(TransportKind.Bluetooth, TransportHealth.Healthy, linked = 1, nearby = 2)),
+                    TransportRow.Absent(TransportKind.WifiAware, PlaneSupport.NoHardware),
+                    TransportRow.Live(
+                        TransportStatus(TransportKind.LoRa, TransportHealth.Unavailable, linked = 0, nearby = 0),
+                        lora = LoraPlane.Off,
+                    ),
                 ),
         )
     }
@@ -968,8 +1056,8 @@ fun DiagnosticsScreenPopulatedPreview() =
                         ),
                     transports =
                         listOf(
-                            TransportStatus(TransportKind.Bluetooth, TransportHealth.Healthy, linked = 2, nearby = 4),
-                            TransportStatus(TransportKind.WifiAware, TransportHealth.Healthy, linked = 1, nearby = 3),
+                            TransportRow.Live(TransportStatus(TransportKind.Bluetooth, TransportHealth.Healthy, linked = 2, nearby = 4)),
+                            TransportRow.Live(TransportStatus(TransportKind.WifiAware, TransportHealth.Healthy, linked = 1, nearby = 3)),
                         ),
                 ),
             health = TransportHealth.Healthy,
@@ -994,6 +1082,8 @@ fun DiagnosticsScreenEmptyDegradedPreview() =
                 DiagnosticsUiState(
                     myNodeId = "8f3a2b1c9d4e",
                     myName = "Ada Lovelace",
+                    transports = listOf(TransportRow.Absent(TransportKind.WifiAware, PlaneSupport.NeedsAndroid12)),
+                    radios = RadioSupport(bluetooth = PlaneSupport.Supported, wifiAware = PlaneSupport.NeedsAndroid12),
                 ),
             health = TransportHealth.Degraded,
             lastCrash = null,

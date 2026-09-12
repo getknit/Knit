@@ -130,7 +130,11 @@ transport by hand (`MeshTransport.pause`/`resume`, `context/direct-transfer.md`,
 (some budget/older + certain Samsung models) — but the **Bluetooth LE plane still meshes** on those
 devices, since `CompositeMeshTransport` merges whichever radios are present, so the UI shows the
 "unsupported" state only when *neither* Wi-Fi Aware nor BLE hardware exists
-(`hasWifiAwareHardware || hasBleHardware`, in onboarding).
+(`RadioSupport.probe(context).any`, in onboarding). The same verdict (`mesh/RadioSupport.kt`: `PlaneSupport`
+Supported / NoHardware / NeedsAndroid12, the two transports' `isSupported` gates are expressed on it) fills in
+the Diagnostics Transports row for a plane the composite never built — "Not supported by this phone" or "Needs
+Android 12 or newer" — since an omitted row had looked identical to a radio switched off (work item 18). Never
+as a synthetic `TransportStatus`: the chat list's `radioWarningFor` reads every entry there as present hardware.
 
 ## One file streams at a time per socket
 

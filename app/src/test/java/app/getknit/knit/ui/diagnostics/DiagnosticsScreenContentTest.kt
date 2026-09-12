@@ -10,7 +10,12 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.R
 import app.getknit.knit.crash.CrashReportRef
+import app.getknit.knit.mesh.PlaneSupport
+import app.getknit.knit.mesh.RadioSupport
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.TransportKind
+import app.getknit.knit.mesh.TransportStatus
+import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -205,6 +210,80 @@ class DiagnosticsScreenContentTest {
         }
 
         compose.onNodeWithText(context.getString(R.string.diagnostics_moderation_latched_label)).assertDoesNotExist()
+    }
+
+    /** Work item 18: a plane the phone cannot run is a row that says so, not a row that is missing. */
+    @Test
+    fun anAbsentPlaneIsListedWithItsReason() {
+        val bleOnly = RadioSupport(bluetooth = PlaneSupport.Supported, wifiAware = PlaneSupport.NoHardware)
+        compose.setContent {
+            KnitTheme {
+                DiagnosticsScreenContent(
+                    state =
+                        state().copy(
+                            transports =
+                                listOf(
+                                    TransportRow.Live(
+                                        TransportStatus(TransportKind.Bluetooth, TransportHealth.Healthy, linked = 1, nearby = 2),
+                                    ),
+                                    TransportRow.Absent(TransportKind.WifiAware, PlaneSupport.NoHardware),
+                                    TransportRow.Live(
+                                        TransportStatus(TransportKind.LoRa, TransportHealth.Unavailable, linked = 0, nearby = 0),
+                                        lora = LoraPlane.Off,
+                                    ),
+                                ),
+                            radios = bleOnly,
+                        ),
+                    // Bluetooth off on a phone with no Wi-Fi Aware: the hint must not say "turn on Wi-Fi".
+                    health = TransportHealth.Unavailable,
+                    lastCrash = null,
+                    now = 0L,
+                    snackbarHostState = SnackbarHostState(),
+                    onBack = {},
+                    onRestartMesh = {},
+                    onScan = {},
+                    onOpenCrashLog = {},
+                    moderationLatched = false,
+                    onResetModeration = {},
+                )
+            }
+        }
+
+        // The section sits below the controls, past Robolectric's small viewport: composed, so `assertExists`
+        // is the honest check (`assertIsDisplayed` would need a scroll the real screen never asks for).
+        compose.onNodeWithText(context.getString(R.string.diagnostics_transport_wifi_aware)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.diagnostics_transport_unsupported)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.lora_status_off)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.diagnostics_status_unavailable_hint_ble_only)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.diagnostics_status_unavailable_hint)).assertDoesNotExist()
+    }
+
+    @Test
+    fun aPhoneBelowTheWifiAwareFloorIsToldTheAndroidVersion() {
+        compose.setContent {
+            KnitTheme {
+                DiagnosticsScreenContent(
+                    state =
+                        state().copy(
+                            transports = listOf(TransportRow.Absent(TransportKind.WifiAware, PlaneSupport.NeedsAndroid12)),
+                            radios = RadioSupport(bluetooth = PlaneSupport.Supported, wifiAware = PlaneSupport.NeedsAndroid12),
+                        ),
+                    health = TransportHealth.Healthy,
+                    lastCrash = null,
+                    now = 0L,
+                    snackbarHostState = SnackbarHostState(),
+                    onBack = {},
+                    onRestartMesh = {},
+                    onScan = {},
+                    onOpenCrashLog = {},
+                    moderationLatched = false,
+                    onResetModeration = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText(context.getString(R.string.diagnostics_transport_needs_android_12)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.diagnostics_transport_unsupported)).assertDoesNotExist()
     }
 
     private fun crashRef() =

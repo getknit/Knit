@@ -26,9 +26,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import app.getknit.knit.R
+import app.getknit.knit.mesh.RadioSupport
 import app.getknit.knit.ui.hasAllMeshPermissions
-import app.getknit.knit.ui.hasBleHardware
-import app.getknit.knit.ui.hasWifiAwareHardware
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
 import app.getknit.knit.ui.requiredMeshPermissions
@@ -45,8 +44,9 @@ import app.getknit.knit.ui.requiredMeshPermissions
 @Composable
 fun OnboardingScreen(onReady: () -> Unit) {
     val context = LocalContext.current
-    // The mesh runs on either radio plane, so a device with Wi-Fi Aware OR Bluetooth LE can participate.
-    val meshSupported = remember { hasWifiAwareHardware(context) || hasBleHardware(context) }
+    // The mesh runs on either radio plane, so a device with Wi-Fi Aware OR Bluetooth LE can participate — the
+    // same verdict the composite builds its children from, so this never says "supported" for a plane it skips.
+    val meshSupported = remember { RadioSupport.probe(context).any }
     var granted by remember { mutableStateOf(hasAllMeshPermissions(context)) }
 
     val launcher =

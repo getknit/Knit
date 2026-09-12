@@ -4,6 +4,7 @@ import app.getknit.knit.data.LinkCardStore
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.linkpreview.LinkPreviewService
 import app.getknit.knit.location.LocationSource
+import app.getknit.knit.mesh.RadioSupport
 import app.getknit.knit.mesh.lora.LoraStatusRepository
 import app.getknit.knit.transfer.TransferManager
 import app.getknit.knit.ui.addcontact.AddContactViewModel
@@ -74,7 +75,20 @@ val uiModule =
         }
         viewModel { ContactsViewModel(get(), get(), get(), get(), get(), get()) }
         viewModel { SearchViewModel(get(), get(), get(), get(), get(), get<LoraStatusRepository>().facts, androidContext()) }
-        viewModel { DiagnosticsViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
+        viewModel {
+            DiagnosticsViewModel(
+                get(),
+                get(),
+                get(),
+                get(),
+                get(),
+                get(),
+                get(),
+                get(),
+                radios = RadioSupport.probe(androidContext()),
+                loraFacts = get<LoraStatusRepository>().facts,
+            )
+        }
         viewModel { CrashLogViewModel(get()) }
         viewModel { ProfileViewModel(get(), get(), get(), get()) }
         viewModel {

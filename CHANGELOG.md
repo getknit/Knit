@@ -63,6 +63,10 @@ document:
 
 ### Fixed
 
+- Diagnostics now lists Wi-Fi Aware on a phone that has no such radio, or one that needs Android 12 for it,
+  and says which. That row used to be left out, which looked the same as Wi-Fi being switched off.
+- A LoRa radio you never paired now reads "Not in use" in Diagnostics, and a paired one that is out of reach
+  says so. Both used to sit under the same grey dot with "0 heard".
 - Knit no longer repeats over your LoRa radio a message that Bluetooth or Wi-Fi has already delivered. If
   you have a board paired, its limited airtime now goes to the messages that actually need the range.
 - Restarting Knit no longer makes a paired LoRa radio repeat what it has already sent. Knit now remembers

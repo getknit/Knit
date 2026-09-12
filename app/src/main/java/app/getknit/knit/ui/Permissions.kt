@@ -60,16 +60,3 @@ fun hasAllMeshPermissions(context: Context): Boolean =
     requiredMeshPermissions().all {
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
     }
-
-/**
- * Whether this device has the Wi-Fi Aware radio the primary mesh plane runs on. False on hardware lacking
- * [PackageManager.FEATURE_WIFI_AWARE] (some budget/older and certain Samsung models).
- */
-fun hasWifiAwareHardware(context: Context): Boolean = context.packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE)
-
-/**
- * Whether this device has the Bluetooth LE radio the secondary mesh plane runs on. Together with
- * [hasWifiAwareHardware] this gates the "can this device mesh at all?" onboarding state: a device with
- * **either** radio can participate (the composite runs whichever plane is present).
- */
-fun hasBleHardware(context: Context): Boolean = context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)

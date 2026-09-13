@@ -677,7 +677,7 @@
         <item quantity="other">%d messages for other people</item>
     </plurals>
     <string name="your_mesh_carrying_none">Nothing waiting right now</string>
-    <string name="your_mesh_carrying_hint">Other people's messages from the last day, kept so a phone that missed one can still pick it up here. Private messages stay sealed; this phone can't read them.</string>
+    <string name="your_mesh_carrying_hint">Other people\'s messages from the last day, kept so a phone that missed one can still pick it up here. Private messages stay sealed; this phone can\'t read them.</string>
     <string name="your_mesh_lifetime_heading">All time</string>
     <!-- %1$s is a date. -->
     <string name="your_mesh_lifetime_since">Since %1$s</string>

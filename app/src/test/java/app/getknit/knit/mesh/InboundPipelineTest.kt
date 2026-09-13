@@ -1408,6 +1408,45 @@ class InboundPipelineTest {
             assertNull(row.arrivedAt)
         }
 
+    /**
+     * Our own profile looping back — re-served by a peer, or echoed off the LoRa plane — must not pin
+     * `peers[me]`. It did, once `verifyInbound` started admitting self frames for the custody reconverge:
+     * the row then made every seal-to-a-pinned-peer path take us for a peer, and `flushGroupKeys(me)` sealed
+     * every group's seed to ourselves on each arrival — the source of the hourly self-addressed frames found
+     * in every lab phone's custody. Custody still takes the frame (that is what the reconverge needs).
+     */
+    @Test
+    fun ourOwnProfileLoopingBackIsCustodiedButNeverPinnedAndFlushesNothing() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val profile = rig.profile(rig.self, name = "Me")
+
+            rig.deliver(rig.self, profile)
+
+            assertNull("we never pin our own key", rig.peerMap[rig.self.nodeId])
+            assertTrue("the reconverge still re-carries it", rig.forwardStore.has(profile.id))
+            assertTrue("no group seeds are flushed toward ourselves", rig.groupKeysFlushed.none { it.first == rig.self.nodeId })
+            assertTrue("nothing is originated in answer", rig.originated.isEmpty())
+        }
+
+    /**
+     * A DM from us to us is not a shape this app produces; the ones in the field are the residue of the
+     * self-pin above, re-served for a day. Opening one fails and feeds the reset heuristic, so it is dropped
+     * ahead of the decrypt: not delivered, not acked, no reset — and still custodied, like any own frame.
+     */
+    @Test
+    fun aDmFromUsToUsIsDroppedBeforeTheDecryptAndAnswersNothing() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val env = rig.dmChat(rig.self, rig.self, id = "self-dm", body = "to me")
+
+            rig.deliver(rig.self, env)
+
+            assertFalse(rig.msgMap.containsKey("self-dm"))
+            assertTrue("no receipt and no session reset go out", rig.originated.isEmpty())
+            assertTrue(rig.forwardStore.has("self-dm"))
+        }
+
     @Test
     fun ourOwnRoomPostReServedByAPeerNeverResetsItsTick() =
         runTest {

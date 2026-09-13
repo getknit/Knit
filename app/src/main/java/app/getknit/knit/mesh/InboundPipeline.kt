@@ -664,6 +664,13 @@ class InboundPipeline(
         // A DM addressed to someone else: we're only relaying it (the router floods it onward). It
         // isn't ours, so don't persist, notify, or ack it.
         if (!Conversations.isForMe(env.recipientId, me)) return
+        // A DM from us to us is nothing this app ever sends on purpose: no thread has that shape, and every
+        // sealed ctl DM is addressed to some *other* member or contact. The ones in the field are the residue
+        // of the self-pin `handleProfile` now refuses — still in custody for a day, re-served by every peer —
+        // and opening one fails (there is no receive side of a session with ourselves), which is exactly what
+        // feeds the reset heuristic and re-seals more of them. Dropped ahead of the decrypt, so the residue
+        // ages out quietly. Our own broadcast posts and group frames are untouched: they carry no recipient.
+        if (env.senderId == me && env.recipientId == me) return
         decryptAndDeliver(env, content, me, Conversations.idFor(env.senderId, env.recipientId, me), plane, signed, source)
     }
 
@@ -2868,11 +2875,21 @@ class InboundPipeline(
      * past detekt's threshold of 15. The body is a straight-line sequence of null-coalesced field resolutions
      * and guards — not genuinely complex — and the guard is load-bearing, so suppress rather than reshuffle it.
      */
-    @Suppress("CyclomaticComplexMethod")
+    @Suppress("CyclomaticComplexMethod", "LongMethod") // LongMethod: the self guard's one line tipped it to 61
     private suspend fun handleProfile(
         env: RelayEnvelope,
         wire: WireEnvelope,
     ) {
+        // Our own profile looping back — a peer re-served it, or the LoRa plane echoed it — is not a peer to
+        // pin. `verifyInbound` admits self frames so a wiped custody re-carries them (and custody has already
+        // taken this one, upstream of the type dispatch); everything below is for OTHER people's profiles.
+        // Without this guard the row `peers[me]` appears, with our own key, capabilities and prekey, and
+        // every path that treats a pinned row as a sealable peer takes us for one: `flushGroupKeys(me)` seals
+        // every group's seed to ourselves, the ratchet opens a session with ourselves, the echo cannot be
+        // opened and trips the reset heuristic, the reset re-flushes the seeds — a self-sustaining loop of
+        // sealed self-addressed frames, one every hour or two on every phone, each flooded, custodied and
+        // carried over LoRa airtime (found via the Your mesh screen's custody count, 2026-09-13).
+        if (env.senderId == identity.nodeId()) return
         val content = WireCodec.decodePayload<ProfileContent>(env.payload) ?: return
         // Self-certifying identity: a peer's nodeId IS the hash of its public-key bundle, so a profile
         // is only trustworthy if the advertised key actually derives back to the claimed senderId.

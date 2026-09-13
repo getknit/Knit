@@ -101,6 +101,9 @@ document:
 - A relay that sends junk or stops answering after it connects no longer ties Knit up for minutes at a
   time or keeps a photo from ever arriving through it. Relays and Diagnostics now say what went wrong
   instead of showing it as connected.
+- A phone in a group chat kept sending itself a sealed key message every hour or two, and every phone
+  around it carried the copies. Knit no longer mistakes its own profile for a contact's, which is what
+  started the loop.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

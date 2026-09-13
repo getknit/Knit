@@ -56,6 +56,18 @@ class PeerRepository(
 
     suspend fun upsert(peer: PeerEntity) = dao.upsert(peer)
 
+    /**
+     * Drops the row a device pinned for *itself* — `nodeId` is our own — if one exists. A node never pins its
+     * own key (`InboundPipeline.handleProfile` refuses its own profile), but builds before 2026-09-13 did when
+     * their own profile looped back, and the row made every seal-to-a-pinned-peer path treat us as a peer.
+     * Run once at mesh start; a no-op on a clean device. Returns whether a row was removed.
+     */
+    suspend fun forgetSelf(nodeId: String): Boolean {
+        if (dao.findByNodeId(nodeId) == null) return false
+        dao.delete(nodeId)
+        return true
+    }
+
     /** Marks (or clears) the user's out-of-band verification of this peer's pinned key. */
     suspend fun setVerified(
         nodeId: String,

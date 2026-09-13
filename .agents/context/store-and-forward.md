@@ -205,15 +205,28 @@ only, our own custody's ratchet-form chat DMs from that roster that produced no 
 (`MeshManager.replayCustodiedSeedDms`) — idempotent for the same reasons the group-frame replay is. Pinned by
 `mesh/lab`'s restart-with-a-parked-seed scenario, which found it.
 
-## Custody carries our own frames too — the self-frame silent drop
+## Custody carries our own frames too — a self frame is verified, re-carried, and never pinned
 
-Because custody now carries our **own** frames too, `verifyInbound` short-circuits any frame whose
-`senderId` is our own nodeId — a silent local no-op drop *before* the `NO_SENDER_KEY` path. A neighbor
-re-serves a carried copy of a `chat`/`reaction` we originated, and its re-flood reaches us again once our
-`SeenSet` window has lapsed; since a node never pins its **own** key in `peers` (`handleProfile` only
-upserts inbound senders), that copy would otherwise be counted as `NO_SENDER_KEY`, parked in
-`PendingInbound` until its TTL (no self-profile ever arrives to release it), and trigger a
-`keyExchange.want(self)` no-op — pure noise for a message we already delivered at origination. We drop it
-silently; the router still relays it and neighbors dedup it one hop out. (Field-observed 2026-07-02, idle
-3-node mesh: a slow drip of `drop chat/reaction … no key to verify it` from the node's *own* id, with
-`keyReq` stuck at 0 — the `KeyExchange.want` self-guard — and `framesHeld` climbing.)
+Because custody carries our **own** frames too, a neighbor re-serves a carried copy of a frame we
+originated and its re-flood reaches us again once our `SeenSet` window has lapsed. A node never pins its
+**own** key in `peers`, so `verifyInbound` resolves a self frame against our identity's own bundle
+(`verifierBundle`, commit `2cdf2332`) rather than the pinned-key lookup — it used to be a silent drop, which
+after a custody wipe stopped us ever re-carrying our own sends, so digests never reconverged. The frame
+then reaches `onDeliver`: custody re-takes it (idempotent), `deliverChat` no-ops on its `isNew` gate. Two
+self shapes are refused *after* custody, at the type dispatch, and both must stay refused:
+
+- **Our own `profile` never pins** (`handleProfile` returns on `senderId == me`). When it did (2026-07-04
+  → 2026-09-13), the row `peers[me]` carried our key, `CAP_RATCHET` and prekey, and every path that treats
+  a pinned row as a sealable peer took us for one: `flushGroupKeys(me)` sealed every group's seed to
+  ourselves, the ratchet opened a session with ourselves, the echo could not be opened (no receive side)
+  and tripped `maybeRequestReset(me)`, and the reset's `force` flush re-sealed the seeds — a
+  self-sustaining loop of sealed self-addressed `chat` frames, one every hour or two on every phone,
+  flooded, custodied by every carrier for 24 h, and carried over LoRa airtime as DM-form traffic. Found
+  through the Your mesh screen's custody count (51 "for others" on the P9, 15 of them X→X). Pinned by
+  `InboundPipelineTest.ourOwnProfileLoopingBackIsCustodiedButNeverPinnedAndFlushesNothing` and the
+  no-self-row check in `MeshLab.assertConverged`; `PeerRepository.forgetSelf` sweeps the row at mesh start
+  on a device that already has one.
+- **A DM from us to us is dropped before the decrypt** (`handleChat`): no thread has that shape and every
+  sealed ctl DM is addressed to someone else, so the only ones in existence are that loop's residue, and
+  opening one is what fed the reset heuristic. Our own broadcast posts and group frames carry no recipient
+  and are untouched.

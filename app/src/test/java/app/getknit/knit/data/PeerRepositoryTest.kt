@@ -11,8 +11,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -48,6 +50,19 @@ class PeerRepositoryTest : RoomDbTest() {
             assertNotNull(dao.findByNodeId("new"))
             assertNotNull(dao.findByNodeId("verified"))
             assertNotNull(dao.findByNodeId("known"))
+        }
+
+    @Test
+    fun `forgetSelf drops only the row pinned for our own node id`() =
+        runTest {
+            val dao = db.peerDao()
+            dao.upsert(PeerEntity(nodeId = "me", name = "Me", pubKey = "KEY"))
+            dao.upsert(PeerEntity(nodeId = "a", name = "Alice"))
+
+            assertTrue(repo().forgetSelf("me"))
+            assertNull(dao.findByNodeId("me"))
+            assertNotNull(dao.findByNodeId("a"))
+            assertFalse("a second sweep is a no-op", repo().forgetSelf("me"))
         }
 
     @Test

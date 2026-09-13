@@ -222,6 +222,10 @@ class MeshLab {
         stores.forEach { n ->
             val snap = n.metrics.snapshot()
             assertEquals("${n.name} parked a group seed that never replayed", snap.groupSeedsHeld, snap.groupSeedsReplayed)
+            // A node never pins its own key: its own profile loops back through every peer's custody, and a
+            // self row turns every seal-to-a-pinned-peer path on ourselves (the hourly self-addressed frames
+            // found in the lab fleet's custody, 2026-09-13).
+            assertTrue("${n.name} pinned a peer row for itself", n.peers.find(n.nodeId) == null)
         }
     }
 
@@ -404,8 +408,15 @@ class LabNode internal constructor(
             )
         manager.start()
         // The session's collectors subscribe asynchronously; a frame sent before that is emitted into nobody.
+        // The startup seed of our own profile into custody is asynchronous too, and the lab has no cue plane:
+        // a custody row that lands after a link's first digest exchange is not offered again until the 60 s
+        // re-offer, so a scenario that links straight after boot would sometimes leave one node's seed
+        // unconverged inside the oracle's window. Wait for the seed, so every link starts from a settled store.
         withContext(Dispatchers.Default) {
-            withTimeout(MeshLab.AWAIT_MS) { while (!transport.collecting) delay(1) }
+            withTimeout(MeshLab.AWAIT_MS) {
+                while (!transport.collecting) delay(1)
+                while (custodyIds().none { it.startsWith("profile-$nodeId-") }) delay(1)
+            }
         }
     }
 

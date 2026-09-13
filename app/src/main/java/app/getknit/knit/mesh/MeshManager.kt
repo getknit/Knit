@@ -1992,6 +1992,9 @@ class MeshManager(
      */
     private fun seedOwnProfileCustody(session: CoroutineScope) {
         session.launch {
+            // Hygiene for a device whose own profile once pinned a `peers` row for itself (the self-addressed
+            // seed loop, fixed in InboundPipeline.handleProfile): the row is what made us a sealable "peer".
+            if (peers.forgetSelf(identity.nodeId())) Log.w(TAG, "dropped the peer row this device had pinned for itself")
             // Rotation check BEFORE seeding, so a due prekey mints now and the seeded frame (and any
             // first-contact push) already carries it; also the startup ratchet retention sweep.
             rotatePrekeyIfDue()

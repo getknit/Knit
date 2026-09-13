@@ -55,6 +55,9 @@ interface PeerDao {
         over: Int,
     )
 
+    @Query("DELETE FROM peers WHERE nodeId = :nodeId")
+    suspend fun delete(nodeId: String)
+
     @Upsert
     suspend fun upsert(peer: PeerEntity)
 }

@@ -251,6 +251,65 @@ class MeshRouterTest {
             assertEquals(listOf("m1"), deliveredAtC)
         }
 
+    /**
+     * `onRelayed` is the fact behind the Your mesh screen's "passed along": a relay that fired AND went to at
+     * least one neighbor reports the frame and exactly the neighbors it was sent to (split horizon applied);
+     * a relay with nobody left to send to, or one the overhear suppression cancelled, reports nothing.
+     */
+    @Test
+    fun aFiredRelayReportsTheEnvelopeAndTheNeighborsItWentTo() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "c", "d"))
+            val relayed = mutableListOf<Pair<String, Set<String>>>()
+            val router =
+                MeshRouter(transport, this, jitter = { 0L }, onRelayed = { env, to -> relayed += env.id to to }) { _, _, _, _ -> }
+
+            val (wire, env) = frame("m1")
+            router.handleInbound(wire, env, fromNodeId = "b")
+            advanceUntilIdle()
+
+            assertEquals(listOf("m1" to setOf("c", "d")), relayed)
+        }
+
+    @Test
+    fun aRelayToNobodyIsNotReported() =
+        runTest {
+            val transport = RecordingTransport(setOf("b")) // the only neighbor is the one we heard it from
+            val relayed = mutableListOf<String>()
+            val router = MeshRouter(transport, this, jitter = { 0L }, onRelayed = { env, _ -> relayed += env.id }) { _, _, _, _ -> }
+
+            val (wire, env) = frame("m1")
+            router.handleInbound(wire, env, fromNodeId = "b")
+            advanceUntilIdle()
+
+            assertTrue(transport.sent.isEmpty())
+            assertTrue(relayed.isEmpty())
+        }
+
+    @Test
+    fun aSuppressedRelayIsNotReported() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "c", "d"))
+            val relayed = mutableListOf<String>()
+            val router =
+                MeshRouter(
+                    transport,
+                    this,
+                    jitterWindowMs = 150L,
+                    suppressThreshold = 2,
+                    jitter = { 100L },
+                    onRelayed = { env, _ -> relayed += env.id },
+                ) { _, _, _, _ -> }
+
+            val (wire, env) = frame("m1")
+            router.handleInbound(wire, env, fromNodeId = "b")
+            advanceTimeBy(40)
+            router.handleInbound(wire, env, fromNodeId = "c")
+            advanceUntilIdle()
+
+            assertTrue(relayed.isEmpty())
+        }
+
     @Test
     fun suppressesRelayWhenDuplicateOverheardDuringJitterWindow() =
         runTest {

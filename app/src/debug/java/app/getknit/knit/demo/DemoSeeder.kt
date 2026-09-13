@@ -61,6 +61,7 @@ class DemoSeeder(
         val groupId = writer.seedGroup(scenario.group, now)
         writer.seedRequests(now)
         writer.seedBlocked()
+        writer.seedYourMesh(now)
         // The paired board's own channel, mirrored locally. [DemoPlanes] binds the board below, and the room's
         // row appears the moment one is bound — so without this the chat list would carry an empty room.
         writer.seedMeshRoom(now)

@@ -3,6 +3,7 @@ package app.getknit.knit.data.forward
 import app.getknit.knit.data.RoomDbTest
 import app.getknit.knit.data.blob.BlobEntity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -180,6 +181,30 @@ class ForwardDaoTest : RoomDbTest() {
             dao.delete("dm")
             assertFalse(dao.exists("dm"))
             assertTrue(dao.exists("bc"))
+        }
+
+    /**
+     * The Your mesh screen's "carrying now": relayed chat frames from other people that are not addressed to
+     * us — so our own sends (origin 1), a DM *to* us (custodied too, ADR 018), a non-chat type and an expired
+     * row are all out, while a DM to someone else, a group frame and a broadcast post are all in. Room
+     * re-emits the count on a later insert.
+     */
+    @Test
+    fun `observeCarriedForOthers counts only live relayed chat frames from others not addressed to me`() =
+        runTest {
+            dao.insert(fwd("dm_other", senderId = "alice", recipientId = "carol"))
+            dao.insert(fwd("group", senderId = "alice", recipientId = null, groupId = "g1"))
+            dao.insert(fwd("room", senderId = "alice", recipientId = null))
+            dao.insert(fwd("mine", senderId = "me", recipientId = "carol").copy(origin = 1))
+            dao.insert(fwd("to_me", senderId = "alice", recipientId = "me"))
+            dao.insert(fwd("receipt", senderId = "alice", recipientId = "carol").copy(type = "receipt"))
+            dao.insert(fwd("expired", senderId = "alice", recipientId = "carol", expiresAt = 50L))
+            // A frame we authored but that somehow sits as origin 0 (a wipe-and-re-serve) is still not "for others".
+            dao.insert(fwd("mine_relayed", senderId = "me", recipientId = "carol"))
+            assertEquals(3, dao.observeCarriedForOthers(me = "me", now = 100L).first())
+
+            dao.insert(fwd("dm_other_2", senderId = "bob", recipientId = "carol"))
+            assertEquals(4, dao.observeCarriedForOthers(me = "me", now = 100L).first())
         }
 
     /** Builds a [ForwardEntity] with convergence-relevant fields caller-set and the rest defaulted. */

@@ -3,6 +3,7 @@ package app.getknit.knit.di
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.LinkCardStore
 import app.getknit.knit.data.commons.CommonsRepository
+import app.getknit.knit.data.forward.ForwardRepository
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.linkpreview.LinkPreviewService
 import app.getknit.knit.location.LocationSource
@@ -26,6 +27,7 @@ import app.getknit.knit.ui.relay.InternetRelayViewModel
 import app.getknit.knit.ui.requests.MessageRequestsViewModel
 import app.getknit.knit.ui.search.SearchViewModel
 import app.getknit.knit.ui.settings.SettingsViewModel
+import app.getknit.knit.ui.yourmesh.YourMeshViewModel
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
@@ -106,6 +108,9 @@ val uiModule =
             )
         }
         viewModel { CrashLogViewModel(get()) }
+        // Your mesh: the plain-words companion to Diagnostics. Reads the concrete ForwardRepository for its
+        // "carrying now" count — a UI projection deliberately kept off the ForwardStore seam.
+        viewModel { YourMeshViewModel(get(), get(), get(), get<ForwardRepository>(), get()) }
         viewModel { ProfileViewModel(get(), get(), get(), get()) }
         viewModel {
             SettingsViewModel(get(), get(), get<RelayStatusRepository>().facts, get<LoraStatusRepository>().facts)

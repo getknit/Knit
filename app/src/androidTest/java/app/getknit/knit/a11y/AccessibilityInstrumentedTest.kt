@@ -111,6 +111,11 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun internetRelays() = audit(route = "relays") { awaitTag("relays_switch") }
 
+    // The seeded build banks lifetime numbers, met peers and a few custodied frames (DemoWriter.seedYourMesh),
+    // so this audits the populated screen — the hero, the carrying card and the three stat rows — not the
+    // fresh-install copy. Anchored on the last stat row, which is the row a slow DataStore read fills last.
+    @Test fun yourMesh() = audit(route = "yourMesh") { awaitTag("your_mesh_people_met") }
+
     // The seeded build reports a bound, connected, Knit-provisioned board (DemoPlanes + DemoLoraPlane), so
     // this audits the populated screen — the live status block, the battery and signal rows, the picker and
     // the Restore action — rather than the "pair a board first" empty state an emulator would otherwise give.

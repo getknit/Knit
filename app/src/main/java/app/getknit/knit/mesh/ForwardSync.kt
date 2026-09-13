@@ -35,6 +35,10 @@ class ForwardSync(
     // references (an image): the frame carries only a content hash, so the carrier eager-pulls + holds the bytes
     // keyed to the frame's lifetime. Defaulted to a no-op so the pure tests and non-blob call sites are unaffected.
     private val onCarried: suspend (RelayEnvelope) -> Unit = {},
+    // Invoked once per carried frame [onDigest] actually sends, with the peer it went to — the fact behind the
+    // Your mesh screen's "passed along" / "handed straight to" numbers (`ContributionLedger` decides whether
+    // it counts). Defaulted to a no-op so the pure tests are unaffected.
+    private val onServed: suspend (RelayEnvelope, toNodeId: String) -> Unit = { _, _ -> },
 ) {
     // Ids of DMs purged by a delivery receipt: a short-lived tombstone (≤ carry TTL) so a still-
     // circulating copy from an unvaccinated peer isn't re-stored after we've already delivered it.
@@ -107,6 +111,7 @@ class ForwardSync(
             val members = env.group?.members
             if (members != null && fromNodeId !in members) return@forEach // group: members only (DM/broadcast: anyone)
             transport.send(WireEnvelope(sig = carried.sig, signed = carried.signed), peer)
+            onServed(env, fromNodeId)
         }
     }
 

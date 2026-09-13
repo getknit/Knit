@@ -74,6 +74,7 @@ class ChatListScreenContentTest {
                     onSearch = {},
                     onNewMessage = {},
                     onOpenSettings = {},
+                    onOpenYourMesh = {},
                     onOpenDiagnostics = {},
                     onOpenBlockedUsers = {},
                     onOpenMessageRequests = {},
@@ -95,6 +96,46 @@ class ChatListScreenContentTest {
         assertEquals("dm-1", opened)
     }
 
+    /**
+     * The header's status line is the door to Your mesh: one node that still speaks the row's own description
+     * (it is `clearAndSetSemantics` inside), now with the button role and the click. The overflow menu offers
+     * the same screen, above Diagnostics.
+     */
+    @Test
+    fun theStatusLineAndTheOverflowMenuOpenYourMesh() {
+        var opened = 0
+        compose.setContent {
+            KnitTheme {
+                ChatListScreenContent(
+                    state = ChatListUiState(neighborCount = 3, transportHealth = TransportHealth.Healthy),
+                    now = now,
+                    onOpenConversation = {},
+                    onSearch = {},
+                    onNewMessage = {},
+                    onOpenSettings = {},
+                    onOpenYourMesh = { opened++ },
+                    onOpenDiagnostics = {},
+                    onOpenBlockedUsers = {},
+                    onOpenMessageRequests = {},
+                    onOpenDonate = {},
+                    onOpenAddContact = {},
+                    onShareApp = {},
+                    onOpenRadioSettings = {},
+                    onDismissRadioWarning = {},
+                    onDeleteConversation = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("chatlist_your_mesh").assertContentDescriptionContains("3", substring = true)
+        compose.onNodeWithTag("chatlist_your_mesh").performClick()
+        assertEquals(1, opened)
+
+        compose.onNodeWithContentDescription("More options").performClick()
+        compose.onNodeWithText("Your mesh").performClick()
+        assertEquals(2, opened)
+    }
+
     @Test
     fun aRowWithADraftReadsAsDraftInsteadOfItsLastMessage() {
         compose.setContent {
@@ -109,6 +150,7 @@ class ChatListScreenContentTest {
                     onSearch = {},
                     onNewMessage = {},
                     onOpenSettings = {},
+                    onOpenYourMesh = {},
                     onOpenDiagnostics = {},
                     onOpenBlockedUsers = {},
                     onOpenMessageRequests = {},
@@ -141,6 +183,7 @@ class ChatListScreenContentTest {
                     onSearch = {},
                     onNewMessage = { newMessage++ },
                     onOpenSettings = {},
+                    onOpenYourMesh = {},
                     onOpenDiagnostics = {},
                     onOpenBlockedUsers = {},
                     onOpenMessageRequests = {},
@@ -175,6 +218,7 @@ class ChatListScreenContentTest {
                     onSearch = {},
                     onNewMessage = {},
                     onOpenSettings = {},
+                    onOpenYourMesh = {},
                     onOpenDiagnostics = {},
                     onOpenBlockedUsers = {},
                     onOpenMessageRequests = { openedRequests++ },
@@ -208,6 +252,7 @@ class ChatListScreenContentTest {
                     onSearch = {},
                     onNewMessage = {},
                     onOpenSettings = {},
+                    onOpenYourMesh = {},
                     onOpenDiagnostics = {},
                     onOpenBlockedUsers = {},
                     onOpenMessageRequests = {},
@@ -241,6 +286,7 @@ class ChatListScreenContentTest {
                     onSearch = {},
                     onNewMessage = {},
                     onOpenSettings = {},
+                    onOpenYourMesh = {},
                     onOpenDiagnostics = {},
                     onOpenBlockedUsers = {},
                     onOpenMessageRequests = {},
@@ -272,6 +318,7 @@ class ChatListScreenContentTest {
                     onSearch = {},
                     onNewMessage = {},
                     onOpenSettings = {},
+                    onOpenYourMesh = {},
                     onOpenDiagnostics = {},
                     onOpenBlockedUsers = {},
                     onOpenMessageRequests = {},
@@ -312,6 +359,7 @@ class ChatListScreenContentTest {
                     onSearch = {},
                     onNewMessage = {},
                     onOpenSettings = {},
+                    onOpenYourMesh = {},
                     onOpenDiagnostics = {},
                     onOpenBlockedUsers = {},
                     onOpenMessageRequests = {},

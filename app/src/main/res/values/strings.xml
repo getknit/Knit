@@ -1,4 +1,4 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Knit</string>
 
     <!-- Notification channel groups -->
@@ -650,6 +650,43 @@
     <string name="diagnostics_tag_lora">LoRa</string>
     <string name="diagnostics_tag_spool">Relay</string>
     <string name="diagnostics_transport_audio">audio</string>
+
+    <!-- Your mesh (ui/yourmesh): what keeping Knit running has done for the people around this phone, in
+         plain words. Every number is counted on this phone and never leaves it. "Passed along" is a message
+         frame this phone sent on for someone else; "handed straight to" is one it sent over a live link to
+         the person it was for — a hand-off, not a confirmed delivery, which is why nothing here says
+         "delivered". A carrier cannot tell a message from a sealed receipt or reaction (ADR 018), so those
+         count as messages; nor can it tell a delivered one from an undelivered one (a sealed receipt never
+         purges custody), so "carrying" is what this phone holds and would re-serve, delivered or not — the
+         hint says so. "Met" is a phone this one has been in radio range of. -->
+    <string name="your_mesh_title">Your mesh</string>
+    <!-- Click label of the chat-list header's status line, which opens this screen. -->
+    <string name="your_mesh_open">Open Your mesh</string>
+    <!-- The label under the hero's big number; the number is drawn separately, so no placeholder here. -->
+    <plurals name="your_mesh_nearby" tools:ignore="ImpliedQuantity">
+        <item quantity="one">person nearby</item>
+        <item quantity="other">people nearby</item>
+    </plurals>
+    <string name="your_mesh_status_connected">Your phone is part of the mesh right now.</string>
+    <string name="your_mesh_status_alone">No one in range right now. Knit keeps listening.</string>
+    <string name="your_mesh_status_radios_off">Turn on Wi-Fi or Bluetooth to reach people nearby.</string>
+    <string name="your_mesh_status_degraded">Another app has the radio. Knit picks up again when it lets go.</string>
+    <string name="your_mesh_carrying_heading">Carrying now</string>
+    <plurals name="your_mesh_carrying">
+        <item quantity="one">%d message for other people</item>
+        <item quantity="other">%d messages for other people</item>
+    </plurals>
+    <string name="your_mesh_carrying_none">Nothing waiting right now</string>
+    <string name="your_mesh_carrying_hint">Other people's messages from the last day, kept so a phone that missed one can still pick it up here. Private messages stay sealed; this phone can't read them.</string>
+    <string name="your_mesh_lifetime_heading">All time</string>
+    <!-- %1$s is a date. -->
+    <string name="your_mesh_lifetime_since">Since %1$s</string>
+    <string name="your_mesh_passed_along">messages passed along for other people</string>
+    <string name="your_mesh_handed_direct">of those handed straight to the person they were for</string>
+    <string name="your_mesh_people_met">people this phone has met</string>
+    <string name="your_mesh_encouragement">Every phone running Knit carries messages for the phones around it. Leaving Knit on is how a message gets across a campsite or a crowd, including to people you never meet.</string>
+    <string name="your_mesh_encouragement_fresh">Every phone running Knit carries messages for the phones around it. Leave Knit on, and these numbers start to move the first time someone comes within range.</string>
+    <string name="your_mesh_technical_details">Technical details</string>
 
     <!-- Crash log — a manual, opt-in report the user reads and hands over themselves. Reached from
          Diagnostics; nothing here is ever uploaded. See ui/diagnostics/CrashLogScreen.kt. -->

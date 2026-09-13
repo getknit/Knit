@@ -22,12 +22,15 @@ import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.StatusNotices
+import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.GroupRootRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
+import app.getknit.knit.data.settings.ContributionTotals
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.ContributionLedger
 import app.getknit.knit.mesh.DropReason
 import app.getknit.knit.mesh.IngressBudget
 import app.getknit.knit.mesh.MeshManager
@@ -51,6 +54,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -317,6 +321,10 @@ class LabNode internal constructor(
         private set
     lateinit var metrics: MeshMetrics
         private set
+
+    /** What this node has done for other people's messages — the Your mesh screen's lifetime numbers. */
+    lateinit var ledger: ContributionLedger
+        private set
     private lateinit var receipts: MessageReceiptRepository
     private lateinit var forwardStore: ForwardRepository
     private var scope: CoroutineScope? = null
@@ -329,6 +337,8 @@ class LabNode internal constructor(
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { this.scope = it }
         transport = LabTransport(nodeId)
         metrics = MeshMetrics()
+        // The real DataStore-backed settings are the journal, so a restart() proves the totals persist.
+        ledger = ContributionLedger(journal = settings, selfId = { nodeId })
         val keys = keyStore.keys()
         val messageCrypto = MessageCrypto(keys.hybridPrivate, keys.sigPrivate)
         messages =
@@ -365,6 +375,7 @@ class LabNode internal constructor(
                 groups = groups,
                 reactions = reactions,
                 peers = peers,
+                metPeers = MetPeerRepository(db.metPeerDao(), db),
                 identity = identity,
                 settings = settings,
                 blobs = blobs,
@@ -386,6 +397,7 @@ class LabNode internal constructor(
                 groupRoots = groupRoots,
                 scope = scope,
                 metrics = metrics,
+                ledger = ledger,
                 db = db,
                 tickDebounceMs = MeshLab.TICK_DEBOUNCE_MS,
                 ingressBudget = IngressBudget(burst = limits.ingressBurst, perMinute = limits.ingressPerMinute),
@@ -415,6 +427,9 @@ class LabNode internal constructor(
 
     private fun shutdownLive() {
         transport.disconnectAll()
+        // stop() banks the ledger on the app scope, which the next line cancels; in the lab the "app" scope is
+        // this session's, so bank it here first — the process-death the restart models is the orderly kind.
+        runBlocking { ledger.flush() }
         manager.stop()
         scope?.cancel()
         scope = null
@@ -530,6 +545,12 @@ class LabNode internal constructor(
 
     /** Whether this node has pinned [peer]'s key (its profile arrived). */
     suspend fun knows(peer: LabNode): Boolean = peers.find(peer.nodeId)?.pubKey != null
+
+    /** How many distinct phones this node has been in range of — the met-peers table's count. */
+    suspend fun peopleMet(): Int = db.metPeerDao().count()
+
+    /** The lifetime contribution numbers as the Your mesh screen would read them (persisted + unflushed). */
+    suspend fun contributions(): ContributionTotals = ledger.totals.first()
 
     /** The router counters that explain a frame that never arrived: delivered / relayed / deduped / suppressed. */
     fun metricsLine(): String =

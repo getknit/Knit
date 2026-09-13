@@ -60,6 +60,7 @@ import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.ShareTargetScreen
 import app.getknit.knit.ui.theme.KnitMotion
 import app.getknit.knit.ui.theme.LocalReduceMotion
+import app.getknit.knit.ui.yourmesh.YourMeshScreen
 import org.koin.compose.koinInject
 
 // How far a screen slides as it fades: a twenty-fourth of the width. Enough to give the fade a direction
@@ -73,6 +74,7 @@ private object Routes {
     const val SETTINGS = "settings"
     const val PROFILE = "profile"
     const val DIAGNOSTICS = "diagnostics"
+    const val YOUR_MESH = "yourMesh"
     const val CRASH_LOG = "crash"
     const val BLOCKED_USERS = "blocked"
     const val MESSAGE_REQUESTS = "requests"
@@ -290,6 +292,7 @@ fun KnitApp(startRoute: String? = null) {
                 onSearch = { navController.navigate(Routes.SEARCH) },
                 onNewMessage = { navController.navigate(Routes.CONTACTS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onOpenYourMesh = { navController.navigate(Routes.YOUR_MESH) },
                 onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
                 onOpenBlockedUsers = { navController.navigate(Routes.BLOCKED_USERS) },
                 onOpenMessageRequests = { navController.navigate(Routes.MESSAGE_REQUESTS) },
@@ -450,6 +453,12 @@ fun KnitApp(startRoute: String? = null) {
         }
         composable(Routes.CRASH_LOG) {
             CrashLogScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.YOUR_MESH) {
+            YourMeshScreen(
+                onBack = { navController.popBackStack() },
+                onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
+            )
         }
         composable(Routes.BLOCKED_USERS) {
             BlockedUsersScreen(onBack = { navController.popBackStack() })

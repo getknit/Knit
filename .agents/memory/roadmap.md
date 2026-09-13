@@ -54,6 +54,19 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **The Your mesh screen's follow-ons** (ADR 2026-09.2v2t, 2026-09-13 — the screen ships with four numbers:
+  nearby now, carrying now, passed along / handed straight to all time, people met). Named and left: **streaks
+  or per-week views** (two additive longs cannot answer "this week"; it needs daily buckets); a **"your phone
+  carried N messages today" notification nudge** (a `Notifier` cue off the same ledger, with a cooldown like the
+  open-to-chat cue's); a **home-screen widget**; **crediting `fastSend` / LoRa hand-offs** once those paths
+  report whether anything left the radio (today they return `Unit`, so they are uncounted rather than
+  over-claimed); **"met this week"** off `MetPeerEntity.lastMetAt` (the column is there; the collector
+  conflates, so it is an eviction key today, not a last-seen surface); and **aligning the chat-list header's
+  "Connected to N mesh nodes"** (`chat_connection_count`) with the screen's "people nearby" — one string, but
+  `ChatScreen` reads it too and the KDoc and tests name it, so it was left out of the change on purpose.
+  **Still owed:** the device trial (a third phone as carrier between P9 and P7, the carrier's numbers moving
+  within a minute, a force-stop and relaunch keeping them) and the ATF pass over the screen.
+
 - **"Search in this chat"** (app-wide search shipped 2026-09-10, ADR 2026-09.wnh6 + 2026-09.wdfz) — a
   scoped search from a thread's overflow menu, pre-filtered to that conversation. The data side is already
   there (`MessageRepository.search` takes an allow-list; pass one id). What is not: the hand-back. A hit

@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NetworkCheck
@@ -121,6 +122,7 @@ fun ChatListScreen(
     onSearch: () -> Unit,
     onNewMessage: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenYourMesh: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenBlockedUsers: () -> Unit,
     onOpenMessageRequests: () -> Unit,
@@ -146,6 +148,7 @@ fun ChatListScreen(
         onSearch = onSearch,
         onNewMessage = onNewMessage,
         onOpenSettings = onOpenSettings,
+        onOpenYourMesh = onOpenYourMesh,
         onOpenDiagnostics = onOpenDiagnostics,
         onOpenBlockedUsers = onOpenBlockedUsers,
         onOpenMessageRequests = onOpenMessageRequests,
@@ -210,6 +213,7 @@ internal fun ChatListScreenContent(
     onSearch: () -> Unit,
     onNewMessage: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenYourMesh: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenBlockedUsers: () -> Unit,
     onOpenMessageRequests: () -> Unit,
@@ -234,11 +238,24 @@ internal fun ChatListScreenContent(
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.semantics { heading() },
                         )
+                        // The status line is the door to Your mesh. The click goes on the row's own modifier,
+                        // outside its clearAndSetSemantics (which the row appends last), so the one node keeps the
+                        // row's full spoken description and gains the button role and a labelled action. Not on the
+                        // whole Column: a merged parent would swallow the title's heading and TalkBack would read
+                        // this description in place of "Knit". Compose expands the ~20 dp row's touch target to
+                        // 48 dp, so a tap on the title just above lands here too.
                         ConnectionStatusRow(
                             neighborCount = state.neighborCount,
                             health = state.transportHealth,
                             relay = state.relayPlane,
                             lora = state.loraPlane,
+                            modifier =
+                                Modifier
+                                    .clickable(
+                                        role = Role.Button,
+                                        onClickLabel = stringResource(R.string.your_mesh_open),
+                                        onClick = onOpenYourMesh,
+                                    ).semantics { testTag = "chatlist_your_mesh" },
                         )
                     }
                 },
@@ -294,6 +311,14 @@ internal fun ChatListScreenContent(
                                 onClick = {
                                     menuOpen = false
                                     onOpenAddContact()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.your_mesh_title)) },
+                                leadingIcon = { Icon(Icons.Filled.Hub, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onOpenYourMesh()
                                 },
                             )
                             DropdownMenuItem(
@@ -939,6 +964,7 @@ fun ChatListScreenPopulatedPreview() =
             onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
+            onOpenYourMesh = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
@@ -968,6 +994,7 @@ fun ChatListScreenRadioWarningPreview() =
             onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
+            onOpenYourMesh = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
@@ -992,6 +1019,7 @@ fun ChatListScreenLoadingPreview() =
             onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
+            onOpenYourMesh = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
@@ -1034,6 +1062,7 @@ fun ChatListScreenFirstRunPreview() =
             onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
+            onOpenYourMesh = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},
@@ -1064,6 +1093,7 @@ fun ChatListScreenQuietPreview() =
             onSearch = {},
             onNewMessage = {},
             onOpenSettings = {},
+            onOpenYourMesh = {},
             onOpenDiagnostics = {},
             onOpenBlockedUsers = {},
             onOpenMessageRequests = {},

@@ -246,6 +246,16 @@ class SettingsStoreTest {
         }
 
     @Test
+    fun `addContributions accumulates across writes and stamps since exactly once`() =
+        runTest {
+            val store = newStore()
+            assertEquals(ContributionTotals.NONE, store.contributionTotals.first())
+            store.addContributions(passedAlong = 3, deliveredToRecipient = 1, now = 1_000L)
+            store.addContributions(passedAlong = 2, deliveredToRecipient = 0, now = 2_000L)
+            assertEquals(ContributionTotals(passedAlong = 5, deliveredToRecipient = 1, since = 1_000L), store.contributionTotals.first())
+        }
+
+    @Test
     fun `the Internet plane is off with no spools until something configures it`() =
         runTest {
             val store = newStore()

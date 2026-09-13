@@ -4,6 +4,7 @@ import androidx.room3.Dao
 import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
+import kotlinx.coroutines.flow.Flow
 
 /**
  * An `(id, expiresAt)` projection of a live carried frame — the rebuild source for the
@@ -61,6 +62,24 @@ interface ForwardDao {
     /** Live carried frames — the global-cap count (an expired-unswept row must not push a live one out). */
     @Query("SELECT COUNT(*) FROM forward_store WHERE expiresAt >= :now")
     suspend fun count(now: Long): Int
+
+    /**
+     * Live chat frames held for OTHER people — the Your mesh screen's "carrying now": relayed (origin 0 =
+     * `ForwardStore.ORIGIN_RELAY`, never our own sends), authored by someone else, and not addressed to us
+     * (a DM to us is custodied too, ADR 018). Group and broadcast-room frames count — we hold them for the
+     * other members / whoever joins. A sealed receipt or reaction rides as `chat` and a carrier cannot tell
+     * it from a message, so it counts as one. Room re-emits on every `forward_store` write; [now] is fixed
+     * per subscription, so the caller re-subscribes on a ticker to age an expired-but-unswept row out
+     * between the 10-min sweeps.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM forward_store WHERE origin = 0 AND type = 'chat' AND senderId != :me " +
+            "AND (recipientId IS NULL OR recipientId != :me) AND expiresAt >= :now",
+    )
+    fun observeCarriedForOthers(
+        me: String,
+        now: Long,
+    ): Flow<Int>
 
     /** Every carried frame id, expired residue included — diagnostics/tests only (the digest folds live ids). */
     @Query("SELECT id FROM forward_store")

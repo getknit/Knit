@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-123 decisions.
+124 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -90,6 +90,7 @@ carries; never renumber an old one.
 | [067](decisions/067-a-dedicated-lora-frequency-is-a-debug-only-second-bargain.md) | A dedicated LoRa frequency is a debug-only second bargain, and it is the *politeness* ceiling it lifts | lora, airtime, debug |
 | [2026-09.26q3](decisions/2026-09-26q3-the-meshtastic-room-is-a-local-mirror-of-the-bound-board-s-slot-0.md) | The Meshtastic room is a local mirror of the bound board's slot 0 | lora, meshtastic, mesh |
 | [2026-09.2ajk](decisions/2026-09-2ajk-lora-reach-is-relay-reach.md) | LoRa reach is relay reach, and a custody re-serve is not presence | lora, mesh, ui |
+| [2026-09.2v2t](decisions/2026-09-2v2t-a-phone-s-mesh-contribution-is-counted-at-the-hand-off.md) | A phone's mesh contribution is counted at the hand-off, once per message, and stays on the phone | ui, custody, privacy |
 | [2026-09.37ce](decisions/2026-09-37ce-a-direct-transfer-s-bytes-are-sealed.md) | A direct transfer's bytes are sealed, not just sent over WPA2 | transfer, crypto |
 | [2026-09.3yje](decisions/2026-09-3yje-the-open-to-chat-cue-introduces-strangers-only.md) | The open-to-chat cue introduces strangers only, gated on a two-way exchange | notifications, presence, data |
 | [2026-09.5bqu](decisions/2026-09-5bqu-the-lora-plane-is-fully-quiescent-until-a-board-is-configured.md) | The LoRa plane is fully quiescent until a board is configured | lora, mesh, performance |

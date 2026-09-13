@@ -9,6 +9,7 @@ import app.getknit.knit.mesh.protocol.ChatContent
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.Protocol
 import app.getknit.knit.mesh.protocol.WireCodec
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -188,6 +189,16 @@ class ForwardRepository(
     override suspend fun attachmentHashesNeedingFetch(): List<String> = dao.attachmentHashesNeedingFetch()
 
     override suspend fun recipientOf(id: String): String? = dao.recipientOf(id)
+
+    /**
+     * How many live chat frames this phone holds for other people (see [ForwardDao.observeCarriedForOthers]).
+     * On the concrete class, not the [ForwardStore] seam: it is a UI read, and the seam's fakes model custody
+     * semantics, not this projection.
+     */
+    fun observeCarriedForOthers(
+        me: String,
+        now: Long,
+    ): Flow<Int> = dao.observeCarriedForOthers(me, now)
 
     override suspend fun has(id: String): Boolean = dao.exists(id)
 

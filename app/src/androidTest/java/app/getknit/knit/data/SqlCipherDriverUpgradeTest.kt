@@ -209,7 +209,7 @@ class SqlCipherDriverUpgradeTest {
         const val TABLE_NAME_PLACEHOLDER = "\${TABLE_NAME}"
 
         /** Bump alongside `KnitDatabase`'s `@Database(version = …)`; its retention is CLASS, so it can't be read. */
-        const val CURRENT_VERSION = 13
+        const val CURRENT_VERSION = 14
 
         /** Tables the migration chain introduces after v1: none of these appear in `1.json`. */
         val MIGRATED_IN_TABLES = listOf("ratchet_sessions", "group_roots", "message_receipts", "messages_fts", "commons")

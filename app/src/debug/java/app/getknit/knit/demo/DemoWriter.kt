@@ -10,6 +10,8 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.forward.ForwardDao
+import app.getknit.knit.data.forward.ForwardEntity
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.Conversations
@@ -17,9 +19,12 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.withReply
+import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.mesh.ForwardStore
+import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.LinkPreviewBlob
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
@@ -51,6 +56,8 @@ class DemoWriter(
     private val groups = koin.get<GroupRepository>()
     private val settings = koin.get<SettingsStore>()
     private val blobs = koin.get<BlobRepository>()
+    private val metPeers = koin.get<MetPeerRepository>()
+    private val forwardDao = koin.get<ForwardDao>()
     private val context = koin.get<Context>()
 
     /**
@@ -158,6 +165,41 @@ class DemoWriter(
     /** Blocks the scenario's blocked slots, so "Blocked users" has rows instead of its empty state. */
     suspend fun seedBlocked() {
         scenario.blocked.forEach { settings.block(nodeId(it), deviceTag = null) }
+    }
+
+    /**
+     * Gives the Your mesh screen a history: lifetime numbers banked straight into the journal, the whole
+     * cast plus a crowd of one-time strangers as met, and a few frames held in custody for other people.
+     * The custody rows go in through the DAO with empty bytes: the demo build never starts the mesh, so
+     * nothing re-serves them, and the `ForwardRepository` digest is deliberately left untouched — there is
+     * no cue plane here for it to drive. Every stat therefore reads non-zero without a radio in the room.
+     */
+    suspend fun seedYourMesh(now: Long) {
+        settings.addContributions(
+            passedAlong = YOUR_MESH_PASSED_ALONG,
+            deliveredToRecipient = YOUR_MESH_HANDED_DIRECT,
+            now =
+                now - YOUR_MESH_SINCE_MS,
+        )
+        val strangers = (1..YOUR_MESH_STRANGERS).map { "stranger-%02d".format(it) }
+        metPeers.recordMet(scenario.peers.map { nodeId(it.slot) } + strangers, now)
+        repeat(YOUR_MESH_CARRYING) { i ->
+            forwardDao.insert(
+                ForwardEntity(
+                    id = "demo-carried-$i",
+                    recipientId = nodeId(Slot.THEO),
+                    groupId = null,
+                    senderId = nodeId(Slot.SAM),
+                    type = FrameType.CHAT,
+                    origin = ForwardStore.ORIGIN_RELAY,
+                    signed = ByteArray(0),
+                    sig = ByteArray(0),
+                    sentAt = now - (i + 1) * 60_000L,
+                    receivedAt = now - (i + 1) * 60_000L,
+                    expiresAt = now + 60 * 60_000L,
+                ),
+            )
+        }
     }
 
     /**
@@ -438,6 +480,13 @@ class DemoWriter(
          * list row, the thread header and every post's provenance line all name the same channel.
          */
         const val MESH_ROOM_CHANNEL = "LongFast"
+
+        // The Your mesh screen's seeded history: a phone that has been on for a few weeks in a busy place.
+        const val YOUR_MESH_PASSED_ALONG = 212L
+        const val YOUR_MESH_HANDED_DIRECT = 37L
+        const val YOUR_MESH_SINCE_MS = 40L * 24 * 60 * 60_000L
+        const val YOUR_MESH_STRANGERS = 40
+        const val YOUR_MESH_CARRYING = 6
 
         // A seeded voice note's synthetic ADTS stream: mono 22.05 kHz AAC-LC, the recorder's own format, so
         // VoiceAudio reads the same duration off it that it would off a real recording.

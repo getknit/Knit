@@ -46,9 +46,9 @@ class KnitDatabaseMigrationTest {
         )
 
     @Test
-    fun `the current schema (v13) creates and opens from the exported JSON`() =
+    fun `the current schema (v14) creates and opens from the exported JSON`() =
         runTest {
-            val version = 13 // KnitDatabase @Database(version = 13) — bump alongside the DB (its retention is CLASS,
+            val version = 14 // KnitDatabase @Database(version = 14) — bump alongside the DB (its retention is CLASS,
             // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
             helper.createDatabase(version).close()
         }
@@ -491,6 +491,43 @@ class KnitDatabaseMigrationTest {
                     assertEquals(1L, s.getLong(0))
                     assertEquals(2L, s.getLong(1))
                 }
+            }
+        }
+
+    @Test
+    fun `migrate 13 to 14 preserves existing rows and adds the empty met_peers table`() =
+        runTest {
+            // "Met" is a live radio signal, so nothing in the older tables can backfill it: the table arrives
+            // empty and every upgrader's count starts at zero, while every thread they hold is untouched.
+            helper.createDatabase(13).use { c ->
+                c.execSQL(
+                    "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, receivedVia, " +
+                        "mentions, replyToHasAttachment, moderation, pendingKey, kind, originViaMqtt, originSigned) " +
+                        "VALUES ('m1','n1','peer-1','hello',1,1,0,'[]',0,0,0,0,0,0)",
+                )
+            }
+            helper.runMigrationsAndValidate(14, listOf(KnitMigrations.MIGRATION_13_14)).use { c ->
+                c.prepare("SELECT body FROM messages WHERE id = 'm1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("hello", s.getText(0))
+                }
+                c.prepare("SELECT COUNT(*) FROM met_peers").use { s ->
+                    assertTrue(s.step())
+                    assertEquals(0L, s.getLong(0))
+                }
+                // One row per phone: a second sighting is ignored by the insert and touched by the update.
+                c.execSQL("INSERT OR IGNORE INTO met_peers (nodeId, firstMetAt, lastMetAt) VALUES ('n1',1,1)")
+                c.execSQL("INSERT OR IGNORE INTO met_peers (nodeId, firstMetAt, lastMetAt) VALUES ('n1',2,2)")
+                c.prepare("SELECT COUNT(*), MAX(firstMetAt) FROM met_peers").use { s ->
+                    assertTrue(s.step())
+                    assertEquals(1L, s.getLong(0))
+                    assertEquals(1L, s.getLong(1))
+                }
+                val indexes = mutableListOf<String>()
+                c.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'met_peers'").use { s ->
+                    while (s.step()) indexes += s.getText(0)
+                }
+                assertTrue("index_met_peers_lastMetAt" in indexes)
             }
         }
 

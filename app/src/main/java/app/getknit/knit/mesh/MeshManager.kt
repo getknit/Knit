@@ -21,6 +21,7 @@ import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.replyRef
 import app.getknit.knit.data.message.withReply
+import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.settings.SettingsStore
@@ -128,6 +129,9 @@ class MeshManager(
     private val groups: GroupRepository,
     private val reactions: ReactionRepository,
     private val peers: PeerRepository,
+    // The phones this one has met — the lifetime union of the nearby set, fed by [watchMetPeers] for the
+    // Your mesh screen. Required, not defaulted: a rig that forgets it should fail to compile.
+    private val metPeers: MetPeerRepository,
     private val identity: Identity,
     private val settings: SettingsStore,
     private val blobs: BlobRepository,
@@ -145,6 +149,9 @@ class MeshManager(
     private val groupRoots: GroupRootStore,
     private val scope: CoroutineScope,
     private val metrics: MeshMetrics,
+    // What this phone does for other people's messages, credited at the two hand-off points below (the
+    // router's relay fan-out and the custody re-serve) and flushed on the metrics tick + [stop].
+    private val ledger: ContributionLedger,
     private val db: KnitDatabase,
     // Opens WebSocket sessions to spools for [scopeSync]. Null (the default) means the app is built
     // without the Internet plane at all — which is what every unit test wants, and what keeps the mesh
@@ -208,6 +215,8 @@ class MeshManager(
             // Fired once when a chat frame is actually carried: eager-pull its image blob so a custodied image
             // survives to a late joiner (the carrier holds ciphertext it can't read, like the frame itself).
             onCarried = { pipeline.onCarriedFrame(it) },
+            // A carried frame actually sent to a peer that lacked it — the ledger decides whether it counts.
+            onServed = { env, to -> ledger.onHandedOff(env, setOf(to)) },
             // (The carry store grew → the store impl folds the id into StoreDigest, whose version change re-cues.)
         )
 
@@ -381,7 +390,7 @@ class MeshManager(
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
     // cancelled by stop() (rather than leaking on the never-cancelled app scope). Declared after `pipeline`
     // so onDeliver targets it.
-    private var router = MeshRouter(transport, scope, metrics = metrics, budget = ingressBudget, onDeliver = pipeline::onDeliver)
+    private var router = newRouter(scope)
 
     /**
      * §9.5's push-half deferral: an attachment we authored and whose recipient acked stays off the
@@ -541,11 +550,12 @@ class MeshManager(
         val session =
             CoroutineScope(SupervisorJob(scope.coroutineContext[Job]) + Dispatchers.Default + meshExceptionHandler)
         sessionScope = session
-        router = MeshRouter(transport, session, metrics = metrics, budget = ingressBudget, onDeliver = pipeline::onDeliver)
+        router = newRouter(session)
         router.start()
         transport.start()
         watchNeighbors(session)
         watchReachable(session)
+        watchMetPeers(session)
         openToChatWatch.start(session)
         seedOwnProfileCustody(session)
         watchProfileChanges(session)
@@ -570,9 +580,22 @@ class MeshManager(
         val session = sessionScope
         val sessionRouter = router
         scope.launch { sessionRouter.stop() }
+        // The session's last metrics tick may be a minute away; bank what it credited before it dies.
+        scope.launch { ledger.flush() }
         session?.cancel()
         sessionScope = null
     }
+
+    /** The one place the router is built, so both constructions report their relays to the ledger alike. */
+    private fun newRouter(routerScope: CoroutineScope) =
+        MeshRouter(
+            transport,
+            routerScope,
+            metrics = metrics,
+            budget = ingressBudget,
+            onRelayed = { env, to -> ledger.onHandedOff(env, to) },
+            onDeliver = pipeline::onDeliver,
+        )
 
     override fun spoolStatus(): List<SpoolStatus> = demoSpools ?: scopeSync?.status().orEmpty()
 
@@ -2016,6 +2039,27 @@ class MeshManager(
     }
 
     /**
+     * Records every phone that enters the nearby set as met (the Your mesh screen's "people this phone has
+     * met"). Reads [nearbyPeers] — the same set the header's count and [neighbors] are — rather than the
+     * transport's data-path links, so a phone sighted over BLE presence but never linked still counts as
+     * met, and so "nearby" and "met" can never disagree about what proximity means (ADR 2026-09.2ajk).
+     * Its own collector, off [watchNeighbors]: that one runs the custody re-offer hooks and a DB write does
+     * not belong on it. A StateFlow collector that suspends only conflates, so a burst of joins costs one
+     * write.
+     */
+    private fun watchMetPeers(session: CoroutineScope) {
+        session.launch {
+            var known = emptySet<String>()
+            nearbyPeers.collect { current ->
+                val ids = current.mapTo(HashSet()) { it.nodeId }
+                val newcomers = ids - known
+                known = ids
+                if (newcomers.isNotEmpty()) metPeers.recordMet(newcomers, clock())
+            }
+        }
+    }
+
+    /**
      * Posts the open-to-chat cue for [peerIds] (arrival order): the collision-aware label per peer (ADR 058,
      * the same resolution `InboundPipeline.notifyIncoming` uses) and, for a lone person, their avatar bytes.
      * A peer whose row is gone by now is simply not named.
@@ -2685,6 +2729,8 @@ class MeshManager(
                         "reactionsSealed=${s.reactionsSealed}/${s.reactionsSealedFallback} " +
                         "filesNan=${s.filesSentNan} filesBt=${s.filesSentBt} bulkTimeouts=${s.nanBulkGraceTimeouts}",
                 )
+                // The contribution ledger banks its deltas on the same tick: one DataStore write a minute at most.
+                ledger.flush()
             }
         }
     }

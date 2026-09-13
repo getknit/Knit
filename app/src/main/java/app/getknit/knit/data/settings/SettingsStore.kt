@@ -24,7 +24,8 @@ class SettingsStore(
     private val dataStore: DataStore<Preferences>,
 ) : InboundSettings,
     ModelLoadJournal,
-    NanAttachJournal {
+    NanAttachJournal,
+    ContributionJournal {
     override val displayName: Flow<String> = dataStore.data.map { it[KEY_NAME] ?: "" }
     val status: Flow<String> = dataStore.data.map { it[KEY_STATUS] ?: "" }
 
@@ -199,6 +200,16 @@ class SettingsStore(
 
     /** Lifetime rate-prompts shown — we don't record the user's choice, so shown-count is all we keep. */
     val reviewAttemptCount: Flow<Long> = dataStore.data.map { it[KEY_REVIEW_ATTEMPT_COUNT] ?: 0L }
+
+    /** What this phone has done for other people's messages, all time — see [ContributionJournal]. */
+    override val contributionTotals: Flow<ContributionTotals> =
+        dataStore.data.map {
+            ContributionTotals(
+                passedAlong = it[KEY_CONTRIB_PASSED_ALONG] ?: 0L,
+                deliveredToRecipient = it[KEY_CONTRIB_HANDED_DIRECT] ?: 0L,
+                since = it[KEY_CONTRIB_SINCE] ?: 0L,
+            )
+        }
 
     /**
      * Whether the Internet (spool) plane may run — **default off**, deliberately. Uploading a
@@ -539,6 +550,19 @@ class SettingsStore(
             it[KEY_REVIEW_ATTEMPT_COUNT] = (it[KEY_REVIEW_ATTEMPT_COUNT] ?: 0L) + 1
         }
 
+    /** Additive on purpose — see [ContributionJournal]: no read-before-write, so flushes can never race. */
+    override suspend fun addContributions(
+        passedAlong: Long,
+        deliveredToRecipient: Long,
+        now: Long,
+    ) {
+        dataStore.edit {
+            it[KEY_CONTRIB_PASSED_ALONG] = (it[KEY_CONTRIB_PASSED_ALONG] ?: 0L) + passedAlong
+            it[KEY_CONTRIB_HANDED_DIRECT] = (it[KEY_CONTRIB_HANDED_DIRECT] ?: 0L) + deliveredToRecipient
+            if (it[KEY_CONTRIB_SINCE] == null) it[KEY_CONTRIB_SINCE] = now
+        }
+    }
+
     /** Clears all review-prompt state (debug bridge reset). */
     suspend fun clearReviewState() =
         dataStore.edit {
@@ -774,6 +798,9 @@ class SettingsStore(
         val KEY_REVIEW_ENGAGEMENT_STARTED_AT = longPreferencesKey("review_engagement_started_at")
         val KEY_REVIEW_LAST_ATTEMPT_AT = longPreferencesKey("review_last_attempt_at")
         val KEY_REVIEW_ATTEMPT_COUNT = longPreferencesKey("review_attempt_count")
+        val KEY_CONTRIB_PASSED_ALONG = longPreferencesKey("contrib_passed_along")
+        val KEY_CONTRIB_HANDED_DIRECT = longPreferencesKey("contrib_handed_direct")
+        val KEY_CONTRIB_SINCE = longPreferencesKey("contrib_since")
         val KEY_SPOOL_ENABLED = booleanPreferencesKey("spool_enabled")
         val KEY_SPOOL_URLS = stringSetPreferencesKey("spool_urls")
         val KEY_SPOOL_DISABLED = stringSetPreferencesKey("spool_urls_disabled")

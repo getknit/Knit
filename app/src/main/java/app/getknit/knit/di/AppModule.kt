@@ -30,6 +30,7 @@ import app.getknit.knit.data.draft.DraftRepository
 import app.getknit.knit.data.emoji.AndroidGlyphCheck
 import app.getknit.knit.data.emoji.EmojiCatalogLoader
 import app.getknit.knit.data.forward.ForwardRepository
+import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.GroupRootRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
@@ -161,6 +162,7 @@ val appModule =
         single { get<KnitDatabase>().messageReceiptDao() }
         single { get<KnitDatabase>().draftDao() }
         single { get<KnitDatabase>().commonsDao() }
+        single { get<KnitDatabase>().metPeerDao() }
         single { MessageRepository(get()) }
         single { PeerRepository(get(), get<SettingsStore>(), get<Identity>()) }
         // Crash reports. The capture-side CrashStore is built by hand in KnitApplication.onCreate BEFORE
@@ -184,7 +186,10 @@ val appModule =
         // Store-and-forward custody for DMs, backed by the encrypted forward_store table. Takes the shared
         // StoreDigest (from meshModule) so every carry-store mutation keeps the cue-plane content digest in sync,
         // plus the KnitDatabase so store/remove/sweep run their DB writes in a transaction under the repo mutex.
-        single<ForwardStore> { ForwardRepository(get(), get(), get()) }
+        // The concrete class is registered too: YourMeshViewModel reads its "carrying for others" projection,
+        // which is a UI read and deliberately not on the seam (the seam's fakes model custody, not counts).
+        single { ForwardRepository(get(), get(), get()) }
+        single<ForwardStore> { get<ForwardRepository>() }
         // DM epoch-ratchet session state (docs/FORWARD_SECRECY_RATCHET.md), in the encrypted DB so the
         // ratchet advance commits in the same transaction as the message row it decrypted/sealed.
         single<RatchetStore> { RatchetRepository(get()) }
@@ -198,5 +203,7 @@ val appModule =
         // started as the user leaves the chat, so it cannot run on the screen's own scope.
         single { DraftRepository(get(), get<CoroutineScope>()) }
         single { CommonsRepository(get(), get(), get()) }
+        // The phones this one has met — the lifetime union of the nearby set, for the Your mesh screen.
+        single { MetPeerRepository(get(), get()) }
         single<CommonsStore> { get<CommonsRepository>() }
     }

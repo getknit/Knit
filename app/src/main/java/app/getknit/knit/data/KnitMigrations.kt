@@ -369,6 +369,25 @@ object KnitMigrations {
             }
         }
 
+    /**
+     * v13 → v14: the `met_peers` table (the phones this one has been in radio range of — see
+     * `MetPeerEntity`) and its `lastMetAt` index, empty on arrival: "met" is a live radio signal, so there
+     * is nothing in the older tables to backfill it from (`peers` holds multi-hop profiles too). No column
+     * moves anywhere else. The SQL must stay byte-equivalent to what Room generates for
+     * `app/schemas/**/14.json`.
+     */
+    val MIGRATION_13_14 =
+        object : Migration(13, 14) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `met_peers` " +
+                        "(`nodeId` TEXT NOT NULL, `firstMetAt` INTEGER NOT NULL, `lastMetAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`nodeId`))",
+                )
+                connection.execSQL("CREATE INDEX IF NOT EXISTS `index_met_peers_lastMetAt` ON `met_peers` (`lastMetAt`)")
+            }
+        }
+
     /** All migrations, applied by Room in order. */
     val ALL: Array<Migration> =
         arrayOf(
@@ -384,5 +403,6 @@ object KnitMigrations {
             MIGRATION_10_11,
             MIGRATION_11_12,
             MIGRATION_12_13,
+            MIGRATION_13_14,
         )
 }

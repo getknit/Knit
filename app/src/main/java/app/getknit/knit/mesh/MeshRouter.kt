@@ -33,6 +33,11 @@ class MeshRouter(
     private val suppressThreshold: Int = DEFAULT_SUPPRESS_THRESHOLD,
     private val jitter: () -> Long = { Random.nextLong(jitterWindowMs) },
     private val budget: IngressBudget = IngressBudget(),
+    // A relay that fired and actually went somewhere: the frame and the neighbors it was sent to. The router
+    // reports the fact and nothing else — whether it counts as this phone helping anyone is `ContributionLedger`'s
+    // call. Not invoked for a relay that fired with no neighbor to send to. Defaulted to a no-op so the tests
+    // that bind `onDeliver` as a trailing lambda are untouched; keep it before `onDeliver` for that reason.
+    private val onRelayed: suspend (envelope: RelayEnvelope, to: Set<String>) -> Unit = { _, _ -> },
     private val onDeliver: suspend (wire: WireEnvelope, envelope: RelayEnvelope, fromNodeId: String, kind: TransportKind) -> Unit,
 ) {
     /**
@@ -44,6 +49,8 @@ class MeshRouter(
      */
     private class PendingRelay(
         val relayed: WireEnvelope,
+        // The decoded envelope, held by reference for the `onRelayed` report — nothing is re-encoded from it.
+        val envelope: RelayEnvelope,
         val heardFrom: MutableSet<String>,
         var job: Job? = null,
     )
@@ -93,7 +100,7 @@ class MeshRouter(
         }
         metrics.onDelivered()
         onDeliver(wire, envelope, fromNodeId, kind)
-        scheduleRelay(wire, envelope.id, fromNodeId)
+        scheduleRelay(wire, envelope, fromNodeId)
     }
 
     /** Sends a locally-originated frame ([id] = its dedup key) to the whole mesh, immediately. */
@@ -134,9 +141,10 @@ class MeshRouter(
      */
     private suspend fun scheduleRelay(
         wire: WireEnvelope,
-        id: String,
+        envelope: RelayEnvelope,
         fromNodeId: String,
     ) {
+        val id = envelope.id
         if (!wire.relay) return // point-to-point control frames propagate hop-by-hop, not flooded
         // [ttl] is attacker-controlled; cap it to the local default so a forged oversized value can't
         // keep a frame alive past the dedup window and flood the mesh. Every relayer caps independently,
@@ -146,6 +154,7 @@ class MeshRouter(
         val entry =
             PendingRelay(
                 relayed = wire.relayed(), // only ttl/hops mutate; signed + sig pass through verbatim
+                envelope = envelope,
                 heardFrom = mutableSetOf(fromNodeId),
             )
         pendingLock.withLock { pending[id] = entry }
@@ -155,10 +164,10 @@ class MeshRouter(
                 // Re-check under lock: an overhear may have removed us during the delay.
                 val live = pendingLock.withLock { pending.remove(id) } ?: return@launch
                 val excluded = live.heardFrom.toSet()
-                transport.neighbors.value
-                    .filter { it.nodeId !in excluded }
-                    .forEach { neighbor -> transport.send(live.relayed, neighbor) }
-                metrics.onRelayed()
+                val targets = transport.neighbors.value.filter { it.nodeId !in excluded }
+                targets.forEach { neighbor -> transport.send(live.relayed, neighbor) }
+                metrics.onRelayed() // the diagnostic counts the relay decision, targets or not
+                if (targets.isNotEmpty()) onRelayed(live.envelope, targets.mapTo(HashSet()) { it.nodeId })
             }
     }
 

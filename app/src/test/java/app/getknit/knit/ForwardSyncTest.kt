@@ -487,6 +487,29 @@ class ForwardSyncTest {
             assertEquals(setOf("r1", "r3"), transport.sent.map { it.first.frameId() }.toSet())
         }
 
+    /**
+     * The `onServed` report is the fact behind the Your mesh screen's "passed along": one call per frame
+     * `onDigest` actually sends, naming the peer it went to, and none for a frame the peer's digest showed
+     * it already holds. The ledger downstream decides what counts; the sync only reports.
+     */
+    @Test
+    fun onDigestReportsEachServedFrameToThePeerItWentTo() =
+        runTest {
+            val transport = RecordingTransport()
+            val served = mutableListOf<Pair<String, String>>()
+            val sync =
+                ForwardSync(transport, FakeForwardStore(), clock = { 0L }, onServed = { env, to -> served += env.id to to })
+            listOf("r1", "r2", "r3").forEach {
+                val e = broadcast(it)
+                sync.onSeen(wireOf(e), e, ForwardStore.ORIGIN_RELAY)
+            }
+
+            sync.onDigest("z", listOf("r2"))
+
+            assertEquals(setOf("r1" to "z", "r3" to "z"), served.toSet())
+            assertEquals("one report per frame actually sent", transport.sent.size, served.size)
+        }
+
     @Test
     fun onDigestSendsNothingWhenThePeerHoldsEverything() =
         runTest {

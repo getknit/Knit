@@ -21,6 +21,8 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.message.MessageDao
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.MessageFtsEntity
+import app.getknit.knit.data.peer.MetPeerDao
+import app.getknit.knit.data.peer.MetPeerEntity
 import app.getknit.knit.data.peer.PeerDao
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupKeySendEntity
@@ -51,7 +53,7 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
         GroupSkippedKeyEntity::class, GroupKeySendEntity::class,
         GroupRootEntity::class, MessageReceiptEntity::class, DraftEntity::class,
         MessageFtsEntity::class, CommonsEntity::class, CommonsOutboxEntity::class,
-        CommonsMemberEntity::class,
+        CommonsMemberEntity::class, MetPeerEntity::class,
     ],
     // v1: frozen launch baseline. The pre-1.0 alpha schema churn (the old destructive v2…v22 bumps that
     //     rode the wire/crypto breaks) is collapsed; docs/WIRE_COMPAT.md keeps the historical break record.
@@ -137,7 +139,14 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
     //     device has seen there — the roster a commons has instead of a pinned one). All three in this
     //     database for the group roots' reason (v3): the secret is the room. Migrated by
     //     KnitMigrations.MIGRATION_12_13.
-    version = 13,
+    // v14: one `met_peers` table — the phones this one has been within radio range of (the lifetime union
+    //     of `MeshController.neighbors`, one row per node id with its first and latest sighting), the
+    //     "people this phone has met" line of the Your mesh screen. Not a column on `peers`: that table is
+    //     written for multi-hop profiles too and evicts oldest-profile-first, so it can neither say "met" nor
+    //     keep a met contact counted. Local only — never framed, never in custody, no digest folds over it —
+    //     and in this database rather than the DataStore because it is a list of node ids. Empty on arrival;
+    //     the count starts at zero for everyone. Migrated by KnitMigrations.MIGRATION_13_14.
+    version = 14,
     // Export the schema JSON to app/schemas/ (location set by the androidx.room Gradle plugin's
     // room { schemaDirectory(...) } in app/build.gradle.kts). Keeps the schema diffable in review and feeds
     // the migration test's MigrationTestHelper. Room also errors at compile time if an entity changes without
@@ -170,6 +179,8 @@ abstract class KnitDatabase : RoomDatabase() {
     abstract fun draftDao(): DraftDao
 
     abstract fun commonsDao(): CommonsDao
+
+    abstract fun metPeerDao(): MetPeerDao
 
     companion object {
         /**

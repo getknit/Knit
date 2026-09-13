@@ -39,6 +39,9 @@ document:
   out of the results until you accept it.
 - The Support Knit screen now offers GitHub Sponsors alongside Ko-fi and Liberapay. Pick whichever you
   already have an account on.
+- Tap the nearby count above the chat list for a new Your mesh screen: messages your phone passed along or
+  handed straight to the person they were for, what it is carrying right now, and how many people it has
+  met. Every number is counted on your phone and stays there.
 
 ### Changed
 

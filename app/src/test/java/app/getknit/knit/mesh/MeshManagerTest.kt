@@ -19,6 +19,7 @@ import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.GroupRootRepository
@@ -75,6 +76,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -129,7 +131,10 @@ class MeshManagerTest {
         val longRangeHints = mutableListOf<FanoutHint>()
         val fastFanouts = mutableListOf<WireEnvelope>()
         val fastSends = mutableListOf<Pair<WireEnvelope, Peer>>()
-        override val neighbors = MutableStateFlow<Set<Peer>>(emptySet()).asStateFlow()
+
+        /** Drivable, so a test can bring a peer into range (the met-peers watcher reads the nearby set). */
+        val nearby = MutableStateFlow<Set<Peer>>(emptySet())
+        override val neighbors = nearby.asStateFlow()
         override val health = MutableStateFlow(TransportHealth.Healthy).asStateFlow()
         override val inbound = MutableSharedFlow<InboundFrame>().asSharedFlow()
         override val incomingFiles = emptyFlow<ReceivedFile>()
@@ -343,6 +348,7 @@ class MeshManagerTest {
                     groups = groups,
                     reactions = reactions,
                     peers = peers,
+                    metPeers = MetPeerRepository(db.metPeerDao(), db),
                     identity = identity,
                     settings = settings,
                     blobs = blobs,
@@ -362,6 +368,9 @@ class MeshManagerTest {
                     groupRoots = GroupRootRepository(db.groupRootDao()),
                     scope = scope,
                     metrics = metrics,
+                    // The relaxed settings mock is the journal: nothing here collects the totals, and a flush's
+                    // write is a no-op on it.
+                    ledger = ContributionLedger(journal = settings, selfId = { me.nodeId }, clock = { clockNow }),
                     db = db,
                     clock = { clockNow },
                     publicChannel = { body ->
@@ -1822,6 +1831,39 @@ class MeshManagerTest {
         const val AWAIT_MS = 10_000L
         const val POLL_MS = 5L
     }
+
+    // --- people met ---
+
+    /**
+     * A phone entering the nearby set is recorded as met, once — the same set the header's count reads, so
+     * "nearby" and "met" agree about what proximity means. A peer that leaves and returns never adds a row
+     * (the repository test covers the `lastMetAt` touch; a StateFlow collector may conflate the leave away).
+     */
+    @Test
+    fun aNearbyNewcomerIsRecordedAsMetOnce() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.manager.start()
+
+            rig.transport.nearby.value = setOf(Peer(rig.bob.nodeId))
+            rig.await(1) { runBlocking { rig.db.metPeerDao().count() } }
+            rig.transport.nearby.value = emptySet()
+            rig.clockNow = rig.now + 5_000
+            rig.transport.nearby.value = setOf(Peer(rig.bob.nodeId), Peer("stranger"))
+            rig.await(2) { runBlocking { rig.db.metPeerDao().count() } }
+
+            val bob = rig.db.metPeerDao().find(rig.bob.nodeId)!!
+            assertEquals("the first sighting's stamp stays", rig.now, bob.firstMetAt)
+            assertEquals(
+                "the stranger is the only new row",
+                rig.now + 5_000,
+                rig.db
+                    .metPeerDao()
+                    .find("stranger")!!
+                    .firstMetAt,
+            )
+            assertEquals(2, rig.db.metPeerDao().count())
+        }
 
     // --- profile propagation ---
 

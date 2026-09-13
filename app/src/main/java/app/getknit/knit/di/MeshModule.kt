@@ -14,6 +14,7 @@ import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.BridgeFrameSource
 import app.getknit.knit.mesh.CompositeMeshTransport
+import app.getknit.knit.mesh.ContributionLedger
 import app.getknit.knit.mesh.FarPeerFrameSource
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshManager
@@ -71,6 +72,9 @@ val meshModule =
         // backstop for an uncaught throw in a top-level child (e.g. a FramedLink writer coroutine).
         single<CoroutineScope> { CoroutineScope(SupervisorJob() + Dispatchers.Default + meshExceptionHandler) }
         single { MeshMetrics() }
+        // What this phone does for other people's messages (the Your mesh screen's lifetime numbers): credited
+        // at the router's relay fan-out and the custody re-serve, persisted through SettingsStore's journal slice.
+        single { ContributionLedger(journal = get<SettingsStore>(), selfId = { get<Identity>().nodeId() }) }
         // Whether a MeshService.start the system refused is still owed a retry (work item #32).
         single { MeshStartGate() }
         // Content digest of this node's syncable state; shared between the forward-store impl (maintains the
@@ -205,11 +209,13 @@ val meshModule =
         // shipped build cannot be pointed at a plaintext relay. The plane itself stays dark until the user
         // opts in AND configures a spool — see SettingsStore.spoolEnabled.
         single<SpoolDialer> { OkHttpSpoolDialer(allowCleartext = BuildConfig.DEBUG) }
-        // Constructor order: transport, messages, receipts, groups, reactions, peers, identity, settings,
-        // blobs, imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto, ratchet,
-        // groupRatchet, groupRoots, scope, metrics, db, spoolDialer.
+        // Constructor order: transport, messages, receipts, groups, reactions, peers, metPeers, identity,
+        // settings, blobs, imageScreening, blobStore, forwardStore, notifier, textModeration, messageCrypto,
+        // ratchet, groupRatchet, groupRoots, scope, metrics, ledger, db, spoolDialer.
         single {
             MeshManager(
+                get(),
+                get(),
                 get(),
                 get(),
                 get(),

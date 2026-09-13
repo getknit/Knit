@@ -74,6 +74,14 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   membership, titles, speaker and contacts rules live in those two shared files so search cannot drift
   from the list; a hit opens the thread through `chat/{id}?messageId=` and the quote-jump machinery,
   never a second thread view). "Search in this chat" is deferred — CHECK `.agents/memory/roadmap.md`.
+- **When touching `ui/yourmesh/`, `mesh/ContributionLedger`, `data/settings/ContributionJournal`,
+  `data/peer/MetPeer*`, `ForwardDao.observeCarriedForOthers`, or the `onRelayed` / `onServed` hooks in
+  `MeshRouter` / `ForwardSync`:** READ ADR 2026-09.2v2t. The Your mesh screen's numbers are shown to the user
+  as things their phone *did*, so a credit happens only at a hand-off (this phone sent someone else's chat
+  frame to ≥ 1 peer), once per frame, never for our own frames or a DM addressed to us; "handed straight to"
+  is a live-link send and is never worded "delivered". "Nearby" and "met" both derive from
+  `MeshController.neighbors` (ADR 2026-09.2ajk) — don't add a second gate. Counters flush on the 60 s tick,
+  never per frame, and nothing here leaves the phone.
 - **When touching a presence dot or an online / offline label** (Profile Details, Diagnostics' node
   sections, the Contacts dot): the three evidence tiers live in `ui/Reach.kt` — `Direct` is
   `MeshController.neighbors` (a short-range radio saw the peer's own radio), `Relay` is the long-range reach

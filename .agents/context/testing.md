@@ -58,6 +58,14 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
 - **`CustodyLabTest` is the store-and-forward set:** a DM and a whole new group (seed + roster) reaching a
   member who was away, through a carrier the sender has since left; and a partition where both sides send
   (and one founds a group) before the merge.
+- **`RoomFloodLabTest` is the Sybil-flood set:** a stranger's twenty room posts against a node whose room keeps
+  ten (the sweep keeps a contact's and the user's own, trims the stranger to the per-stranger cap), and a line
+  Mallory–Alice–Bob where Alice's per-link `IngressBudget` is five (Bob holds the same five, Alice's
+  `INGRESS_REFUSED` counter reads fifteen, Bob's own post still crosses). `LabLimits` shrinks the policy numbers
+  per node — same rules, same paths. Two traps: a **room** tick toward an author who is not a live neighbor
+  deliberately never escalates into custody (ADR 2026-09.aa27), so a room scenario that ends in the full oracle
+  needs a triangle, not a line, or its tick check waits forever; and the sweep runs at boot and on the 10-min
+  loop, so a scenario calls `node.sweepLocalStorage()` itself.
 - **Order is a knob.** `alice.transport.hold(bob.transport)` parks what Alice sends Bob;
   `release(bob.transport) { reorder }` delivers it in the order you choose — how "custody serves the two in
   either order" becomes a deterministic case. Partition (group frames first, say) rather than blindly

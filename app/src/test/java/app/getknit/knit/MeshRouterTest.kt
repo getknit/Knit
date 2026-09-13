@@ -1,8 +1,10 @@
 package app.getknit.knit
 
+import app.getknit.knit.mesh.DropReason
 import app.getknit.knit.mesh.FakeLoopTransport
 import app.getknit.knit.mesh.FileMeta
 import app.getknit.knit.mesh.InboundFrame
+import app.getknit.knit.mesh.IngressBudget
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.MeshRouter
 import app.getknit.knit.mesh.MeshTransport
@@ -328,5 +330,71 @@ class MeshRouterTest {
             assertTrue(transport.sent.all { it.first.hops == 1 })
             assertEquals(1, metrics.snapshot().framesRelayed)
             assertEquals(0, metrics.snapshot().framesSuppressed)
+        }
+
+    @Test
+    fun aRoomPostOverTheLinksBudgetIsRefusedBeforeDeliveryRelayAndDedup() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "c"))
+            val metrics = MeshMetrics()
+            val delivered = mutableListOf<String>()
+            var now = 0L
+            val budget = IngressBudget(burst = 1, perMinute = 60, clock = { now })
+            val router =
+                MeshRouter(transport, this, metrics = metrics, jitter = { 0L }, budget = budget) { _, env, _, _ ->
+                    delivered +=
+                        env.id
+                }
+
+            val (w1, e1) = frame("m1")
+            val (w2, e2) = frame("m2")
+            router.handleInbound(w1, e1, fromNodeId = "b") // spends b's one token
+            router.handleInbound(w2, e2, fromNodeId = "b") // refused: not delivered, not relayed, not seen
+            advanceUntilIdle()
+
+            assertEquals(listOf("m1"), delivered)
+            assertEquals(1, transport.sent.size)
+            assertEquals(1L, metrics.snapshot().dropsByReason[DropReason.INGRESS_REFUSED])
+
+            // A refused frame was never marked seen, so the custody re-serve brings it through once the bucket
+            // refills — a delay, not a veto.
+            now += 1_000L
+            router.handleInbound(w2, e2, fromNodeId = "b")
+            advanceUntilIdle()
+            assertEquals(listOf("m1", "m2"), delivered)
+        }
+
+    @Test
+    fun duplicatesAndAddressedFramesAreNotMetered() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "c"))
+            val metrics = MeshMetrics()
+            val delivered = mutableListOf<String>()
+            val router =
+                MeshRouter(
+                    transport,
+                    this,
+                    metrics = metrics,
+                    jitter = { 0L },
+                    budget = IngressBudget(burst = 1, perMinute = 0),
+                ) { _, env, _, _ ->
+                    delivered +=
+                        env.id
+                }
+
+            val (w1, e1) = frame("m1")
+            router.handleInbound(w1, e1, fromNodeId = "b")
+            // Every later copy of m1 is a dedup, never a token: a re-serve from the same link and an overhear
+            // from another both cost nothing.
+            router.handleInbound(w1, e1, fromNodeId = "b")
+            router.handleInbound(w1, e1, fromNodeId = "c")
+            // A DM over the exhausted link is not a room post, so it is not the meter's business.
+            val (wd, ed) = frame("dm1", recipientId = "z")
+            router.handleInbound(wd, ed, fromNodeId = "b")
+            advanceUntilIdle()
+
+            assertEquals(listOf("m1", "dm1"), delivered)
+            assertEquals(null, metrics.snapshot().dropsByReason[DropReason.INGRESS_REFUSED])
+            assertEquals(2L, metrics.snapshot().framesDeduped)
         }
 }

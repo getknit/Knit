@@ -32,6 +32,7 @@ class MeshRouter(
     private val jitterWindowMs: Long = DEFAULT_JITTER_WINDOW_MS,
     private val suppressThreshold: Int = DEFAULT_SUPPRESS_THRESHOLD,
     private val jitter: () -> Long = { Random.nextLong(jitterWindowMs) },
+    private val budget: IngressBudget = IngressBudget(),
     private val onDeliver: suspend (wire: WireEnvelope, envelope: RelayEnvelope, fromNodeId: String, kind: TransportKind) -> Unit,
 ) {
     /**
@@ -75,6 +76,14 @@ class MeshRouter(
         fromNodeId: String,
         kind: TransportKind = TransportKind.Other,
     ) {
+        // The ingress meter sits between the dedup *check* and the dedup *add*: a duplicate is never metered
+        // (it is evidence of propagation, not a cost — see countOverheard), and a refused frame is never
+        // marked seen, so the custody re-serve can bring it through later. The gap between the two lets the
+        // same first-seen frame arriving over two links at once spend two tokens; harmless.
+        if (!seen.contains(envelope.id) && budget.meters(envelope) && !budget.admit(fromNodeId)) {
+            metrics.onDropped(DropReason.INGRESS_REFUSED)
+            return
+        }
         if (!seen.add(envelope.id)) {
             // Duplicate: never re-deliver or start a second relay, but it IS evidence the frame is
             // already propagating — count it against any relay we still have pending.

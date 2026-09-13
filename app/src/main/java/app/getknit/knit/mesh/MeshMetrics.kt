@@ -96,6 +96,14 @@ enum class DropReason {
      * ratchet chain still advances (sealed): a size gate is a delivery gate, never a relay gate.
      */
     REACTION_REFUSED,
+
+    /**
+     * A broadcast-room post over the link's ingress budget ([IngressBudget]) — refused in [MeshRouter] before
+     * verify, custody, delivery and relay, and never marked seen, so a custody re-serve can bring it through
+     * once the bucket refills. The one deliberate refusal counted here, because a rising count *is* the
+     * flood signal Diagnostics should show: one link handing over room posts faster than any room is written.
+     */
+    INGRESS_REFUSED,
 }
 
 /**

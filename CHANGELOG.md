@@ -65,6 +65,9 @@ document:
   write a message across several lines before you tap it, and on a hardware keyboard Ctrl+Enter sends too.
 - The menu that pops up over a text field no longer offers Autofill. Android puts it on any box that could
   hold a saved password or address, and nothing you type into Knit is one.
+- A stranger who floods the Nearby room can no longer push out what you and your contacts posted there:
+  their oldest posts go first, and each stranger keeps at most 200. A phone in range can also only pass Knit
+  so many room posts a minute.
 
 ### Fixed
 

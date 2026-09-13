@@ -449,6 +449,44 @@ interface MessageDao {
         conversationId: String,
         cutoff: Long,
     )
+
+    /** Senders holding more than [keep] rows in [conversationId] — the room sweep's per-sender candidates. */
+    @Query("SELECT senderId FROM messages WHERE conversationId = :conversationId GROUP BY senderId HAVING COUNT(*) > :keep")
+    suspend fun sendersOverIn(
+        conversationId: String,
+        keep: Int,
+    ): List<String>
+
+    /** Keeps only [senderId]'s newest [keep] messages in [conversationId]; the `id` tiebreak matches [deleteOldestInConversation]. */
+    @Query(
+        "DELETE FROM messages WHERE conversationId = :conversationId AND senderId = :senderId AND id NOT IN " +
+            "(SELECT id FROM messages WHERE conversationId = :conversationId AND senderId = :senderId " +
+            "ORDER BY sentAt DESC, id DESC LIMIT :keep)",
+    )
+    suspend fun deleteOldestBySenderInConversation(
+        conversationId: String,
+        senderId: String,
+        keep: Int,
+    )
+
+    /** Row count of [conversationId], notices included — the room sweep's over-cap arithmetic. */
+    @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId")
+    suspend fun countIn(conversationId: String): Int
+
+    /**
+     * Deletes the oldest [limit] messages in [conversationId] whose sender is **not** in [keepFrom] — the
+     * room sweep's first tier, so a flood of strangers' posts evicts strangers' posts before a contact's.
+     */
+    @Query(
+        "DELETE FROM messages WHERE conversationId = :conversationId AND id IN " +
+            "(SELECT id FROM messages WHERE conversationId = :conversationId AND senderId NOT IN (:keepFrom) " +
+            "ORDER BY sentAt ASC, id ASC LIMIT :limit)",
+    )
+    suspend fun deleteOldestFromStrangersIn(
+        conversationId: String,
+        keepFrom: Set<String>,
+        limit: Int,
+    )
 }
 
 /** Room projection for [MessageDao.conversationActivity]: a thread's id, newest message time, and row count. */

@@ -131,4 +131,58 @@ class MessageRetentionTest : RoomDbTest() {
             assertTrue(ids("convA").isNotEmpty())
             assertTrue(ids("convB").isNotEmpty())
         }
+
+    @Test
+    fun `a stranger keeps only their newest few room posts, a known sender is not capped that way`() =
+        runTest {
+            val now = 10_000L
+            (1..4).forEach { put("m$it", Conversations.NEARBY, sentAt = now - it, sender = "mallory") }
+            (1..4).forEach { put("f$it", Conversations.NEARBY, sentAt = now - 10 - it, sender = "friend") } // older than all of Mallory's
+
+            // Room cap is 3, so the count rule still bites after the per-stranger trim — raise it out of the way
+            // to see the per-stranger rule alone.
+            MessageRepository(db.messageDao(), nearbyMaxMessages = 100, roomMaxPerStranger = 2)
+                .sweepRetention(now, protected = emptySet(), knownSenders = setOf("friend"))
+
+            assertEquals(setOf("m1", "m2"), ids(Conversations.NEARBY).filter { it.startsWith("m") }.toSet()) // newest two
+            assertEquals(4, ids(Conversations.NEARBY).count { it.startsWith("f") }) // a known sender keeps all four
+        }
+
+    @Test
+    fun `over the room cap, strangers' oldest posts go before a known sender's`() =
+        runTest {
+            val now = 10_000L
+            // Newest-first alone would keep m1..m3 and drop both of the friend's. The friend's are the oldest
+            // in the room on purpose.
+            put("f1", Conversations.NEARBY, sentAt = now - 20, sender = "friend")
+            put("f2", Conversations.NEARBY, sentAt = now - 19, sender = "friend")
+            (1..3).forEach { put("m$it", Conversations.NEARBY, sentAt = now - it, sender = "mallory") }
+
+            MessageRepository(db.messageDao(), nearbyMaxMessages = 3, roomMaxPerStranger = 100)
+                .sweepRetention(now, protected = emptySet(), knownSenders = setOf("friend"))
+
+            assertEquals(setOf("f1", "f2", "m1"), ids(Conversations.NEARBY))
+        }
+
+    @Test
+    fun `a room over cap on known senders alone still trims to the cap, oldest first`() =
+        runTest {
+            val now = 10_000L
+            (1..5).forEach { put("f$it", Conversations.NEARBY, sentAt = now - it, sender = "friend") }
+
+            repo().sweepRetention(now, protected = emptySet(), knownSenders = setOf("friend"))
+
+            assertEquals(setOf("f1", "f2", "f3"), ids(Conversations.NEARBY)) // the last resort keeps the newest three
+        }
+
+    @Test
+    fun `with no known senders the room cap is newest-first, as before`() =
+        runTest {
+            val now = 10_000L
+            (1..5).forEach { put("n$it", Conversations.NEARBY, sentAt = now - it, sender = "s$it") }
+
+            repo().sweepRetention(now, protected = emptySet())
+
+            assertEquals(setOf("n1", "n2", "n3"), ids(Conversations.NEARBY))
+        }
 }

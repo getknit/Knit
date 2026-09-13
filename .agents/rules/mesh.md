@@ -168,6 +168,15 @@ convergence-critical — treat changing them like a wire change.** Two nodes tha
 live sets continuously and churn the NDP cue plane forever. Full failure history + how to verify
 (`…debug.STORE`, `liveFingerprint` parity): `context/store-and-forward.md`.
 
+The one bound that is *not* identical on every node is the per-link `IngressBudget` on room posts in
+`MeshRouter` (ADR 2026-09.vybk), and it is safe only because of where it sits: **before** `SeenSet.add`, custody and relay. A
+refused frame is never marked seen, so the custody re-offer serves it again through the same meter — a
+delay, never a veto — and the carried sets re-converge at the metered pace. Never move the meter past the
+seen-set add (a refused frame would be deduped forever and the digests would diverge for good), never meter
+a duplicate (a re-serve is evidence, not a cost), and never widen it to an addressed or sealed frame class
+without the same reasoning: a DM's receipt and a group's seed converge through custody and must not be
+throttled at the link.
+
 ## Inbound handlers must never throw
 
 Decrypt/verify failures must never throw out of the inbound handler — `onDeliver` runs before the router

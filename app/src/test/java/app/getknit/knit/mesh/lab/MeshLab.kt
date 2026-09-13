@@ -28,6 +28,8 @@ import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.DropReason
+import app.getknit.knit.mesh.IngressBudget
 import app.getknit.knit.mesh.MeshManager
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.StoreDigest
@@ -89,8 +91,11 @@ class MeshLab {
      * Creates and starts a node — its own identity, database and settings file — and returns once its router
      * is listening, so a link made next cannot lose the profile push (see [LabTransport.collecting]).
      */
-    suspend fun node(name: String): LabNode {
-        val node = LabNode(name, context, File(dir, name).apply { mkdirs() })
+    suspend fun node(
+        name: String,
+        limits: LabLimits = LabLimits(),
+    ): LabNode {
+        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits)
         nodes += node
         node.boot()
         return node
@@ -250,6 +255,21 @@ class MeshLab {
 }
 
 /**
+ * The storage and ingress policy numbers a node boots with. Production takes the field defaults; a flood
+ * scenario shrinks them so a handful of posts is a flood — same rules, same paths, smaller numbers.
+ */
+data class LabLimits(
+    /** Newest posts a room keeps ([MessageRepository]'s `nearbyMaxMessages`). */
+    val roomMaxMessages: Int = 2_000,
+    /** Newest posts a room keeps per stranger ([MessageRepository]'s `roomMaxPerStranger`). */
+    val roomMaxPerStranger: Int = 200,
+    /** Room posts one link may hand over at once ([IngressBudget]'s `burst`). */
+    val ingressBurst: Int = IngressBudget.DEFAULT_BURST,
+    /** Room posts per minute one link may sustain ([IngressBudget]'s `perMinute`). */
+    val ingressPerMinute: Int = IngressBudget.DEFAULT_PER_MINUTE,
+)
+
+/**
  * One phone. The persistent half (identity secret, database, settings file) outlives [boot]/[shutdown], so
  * [restart] is a real process death: every in-memory structure — `PendingInbound`, `PendingGroupKeys`, the
  * ratchet caches, the seen set — is rebuilt from what was committed.
@@ -258,6 +278,7 @@ class LabNode internal constructor(
     val name: String,
     private val context: Context,
     private val dir: File,
+    private val limits: LabLimits,
 ) {
     // --- persistent across restarts ---
 
@@ -310,7 +331,12 @@ class LabNode internal constructor(
         metrics = MeshMetrics()
         val keys = keyStore.keys()
         val messageCrypto = MessageCrypto(keys.hybridPrivate, keys.sigPrivate)
-        messages = MessageRepository(db.messageDao())
+        messages =
+            MessageRepository(
+                db.messageDao(),
+                nearbyMaxMessages = limits.roomMaxMessages,
+                roomMaxPerStranger = limits.roomMaxPerStranger,
+            )
         peers = PeerRepository(db.peerDao(), settings, identity)
         val reactions = ReactionRepository(db.reactionDao(), db)
         receipts = MessageReceiptRepository(db.messageReceiptDao(), messages, db)
@@ -362,6 +388,7 @@ class LabNode internal constructor(
                 metrics = metrics,
                 db = db,
                 tickDebounceMs = MeshLab.TICK_DEBOUNCE_MS,
+                ingressBudget = IngressBudget(burst = limits.ingressBurst, perMinute = limits.ingressPerMinute),
             )
         manager.start()
         // The session's collectors subscribe asynchronously; a frame sent before that is emitted into nobody.
@@ -398,6 +425,12 @@ class LabNode internal constructor(
     suspend fun setDisplayName(value: String) {
         settings.setDisplayName(value)
     }
+
+    /** Posts in the Nearby room; the frame the app's composer would send. */
+    suspend fun sendRoom(text: String): Boolean = manager.sendChat(text = text)
+
+    /** Runs the local-storage sweep the 10-minute prune loop runs, now. */
+    suspend fun sweepLocalStorage() = manager.sweepLocalStorage()
 
     /** Sends a DM; the frame the app's composer would send. */
     suspend fun sendDm(
@@ -476,6 +509,18 @@ class LabNode internal constructor(
                 m.body to others.filter { it.nodeId !in ackers }.map { it.name }
             }.filterValues { it.isNotEmpty() }
     }
+
+    /** The ordinary Nearby-room posts this node holds, keyed by author node id → bodies. */
+    suspend fun roomPosts(): Map<String, Set<String>> =
+        messages
+            .observeNewestMessages(Conversations.NEARBY, MeshLab.WINDOW)
+            .first()
+            .filter { it.kind == MessageEntity.KIND_NORMAL }
+            .groupBy({ it.senderId }, { it.body })
+            .mapValues { it.value.toSet() }
+
+    /** How many inbound frames this node refused for [reason] this session. */
+    fun drops(reason: DropReason): Long = metrics.snapshot().dropsByReason[reason] ?: 0L
 
     /** The custody store's live id set, as the digest exchange advertises it. */
     suspend fun custodyIds(): Set<String> = forwardStore.liveIds(System.currentTimeMillis()).toSet()

@@ -24,6 +24,7 @@ class MessageRepository(
     private val dao: MessageDao,
     private val nearbyMaxMessages: Int = DEFAULT_NEARBY_MAX_MESSAGES,
     private val nearbyMaxAgeMs: Long = DEFAULT_NEARBY_MAX_AGE_MS,
+    private val roomMaxPerStranger: Int = DEFAULT_ROOM_MAX_PER_STRANGER,
     private val maxPerPendingThread: Int = DEFAULT_MAX_PER_PENDING_THREAD,
     private val pendingThreadMaxAgeMs: Long = DEFAULT_PENDING_THREAD_MAX_AGE_MS,
     private val maxPendingThreads: Int = DEFAULT_MAX_PENDING_THREADS,
@@ -222,7 +223,8 @@ class MessageRepository(
      * `forward_store`, `messages` is pure local state (no content digest), so this is plain GC — no mutex, no
      * transaction, a partial sweep is harmless. [protected] holds the conversation ids exempt from wholesale
      * eviction (accepted / verified / user-authored — the same set the notify gate treats as "not a request").
-     *  - a public **room** — Nearby, and the bridged Meshtastic channel — is capped by count and age;
+     *  - a public **room** — Nearby, and the bridged Meshtastic channel — is capped by age, then per stranger,
+     *    then by count with strangers evicted first (see below);
      *  - a **protected** thread is never trimmed, by count or by age: it is the user's own history, and the
      *    chat screen reads it through a bounded window (ADR 2026-09.hd5n) while the list screens read
      *    per-thread summaries, so its length costs nothing at open;
@@ -233,10 +235,21 @@ class MessageRepository(
      * stale-drop branch below would delete a whole neighbourhood's history a week after the board came off,
      * and the newest-few cap would leave it fifty posts deep. It is also the higher-volume of the two rooms —
      * its authors are a whole region rather than whoever is in radio range.
+     *
+     * A room's count cap used to be newest-first alone, which made it the flood's friend: 2,000 posts from
+     * fresh identities — free, on this mesh — evicted every honest post in the room, contacts' included. The
+     * cap now reads who wrote what. [knownSenders] are the people the user already talks to (the accepted,
+     * verified and DM'd peers, and the user); everyone else is a stranger, and a stranger keeps at most
+     * [roomMaxPerStranger] newest posts — the same per-identity quota custody applies. When the room is still
+     * over [nearbyMaxMessages], strangers' oldest posts go first; only a room over cap on known senders alone
+     * trims a known sender's post. Sybil is not solved here — ten identities still fill a room — and is not
+     * meant to be: `mesh/IngressBudget` bounds how fast one *link* can hand those over, and this rule decides
+     * what the bounded flood is allowed to displace.
      */
     suspend fun sweepRetention(
         now: Long,
         protected: Set<String>,
+        knownSenders: Set<String> = emptySet(),
     ) {
         // The fixed rooms plus every commons with history: a commons is a room by the same rule (its authors
         // are a whole relay's membership, and it is nobody's request thread), but its ids are dynamic.
@@ -244,7 +257,12 @@ class MessageRepository(
         val rooms = ROOMS + activity.map { it.conversationId }.filter { Conversations.isPublicRoom(it) }
         for (room in rooms) {
             dao.deleteOlderThan(room, now - nearbyMaxAgeMs)
-            dao.deleteOldestInConversation(room, nearbyMaxMessages)
+            for (sender in dao.sendersOverIn(room, roomMaxPerStranger)) {
+                if (sender !in knownSenders) dao.deleteOldestBySenderInConversation(room, sender, roomMaxPerStranger)
+            }
+            val over = dao.countIn(room) - nearbyMaxMessages
+            if (over > 0) dao.deleteOldestFromStrangersIn(room, knownSenders, over)
+            dao.deleteOldestInConversation(room, nearbyMaxMessages) // the last resort: over cap on known senders alone
         }
 
         val pending = mutableListOf<ConversationActivity>()
@@ -279,6 +297,12 @@ class MessageRepository(
 
         /** Broadcast-room messages older than this are reclaimed regardless of count. */
         const val DEFAULT_NEARBY_MAX_AGE_MS = 30L * 24 * 60 * 60_000 // 30 days
+
+        /**
+         * Newest room posts kept per stranger — custody's per-identity quota
+         * ([app.getknit.knit.data.forward.ForwardRepository.DEFAULT_MAX_PER_SENDER]) applied to what is kept.
+         */
+        const val DEFAULT_ROOM_MAX_PER_STRANGER = 200
 
         /** A stranger's request thread keeps at most this many newest messages. */
         const val DEFAULT_MAX_PER_PENDING_THREAD = 50

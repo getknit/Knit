@@ -162,6 +162,10 @@ class MeshManager(
     // harness (`mesh/lab`) can watch a tick cross a relay in milliseconds rather than wait out the field
     // value; production wiring takes the default.
     private val tickDebounceMs: Long = AckSync.TICK_BATCH_DEBOUNCE_MS,
+    // The per-link meter on broadcast-room posts ([IngressBudget]), handed to the router. A policy object,
+    // injectable like [tickDebounceMs] so `mesh/lab` can flood a room past a tiny budget in one scenario;
+    // production wiring takes the default and shares [clock].
+    private val ingressBudget: IngressBudget = IngressBudget(clock = clock),
     // Puts a post typed in the Meshtastic room on this phone's own board — the LoRa transport's
     // [PublicChannelSink]. A lambda rather than the interface for the reason [MeshPostSink] is a seam in the
     // other direction: the two ends construct each other, so one of them has to be late-bound. The default
@@ -377,7 +381,7 @@ class MeshManager(
     // Reconstructed per session so its inbound collector + relay jobs live on the session scope and are
     // cancelled by stop() (rather than leaking on the never-cancelled app scope). Declared after `pipeline`
     // so onDeliver targets it.
-    private var router = MeshRouter(transport, scope, metrics = metrics, onDeliver = pipeline::onDeliver)
+    private var router = MeshRouter(transport, scope, metrics = metrics, budget = ingressBudget, onDeliver = pipeline::onDeliver)
 
     /**
      * §9.5's push-half deferral: an attachment we authored and whose recipient acked stays off the
@@ -537,7 +541,7 @@ class MeshManager(
         val session =
             CoroutineScope(SupervisorJob(scope.coroutineContext[Job]) + Dispatchers.Default + meshExceptionHandler)
         sessionScope = session
-        router = MeshRouter(transport, session, metrics = metrics, onDeliver = pipeline::onDeliver)
+        router = MeshRouter(transport, session, metrics = metrics, budget = ingressBudget, onDeliver = pipeline::onDeliver)
         router.start()
         transport.start()
         watchNeighbors(session)
@@ -1874,13 +1878,14 @@ class MeshManager(
      * verified, or that the user has authored in, plus any group a known peer has posted in — is exempt from
      * wholesale eviction, matching the notify gate's "not a request" predicate ([Conversations.isAccepted]) so a
      * group that reads as a normal chat keeps its history like one. Runs on the prune loop and at startup,
-     * alongside the forward-store sweep.
+     * alongside the forward-store sweep. `internal` so `mesh/lab` can run a sweep inside a scenario.
      */
-    private suspend fun sweepLocalStorage() {
+    internal suspend fun sweepLocalStorage() {
         val now = clock()
+        val me = identity.nodeId()
         val accepted = settings.acceptedConversations.first()
         val verified = peers.verifiedNodeIds().toSet()
-        val authored = messages.conversationsIAuthoredIn(identity.nodeId()).toSet()
+        val authored = messages.conversationsIAuthoredIn(me).toSet()
         // A group inherits protection once a known peer has posted in it (the id lookups alone never match a
         // "g-" group id). sendersIn is suspend, so gather in a loop rather than a filter lambda.
         val protectedGroups = mutableListOf<String>()
@@ -1891,7 +1896,10 @@ class MeshManager(
             }
         }
         val protectedIds = accepted + verified + authored + protectedGroups
-        messages.sweepRetention(now, protectedIds)
+        // The room sweep's known senders: a DM's conversation id *is* its peer's node id, so the three DM
+        // signals double as the set of people the user talks to — the rule [Conversations.isAccepted] applies
+        // to a group's senders. Group and room ids in the set never match a sender and are harmless.
+        messages.sweepRetention(now, protectedIds, knownSenders = accepted + verified + authored + me)
         peers.sweepCap(protectedIds)
     }
 

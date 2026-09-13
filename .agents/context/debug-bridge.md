@@ -69,7 +69,12 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   stop you chasing ghosts: `retiring` marks a drained previous-session scope, where `local > spool`
   is correct rather than divergence; and `lastError` is the spool's most recent `err` code, which is
   the only thing distinguishing "connected and idle" from "connected and refusing us" (`quota`,
-  `pow` and `rate` all otherwise present as a scope that simply never converges). `accounted` is how
+  `pow` and `rate` all otherwise present as a scope that simply never converges) — or the client's own
+  verdict on the spool (ADR 2026-09.amzn): `unresponsive` (it stopped answering and was dropped),
+  `overlong_list` (it listed more ids than a conforming spool can hold, and the round was refused), or
+  `too_large` with nothing subscribed (its `maxRecord` could not carry our SUB). A client-side verdict
+  stays through the next session, so a spool that answers the hello and nothing else reads as
+  `unresponsive` rather than flickering `connected`. `accounted` is how
   much of `local` is the §9.6 band — blobs the spool still holds that our custody has aged out, counted
   as held on purpose (ADR 062) so `local == spool` keeps meaning converged; a scope stuck unconverged
   with a large `accounted` means the fold or the prune is broken, not the network.

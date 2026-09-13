@@ -90,6 +90,19 @@ class SpoolConnectionTest {
 
     private fun ok(q: Long) = SpoolCodec.encode(SpoolOk(t = SpoolRecordType.OK, q = q))
 
+    private fun ahas(
+        q: Long,
+        scope: ByteArray = this.scope,
+        aid: ByteArray = attachment,
+    ) = SpoolCodec.encode(
+        SpoolAhas(t = SpoolRecordType.AHAS, q = q, scope = scope, aid = aid, total = 4, bits = byteArrayOf(0xF0.toByte())),
+    )
+
+    private fun listing(
+        q: Long,
+        scope: ByteArray = this.scope,
+    ) = SpoolCodec.encode(SpoolList(t = SpoolRecordType.LIST, q = q, scope = scope, blobIds = listOf(id(5)), tombstones = null))
+
     @Test
     fun `answers the spool's unprompted hello with nothing but the chosen version`() =
         runTest {
@@ -502,5 +515,118 @@ class SpoolConnectionTest {
             assertEquals(1L, room.ttlMs)
             assertEquals("the room's blob cap cannot exceed the spool's", 64, room.maxBlob)
             assertTrue(room.attach)
+        }
+
+    @Test
+    fun `an ahas about another scope or attachment is not an answer, however well its q matches`() =
+        runTest {
+            val link = RecordingLink()
+            val conn = connection(link)
+            conn.onMessage(serverHello(limits = greedyLimits()))
+
+            var reply: SpoolReply.Presence? = null
+            launch { reply = conn.ahave(scope, attachment) }
+            runCurrent()
+            val q = link.last<SpoolAhave>().q
+            conn.onMessage(ahas(q, scope = other))
+            runCurrent()
+            assertNull("wrong scope: still waiting", reply)
+            conn.onMessage(ahas(q, aid = id(9)))
+            runCurrent()
+            assertNull("wrong attachment: still waiting", reply)
+
+            // A dropped mismatch leaves the question open, so the right answer still completes it.
+            conn.onMessage(ahas(q))
+            runCurrent()
+            assertEquals(4, reply?.total)
+        }
+
+    @Test
+    fun `a listing for another scope is not applied to the one we asked about`() =
+        runTest {
+            val link = RecordingLink()
+            val conn = connection(link)
+            conn.onMessage(serverHello())
+
+            var reply: SpoolReply.Listing? = null
+            launch { reply = conn.list(scope) }
+            runCurrent()
+            val q = link.last<SpoolList>().q
+            // Applied to our scope, this would re-anchor us on a set we never asked about.
+            conn.onMessage(listing(q, scope = other))
+            runCurrent()
+            assertNull(reply)
+
+            conn.onMessage(listing(q))
+            runCurrent()
+            assertEquals(1, reply?.blobIds?.size)
+        }
+
+    @Test
+    fun `three unanswered requests in a row drop the connection as unresponsive`() =
+        runTest {
+            val link = RecordingLink()
+            val conn = connection(link)
+            conn.onMessage(serverHello())
+
+            repeat(SpoolConnection.MAX_SILENT_REQUESTS - 1) {
+                launch { conn.push(scope, other, byteArrayOf(1)) }
+                runCurrent()
+                advanceTimeBy(SpoolConnection.REQUEST_TIMEOUT_MS + 1)
+                runCurrent()
+                assertNull("two strikes: still open", link.closedWith)
+            }
+            launch { conn.push(scope, other, byteArrayOf(1)) }
+            runCurrent()
+            advanceTimeBy(SpoolConnection.REQUEST_TIMEOUT_MS + 1)
+            runCurrent()
+
+            assertEquals(SpoolCloseCode.NORMAL to SpoolConnection.UNRESPONSIVE, link.closedWith)
+            assertEquals(SpoolConnection.UNRESPONSIVE, conn.fault)
+            assertFalse(conn.isOpen)
+            // And nothing further waits on it: a request against the dropped socket fails at once.
+            assertEquals(SpoolReply.Closed, conn.push(scope, other, byteArrayOf(2)))
+        }
+
+    @Test
+    fun `an answer resets the strike count — silence is only a fault when it is consecutive`() =
+        runTest {
+            val link = RecordingLink()
+            val conn = connection(link)
+            conn.onMessage(serverHello())
+
+            repeat(2) {
+                launch { conn.push(scope, other, byteArrayOf(1)) }
+                runCurrent()
+                advanceTimeBy(SpoolConnection.REQUEST_TIMEOUT_MS + 1)
+                runCurrent()
+            }
+            launch { conn.push(scope, other, byteArrayOf(1)) }
+            runCurrent()
+            conn.onMessage(ok(link.last<SpoolPush>().q))
+            runCurrent()
+            repeat(2) {
+                launch { conn.push(scope, other, byteArrayOf(1)) }
+                runCurrent()
+                advanceTimeBy(SpoolConnection.REQUEST_TIMEOUT_MS + 1)
+                runCurrent()
+            }
+
+            assertNull("two, an answer, two: never three in a row", link.closedWith)
+            assertNull(conn.fault)
+        }
+
+    @Test
+    fun `a commons pin past what one listing can carry is clamped like every other advertised number`() =
+        runTest {
+            val link = RecordingLink()
+            val conn = connection(link)
+            val room = SpoolCommonsInfo(name = "home", maxFrames = Int.MAX_VALUE, ttlMs = 1L, maxBlob = 64)
+            conn.onMessage(
+                SpoolCodec.encode(SpoolHello(t = SpoolRecordType.HELLO, v = SPOOL_RECORD_VERSION, limits = greedyLimits(), commons = room)),
+            )
+
+            assertTrue(conn.awaitReady())
+            assertEquals(MAX_PINNED_FRAMES, conn.commons?.maxFrames)
         }
 }

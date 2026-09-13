@@ -59,6 +59,8 @@ object SpoolErrCode {
 
 /** WebSocket close codes for failures that happen before or outside the record layer. */
 object SpoolCloseCode {
+    /** The ordinary WebSocket close — the only non-protocol code OkHttp lets a client send. */
+    const val NORMAL = 1000
     const val MALFORMED = 4000
     const val AUTH = 4001
     const val VERSION = 4002
@@ -90,6 +92,13 @@ const val SPOOL_ERR_CODE_MAX = 32
 
 /** Scope ids, blob ids, roots and keys are all `bstr32` (§12.1) — the one shape check the record layer owns. */
 const val SPOOL_ID_BYTES = 32
+
+/**
+ * The most ids one listing record can carry under [MAX_INBOUND_RECORD] — the ceiling on any `maxFrames` a
+ * spool pins for a commons (HELLO and DIGEST alike), since a room it could never list whole is not one we
+ * can heal, and the pinned number sizes the accounted set and the listing threshold derived from it.
+ */
+const val MAX_PINNED_FRAMES = MAX_INBOUND_RECORD / SPOOL_ID_BYTES
 
 /** Decode-first view of any record: just the discriminator (unknown keys are ignored). */
 @Serializable

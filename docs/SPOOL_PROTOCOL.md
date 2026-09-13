@@ -1045,7 +1045,17 @@ day     = floor(unixMillis / 86 400 000)                       // UTC day number
 |-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **C-9.1-1** | On a `digest` mismatch against the local expectation for a scope, a client MUST request `list`, diff the spool's live set against local custody minus tombstoned ids, `pull` what is missing locally and `push` what the spool lacks. |
 | **C-9.1-2** | The loop MUST be bidirectional.                                                                                                                                                                                                       |
+| **C-9.1-3** | A client MUST refuse a `list` answer whole — never truncate it — when it names more live ids than the client's own per-scope tracking bound (§12.2) or more tombstones than the tombstone count bound (§12.2), and MAY treat it as a spool fault. |
+| **C-9.1-4** | A client SHOULD bound how long it waits on a spool that accepts requests and answers none: a request timeout, and after a small number of consecutive unanswered requests, the connection itself is dropped with the ordinary reconnect backoff. |
+| **C-9.1-5** | A client SHOULD NOT re-`sub` a scope the spool refused (`quota`, `pow`) on every heal round; it parks the scope for a window of its own choosing, taking the spool's `retryMs` as a hint inside that window only. |
 
+> **Why C-9.1-3 refuses rather than truncates.** A conforming spool's live set fits its applied
+> `maxFrames` and its tombstones the §12.2 count bound, while the record cap alone admits thousands of
+> ids — enough to churn a client's bounded per-scope sets every round and pin its worker in pull round
+> trips. A truncated view would re-anchor the client on a partial set and re-list forever; refusing the
+> round costs one `list` per tick. The threshold is the client's *tracking* bound rather than its declared
+> `maxFrames` because S-6.2-2 applies the most recent SUB's declaration, which a newer member may have raised.
+>
 > **Why bidirectional.** This is the "custody peer per scope" doing real work. A member that carried
 > frames over the mesh while the spool was unreachable refills it; a fresh spool added to the config
 > heals
@@ -1067,12 +1077,19 @@ nor bounces between client and spool eviction. §6.2's guards close the loop fro
 |-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **C-9.3-1** | A pulled blob that fails the hash check, the AEAD, the signature or the frame-set rule (§4.4) MUST enter a bounded per-spool **invalid set** keyed by blobId. |
 | **C-9.3-2** | An invalid-set entry MUST never be re-pulled, never counted as held and never re-pushed.                                                                      |
+| **C-9.3-3** | An invalid-set entry MAY be dropped once a `list` for its scope no longer names the id — unlisted, it can no longer be re-pulled, and holding it would only refuse a clean re-push of the same id after the garbage copy expired. |
+| **C-9.3-4** | A blob the client did **not** pull — an `event` — that fails §4.4 MUST NOT enter the invalid set. It is dropped; if the spool holds it, a later `list` names it and C-9.3-1 applies. |
 
 > **Why this is load-bearing.** Spools are untrusted storage. Without the set, one garbage blob at a
 > spool
 > folds into the spool's digest but never the client's: permanent divergence and infinite re-pull.
 > With
 > it, the divergence is accounted and inert.
+>
+> **Why C-9.3-4 keeps the event path out.** The set is bounded, so anything that can write into it can
+> evict from it. An `event` is unsolicited: a spool that could quarantine by sending garbage events would
+> push the pulled, genuine entries out oldest-first and re-open the very loop the set exists to close.
+> An id nobody pulled cannot start that loop, so there is nothing for its entry to protect against.
 
 ### 9.4 The mesh bridge
 
@@ -1131,6 +1148,7 @@ The round, per attachment:
 |-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **C-9.5-3** | A retiring scope (§3.1, §3.3) is pulled but never refilled, mirroring frames.                                                                              |
 | **C-9.5-4** | Any failure — AEAD, a header that does not match the request, a final hash mismatch — MUST quarantine the `aid` per (spool, scope), extending §9.3's rule. |
+| **C-9.5-11** | An attachment quarantine MAY expire after the scope's `ttlMs`, measured from when it was recorded: by then the copy that failed has left an honest spool (S-6.5-4), and presence is asked for, never listed, so no `list` can retire it the way C-9.3-3 does. |
 
 > **Why a reference may carry no mime.** The mesh frame used to repeat the attachment's MIME beside its
 > hash so a blind radio carrier could label what it custodied. That told a carrier whether a message was a
@@ -1371,7 +1389,9 @@ Deliberately open, additively reachable, in no particular order.
 | commons push budget                      | 20 pushes/s spool-wide, burst 4×                        | §7.4 — `SPOOL_COMMONS_RATE_PUSHES`; refused with `err rate`, never a strike                                            |
 | commons deferral bound                   | 8 rounds                                                | §7.4 — how long a post waits for its author's profile before it is quarantined                                        |
 | `maxPairScopes`                          | 8                                                       | §3.5 — headroom under `maxScopes`                                                                                       |
-| suggested invalid / accounted set bound  | 512 ids per (spool, scope), oldest-first drop           | §9.3, §9.6 — above a full scope (`maxFrames` = 400), so eviction is the pathological case, not the ordinary one       |
+| suggested invalid / accounted set bound  | 512 ids per (spool, scope), oldest-first drop           | §9.3, §9.6 — above a full scope (`maxFrames` = 400), so eviction is the pathological case, not the ordinary one; also the C-9.1-3 listing threshold, so a listing never exceeds what the sets can hold |
+| suggested silent-request strike count    | 3 consecutive, at a 30 s request timeout                | §9.1 (C-9.1-4) — the reference client                                                                                  |
+| suggested refused-scope park             | 5 min floor, 1 h cap                                    | §9.1 (C-9.1-5) — `retryMs` honoured inside that window only                                                            |
 | intro re-send / answer floors            | 20 h / 1 h                                              | §3.5 client policy: re-send an unconfirmed intro under the 24 h custody TTL; answer an init-bearing peer at most hourly |
 
 ## 13. Test vectors [Both]
@@ -1608,4 +1628,5 @@ the plane itself was unaffected either time, since a spool never decodes a frame
 | 2026-08-25 | **Pair scopes (ADR 042).** New §3.5: a scope both members derive from their *identity* DH keys, so a pair that has only exchanged a contact card out of band (`docs/CONTACT_CARD.md`) can meet at a spool before a session exists. Carries the §4.4 DM frame set unchanged; subscribed only while an intro is pending plus a 48 h grace. §1.1/§1.4 wording, §3.4 row, §10.1 bullet, §10.3's identity-file row narrowed to *conversation* scopes, §12 constants, four §13 rows appended                                                                                                                                                                                              | None for spools: one more opaque id. Clients: a new label family under `knit/scope/v1/pair/…`; no record, no existing vector moved                                                                                                |
 | 2026-08-30 | **The accounted set (ADR 062).** New §9.6: a pulled blob that passed §4.4, bridged, and that local custody did not keep is counted as held and never pulled again (C-9.6-1…4), with §12.2 gaining the set bound. Closes the divergence §9.3 was written for, arriving through the one door §9.3 does not cover — a *valid* blob in the 24–48 h band between the mesh custody TTL and the scope TTL, which no client could ever fold into its digest | None for spools. Clients: a scope that has been reporting `converged = false` for the back half of the spool's retention should now settle, and stop re-pulling that band on every reconnect |
 | 2026-09-12 | **The commons (§7.4).** One shared scope per spool for a private relay's membership: the invite grammar, the two derivations (the spool's bare-hash id under the transport-plane prefix, the members' HKDF seal keys), the HELLO advertisement that never carries the id, pinned bounds, no creation gates, the non-striking spool-wide push budget, and the client half — a `profile`-plus-`commons` frame set, a post door that bypasses §9.4, bounded deferral of a post ahead of its author's profile, accounted-by-construction, the member's own profile kept live, single-spool affinity. §1.4 wording, §3.4 row, §12.2 defaults, five §13 derivation rows and two record vectors appended | **Spools:** optional; a spool with no commons omits the field and is unaffected. **Clients:** a new `commons` mesh frame type (non-custodial, additive) and a new label family under `knit/spool/v1/commons…`; no existing record, derivation or vector moved |
+| 2026-09-13 | **Client hardening against a hostile spool (ADR 2026-09.amzn).** §9.3 gains C-9.3-3 (an invalid entry may go once unlisted) and C-9.3-4 (the event path never quarantines); §9.5 C-9.5-11 (an attachment quarantine may expire at the scope TTL); §9.1 C-9.1-3…5 (an over-long `list` is refused whole; a silent spool is dropped after consecutive unanswered requests; a refused scope is parked, not re-`sub`bed every tick); §12.2 rows for the three. All client-side | None for spools. Clients: none of it is observable on the wire beyond fewer records — no record, derivation or vector moved |
 | 2026-09-12 | **Send-side moderation (§7.5).** One optional HELLO bool, `moderation`, by which an operator asks clients to run their on-device content screen before sending and to withhold what it flags, with no sender override; strictest wins across a multi-homed scope; receive-side behaviour untouched; no data-path change at the spool. §10.2 bullet, one §13 record vector appended | **Spools:** optional; a spool that does not set it omits the field and is unaffected. **Clients:** tolerate-and-ignore until the client half lands; no existing record, derivation or vector moved |

@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-122 decisions.
+123 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -106,6 +106,7 @@ carries; never renumber an old one.
 | [2026-09.995c](decisions/2026-09-995c-a-peer-rename-notice-stores-both-names.md) | A peer rename notice stores both names | ui, data |
 | [2026-09.9dnk](decisions/2026-09-9dnk-the-wedge-watchdog-s-tier-1-responder-refresh-is-capped-per-episode.md) | The wedge watchdog's Tier-1 responder refresh is capped per episode | mesh, nan, recovery |
 | [2026-09.aa27](decisions/2026-09-aa27-a-room-delivery-tick-rides-a-frame-already-going-to-its-author.md) | A room delivery tick rides a frame already going to its author | receipts, mesh, lora |
+| [2026-09.amzn](decisions/2026-09-amzn-a-spool-s-answers-are-bounded-by-what-the-client-can-track.md) | A spool's answers are bounded by what the client can track | spool, hardening |
 | [2026-09.cf7a](decisions/2026-09-cf7a-a-meshtastic-public-post-is-a-signed-attribution-in-its-own-room.md) | A Meshtastic public post is a signed attribution in its own room | lora, meshtastic, mesh |
 | [2026-09.emd7](decisions/2026-09-emd7-a-knit-board-tells-the-mesh-it-is-unmonitored.md) | A Knit board tells the mesh it is unmonitored | lora, meshtastic, provisioning |
 | [2026-09.fq6b](decisions/2026-09-fq6b-overscroll-and-ripple-take-their-colour-from-the-theme.md) | Overscroll and ripple take their colour from the theme | ui, theme |

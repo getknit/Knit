@@ -95,6 +95,9 @@ document:
 - A contact whose phone dated a profile, reaction, group name or photo far in the future could keep that
   version stuck on your phone for good. Knit now caps such dates at a few minutes past its own clock, the
   way it already does for messages.
+- A relay that sends junk or stops answering after it connects no longer ties Knit up for minutes at a
+  time or keeps a photo from ever arriving through it. Relays and Diagnostics now say what went wrong
+  instead of showing it as connected.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

@@ -87,6 +87,8 @@ class ScopeSyncTest {
         // `sentAt`, so running one member late is how a test makes an arriving frame look like a backlog
         // pull without moving the fixture's `now` under every other assertion.
         clock: () -> Long = { now },
+        // What the member dials — the spool itself, or a wrapper that watches the dials and closes.
+        dialer: SpoolDialer = spool,
     ): Member {
         val metrics = MeshMetrics()
         val delivered = mutableListOf<RelayEnvelope>()
@@ -100,7 +102,7 @@ class ScopeSyncTest {
                         groupRoots = { groups },
                         pairs = { pairs() },
                     ),
-                dialer = spool,
+                dialer = dialer,
                 store = custody,
                 selfId = { self },
                 urls = { listOf(url) },
@@ -193,6 +195,37 @@ class ScopeSyncTest {
             // de-synchronises a population of clients one full spool refused in the same instant.
             jitter = { 250L },
         )
+    }
+
+    /**
+     * Watches one member's sessions against a real [FakeSpool]: when each socket was dialled and when the
+     * client first closed it. The gap between a close and the next dial is the reconnect backoff — the
+     * one observable that says whether a session counted as "reached".
+     */
+    private inner class SessionLog(
+        private val spool: FakeSpool,
+        private val scheduler: kotlinx.coroutines.test.TestCoroutineScheduler,
+    ) : SpoolDialer {
+        val dialedAt = mutableListOf<Long>()
+        val closedAt = mutableListOf<Long>()
+
+        override suspend fun dial(url: String): SpoolSocket {
+            dialedAt += scheduler.currentTime
+            val inner = spool.dial(url)
+            val index = closedAt.size.also { closedAt += -1L }
+            return object : SpoolSocket by inner {
+                override fun close(
+                    code: Int,
+                    reason: String,
+                ) {
+                    if (closedAt[index] < 0) closedAt[index] = scheduler.currentTime
+                    inner.close(code, reason)
+                }
+            }
+        }
+
+        /** Reconnect waits, in ms: each dial minus the close of the session before it. */
+        fun gaps(): List<Long> = dialedAt.drop(1).mapIndexed { i, at -> at - closedAt[i] }
     }
 
     @Test
@@ -692,6 +725,140 @@ class ScopeSyncTest {
         }
 
     @Test
+    fun `no more scopes are subscribed than the spool's advertised maxScopes`() =
+        runTest {
+            val spool = FakeSpool(maxScopes = 1)
+            val group = GroupScopeRoots("g-00112233445566778899aabb", setOf(alice, bob, carol), groupRoot, rootVersion = 1)
+            val holder = member(spool, alice, bob, groups = listOf(group))
+
+            holder.sync.start(backgroundScope)
+            pump(rounds = 70)
+
+            assertEquals("one scope, however many we carry", 1, spool.subscribedScopes.size)
+            assertNull(
+                "and no refusal to show for it",
+                holder.sync
+                    .status()
+                    .single()
+                    .lastError,
+            )
+            holder.sync.stop()
+        }
+
+    @Test
+    fun `a scope the spool refused is parked, not asked for again every tick`() =
+        runTest {
+            // The daemon's cap is spool-wide, so the client cannot know in advance which SUB will be the
+            // one over it: the refusal is the signal, and it must not be re-provoked on every 60 s tick.
+            val spool = FakeSpool(scopeQuota = 1)
+            val group = GroupScopeRoots("g-00112233445566778899aabb", setOf(alice, bob, carol), groupRoot, rootVersion = 1)
+            // The park is measured on the member's own clock, so this one has to move with virtual time.
+            val holder = member(spool, alice, bob, groups = listOf(group), clock = { now + testScheduler.currentTime })
+
+            holder.sync.start(backgroundScope)
+            pump(rounds = 200)
+            val refused = spool.subAttempts.keys.single { it !in spool.subscribedScopes }
+            assertEquals("asked once, then parked", 1, spool.subAttempts[refused])
+            assertEquals(
+                SpoolErrCode.QUOTA,
+                holder.sync
+                    .status()
+                    .single()
+                    .lastError,
+            )
+
+            pump(rounds = 200) // past the 5 min park: one more try, then parked again
+            assertEquals(2, spool.subAttempts[refused])
+            holder.sync.stop()
+        }
+
+    @Test
+    fun `a spool's retryMs on a refusal is a hint inside our own window, never a permanent park`() =
+        runTest {
+            val spool = FakeSpool(scopeQuota = 1, quotaRetryMs = 10L * 24 * 60 * 60_000L)
+            val group = GroupScopeRoots("g-00112233445566778899aabb", setOf(alice, bob, carol), groupRoot, rootVersion = 1)
+            val holder = member(spool, alice, bob, groups = listOf(group), clock = { now + testScheduler.currentTime })
+
+            holder.sync.start(backgroundScope)
+            pump(rounds = 3700) // just past the one-hour cap
+            val refused = spool.subAttempts.keys.single { it !in spool.subscribedScopes }
+
+            assertEquals("ten days asked for, one hour granted", 2, spool.subAttempts[refused])
+            holder.sync.stop()
+        }
+
+    @Test
+    fun `a spool whose maxRecord cannot carry a sub is dropped and reported, not shown connected forever`() =
+        runTest {
+            // Large enough for our 12-byte hello reply — the handshake passes — and too small for a SUB.
+            val spool = FakeSpool(maxRecord = 32)
+            val log = SessionLog(spool, testScheduler)
+            val holder = member(spool, alice, bob, dialer = log)
+
+            holder.sync.start(backgroundScope)
+            pump(rounds = 12)
+
+            assertEquals(
+                SpoolErrCode.TOO_LARGE,
+                holder.sync
+                    .status()
+                    .single()
+                    .lastError,
+            )
+            assertFalse(
+                holder.sync
+                    .status()
+                    .single()
+                    .connected,
+            )
+            assertTrue(spool.subscribedScopes.isEmpty())
+            // A session we had to abort is not a reached one: the reconnect backoff grows.
+            assertEquals(listOf(2_000L, 4_000L), log.gaps().take(2))
+            holder.sync.stop()
+        }
+
+    @Test
+    fun `a spool that goes quiet after the handshake is dropped after three unanswered requests`() =
+        runTest {
+            val spool = FakeSpool()
+            spool.mute()
+            val log = SessionLog(spool, testScheduler)
+            val holder = member(spool, alice, bob, dialer = log)
+            // Something to ask about, so each heal round issues a request the spool then swallows.
+            spool.plantGarbage(scopeHex(alice, bob), "never served".toByteArray())
+
+            holder.sync.start(backgroundScope)
+            // The 15 s reconcile wake keeps the heal loop asking; each LIST times out at 30 s, so the
+            // third strike lands at 90 s and the redial two seconds later.
+            pump(rounds = 120)
+
+            assertEquals("the first socket was dropped and a second dialled", 2, log.dialedAt.size)
+            assertTrue(spool.swallowed.count { it == SpoolRecordType.LIST } >= 3)
+            assertEquals("and not dialled again a second later", 2_000L, log.gaps().single())
+            // Still the diagnosis while the second session runs: the spool answered the hello again, but
+            // "connected" would be the lie the relay row told for the whole first session.
+            assertEquals(
+                SpoolConnection.UNRESPONSIVE,
+                holder.sync
+                    .status()
+                    .single()
+                    .lastError,
+            )
+
+            // Until it demonstrably talks again — one answered request, and the verdict is retired.
+            spool.unmute()
+            pump(rounds = 70)
+            assertNull(
+                holder.sync
+                    .status()
+                    .single()
+                    .lastError,
+            )
+            assertEquals("its garbage was pulled once the spool answered", 1, holder.metrics.snapshot().spoolInvalid)
+            holder.sync.stop()
+        }
+
+    @Test
     fun `a garbage blob at the spool is quarantined once, never delivered, never re-pulled`() =
         runTest {
             val spool = FakeSpool()
@@ -769,7 +936,10 @@ class ScopeSyncTest {
             val receiver = member(spool, bob, alice, carryGate = { _, _ -> false })
             sender.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
 
+            // Pushed before the receiver connects, so m1 reaches it by SUB → LIST → pull: the pull path is
+            // the one C-9.3-1 quarantines on. (Arriving as a live event instead, it is released and dropped.)
             sender.sync.start(backgroundScope)
+            pump()
             receiver.sync.start(backgroundScope)
             pump()
 
@@ -778,6 +948,214 @@ class ScopeSyncTest {
             assertTrue(receiver.metrics.snapshot().spoolInvalid >= 1)
             sender.sync.stop()
             receiver.sync.stop()
+        }
+
+    @Test
+    fun `a garbage live event is dropped, not quarantined — the listing that names it is what quarantines it`() =
+        runTest {
+            val spool = FakeSpool()
+            val victim = member(spool, bob, alice)
+            val scope = unhex(scopeHex(bob, alice))
+            val garbage = "not a sealed frame".toByteArray()
+            val id = hex(sha256(garbage))
+
+            victim.sync.start(backgroundScope)
+            pump()
+            // Under the size gate, so it reaches `accept` and fails there. C-9.3-1 is written for a
+            // *pulled* blob: an id nobody asked for cannot start the re-pull loop the invalid set stops,
+            // and letting it in would hand the spool a way to evict the entries that matter.
+            spool.gossip(SpoolCodec.encode(SpoolEvent(t = SpoolRecordType.EVENT, scope = scope, blobId = unhex(id), data = garbage)))
+            pump()
+            assertEquals("an unsolicited failure is not ours to quarantine", 0, victim.metrics.snapshot().spoolInvalid)
+            assertEquals(
+                0,
+                victim.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single()
+                    .invalidCount,
+            )
+
+            // The spool really holds it: the listing names it, the pull path quarantines it — once.
+            spool.plantGarbage(scopeHex(bob, alice), garbage)
+            spool.announce(scopeHex(bob, alice))
+            pump()
+            pump()
+
+            assertEquals(1, victim.metrics.snapshot().spoolInvalid)
+            assertEquals("asked for exactly once", 1, spool.pulled.count { it == id })
+            assertTrue(victim.delivered.isEmpty())
+            victim.sync.stop()
+        }
+
+    @Test
+    fun `a hostile event for a genuine id does not block the pull of that id`() =
+        runTest {
+            val spool = FakeSpool()
+            val victim = member(spool, bob, alice)
+            val frame = dmFrame("m1", from = alice, to = bob, sentAt = now)
+            val blob =
+                ScopeCrypto.seal(
+                    ScopeCrypto.dmSealKeys(pairwiseRoot, alice, bob),
+                    ScopeCrypto.dmScopeId(pairwiseRoot, alice, bob),
+                    frame.sig,
+                    frame.signed,
+                )
+            val id = hex(ScopeCrypto.blobId(blob))
+            val scope = unhex(scopeHex(bob, alice))
+
+            victim.sync.start(backgroundScope)
+            pump()
+            // The event claims m1's id with bytes that do not open. If the claim were kept — or the id
+            // quarantined — the genuine blob behind that id could never be pulled on this connection.
+            spool.gossip(
+                SpoolCodec.encode(SpoolEvent(t = SpoolRecordType.EVENT, scope = scope, blobId = unhex(id), data = ByteArray(64) { 9 })),
+            )
+            pump()
+            spool.plantGarbage(scopeHex(bob, alice), blob) // "garbage" to the fake; a real sealed frame to bob
+            spool.announce(scopeHex(bob, alice))
+            pump()
+
+            assertEquals(listOf("m1"), victim.delivered.map { it.id })
+            assertEquals(1, victim.metrics.snapshot().spoolBridged)
+            assertEquals(0, victim.metrics.snapshot().spoolInvalid)
+            victim.sync.stop()
+        }
+
+    @Test
+    fun `an event flood cannot evict a delivered id from the per-connection guard`() =
+        runTest {
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            val receiver = member(spool, bob, alice)
+            val scope = unhex(scopeHex(bob, alice))
+            sender.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            sender.sync.start(backgroundScope)
+            pump()
+            receiver.sync.start(backgroundScope)
+            pump()
+            assertEquals(1, receiver.metrics.snapshot().spoolBridged)
+
+            // More garbage than the guard holds. Every one of these claims a slot and fails; if a claim
+            // could evict, m1 would be pushed out and — once custody sweeps it — pulled and bridged again.
+            repeat(600) { n ->
+                val junk = ByteArray(32) { (it + n).toByte() }
+                spool.gossip(SpoolCodec.encode(SpoolEvent(t = SpoolRecordType.EVENT, scope = scope, blobId = sha256(junk), data = junk)))
+            }
+            pump()
+            receiver.custody.sweep("m1")
+            pump(rounds = 120)
+
+            assertEquals("m1 stayed guarded — bridged once, not once more after the sweep", 1, receiver.metrics.snapshot().spoolBridged)
+            assertEquals(0, receiver.metrics.snapshot().spoolInvalid)
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `a quarantined id the spool drops leaves the invalid set with it`() =
+        runTest {
+            val spool = FakeSpool()
+            val victim = member(spool, bob, alice)
+            val g1 = spool.plantGarbage(scopeHex(bob, alice), "garbage one".toByteArray())
+            spool.plantGarbage(scopeHex(bob, alice), "garbage two".toByteArray())
+
+            victim.sync.start(backgroundScope)
+            pump()
+            assertEquals(
+                2,
+                victim.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single()
+                    .invalidCount,
+            )
+
+            // The quarantine exists to stop a re-pull; an id the listing no longer names cannot be
+            // re-pulled, so holding it any longer only denies a clean re-push after the garbage expired.
+            spool.expire(scopeHex(bob, alice), g1)
+            pump(rounds = 70)
+
+            assertEquals(
+                1,
+                victim.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single()
+                    .invalidCount,
+            )
+            assertEquals("the entry that left was the one the spool dropped", 1, spool.pulled.count { it == g1 })
+            victim.sync.stop()
+        }
+
+    @Test
+    fun `a spool listing more ids than a conforming one can hold is refused, not pulled from`() =
+        runTest {
+            // Well past §12.2's default `maxFrames` (400) and the set bound (512) the client tracks with,
+            // but comfortably inside the 128 KiB record cap that was the only bound on it.
+            val spool = FakeSpool(listingPadding = 600)
+            val victim = member(spool, bob, alice)
+            spool.plantGarbage(scopeHex(bob, alice), "forces a listing".toByteArray())
+
+            victim.sync.start(backgroundScope)
+            pump(rounds = 70)
+
+            assertTrue("nothing from that listing is pulled", spool.pulled.isEmpty())
+            assertEquals(
+                ScopeSync.OVERLONG_LISTING,
+                victim.sync
+                    .status()
+                    .single()
+                    .lastError,
+            )
+            assertTrue(victim.metrics.snapshot().spoolErrors >= 1)
+            assertEquals("and nothing quarantined on its say-so", 0, victim.metrics.snapshot().spoolInvalid)
+            victim.sync.stop()
+        }
+
+    @Test
+    fun `a spool listing more tombstones than the count bound is refused too`() =
+        runTest {
+            val spool = FakeSpool(tombstonePadding = 1100)
+            val victim = member(spool, bob, alice)
+            spool.plantGarbage(scopeHex(bob, alice), "forces a listing".toByteArray())
+
+            victim.sync.start(backgroundScope)
+            pump(rounds = 70)
+
+            assertTrue(spool.pulled.isEmpty())
+            assertEquals(
+                ScopeSync.OVERLONG_LISTING,
+                victim.sync
+                    .status()
+                    .single()
+                    .lastError,
+            )
+            victim.sync.stop()
+        }
+
+    @Test
+    fun `a listing inside the bound is worked whole — the threshold is a refusal, not a truncation`() =
+        runTest {
+            val spool = FakeSpool(listingPadding = 100)
+            val victim = member(spool, bob, alice)
+            val id = spool.plantGarbage(scopeHex(bob, alice), "garbage".toByteArray())
+
+            victim.sync.start(backgroundScope)
+            pump()
+
+            assertEquals("the round ran: the garbage it named was pulled and quarantined", 1, spool.pulled.count { it == id })
+            assertEquals(1, victim.metrics.snapshot().spoolInvalid)
+            assertNull(
+                victim.sync
+                    .status()
+                    .single()
+                    .lastError,
+            )
+            victim.sync.stop()
         }
 
     @Test
@@ -1010,6 +1388,51 @@ class ScopeSyncTest {
             assertEquals(1, receiver.metrics.snapshot().spoolInvalid)
             // The whole point of the invalid set: an accounted failure, not an infinite re-pull.
             assertEquals("no further aget after the quarantine", afterFirst, spool.chunkGets.size)
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `a quarantined attachment is tried again once the scope TTL has passed`() =
+        runTest {
+            val spool = FakeSpool()
+            val (aHash, bytes) = image()
+            val sender = member(spool, alice, bob, blobs = FakeBlobs(aHash to bytes))
+            var receiverClock = now
+            // Custody kept long, so the frame still names the attachment once the receiver's clock moves.
+            val receiver = member(spool, bob, alice, custody = FakeCustody(ttlMs = Long.MAX_VALUE / 2), clock = { receiverClock })
+            val scope = scopeHex(alice, bob)
+            val aid = aidHex(alice, bob, aHash)
+            sender.custody.store(
+                dmFrame("m1", from = alice, to = bob, sentAt = now, attachmentHash = aHash),
+                ForwardStore.ORIGIN_SELF,
+                now,
+            )
+            sender.sync.start(backgroundScope)
+            pump(rounds = 12)
+            spool.corruptChunk(scope, aid, index = 0)
+            receiver.sync.start(backgroundScope)
+            pump(rounds = 16)
+            assertEquals(1, receiver.metrics.snapshot().spoolInvalid)
+            assertFalse(receiver.blobs.stored.containsKey(aHash))
+
+            // The spool's copy is mended (a member re-uploads the chunk it now lacks) — which within the
+            // horizon changes nothing, because a bad chunk is permanent for a copy's life (S-6.5-7) and a
+            // retry against a hostile spool buys nothing at all.
+            spool.dropChunk(scope, aid, index = 0)
+            pump(rounds = 70)
+            assertEquals(3, spool.chunkCount(scope, aid))
+            val gets = spool.chunkGets.size
+            pump(rounds = 70)
+            assertEquals("still quarantined inside the horizon", gets, spool.chunkGets.size)
+
+            // Past the scope TTL the poisoned copy would be gone from an honest spool anyway (S-6.5-4), so
+            // the quarantine is spent: one more look, and the image lands.
+            receiverClock = now + ScopeRegistry.DEFAULT_TTL_MS + 1
+            pump(rounds = 70)
+
+            assertTrue("fetched after the horizon", receiver.blobs.stored.containsKey(aHash))
+            assertEquals(listOf(aHash), receiver.obtained)
             sender.sync.stop()
             receiver.sync.stop()
         }

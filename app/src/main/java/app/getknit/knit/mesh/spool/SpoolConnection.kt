@@ -5,6 +5,7 @@ import app.getknit.knit.mesh.crypto.scope.SpoolPow
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -116,6 +117,9 @@ class SpoolConnection(
      */
     private class Pending(
         val scopeHex: String?,
+        // The aid this AHAVE named, so its `ahas` is checked against the question and not only the `q`.
+        // Separate from `chunksFor` on purpose: naming an aid here must not make the entry a chunk collector.
+        val aidHex: String? = null,
         // The ids this PULL named, in hex. Drained by `claimBlob`, so its initial size is the hard cap
         // on [blobs] — and an entry that named none (LIST, PUSH, AHAVE, APUT) collects nothing at all,
         // which is what the old `collectsBlobs` flag said less directly.
@@ -157,6 +161,11 @@ class SpoolConnection(
     private val nextQ = AtomicLong(1)
     private val pending = ConcurrentHashMap<Long, Pending>()
 
+    // Consecutive requests that timed out unanswered. Any terminal reply resets it; at
+    // [MAX_SILENT_REQUESTS] the connection is dropped as [UNRESPONSIVE] rather than left to burn
+    // 30 s per request, per scope, per round on a spool that completed the handshake and then went quiet.
+    private val silent = AtomicInteger(0)
+
     // Scope hex -> the bounds *we* declared for it at SUB. Kept rather than a bare id set because those
     // bounds are the one `maxBlob` on this connection the spool did not choose (see [inboundCap]).
     private val subscriptions = ConcurrentHashMap<String, ScopeBounds>()
@@ -186,6 +195,32 @@ class SpoolConnection(
 
     @Volatile
     private var closed = false
+
+    /**
+     * Why *we* dropped this connection, or null while it is open or the spool ended it: [UNRESPONSIVE],
+     * or a [SpoolErrCode] the caller aborted on. The worker reads it after the session to (a) report it
+     * — an OkHttp socket echoes our own close back as `close 1000`, which would otherwise be the only
+     * story — and (b) back off, since a session that we had to abort is not one worth dialling again in
+     * a second.
+     */
+    @Volatile
+    var fault: String? = null
+        private set
+
+    /** Whether the socket is still ours to write to — false once either side has closed it. */
+    val isOpen: Boolean get() = !closed
+
+    /**
+     * Whether this spool has answered a `q`-correlated request on this connection — a `digest` does not
+     * count, since a spool that answers the SUB and then nothing else is exactly the one [UNRESPONSIVE]
+     * is for. What lets the worker retire a carried fault once the spool is demonstrably talking again.
+     */
+    @Volatile
+    var answered: Boolean = false
+        private set
+
+    /** How many scopes are SUBbed on this connection — what a `maxScopes` cap is measured against. */
+    val subscribedCount: Int get() = subscriptions.size
 
     /** Suspends until the hello exchange settles: true when the connection is usable. */
     suspend fun awaitReady(): Boolean = handshake.await()
@@ -261,7 +296,7 @@ class SpoolConnection(
         aid: ByteArray,
     ): SpoolReply.Presence? {
         val reply =
-            request(Pending(hex(scope))) { q ->
+            request(Pending(hex(scope), aidHex = hex(aid))) { q ->
                 SpoolCodec.encode(SpoolAhave(t = SpoolRecordType.AHAVE, q = q, scope = scope, aid = aid))
             }
         return reply as? SpoolReply.Presence
@@ -349,6 +384,13 @@ class SpoolConnection(
         onClosed()
     }
 
+    /** Drops the connection for a reason of our own (see [fault]); a no-op once it is already gone. */
+    fun abort(code: String) {
+        if (closed) return
+        fault = code
+        close(SpoolCloseCode.NORMAL, code)
+    }
+
     private suspend fun onHello(bytes: ByteArray) {
         if (negotiated) return // a post-negotiation hello is in-band noise; ignore rather than tear down
         val hello = SpoolCodec.decode<SpoolHello>(bytes)
@@ -388,9 +430,12 @@ class SpoolConnection(
     }
 
     private fun onAhas(ahas: SpoolAhas) {
-        pending.remove(ahas.q)?.reply?.complete(
-            SpoolReply.Presence(total = ahas.total, bits = ahas.bits, dead = ahas.dead),
-        )
+        // Correlated on `q`, but checked against the question: an answer about some other scope or
+        // attachment is not an answer to ours, however well its `q` matches. Dropped rather than failed,
+        // so it counts as the silence it is — a spool that answers every question wrongly should reach
+        // the strike counter, not keep the connection alive for free.
+        val entry = answered(ahas.q, hex(ahas.scope), hex(ahas.aid)) ?: return
+        entry.reply.complete(SpoolReply.Presence(total = ahas.total, bits = ahas.bits, dead = ahas.dead))
     }
 
     private fun onAchunk(chunk: SpoolAchunk) {
@@ -416,9 +461,32 @@ class SpoolConnection(
     private fun onListing(listing: SpoolList) {
         // Ids are `bstr32` by definition (§12.1), and every one of these is hexed and held by the caller —
         // so drop the malformed ones here rather than letting an arbitrary-length byte string through.
-        pending.remove(listing.q)?.reply?.complete(
+        // The reply's scope is checked like `ahas`'s: a listing for another scope, applied to ours, would
+        // re-anchor us on a set we never asked about.
+        val entry = answered(listing.q, hex(listing.scope)) ?: return
+        entry.reply.complete(
             SpoolReply.Listing(listing.blobIds.orEmpty().filter(::isId), listing.tombstones.orEmpty().filter(::isId)),
         )
+    }
+
+    /**
+     * Takes the outstanding entry for [q] off the table if the reply is about what it asked — [scopeHex],
+     * and for an AHAVE [aidHex] too. Null (and the entry left waiting) when it is not: a mismatched reply
+     * is no reply. Match-then-remove is atomic on the entry, so a second, matching record still completes it.
+     */
+    private fun answered(
+        q: Long,
+        scopeHex: String,
+        aidHex: String? = null,
+    ): Pending? {
+        val entry = pending[q] ?: return null
+        if (entry.scopeHex != scopeHex || (aidHex != null && entry.aidHex != aidHex)) return null
+        return if (pending.remove(q, entry)) entry.also { replied() } else null
+    }
+
+    private fun replied() {
+        silent.set(0)
+        answered = true
     }
 
     private fun isId(bytes: ByteArray): Boolean = bytes.size == SPOOL_ID_BYTES
@@ -427,12 +495,14 @@ class SpoolConnection(
         // `missing` answers *this* request, so ids it never named are not ours to act on: `ScopeSync`
         // folds them out of the spool's digest anchor, which an invented id would then corrupt.
         val entry = pending.remove(ok.q) ?: return
+        replied()
         entry.reply.complete(SpoolReply.Ok(ok.missing.orEmpty().filter { entry.wasRequested(hex(it)) }))
     }
 
     private suspend fun onErr(err: SpoolErr) {
         val entry = err.q?.let { pending.remove(it) }
         if (entry != null) {
+            replied()
             entry.reply.complete(SpoolReply.Failed(err.code.take(SPOOL_ERR_CODE_MAX), err.retryMs))
             return
         }
@@ -455,9 +525,14 @@ class SpoolConnection(
         }
         // A spool that accepts a record and never answers must not wedge the heal loop: time out, drop the
         // correlation, and let the next round re-derive the diff (a re-PUSH is byte-identical, a re-PULL is
-        // idempotent, so nothing is lost by giving up on a response).
+        // idempotent, so nothing is lost by giving up on a response). Three such silences in a row and
+        // the connection itself is given up on — otherwise a spool that goes quiet after the handshake
+        // costs 30 s per request, serially, across every scope on it.
         return withTimeoutOrNull(REQUEST_TIMEOUT_MS) { entry.reply.await() }
-            ?: SpoolReply.Closed.also { pending.remove(q) }
+            ?: SpoolReply.Closed.also {
+                pending.remove(q)
+                if (silent.incrementAndGet() >= MAX_SILENT_REQUESTS) abort(UNRESPONSIVE)
+            }
     }
 
     /**
@@ -474,7 +549,13 @@ class SpoolConnection(
         return link.send(bytes)
     }
 
-    private companion object {
+    companion object {
+        /** [fault] when the spool stopped answering requests it had accepted (see [MAX_SILENT_REQUESTS]). */
+        const val UNRESPONSIVE = "unresponsive"
+
+        /** Consecutive unanswered requests before the connection is dropped as [UNRESPONSIVE]. */
+        const val MAX_SILENT_REQUESTS = 3
+
         /** How long a `q`-correlated request waits for its terminal `ok`/`err`/`list` before giving up. */
         const val REQUEST_TIMEOUT_MS = 30_000L
 
@@ -483,21 +564,22 @@ class SpoolConnection(
          * hints rather than facts is the whole lesson of this file: at 256 ids of [ScopeRegistry
          * .DEFAULT_MAX_BLOB] each, a pull's worst-case buffer is 16 MiB, and the spec only suggests 64.
          */
-        const val MAX_PULL_CEILING = 256
+        private const val MAX_PULL_CEILING = 256
 
         /** Two maximal attachments' worth — well past any honest `maxAttachBytes` (§12.2 suggests 16 MiB). */
-        const val MAX_ATTACH_BYTES_CEILING = 4 * ScopeAttachments.MAX_ATTACHMENT_BYTES
+        private const val MAX_ATTACH_BYTES_CEILING = 4 * ScopeAttachments.MAX_ATTACHMENT_BYTES
 
         /**
          * HELLO limits are the spool's own claim about itself, taken verbatim until now — a hostile one
          * could advertise `Int.MAX_VALUE` and set its own budget for every check written against them.
          * Clamping on ingest is the one place that says *these numbers are a hint*.
          *
-         * Only the upper end matters. A spool that declares an unusably *small* cap needs no defense: our
-         * own hello reply then fails [send], the handshake completes false, and the worker backs off.
+         * Only the upper end matters here. A spool that declares an unusably *small* `maxRecord` is
+         * caught one step later: below our 12-byte hello reply the handshake completes false, and below
+         * a SUB the worker aborts the session as `too_large` (`ScopeSync.subscribe`) — either way it backs off.
          */
 
-        fun SpoolLimits.clamped() =
+        private fun SpoolLimits.clamped() =
             SpoolLimits(
                 maxBlob = maxBlob.coerceAtMost(MAX_INBOUND_RECORD),
                 maxRecord = maxRecord.coerceAtMost(MAX_INBOUND_RECORD),
@@ -513,10 +595,12 @@ class SpoolConnection(
             )
 
         /** The room's pinned bounds (§7.4), held to the same ceilings as the spool-wide caps they sit under. */
-        fun SpoolCommonsInfo.clamped(limits: SpoolLimits?) =
+        private fun SpoolCommonsInfo.clamped(limits: SpoolLimits?) =
             SpoolCommonsInfo(
                 name = name?.takeIf { it.isNotBlank() },
-                maxFrames = maxFrames.coerceAtLeast(1),
+                // A pinned `maxFrames` sizes the accounted set and the listing threshold `ScopeSync` derives
+                // from it, so an absurd one is a claim like every other HELLO number.
+                maxFrames = maxFrames.coerceIn(1, MAX_PINNED_FRAMES),
                 ttlMs = ttlMs.coerceAtLeast(1L),
                 maxBlob = maxBlob.coerceIn(1, limits?.maxBlob ?: MAX_INBOUND_RECORD),
                 attach = attach,

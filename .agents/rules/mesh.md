@@ -54,9 +54,13 @@ free). Two invariants that are easy to break:
   group, so the DM half matches it on sender alone and the group half rests wholly on the founding roster.
   Do not "tighten" that back to a recipient match — it is the only carrier of the prekey, and without it a
   peer off the radios can never bootstrap or repair a DM session, nor receive group sender-key seeds.
-- **A blob that fails validation is quarantined per (spool, scope), never merely dropped** (spec §9.3).
-  Spools are untrusted storage: a garbage blob folds into *their* digest and never ours, so without the
-  invalid set the two digests diverge forever and the client re-pulls it on every heal round.
+- **A *pulled* blob that fails validation is quarantined per (spool, scope), never merely dropped** (spec
+  C-9.3-1). Spools are untrusted storage: a garbage blob folds into *their* digest and never ours, so
+  without the invalid set the two digests diverge forever and the client re-pulls it on every heal round.
+  The rule is deliberately narrower than "any blob": an unsolicited `event` that fails is released and
+  dropped, because an id we never pulled cannot drive that loop, and letting the spool write into a
+  bounded set by sending garbage is how it evicts the entries that matter — if the spool really holds
+  the id, the next listing names it and the pull path quarantines it (ADR 025, ADR 2026-09.amzn).
 - **A blob that bridged but that custody did not keep is *accounted*, not re-pulled** (spec §9.6, ADR 062)
   — the same divergence through the one door §9.3 does not cover, since these blobs are valid and die at
   the custody store's dead-on-arrival guard. The scope TTL (48 h) outlives mesh custody (24 h) on purpose,

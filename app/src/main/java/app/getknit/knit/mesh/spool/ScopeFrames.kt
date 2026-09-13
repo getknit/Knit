@@ -284,5 +284,22 @@ object ScopeFrames {
     ): Boolean = env.sentAt + ttlMs <= now
 }
 
-/** Lowercase hex — the spec's display form for scope ids, blob ids, and digests (§2). */
-fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+/**
+ * Lowercase hex — the spec's display form for scope ids, blob ids, and digests (§2). A nibble table
+ * rather than `String.format`: this runs on every id on every inbound record, and a formatter call per
+ * byte was most of a listing's cost. (`java.util.HexFormat` is API 34; minSdk is 29.)
+ */
+fun hex(bytes: ByteArray): String {
+    val out = CharArray(bytes.size * 2)
+    bytes.forEachIndexed { i, b ->
+        val v = b.toInt() and BYTE_MASK
+        out[i * 2] = HEX_DIGITS[v ushr NIBBLE_BITS]
+        out[i * 2 + 1] = HEX_DIGITS[v and NIBBLE_MASK]
+    }
+    return String(out)
+}
+
+private const val HEX_DIGITS = "0123456789abcdef"
+private const val BYTE_MASK = 0xFF
+private const val NIBBLE_MASK = 0x0F
+private const val NIBBLE_BITS = 4

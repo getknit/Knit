@@ -399,4 +399,12 @@ class ScopeFramesTest {
         val good = ScopeCrypto.seal(scope.keys, scope.id, own.sig, own.signed)
         assertNotNull(ScopeFrames.open(scope, alice, ScopeCrypto.blobId(good), good))
     }
+
+    @Test
+    fun `hex is the lowercase display form, byte for byte`() {
+        val all = ByteArray(256) { it.toByte() }
+        assertEquals(all.joinToString("") { "%02x".format(it) }, hex(all))
+        assertEquals("", hex(ByteArray(0)))
+        assertEquals("00ff7f80", hex(byteArrayOf(0, -1, 127, -128)))
+    }
 }

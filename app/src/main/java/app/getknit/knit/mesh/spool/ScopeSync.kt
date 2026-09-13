@@ -104,7 +104,9 @@ class ScopeStatus(
  * [lastError] is the most recent `err` code this spool answered with — the difference between
  * "connected but idle" and "connected and refusing us", which is otherwise invisible and is exactly
  * what a field test needs (`quota`, `pow` and `rate` all present as a scope that simply never
- * converges).
+ * converges) — or one of the client's own verdicts on it: [ScopeSync.UNREACHABLE],
+ * [ScopeSync.OVERLONG_LISTING], [SpoolConnection.UNRESPONSIVE], and `too_large` when its `maxRecord`
+ * could not carry our SUB.
  *
  * [maxAttachBytes] is this spool's HELLO-advertised per-scope attachment budget, or **null** when it
  * advertised no attachment support at all (spec §7.3 — the three limits arrive together or not at all,
@@ -303,7 +305,18 @@ class ScopeSync(
         // [accepted] this SURVIVES a reconnect — that is the whole point of it (ADR 062).
         private val accounted = ConcurrentHashMap<String, LinkedHashMap<String, Long>>()
         private val stamps = ConcurrentHashMap<String, PowStamp>()
-        private val invalidAttachments = ConcurrentHashMap<String, LinkedHashSet<String>>()
+
+        // scopeHex → when a SUB for it may be tried again, after the spool refused it (`quota`: the spool
+        // is at its `maxScopes`; `pow`: it wants a stamp we could not or would not mine). Without this the
+        // refused scope is re-SUBbed every tick for as long as the spool stays full — and a `pow` refusal
+        // re-mines 2^26 hashes each time, which is a battery attack that costs the spool one record.
+        // Survives a reconnect: the spool's fullness is not our event either.
+        private val refusedUntil = ConcurrentHashMap<String, Long>()
+
+        // §9.5's quarantine, per scope: attachment hash → when it was quarantined. Timed rather than
+        // pruned to the listing like [invalid], because presence is discovered by asking, never listed:
+        // the entry expires with the scope TTL, which is also when the spool's poisoned copy is gone.
+        private val invalidAttachments = ConcurrentHashMap<String, LinkedHashMap<String, Long>>()
 
         // A commons' bounds as the spool pinned them in its DIGEST (§7.4) — the truth this worker sizes
         // events and dead-on-arrival against, since what the scope table declared was only a guess.
@@ -349,6 +362,12 @@ class ScopeSync(
         // read only by session()/runLoop(), which are the same coroutine.
         private var retryFloorMs = 0L
 
+        // The fault *we* ended the last session on (see [SpoolConnection.fault]), carried through the next
+        // one so [lastError] keeps saying it: a spool that answers the hello and nothing else would
+        // otherwise read as connected for the minutes it takes to strike out again, and unresponsive for
+        // the two seconds in between. Cleared once a session ends on the spool's terms instead.
+        private var carriedFault: String? = null
+
         fun ensureRunning(host: CoroutineScope) {
             if (job?.isActive == true) return
             job = host.launch { runLoop() }
@@ -357,7 +376,7 @@ class ScopeSync(
         fun stop() {
             job?.cancel()
             job = null
-            connection?.close(NORMAL_CLOSE, "stopping")
+            connection?.close(SpoolCloseCode.NORMAL, "stopping")
             connection = null
         }
 
@@ -373,13 +392,14 @@ class ScopeSync(
          * spool's own subscription outlives this (there is no `unsub` record); [mine] keeps its events out.
          */
         fun forgetScopesNotIn(live: Set<String>) {
-            for (map in listOf(spoolDigests, spoolCounts, localDigests, localCounts, peerSeenAt, stamps, pinnedBounds)) {
+            for (map in listOf(spoolDigests, spoolCounts, localDigests, localCounts, peerSeenAt, stamps, pinnedBounds, refusedUntil)) {
                 map.keys.retainAll(live)
             }
-            for (sets in listOf(invalid, accepted, invalidAttachments, reportedTombstones, tombstonesSeen)) {
+            for (sets in listOf(invalid, accepted, reportedTombstones, tombstonesSeen)) {
                 synchronized(sets) { sets.keys.retainAll(live) }
             }
             synchronized(accounted) { accounted.keys.retainAll(live) }
+            synchronized(invalidAttachments) { invalidAttachments.keys.retainAll(live) }
             synchronized(parked) { parked.keys.retainAll(live) }
             // And the connection's own record, or a scope that comes back is never SUBbed again and its heal
             // round waits forever for a digest that was already answered before it left.
@@ -440,10 +460,17 @@ class ScopeSync(
             val pump = host.launch { for (bytes in socket.incoming) conn.onMessage(bytes) }
             // The socket dying before (or instead of) the spool's hello must resolve the handshake rather
             // than park this worker forever; so must a spool that opens the socket and then says nothing.
-            pump.invokeOnCompletion { conn.onClosed() }
+            // The wake is what ends the session *now* rather than at the next tick: the loop below is
+            // otherwise asleep in `wakeup.receive()` for up to a minute after the socket is already gone.
+            pump.invokeOnCompletion {
+                conn.onClosed()
+                wake()
+            }
             val ready = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { conn.awaitReady() } == true
             if (ready) {
-                lastError = null
+                // A fresh handshake clears a stale refusal — unless the refusal is still in force: a fault
+                // of our own carried from the last session, or a scope the spool refused and we parked.
+                if (carriedFault == null && refusedUntil.values.none { it > clock() }) lastError = null
                 subscribe(conn, mine(scopes, conn))
                 while (pump.isActive && currentCoroutineContext().isActive) {
                     withTimeoutOrNull(TICK_INTERVAL_MS) { wakeup.receive() }
@@ -455,8 +482,17 @@ class ScopeSync(
             // A close code is the only explanation we get for auth/version/abuse rejections, and the
             // handshake itself never fails "loudly" — record it before the socket is discarded.
             socket.closeReason?.let { lastError = it }
+            // Unless we ended it ourselves: the spool echoes our close back as a bare `close 1000`, which
+            // would bury the one diagnosis this connection produced. Read after the close reason on purpose.
+            val fault = conn.fault
+            if (fault != null) {
+                lastError = fault
+            } else if (lastError == carriedFault) {
+                lastError = socket.closeReason // the carried fault is over: this session ended on the spool's terms
+            }
+            carriedFault = fault
             retryFloorMs = socket.retryAfterMs ?: 0L
-            socket.close(NORMAL_CLOSE, "done")
+            socket.close(SpoolCloseCode.NORMAL, "done")
             connection = null
             spoolDigests.clear()
             pinnedBounds.clear()
@@ -465,7 +501,9 @@ class ScopeSync(
             // live is simply re-pulled); dropping `accounted` only re-pulls what can never be held, which
             // is the reconnect storm ADR 062 is about.
             accepted.clear()
-            return ready
+            // A session we had to abort is not "reached": the backoff must grow, or an unresponsive spool
+            // is dialled again a second later and the whole strike budget spent on it once a minute.
+            return ready && conn.fault == null
         }
 
         private fun connect(socket: SpoolSocket) =
@@ -474,15 +512,44 @@ class ScopeSync(
                 link = socket,
                 onDigest = { handleDigest(it) },
                 onEvent = { handleEvent(it) },
-                onScopeError = { scopeHex, code, _ -> handleScopeError(scopeHex, code) },
+                onScopeError = { scopeHex, code, retryMs -> handleScopeError(scopeHex, code, retryMs) },
             )
 
+        /**
+         * SUBs [wanted], as much of it as the spool can take. `maxScopes` is the spool's *total* scope
+         * count (a new one past it is refused `quota`), so the cap here is a ceiling rather than the
+         * guarantee — [refusedUntil] is what stops a refused scope being asked for again every tick. A
+         * commons goes first: it is what a private relay exists for, and the one scope nobody else can
+         * carry for us.
+         */
         private suspend fun subscribe(
             conn: SpoolConnection,
             wanted: List<Scope>,
         ) {
-            if (wanted.isEmpty()) return
-            conn.sub(wanted.map { ScopeSub(scope = it.id, bounds = declaredBounds(it, conn), pow = stampFor(it, conn.powBits)) })
+            val now = clock()
+            val room = (conn.limits?.maxScopes ?: Int.MAX_VALUE).coerceAtLeast(1) - conn.subscribedCount
+            val batch =
+                wanted
+                    .filterNot { (refusedUntil[it.idHex] ?: 0L) > now }
+                    .sortedBy { it.commonsId == null }
+                    .take(room.coerceAtLeast(0))
+            if (batch.isEmpty()) return
+            val sent = conn.sub(batch.map { ScopeSub(scope = it.id, bounds = declaredBounds(it, conn), pow = stampFor(it, conn.powBits)) })
+            // A SUB the record layer refused to send is a spool advertising a `maxRecord` too small to
+            // carry it — and then too small to carry any blob either. Without this the relay reads as
+            // connected forever while subscribing to nothing.
+            if (!sent && conn.isOpen) conn.abort(SpoolErrCode.TOO_LARGE)
+            if (sent) retireFault(SpoolErrCode.TOO_LARGE)
+        }
+
+        /**
+         * Drops a carried fault (see [carriedFault]) once the condition behind it is demonstrably over:
+         * a SUB that went through retires `too_large`, an answered request retires `unresponsive`.
+         */
+        private fun retireFault(fault: String) {
+            if (carriedFault != fault) return
+            carriedFault = null
+            if (lastError == fault) lastError = null
         }
 
         /**
@@ -520,6 +587,7 @@ class ScopeSync(
             }
 
         private suspend fun healAll(conn: SpoolConnection) {
+            if (conn.answered) retireFault(SpoolConnection.UNRESPONSIVE)
             val current = mine(scopes, conn)
             // Sub-before-use is per connection, and the scope table changes as sessions are established.
             subscribe(conn, current.filterNot { conn.isSubscribed(it.idHex) })
@@ -551,7 +619,7 @@ class ScopeSync(
                 if (scope.commonsId == null) healAttachments(conn, scope, frames)
                 return
             }
-            val listing = conn.list(scope.id) ?: return
+            val listing = conn.list(scope.id)?.takeIf { plausible(scope, it) } ?: return
             val quarantined = invalid[scope.idHex].orEmpty()
             val spoolIds = listing.blobIds.associateBy { hex(it) }
             val tombstoned = listing.tombstones.mapTo(mutableSetOf()) { hex(it) }
@@ -563,12 +631,16 @@ class ScopeSync(
             // accounted blob finally expired at the spool. Drop those: keeping them would leave our fold
             // carrying an id the spool no longer counts — the same permanent divergence, mirrored.
             pruneAccounted(scope.idHex, spoolIds.keys)
+            // The same for the invalid set: an id the spool no longer lists can never be re-pulled, so
+            // its quarantine has done its work — and keeping it would deny a blob that a member may yet
+            // re-push clean after the garbage copy expired.
+            pruneInvalid(scope.idHex, spoolIds.keys)
             // Skip what we already processed on this connection, and what we have accounted for across
             // every connection. The scope TTL (48 h) deliberately outlives mesh custody (24 h), so a frame
             // we delivered and then swept still sits at the spool for another day: it is absent from
             // `local` forever, and without these two sets the heal round re-pulls it every tick for that
             // whole second day — silently, since `accept` short-circuits before the counters move.
-            val processed = accepted[scope.idHex].orEmpty()
+            val processed = acceptedFor(scope.idHex)
             val wanted =
                 spoolIds
                     .filterKeys { it !in local && it !in quarantined && it !in processed && it !in accountedHere }
@@ -579,6 +651,30 @@ class ScopeSync(
             reanchor(scope, spoolIds, gone, pushed)
             // Text only in this revision: a commons never exchanges attachment records, whatever its HELLO says.
             if (scope.commonsId == null) healAttachments(conn, scope, frames)
+        }
+
+        /**
+         * Whether a listing is one a conforming spool could have sent: bounded by count, not only by the
+         * record cap. A live set fits the applied `maxFrames` and the tombstones §12's `max(2 × maxFrames,
+         * 1024)`, while the 128 KiB record cap alone admits ~4000 ids — enough to churn the per-scope sets
+         * every round and pin this worker in pull round trips. Refused whole rather than truncated: a
+         * partial view would re-anchor us on it and re-list forever. The id threshold is the worker's own
+         * tracking bound, which is what makes "a listing never exceeds what the sets can hold" true by
+         * construction — and why it is not our *declared* `maxFrames`, which a newer member's SUB may
+         * legitimately have raised at the spool (S-6.2-2).
+         */
+        private fun plausible(
+            scope: Scope,
+            listing: SpoolReply.Listing,
+        ): Boolean {
+            val fits =
+                listing.blobIds.size <= accountBound(scope.idHex) &&
+                    listing.tombstones.size <= tombstoneBound(boundsFor(scope).maxFrames)
+            if (!fits) {
+                metrics.onSpoolError()
+                lastError = OVERLONG_LISTING
+            }
+            return fits
         }
 
         /**
@@ -626,14 +722,16 @@ class ScopeSync(
             val deferred = mutableListOf<SpoolBlob>()
             ids.chunked(cap).forEach { batch ->
                 val outcome = conn.pull(scope.id, batch) ?: return gone
-                outcome.blobs.forEach { blob -> if (accept(scope, blob.blobId, blob.data) == Accept.PARKED) deferred.add(blob) }
+                outcome.blobs.forEach { blob ->
+                    if (accept(scope, blob.blobId, blob.data, Source.PULL) == Accept.PARKED) deferred.add(blob)
+                }
                 outcome.missing.forEach { gone.add(hex(it)) }
                 // An id we asked for and got an unusable answer for is quarantined, not merely dropped
                 // (§9.3) — and deliberately not added to `gone`, since the spool still holds it and
                 // `reanchor` must keep folding it into the digest we compare against.
                 outcome.oversize.forEach { quarantine(scope, hex(it)) }
             }
-            deferred.forEach { blob -> accept(scope, blob.blobId, blob.data, retry = true) }
+            deferred.forEach { blob -> accept(scope, blob.blobId, blob.data, Source.PULL, retry = true) }
             return gone
         }
 
@@ -743,7 +841,7 @@ class ScopeSync(
         ) {
             val blobStore = blobs ?: return
             if (conn.limits?.attachments != true) return
-            val quarantined = invalidAttachments[scope.idHex].orEmpty()
+            val quarantined = quarantinedAttachments(scope)
             val candidates =
                 ScopeAttachments
                     .references(frames, scope, selfId())
@@ -937,7 +1035,32 @@ class ScopeSync(
             scope: Scope,
             aHash: String,
         ) {
-            if (remember(invalidAttachments, scope.idHex, aHash)) metrics.onSpoolInvalid()
+            val now = clock()
+            val fresh =
+                synchronized(invalidAttachments) {
+                    val set = invalidAttachments.getOrPut(scope.idHex) { LinkedHashMap() }
+                    // Remove-then-put so a re-quarantine moves to the young end and restarts its clock.
+                    val previous = set.remove(aHash)
+                    while (set.size >= BLOB_SET_MAX) set.remove(set.keys.first())
+                    set[aHash] = now
+                    previous == null || previous + boundsFor(scope).ttlMs <= now
+                }
+            if (fresh) metrics.onSpoolInvalid()
+        }
+
+        /**
+         * The attachments still quarantined for [scope], dropping the ones whose horizon has passed. The
+         * horizon is the scope TTL: a spool stamps an attachment's life at its first chunk on that clock
+         * (S-6.5-4) and a bad chunk is permanent for that copy's life (S-6.5-7), so by `quarantinedAt +
+         * ttlMs` the poisoned copy is gone and a re-upload — if a member ever makes one — is a fresh object.
+         */
+        private fun quarantinedAttachments(scope: Scope): Set<String> {
+            val horizon = clock() - boundsFor(scope).ttlMs
+            return synchronized(invalidAttachments) {
+                val set = invalidAttachments[scope.idHex] ?: return emptySet()
+                set.values.removeAll { it <= horizon }
+                set.keys.toSet()
+            }
         }
 
         private fun handleDigest(digest: SpoolDigest) {
@@ -947,36 +1070,47 @@ class ScopeSync(
             val scope = scopes.firstOrNull { it.idHex == scopeHex } ?: return
             spoolDigests[scopeHex] = ScopeCrypto.digestValue(digest.digest)
             spoolCounts[scopeHex] = digest.count
-            // A commons SUB is answered with the bounds the spool pinned, not the ones we declared (§7.4).
-            if (scope.commonsId != null) pinnedBounds[scopeHex] = digest.bounds
+            // A commons SUB is answered with the bounds the spool pinned, not the ones we declared (§7.4) —
+            // clamped like the HELLO's copy, since what is pinned here sizes what we track for the room.
+            if (scope.commonsId != null) pinnedBounds[scopeHex] = digest.bounds.clamped()
             wake()
         }
 
         /**
          * Live fan-out (§7.2). Unsolicited by design, so the correlation gate that bounds `pull` cannot
          * reach it and size is the only bound left: a frame over the `maxBlob` we declared for this scope
-         * can never be one we would hold. Without the gate an event flood churns the two bounded sets
-         * `accept` writes — evicting genuine entries and re-opening the §9.3 re-pull loop.
+         * can never be one we would hold. An event that then fails validation is released and dropped,
+         * never quarantined ([Source.EVENT]) — §9.3 is written for a *pulled* blob, and an id we never
+         * pulled cannot drive the re-pull loop the invalid set exists to stop. If the spool really holds
+         * it, the next listing names it and the pull path quarantines it properly.
          */
         private suspend fun handleEvent(event: SpoolEvent) {
             val scope = mine(scopes, connection).firstOrNull { it.idHex == hex(event.scope) } ?: return
             if (event.data.size > boundsFor(scope).maxBlob) return
-            if (accept(scope, event.blobId, event.data) == Accept.DELIVERED) wake()
+            if (accept(scope, event.blobId, event.data, Source.EVENT) == Accept.DELIVERED) wake()
         }
 
         private fun handleScopeError(
             scopeHex: String?,
             code: String,
+            retryMs: Long?,
         ) {
             metrics.onSpoolError()
             lastError = code
+            if (scopeHex == null) return
             // A refused stamp is stale (day rollover, or the spool raised its difficulty): drop it so the
             // next SUB/PUSH mines a fresh one instead of replaying the rejected counter forever.
-            if (scopeHex != null && code == SpoolErrCode.POW) stamps.remove(scopeHex)
+            if (code == SpoolErrCode.POW) stamps.remove(scopeHex)
+            // A refused SUB is parked, not retried every tick. The spool's own hint is honoured inside our
+            // own window only — `coerceIn`, never `max`, or one absurd `retryMs` parks a scope for good.
+            if (code == SpoolErrCode.QUOTA || code == SpoolErrCode.POW) {
+                refusedUntil[scopeHex] = clock() + (retryMs ?: MIN_REFUSAL_PARK_MS).coerceIn(MIN_REFUSAL_PARK_MS, MAX_REFUSAL_PARK_MS)
+            }
         }
 
         /**
-         * §4.4 validation, then the mesh carry gate, then §9.4's bridge. Any failure quarantines the id.
+         * §4.4 validation, then the mesh carry gate, then §9.4's bridge. A failure on the pull path
+         * quarantines the id; on the event path it is merely released (see [refuse]).
          *
          * A blob arrives twice whenever a live `event` races the heal round that was already pulling it —
          * routine, since the pull set is computed before the events land. Re-delivering is *harmless*
@@ -984,28 +1118,44 @@ class ScopeSync(
          * Diagnostics presents as "messages received via relays", so an accepted id is remembered for the
          * life of the connection. The memory is per (spool, scope) and dropped on reconnect, so a custody
          * wipe still re-converges by the ordinary route.
+         *
+         * The claim is taken *before* validation on purpose: the two racers run on different coroutines
+         * (the pump and the worker), so claiming after would re-open double delivery. What makes the
+         * early claim safe is that it is held only by a delivery — every other outcome releases it — and
+         * that claiming never evicts: garbage therefore costs the guard nothing, however much of it a
+         * spool sends.
          */
         private suspend fun accept(
             scope: Scope,
             blobId: ByteArray,
             data: ByteArray,
+            source: Source,
             // The end-of-round second look at a parked post: it does not count against the park budget.
             retry: Boolean = false,
         ): Accept {
             val idHex = hex(blobId)
-            if (!remember(accepted, scope.idHex, idHex)) return Accept.SKIPPED
-            val opened = ScopeFrames.open(scope, selfId(), blobId, data)
-            if (opened == null) {
-                quarantine(scope, idHex)
-                return Accept.SKIPPED
-            }
+            if (!claim(scope.idHex, idHex)) return Accept.SKIPPED
+            val outcome = acceptClaimed(scope, idHex, blobId, data, source, retry)
+            if (outcome == Accept.DELIVERED) settle(scope.idHex) else release(scope.idHex, idHex)
+            return outcome
+        }
+
+        @Suppress("LongParameterList") // the accept step's inputs, threaded once past the claim
+        private suspend fun acceptClaimed(
+            scope: Scope,
+            idHex: String,
+            blobId: ByteArray,
+            data: ByteArray,
+            source: Source,
+            retry: Boolean,
+        ): Accept {
+            val opened = ScopeFrames.open(scope, selfId(), blobId, data) ?: return refuse(scope, idHex, source)
             if (scope.commonsId != null && opened.env.type == FrameType.COMMONS) {
-                return acceptCommonsPost(scope, scope.commonsId, idHex, blobId, opened, countPark = !retry)
+                // The park budget is spent by pulls only: an event flood must not be able to burn it.
+                val countPark = !retry && source == Source.PULL
+                return acceptCommonsPost(scope, scope.commonsId, idHex, blobId, opened, source, countPark)
             }
-            if (!canCarry(opened.wire, opened.env)) {
-                quarantine(scope, idHex)
-                return Accept.SKIPPED
-            }
+            if (!canCarry(opened.wire, opened.env)) return refuse(scope, idHex, source)
             metrics.onSpoolPulled()
             deliver(opened.wire, opened.env, SPOOL_SOURCE_PREFIX + url)
             metrics.onSpoolBridged()
@@ -1035,26 +1185,23 @@ class ScopeSync(
          * yet is asked about first and the post parked for the profile that is on its way — every member
          * keeps one live in the room — rather than quarantined for the life of the connection.
          */
+        @Suppress("LongParameterList") // the commons door's inputs; a parameter object would only relocate them
         private suspend fun acceptCommonsPost(
             scope: Scope,
             conversationId: String,
             idHex: String,
             blobId: ByteArray,
             opened: ScopeFrames.Opened,
+            source: Source,
             countPark: Boolean,
         ): Accept {
             val sender = opened.env.senderId
             if (!hasKey(sender)) {
-                forget(accepted, scope.idHex, idHex)
                 if (!countPark || park(scope.idHex, idHex)) return Accept.PARKED
-                quarantine(scope, idHex)
-                return Accept.SKIPPED
+                return refuse(scope, idHex, source)
             }
             val post = WireCodec.decodePayload<CommonsPost>(opened.env.payload)
-            if (post == null || !canCarry(opened.wire, opened.env)) {
-                quarantine(scope, idHex)
-                return Accept.SKIPPED
-            }
+            if (post == null || !canCarry(opened.wire, opened.env)) return refuse(scope, idHex, source)
             unpark(scope.idHex, idHex)
             metrics.onSpoolPulled()
             deliverCommons(opened.env, post.chat, conversationId, SPOOL_SOURCE_PREFIX + url)
@@ -1107,37 +1254,79 @@ class ScopeSync(
             if (isPresenceEvidence(env, now)) peerSeenAt[scope.idHex] = now
         }
 
+        /**
+         * A blob that failed validation or the carry gate. Quarantined only when *we pulled it* (spec
+         * C-9.3-1): the invalid set exists to stop a re-pull loop, and an id we never asked for cannot
+         * start one. Letting an unsolicited record into a bounded set would hand the spool a way to evict
+         * the entries that matter — the same shape ADR 025 closed for `pull`.
+         */
+        private fun refuse(
+            scope: Scope,
+            idHex: String,
+            source: Source,
+        ): Accept {
+            if (source == Source.PULL) quarantine(scope, idHex)
+            return Accept.SKIPPED
+        }
+
         private fun quarantine(
             scope: Scope,
             blobIdHex: String,
         ) {
-            if (remember(invalid, scope.idHex, blobIdHex)) metrics.onSpoolInvalid()
+            // Bounded like the accounted set, and for the same reason: a listing is refused past
+            // `accountBound` (see [heal]), so what we can be asked to quarantine is what this can hold.
+            if (remember(invalid, scope.idHex, blobIdHex, accountBound(scope.idHex))) metrics.onSpoolInvalid()
         }
 
         /**
          * Records [blobIdHex] under [scopeHex] in a bounded, oldest-first-evicting per-scope set. Returns
-         * whether it was new — false means "already known", which is the skip signal for both the invalid
-         * set (§9.3: never re-pull, never re-count) and the accepted set (don't re-deliver a raced blob).
+         * whether it was new — false means "already known", which is the skip signal for the invalid set
+         * (§9.3: never re-pull, never re-count).
          */
         private fun remember(
             sets: ConcurrentHashMap<String, LinkedHashSet<String>>,
             scopeHex: String,
             blobIdHex: String,
+            bound: Int = BLOB_SET_MAX,
         ): Boolean =
             synchronized(sets) {
                 val set = sets.getOrPut(scopeHex) { LinkedHashSet() }
-                while (set.size >= BLOB_SET_MAX) set.remove(set.first())
+                while (set.size >= bound) set.remove(set.first())
                 set.add(blobIdHex)
             }
 
-        /** Undoes [remember] for a blob that was claimed and then parked, so the next round may claim it again. */
-        private fun forget(
-            sets: ConcurrentHashMap<String, LinkedHashSet<String>>,
+        /**
+         * Claims [blobIdHex] in the per-connection guard: false means another path already holds it.
+         * Deliberately evicts nothing — a claim is not yet a delivery, and trimming here would let a
+         * flood of garbage push genuine entries out before any of it was validated. [settle] trims once
+         * the claim has become a delivery; [release] undoes a claim that did not.
+         */
+        private fun claim(
+            scopeHex: String,
+            blobIdHex: String,
+        ): Boolean = synchronized(accepted) { accepted.getOrPut(scopeHex) { LinkedHashSet() }.add(blobIdHex) }
+
+        private fun release(
             scopeHex: String,
             blobIdHex: String,
         ) {
-            synchronized(sets) { sets[scopeHex]?.remove(blobIdHex) }
+            synchronized(accepted) { accepted[scopeHex]?.remove(blobIdHex) }
         }
+
+        /**
+         * Trims the guard to its bound, oldest first. Only ever removes settled deliveries: an in-flight
+         * claim is by construction among the newest entries, and at most two can be in flight (the pump
+         * and the worker are each serial), so a set over the bound has older entries than those to shed.
+         */
+        private fun settle(scopeHex: String) {
+            synchronized(accepted) {
+                val set = accepted[scopeHex] ?: return
+                while (set.size > BLOB_SET_MAX) set.remove(set.first())
+            }
+        }
+
+        /** A snapshot of [scopeHex]'s guard — copied under the lock, since the pump writes it concurrently. */
+        private fun acceptedFor(scopeHex: String): Set<String> = synchronized(accepted) { accepted[scopeHex]?.toSet().orEmpty() }
 
         /**
          * Records [blobIdHex] as accounted for [scopeHex] (§9.6): folded into our local digest as if held,
@@ -1163,6 +1352,17 @@ class ScopeSync(
          */
         private fun accountBound(scopeHex: String): Int = maxOf(BLOB_SET_MAX, (pinnedBounds[scopeHex]?.maxFrames ?: 0) + ACCOUNT_HEADROOM)
 
+        /** A spool-pinned bound held to our own ceilings: a room we could never list whole is not one we can heal. */
+        private fun ScopeBounds.clamped() =
+            ScopeBounds(
+                maxFrames = maxFrames.coerceIn(1, MAX_PINNED_FRAMES),
+                ttlMs = ttlMs.coerceAtLeast(1L),
+                maxBlob = maxBlob.coerceIn(1, MAX_INBOUND_RECORD),
+            )
+
+        /** §12.2's suggested tombstone count bound — the most a conforming spool lists for a scope. */
+        private fun tombstoneBound(maxFrames: Int): Int = maxOf(2 * maxFrames, MIN_TOMBSTONE_BOUND)
+
         /** A snapshot of [scopeHex]'s accounted set — copied under the lock, since `accept` runs off the pump. */
         private fun accountedFor(scopeHex: String): Map<String, Long> = synchronized(accounted) { accounted[scopeHex]?.toMap().orEmpty() }
 
@@ -1172,6 +1372,14 @@ class ScopeSync(
             live: Set<String>,
         ) {
             synchronized(accounted) { accounted[scopeHex]?.keys?.retainAll(live) }
+        }
+
+        /** Drops quarantined ids the spool's listing no longer names: unlisted, they can never be re-pulled. */
+        private fun pruneInvalid(
+            scopeHex: String,
+            live: Set<String>,
+        ) {
+            synchronized(invalid) { invalid[scopeHex]?.retainAll(live) }
         }
 
         /** A cached hashcash stamp for [scope], mined only when the spool demands one (§8). */
@@ -1206,6 +1414,12 @@ class ScopeSync(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ScopeFrames.Sealed>?): Boolean = size > max
     }
 
+    /** How a blob reached [Worker.accept]: asked for by a `pull`, or pushed at us by a live `event`. */
+    private enum class Source {
+        PULL,
+        EVENT,
+    }
+
     /** What [Worker.accept] did with a blob. */
     private enum class Accept {
         /** Opened, authenticated and handed to a door. */
@@ -1236,6 +1450,10 @@ class ScopeSync(
         private const val MAX_BACKOFF_MS = 60_000L
         private const val RECONNECT_JITTER_MS = 750L
         private const val MAX_RATE_WAIT_MS = 5_000L
+
+        /** How long a scope the spool refused (`quota`, `pow`) waits before it is SUBbed again — the floor and the cap. */
+        private const val MIN_REFUSAL_PARK_MS = 5 * 60_000L
+        private const val MAX_REFUSAL_PARK_MS = 60 * 60_000L
         private const val DEFAULT_MAX_PULL = 64
         private const val DEFAULT_MAX_AGET = 32
 
@@ -1264,10 +1482,19 @@ class ScopeSync(
         private const val SEAL_CACHE_MAX = 2_048
         private const val INITIAL_CACHE_CAPACITY = 64
         private const val LOAD_FACTOR = 0.75f
-        private const val NORMAL_CLOSE = 1000
 
         /** [SpoolStatus.lastError] when the socket could not be opened at all (bad URL, DNS, refused). */
         const val UNREACHABLE = "unreachable"
+
+        /**
+         * [SpoolStatus.lastError] when a spool's listing named more ids than a conforming one can hold
+         * for the scope (§12.2), so the round was refused rather than anchored on it. Client-minted, like
+         * [UNREACHABLE]: no spool ever says this about itself.
+         */
+        const val OVERLONG_LISTING = "overlong_list"
+
+        /** The floor of §12.2's tombstone count bound, `max(2 × maxFrames, 1024)`. */
+        private const val MIN_TOMBSTONE_BOUND = 1024
 
         /** Hashcash budget per stamp: ~67 M hashes, comfortably above the spec's 20-bit recommendation. */
         private const val POW_BUDGET = 1L shl 26

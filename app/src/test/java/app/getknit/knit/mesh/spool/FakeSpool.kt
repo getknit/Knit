@@ -50,6 +50,17 @@ class FakeSpool(
     // The commons this spool runs (§7.4): its scope id and what the HELLO advertises about it. Null = no
     // commons, the HELLO omits the field, and a SUB for one is an ordinary unknown scope.
     private val commons: Pair<ByteArray, SpoolCommonsInfo>? = null,
+    // The spool-wide scope cap the HELLO advertises, and — separately — the count past which a SUB for a
+    // scope not yet held is refused `quota` (null = never), the way the daemon's store enforces it.
+    private val maxScopes: Int = 64,
+    private val scopeQuota: Int? = null,
+    // `retryMs` on a quota refusal, when the spool has an opinion about when to come back.
+    private val quotaRetryMs: Long? = null,
+    // Overrides the HELLO's `maxRecord` (default `maxBlob + 512`) — small enough and a SUB will not fit.
+    private val maxRecord: Int? = null,
+    // Hostile listing shape: this many synthetic ids appended to every LIST answer's live set / tombstones.
+    private val listingPadding: Int = 0,
+    private val tombstonePadding: Int = 0,
 ) : SpoolDialer {
     private class Attachment(
         val total: Int,
@@ -82,6 +93,28 @@ class FakeSpool(
     /** Every scope any connection ever SUBbed, by hex — proves a scope was (or was never) asked for here. */
     val subscribedScopes: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    /** How many times each scope (hex) was SUBbed, refusals included — proves a refused scope is not re-asked every tick. */
+    val subAttempts = ConcurrentHashMap<String, Int>()
+
+    /** Every `q`-correlated request received while [muted] — what a silent spool swallowed. */
+    val swallowed = mutableListOf<String>()
+
+    @Volatile
+    private var muted = false
+
+    /**
+     * From now on the spool completes the handshake and answers SUBs, and swallows every correlated
+     * request after that — the spool that "accepts and never answers" (§7.3's stall, made permanent).
+     */
+    fun mute() {
+        muted = true
+    }
+
+    /** The spool finds its voice again: every request from here on is answered as usual. */
+    fun unmute() {
+        muted = false
+    }
+
     override suspend fun dial(url: String): SpoolSocket {
         val socket = FakeSocket()
         synchronized(sockets) { sockets.add(socket) }
@@ -94,8 +127,8 @@ class FakeSpool(
                     limits =
                         SpoolLimits(
                             maxBlob = maxBlob,
-                            maxRecord = maxBlob + 512,
-                            maxScopes = 64,
+                            maxRecord = maxRecord ?: (maxBlob + 512),
+                            maxScopes = maxScopes,
                             maxPull = maxPull,
                             maxFramesCap = maxFrames,
                             maxTtlMs = 7 * 24 * 60 * 60_000L,
@@ -145,6 +178,14 @@ class FakeSpool(
         val state = scopes[scopeHex] ?: return
         state.live.remove(blobIdHex)
         state.tombstones.add(blobIdHex)
+        gossip(SpoolCodec.encode(digestRecord(unhex(scopeHex))))
+    }
+
+    /**
+     * Says the current digest again, unprompted (S-7.2-3 style) — the cue that makes a client look at the
+     * live set without anything having changed at the spool, e.g. after [plantGarbage].
+     */
+    fun announce(scopeHex: String) {
         gossip(SpoolCodec.encode(digestRecord(unhex(scopeHex))))
     }
 
@@ -262,7 +303,16 @@ class FakeSpool(
 
         override fun send(bytes: ByteArray): Boolean {
             if (!open) return false
+            if (swallow(bytes)) return true
             handle(bytes)
+            return true
+        }
+
+        /** A muted spool takes every correlated request and answers none — true when this one was eaten. */
+        private fun swallow(bytes: ByteArray): Boolean {
+            val type = SpoolCodec.peekType(bytes)
+            if (!muted || type == SpoolRecordType.HELLO || type == SpoolRecordType.SUB) return false
+            synchronized(swallowed) { swallowed.add(type.orEmpty()) }
             return true
         }
 
@@ -317,6 +367,18 @@ class FakeSpool(
         private fun onSub(sub: SpoolSub) {
             sub.subs.forEach { entry ->
                 val scopeHex = hex(entry.scope)
+                subAttempts.merge(scopeHex, 1, Int::plus)
+                // The daemon's store rule: a scope it does not yet hold, past the cap, is refused `quota`
+                // with the SUB's `q` and the scope — the un-correlated, scoped `err` of §7.2.
+                val quota = scopeQuota
+                if (quota != null && !scopes.containsKey(scopeHex) && scopes.size >= quota) {
+                    emit(
+                        SpoolCodec.encode(
+                            SpoolErr(t = SpoolRecordType.ERR, code = SpoolErrCode.QUOTA, scope = entry.scope, retryMs = quotaRetryMs),
+                        ),
+                    )
+                    return@forEach
+                }
                 entry.pow?.let { stamps[scopeHex] = it }
                 subscribed.add(scopeHex)
                 subscribedScopes.add(scopeHex)
@@ -333,12 +395,18 @@ class FakeSpool(
                         t = SpoolRecordType.LIST,
                         q = list.q,
                         scope = list.scope,
-                        blobIds = state.live.keys.map(::unhex),
-                        tombstones = state.tombstones.map(::unhex),
+                        blobIds = state.live.keys.map(::unhex) + synthetic(listingPadding, salt = 1),
+                        tombstones = state.tombstones.map(::unhex) + synthetic(tombstonePadding, salt = 2),
                     ),
                 ),
             )
         }
+
+        /** [n] well-formed ids nobody can pull — a hostile listing's padding. */
+        private fun synthetic(
+            n: Int,
+            salt: Int,
+        ): List<ByteArray> = List(n) { i -> sha256(byteArrayOf(salt.toByte(), (i shr 8).toByte(), i.toByte())) }
 
         private fun onPull(pull: SpoolPull) {
             val state = scopes[hex(pull.scope)] ?: ScopeState()

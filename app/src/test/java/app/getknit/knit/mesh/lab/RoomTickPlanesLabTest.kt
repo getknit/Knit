@@ -61,38 +61,6 @@ class RoomTickPlanesLabTest {
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { Conversations.NEARBY }
         }
 
-    /**
-     * Two nodes that know each other, have DM sessions both ways (the DM scope derives from the confirmed
-     * ratchet root), and have each heard the other **through the relay**: presence is stamped only on a frame
-     * the spool pulls, and everything from the link phase is already in both custodies, so the two DM once
-     * more while the boards are briefly out of range — the relay is the only path, as it was in the field.
-     */
-    private suspend fun meetOnTheRelay(
-        alice: LabNode,
-        bob: LabNode,
-        air: FakeMeshtasticAir,
-    ) {
-        lab.link(alice, bob)
-        lab.awaitAcquainted(alice, bob)
-        // A reply, not a both-initiate race: bob answers the session alice opened, so both sides confirm it
-        // at once and the scope derives on the next reconcile.
-        assertTrue(alice.sendDm(bob, "hello"))
-        lab.await(1) { bob.decrypted(bob.dmWith(alice)).size }
-        assertTrue(bob.sendDm(alice, "hi"))
-        lab.assertConverged(listOf(alice, bob), atLeast = 2) { it.dmWith(if (it === alice) bob else alice) }
-        lab.unlink(alice, bob)
-        lab.awaitDmScope(alice, bob)
-        lab.awaitDmScope(bob, alice)
-        air.lossy = { _, _ -> true }
-        assertTrue(alice.sendDm(bob, "are you on the relay?"))
-        assertTrue(bob.sendDm(alice, "i am"))
-        lab.awaitSpoolPresent(alice, bob)
-        lab.awaitSpoolPresent(bob, alice)
-        air.lossy = { _, _ -> false }
-        // Settled before the scenario reads any baseline: the receipts for those two DMs are frames too.
-        lab.assertConverged(listOf(alice, bob), atLeast = 4) { it.dmWith(if (it === alice) bob else alice) }
-    }
-
     @Test
     fun aRoomTickRidesTheReceiptForADmThatCameOverTheSpool() =
         runBlocking {
@@ -103,7 +71,7 @@ class RoomTickPlanesLabTest {
             val limits = LabLimits(rideHoldMs = 10_000)
             val alice = lab.node("alice", limits, air = air, spool = spool).apply { setDisplayName("Alice") }
             val bob = lab.node("bob", limits, air = air, spool = spool).apply { setDisplayName("Bob") }
-            meetOnTheRelay(alice, bob, air)
+            lab.meetOnTheRelay(alice, bob, air)
             val bobFarBefore = bob.loraTx("far:chat")
             val aliceSkippedBefore = alice.metrics.snapshot().loraSkippedInternet
 
@@ -135,7 +103,7 @@ class RoomTickPlanesLabTest {
             val spool = FakeSpool()
             val alice = lab.node("alice", air = air, spool = spool).apply { setDisplayName("Alice") }
             val bob = lab.node("bob", air = air, spool = spool).apply { setDisplayName("Bob") }
-            meetOnTheRelay(alice, bob, air)
+            lab.meetOnTheRelay(alice, bob, air)
             val custodiedBefore = bob.custodiedChatsTo(alice)
             val accountedBefore = bob.metrics.snapshot().spoolAccounted
 

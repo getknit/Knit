@@ -87,6 +87,78 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   divergence — the LoRa beacon re-signing the node's own profile under the same id while a settings write
   was landing (two blobs, one id, a scope that never converges; `MeshManager.ownProfile()` is the fix).
   `awaitDmScope`'s failure message lists both custodies row by row for the next one of those.
+- **The oracle has seven parts now** (2026-09-14): messages, then reactions parity (the same (reactor, emoji)
+  set under every converged message), attachment parity (the bytes held, content-equal, unflagged, on every
+  node), group parity for a group thread (roster, departed, name, photo — never `nameUpdatedAt`, which the
+  renamer stamps from the wall clock and everyone else from the frame), ticks, custody, profile parity (every
+  node's `PeerEntity` for a peer against that peer's own settings and profile version), session parity (a
+  pair holding a DM session on both sides holds *one*: both confirmed, equal root and era, opposite roles),
+  and the per-store invariants (no parked seed or parked-for-key frame that never replayed, no self row, no
+  custody row a sender addressed to themselves). A node whose message set legitimately differs from the
+  parties' — a leaver, a blocker, an author two hops from a room's readers — rides as a `carriers = listOf(…)`
+  entry: it takes part in the custody and per-store checks and nothing else.
+- **`LabNode` mirrors the ViewModels' writes** for the ops the first batch lacked: `react` (`ChatViewModel.react`),
+  `leaveGroup` / `renameGroup` / `setGroupPhoto` (`GroupDetailsViewModel`), `setStatus` / `setOpenToChat` /
+  `setAvatar` (`ProfileViewModel`), `block` / `unblock` / `accept`, `sendImage` (bytes straight into the
+  blob store under their hash — `AttachmentStore.ingest` collapses every picture into one placeholder hash
+  under Robolectric's legacy graphics), `mintCard` / `importCard` (`ContactCards` + `ContactImporter`),
+  `resetSession`, `heal()` (fire-and-forget; await the effect), `wipeCustody`. Readers beside them:
+  `reactions`, `group` / `groupShape`, `attachmentHash` / `attachmentHeld` / `attachmentScreened` /
+  `attachmentPlain`, `peer` / `presentationOf`, `session`, `selfAddressedCustody`, `notices`, `rowsIn`,
+  `custodiedChatsFrom`, `scopeStatus`, `loraLine`. If a ViewModel's write sequence changes, change the mirror.
+- **`LabTransport` stages a received file in the receiver's own directory** (`File(dir, "rx")`) before
+  emitting it: `MeshBlobStore.saveIncoming` deletes what it reads, and two receivers of one blob handed the
+  sender's single temp path raced for it, the loser dropping the blob silently. It also has a per-pipe loss
+  knob (`lossy(to) { drop }`) and a `held(to)` peek so a scenario can wait for a relayed frame before releasing.
+- **A held frame that is filtered out at `release` is lost, like a dropped packet** — and the digest exchange
+  repairs it only on the next link-up or the 60 s re-offer. A scenario that drops held frames re-links before
+  the oracle (`KeyExchangeLabTest`, `SessionLabTest`'s key request), as `RoomTickPlanesLabTest` already did.
+- **`LabLimits` carries the custody bounds** (`custodyTtlMs`, `custodyMaxRows`, `custodyMaxPerSender`, …,
+  `ForwardRepository`'s constructor) and the LoRa Trickle interval (`loraGossipMinMs` / `loraGossipMaxMs`).
+  Give every node in a scenario the same custody numbers — the digest is folded over what they keep.
+- **The second batch of classes** (2026-09-14, 45 scenarios): `GroupMembershipLabTest` (leave-rekey, the
+  self-rejoin of ADR 2026-09.v6fu, the departed sender's parked seed, the `left:` notice as an LWW clock, a
+  member who missed the leave, concurrent renames), `ReactionLabTest` (DM / group / room forms, a retraction
+  crossing its reaction, a reaction ahead of its DM, a group reaction founding the group), `ProfileUpdateLabTest`
+  (rename to a contact and a stranger, a re-served older profile, status + flag surviving a sealed update, an
+  avatar), `AttachmentLabTest` (image DM, carried bytes, room image screening, group photo),
+  `KeyExchangeLabTest` (`keyreq` + `PendingInbound`, `pendingKey` retransmit), `BlockAndRequestLabTest`,
+  `SessionLabTest` (both-initiate in both orders, a forced reset, old-era custody after a reset, the group
+  key request), `RestartLabTest` (sender / carrier / recipient-with-a-park / both sides), `TopologyLabTest`
+  (diamond, five-node line, ring partition, eight in a room), `CustodyQuotaLabTest` (per-sender, per-group,
+  full store), `InternetPlaneLabTest` (the two-island group + departure, ADR 032's receive-only scope, spec
+  §9.3 quarantine, ADR 042's card intro, a relay dropping every socket, ADR 020 over the relay) and
+  `LoraPocketLabTest` (two pockets, ADR 054's gate, y8pu's backfill, the election, a DM through the bridge).
+- **A scenario that fails on HEAD for a reason that is a design decision, not a bug, stays in the suite
+  under `@Ignore("finding: …")`** with the finding in its KDoc, so the acceptance test exists before the
+  decision does. Four sit there as of 2026-09-14: a blocker refusing custody of the blocked sender's frames
+  (`canCarry`, against ADR 010's "never folded into custody"), the attachment deferral judged in the round the
+  send itself triggers (before the ack it needs can exist), a group founded across the relay never delivering
+  its roster to the relay-only member (root adoption needs the row; the roster rides the scope the root
+  derives), and — in the clock tier — a `relay = false` key-request-served profile deduping its own custody
+  re-serve for the seen window.
+- **Neither long-range plane carries a third party's DM-form frames** — alice↔bob's ticks and seeds are in
+  no scope of carol's, and a DM-form frame to a linked peer never rides the board — so custody agrees across
+  a relay or across two pockets only once the parties meet by radio again. A spool scenario with three nodes
+  re-links before the oracle (as the two-island one does); a two-pocket LoRa scenario runs the oracle per
+  pocket and asserts the far pocket's tick explicitly. The board-less reader in the far pocket can never
+  tick the author at all: that is the residual ADR 2026-09.y5f3 names, not a scenario bug.
+- **The router's relay jitter is real time the lab cannot pin** (`MeshRouter.jitter` is not reachable
+  through `MeshManager`): a first-seen frame's relay fires 0–150 ms later, later still under load, with
+  targets read *then*. A scenario that unlinks a node, sends, and re-links must wait for the carrier's relay
+  decisions (`framesRelayed` moved by the number sent) before the link comes back, or the router hands the
+  newcomer frames custody has already evicted (`CustodyQuotaLabTest` flaked exactly so, twice).
+- **First contact by board alone is minutes, not seconds**: a passive gateway fans nothing, a superseded
+  profile fan-out is dropped when the election flips, and the bridge budget (`BRIDGE_SHARE` of the 15-min
+  window) serves about one profile per window per gateway. LoRa scenarios meet everyone by radio first
+  (`meetThenSplit`), then cut the cross-pocket links; the slow path is the clock tier's to pin. And a Trickle
+  interval of a second spends the window on offers alone, so the tick that follows is deferred
+  (`loraTickDeferred`) — four to eight seconds is the lab's setting.
+- **A DM that arrived over the board is ticked through `DmAckCoalescer`'s 45 s hold** (ADR 054), which the
+  lab does not shorten; a LoRa DM scenario passes `timeoutMs = 60_000` to the oracle.
+- **Every sealed frame carries the epoch key**, so an absent recipient opens whatever survives a custody
+  quota without the conversation's first frames and asks for no reset — the quota is loss, never a wedge
+  (`CustodyQuotaLabTest`; the "evicted init needs a reset" premise was wrong).
 - **Order is a knob.** `alice.transport.hold(bob.transport)` parks what Alice sends Bob;
   `release(bob.transport) { reorder }` delivers it in the order you choose — how "custody serves the two in
   either order" becomes a deterministic case. Partition (group frames first, say) rather than blindly

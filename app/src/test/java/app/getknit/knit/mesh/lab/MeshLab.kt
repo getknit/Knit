@@ -5,6 +5,10 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room3.Room
 import androidx.room3.withWriteTransaction
 import androidx.test.core.app.ApplicationProvider
+import app.getknit.knit.TextLimits
+import app.getknit.knit.contacts.ContactCards
+import app.getknit.knit.contacts.ContactImporter
+import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.KnitDatabase
@@ -24,6 +28,7 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.data.peer.MetPeerRepository
+import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.GroupRootRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
@@ -35,12 +40,17 @@ import app.getknit.knit.mesh.CompositeMeshTransport
 import app.getknit.knit.mesh.ContributionLedger
 import app.getknit.knit.mesh.DropReason
 import app.getknit.knit.mesh.IngressBudget
+import app.getknit.knit.mesh.IntroState
 import app.getknit.knit.mesh.MeshManager
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.MeshTransport
+import app.getknit.knit.mesh.RatchetPeerState
 import app.getknit.knit.mesh.SPOOL_COVER_MS
 import app.getknit.knit.mesh.StoreDigest
+import app.getknit.knit.mesh.crypto.AttachmentCrypto
+import app.getknit.knit.mesh.crypto.ContactCard
 import app.getknit.knit.mesh.crypto.MessageCrypto
+import app.getknit.knit.mesh.crypto.b64d
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.SessionTransactor
@@ -51,13 +61,16 @@ import app.getknit.knit.mesh.lora.LoraGossipPolicy
 import app.getknit.knit.mesh.lora.LoraMeshTransport
 import app.getknit.knit.mesh.lora.LoraPacePolicy
 import app.getknit.knit.mesh.protocol.FrameType
+import app.getknit.knit.mesh.sha256Hex
 import app.getknit.knit.mesh.spool.FakeSpool
 import app.getknit.knit.mesh.spool.ScopeStatus
 import app.getknit.knit.mesh.spool.spoolPresentPeers
 import app.getknit.knit.moderation.ImageModerator
 import app.getknit.knit.moderation.ImageScreeningService
+import app.getknit.knit.moderation.ImageVerdict
 import app.getknit.knit.moderation.ScopedTextModerator
 import app.getknit.knit.moderation.TextVerdict
+import app.getknit.knit.normalizeSingleLine
 import app.getknit.knit.notifications.Notifier
 import io.mockk.coEvery
 import io.mockk.every
@@ -195,13 +208,23 @@ class MeshLab {
      * 2. **Ticks.** Every message a node authored has been acked by every other node in [nodes] — the sealed
      *    receipt (ADR 018) is a second cross-node protocol under every message, and "the sender never saw a
      *    tick" was cf94a06's user-visible half.
-     * 3. **Custody.** The store-and-forward stores of [nodes] and [carriers] hold the same live id set
+     * 3. **Reactions, attachments, the group row.** Under every converged message the same (reactor, emoji)
+     *    set; behind every message with an attachment the same bytes, held and unflagged, on every node;
+     *    for a group thread the same roster, departed set, name and photo everywhere.
+     * 4. **Custody.** The store-and-forward stores of [nodes] and [carriers] hold the same live id set
      *    (`liveFingerprint` parity, the same oracle the device soaks use). Two stores that quietly disagree
      *    while delivery looks fine are the "NAN churns forever" class (the self-frame wipe divergence).
-     * 4. No node is sitting on a parked group seed that never replayed.
+     * 5. **Profiles.** Every node presents every other exactly as that node presents itself (name, status,
+     *    flag, avatar, profile version) — the cleartext `profile` and the sealed `CTL_PROFILE` writers land
+     *    on one row and must agree.
+     * 6. **Sessions.** Every pair that holds a DM session on both sides holds *one* session: both confirmed,
+     *    the same root, the same era, opposite roles — two devices confirmed on different roots is the
+     *    "neither can read the other" class (ADR 023/024/027).
+     * 7. No node is sitting on a parked group seed or a parked frame that never replayed, no node pinned its
+     *    own key, and no custody holds a frame its sender addressed to themselves (the self-pin loop).
      *
      * [carriers] are nodes that relayed and custodied but are not party to the thread — they take part in the
-     * custody check only.
+     * custody and per-store checks only.
      */
     suspend fun assertConverged(
         nodes: List<LabNode>,
@@ -230,24 +253,147 @@ class MeshLab {
             assertTrue("${n.name} has messages stranded on pendingKey: ${pending.map { it.id }}", pending.isEmpty())
         }
 
+        // The converged id set, read once: every node holds the same ids, so the first node's listing names them.
+        val ids =
+            nodes
+                .first()
+                .decrypted(conversation(nodes.first()))
+                .map { it.first }
+                .sorted()
+        assertReactionsAgree(nodes, ids, timeoutMs)
+        assertAttachmentsAgree(nodes, ids, timeoutMs, conversation)
+        assertGroupAgrees(nodes, conversation(nodes.first()), timeoutMs)
+
         val ticked = await(1, timeoutMs) { if (nodes.all { n -> n.missingAcks(conversation(n), nodes).isEmpty() }) 1 else 0 }
         val owed = nodes.map { n -> "  ${n.name}: ${n.missingAcks(conversation(n), nodes)}" }.joinToString("\n")
-        assertTrue("delivery ticks did not converge across $names within ${timeoutMs}ms (message → who never acked):\n$owed", ticked)
+        assertTrue(
+            "delivery ticks did not converge across $names within ${timeoutMs}ms (message → who never acked):\n$owed\n" +
+                nodes.joinToString("\n") { it.metricsLine() },
+            ticked,
+        )
 
         val stores = nodes + carriers
         val custodied = await(1, timeoutMs) { if (stores.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
-        val ids = stores.map { n -> "  ${n.name}: ${n.custodyIds().sorted()}" }.joinToString("\n")
-        assertTrue("custody did not converge across ${stores.map { it.name }} within ${timeoutMs}ms:\n$ids", custodied)
+        val rows = stores.map { n -> "  ${n.name}: ${n.custodyIds().sorted()}" }.joinToString("\n")
+        assertTrue("custody did not converge across ${stores.map { it.name }} within ${timeoutMs}ms:\n$rows", custodied)
+
+        assertProfilesAgree(nodes, timeoutMs)
+        assertSessionsAgree(nodes, timeoutMs)
 
         stores.forEach { n ->
             val snap = n.metrics.snapshot()
             assertEquals("${n.name} parked a group seed that never replayed", snap.groupSeedsHeld, snap.groupSeedsReplayed)
+            assertEquals("${n.name} parked a frame for a missing key that never replayed", snap.framesHeld, snap.framesReplayed)
             // A node never pins its own key: its own profile loops back through every peer's custody, and a
             // self row turns every seal-to-a-pinned-peer path on ourselves (the hourly self-addressed frames
-            // found in the lab fleet's custody, 2026-09-13).
+            // found in the lab fleet's custody, 2026-09-13). The custody rows are the same bug seen from a carrier.
             assertTrue("${n.name} pinned a peer row for itself", n.peers.find(n.nodeId) == null)
+            assertTrue(
+                "${n.name} custodies frames a sender addressed to themselves: ${n.selfAddressedCustody()}",
+                n.selfAddressedCustody().isEmpty(),
+            )
         }
     }
+
+    private suspend fun assertReactionsAgree(
+        nodes: List<LabNode>,
+        ids: List<String>,
+        timeoutMs: Long,
+    ) {
+        val reacted = await(1, timeoutMs) { if (ids.all { id -> nodes.map { it.reactions(id) }.distinct().size == 1 }) 1 else 0 }
+        assertTrue(
+            "reactions did not converge across ${nodes.map { it.name }} within ${timeoutMs}ms (message → per-node sets):\n" +
+                ids.map { id -> "  $id: ${nodes.map { "${it.name}=${it.reactions(id)}" }}" }.joinToString("\n"),
+            reacted,
+        )
+    }
+
+    private suspend fun assertAttachmentsAgree(
+        nodes: List<LabNode>,
+        ids: List<String>,
+        timeoutMs: Long,
+        conversation: (LabNode) -> String,
+    ) {
+        val held = await(1, timeoutMs) { if (nodes.all { n -> ids.all { n.attachmentHeld(conversation(n), it) } }) 1 else 0 }
+        assertTrue(
+            "attachment bytes did not land on every node within ${timeoutMs}ms:\n" +
+                nodes.map { n -> "  ${n.name}: missing ${ids.filterNot { n.attachmentHeld(conversation(n), it) }}" }.joinToString("\n"),
+            held,
+        )
+        nodes.forEach { n ->
+            ids.forEach { id -> assertTrue("${n.name} flagged the attachment on $id", !n.attachmentFlagged(conversation(n), id)) }
+        }
+        ids.forEach { id ->
+            val plains = nodes.map { it.attachmentPlain(conversation(it), id)?.contentHashCode() }
+            assertEquals("the attachment on $id reads differently across ${nodes.map { it.name }}: $plains", 1, plains.distinct().size)
+        }
+    }
+
+    /** For a group thread only: every node's roster, departed set, name and photo agree (see [LabNode.groupShape]). */
+    private suspend fun assertGroupAgrees(
+        nodes: List<LabNode>,
+        thread: String,
+        timeoutMs: Long,
+    ) {
+        if (!thread.startsWith(Conversations.GROUP_ID_PREFIX)) return
+        val agreed = await(1, timeoutMs) { if (nodes.map { it.groupShape(thread) }.distinct().size == 1) 1 else 0 }
+        assertTrue(
+            "the group's roster, name or photo did not converge across ${nodes.map { it.name }} within ${timeoutMs}ms:\n" +
+                nodes.map { "  ${it.name}: ${it.groupShape(thread)}" }.joinToString("\n"),
+            agreed,
+        )
+    }
+
+    private suspend fun assertProfilesAgree(
+        nodes: List<LabNode>,
+        timeoutMs: Long,
+    ) {
+        val pairs = nodes.flatMap { a -> nodes.filter { it !== a }.map { b -> a to b } }
+        val presented = await(1, timeoutMs) { if (pairs.all { (a, b) -> a.presentationOf(b) == b.ownPresentation() }) 1 else 0 }
+        assertTrue(
+            "profiles did not converge across ${nodes.map { it.name }} within ${timeoutMs}ms:\n" +
+                pairs
+                    .map { (a, b) -> "  ${a.name} holds ${b.name} as ${a.presentationOf(b)}; ${b.name} is ${b.ownPresentation()}" }
+                    .joinToString("\n"),
+            presented,
+        )
+    }
+
+    private suspend fun assertSessionsAgree(
+        nodes: List<LabNode>,
+        timeoutMs: Long,
+    ) {
+        val unordered = nodes.indices.flatMap { i -> (i + 1 until nodes.size).map { j -> nodes[i] to nodes[j] } }
+        val oneSession = await(1, timeoutMs) { if (unordered.all { (a, b) -> sessionsAgree(a.session(b), b.session(a)) }) 1 else 0 }
+        assertTrue(
+            "DM sessions disagree across ${nodes.map { it.name }} within ${timeoutMs}ms:\n" +
+                unordered
+                    .map { (a, b) -> "  ${a.name}↔${b.name}: ${a.session(b).describe()} / ${b.session(a).describe()}" }
+                    .joinToString("\n"),
+            oneSession,
+        )
+    }
+
+    /**
+     * Two sides of one DM session agree when both are confirmed on the same root and era with opposite roles.
+     * A pair with no session on either side (a room-only acquaintance) or on one side only (an init still in
+     * flight, or a peer that only ever received) has nothing to disagree about.
+     */
+    private fun sessionsAgree(
+        a: RatchetPeerState?,
+        b: RatchetPeerState?,
+    ): Boolean {
+        if (a?.hasSession != true || b?.hasSession != true) return true
+        return a.confirmed && b.confirmed && a.rootHash == b.rootHash && a.establishedAt == b.establishedAt &&
+            a.weAreInitiator != b.weAreInitiator
+    }
+
+    private fun RatchetPeerState?.describe(): String =
+        when {
+            this == null -> "no row"
+            !hasSession -> "no session"
+            else -> "root=$rootHash era=$establishedAt confirmed=$confirmed initiator=$weAreInitiator epoch=$sendEpoch"
+        }
 
     private suspend fun listing(
         nodes: List<LabNode>,
@@ -261,16 +407,30 @@ class MeshLab {
     suspend fun awaitDmScope(
         node: LabNode,
         peer: LabNode,
+    ) = awaitScope(node, peer.nodeId, peer)
+
+    /** Waits until [node]'s relay lists the scope of [groupId] as converged; [others] are listed on failure. */
+    suspend fun awaitGroupScope(
+        node: LabNode,
+        groupId: String,
+        vararg others: LabNode,
+    ) = awaitScope(node, groupId, *others)
+
+    private suspend fun awaitScope(
+        node: LabNode,
+        label: String,
+        vararg peers: LabNode,
     ) {
-        val ok = await(1, timeoutMs = SPOOL_AWAIT_MS) { if (node.dmScopeStatus(peer)?.converged == true) 1 else 0 }
+        val ok = await(1, timeoutMs = SPOOL_AWAIT_MS) { if (node.scopeStatus(label)?.converged == true) 1 else 0 }
         if (ok) return
+        val peer = peers.firstOrNull() ?: node
         // A scope that will not converge is nearly always one frame id held as two byte-variants (the
         // profile case ADR 2026-09.y5f3 fixed); the per-row listing shows which, the id sets whether it is
         // that or a frame one side simply never got.
         val mine = node.custodyFrames()
         val theirs = peer.custodyFrames()
         throw AssertionError(
-            "${node.name}'s relay never converged a DM scope with ${peer.name}: ${node.manager.spoolStatus().map { spool ->
+            "${node.name}'s relay never converged the scope $label: ${node.manager.spoolStatus().map { spool ->
                 "${spool.url} connected=${spool.connected} err=${spool.lastError} scopes=${spool.scopes.map {
                     "${it.label.take(
                         8,
@@ -278,6 +438,42 @@ class MeshLab {
                 }}"
             }}\n  ${node.name}-only rows: ${mine - theirs.toSet()}\n  ${peer.name}-only rows: ${theirs - mine.toSet()}",
         )
+    }
+
+    /**
+     * Two nodes that know each other, hold DM sessions both ways (the DM scope derives from the confirmed
+     * ratchet root) and have each heard the other **through the relay**: a link, a DM each way, the link
+     * gone, both scopes converged, then — with [air] made lossy so the relay is the only path — one more DM
+     * each way until presence is stamped (it is stamped only on a frame the spool *pulls*, and everything
+     * from the link phase is already in both custodies). Returns with every receipt landed, so a scenario
+     * reads its baselines from a settled pair. Without an [air] the presence half is skipped: no board, no
+     * cover to prove.
+     */
+    internal suspend fun meetOnTheRelay(
+        alice: LabNode,
+        bob: LabNode,
+        air: FakeMeshtasticAir? = null,
+    ) {
+        link(alice, bob)
+        awaitAcquainted(alice, bob)
+        // A reply, not a both-initiate race: bob answers the session alice opened, so both sides confirm it
+        // at once and the scope derives on the next reconcile.
+        assertTrue(alice.sendDm(bob, "hello"))
+        await(1) { bob.decrypted(bob.dmWith(alice)).size }
+        assertTrue(bob.sendDm(alice, "hi"))
+        assertConverged(listOf(alice, bob), atLeast = 2) { it.dmWith(if (it === alice) bob else alice) }
+        unlink(alice, bob)
+        awaitDmScope(alice, bob)
+        awaitDmScope(bob, alice)
+        if (air == null) return
+        air.lossy = { _, _ -> true }
+        assertTrue(alice.sendDm(bob, "are you on the relay?"))
+        assertTrue(bob.sendDm(alice, "i am"))
+        awaitSpoolPresent(alice, bob)
+        awaitSpoolPresent(bob, alice)
+        air.lossy = { _, _ -> false }
+        // Settled before the scenario reads any baseline: the receipts for those two DMs are frames too.
+        assertConverged(listOf(alice, bob), atLeast = 4) { it.dmWith(if (it === alice) bob else alice) }
     }
 
     /** Waits until [node]'s spool has heard from [peer] recently enough for the mesh to route on it. */
@@ -299,6 +495,23 @@ class MeshLab {
         val ok = await(1) { if (author.receiptPlanes(messageId).containsKey(acker.nodeId)) 1 else 0 }
         assertTrue("${author.name} never got ${acker.name}'s tick for $messageId", ok)
         return author.receiptPlanes(messageId).getValue(acker.nodeId)
+    }
+
+    /**
+     * Waits until the custody stores of [nodes] agree — what a link's digest exchange settles a moment after
+     * the profiles cross. A scenario that takes a link down right after [awaitAcquainted] can otherwise
+     * strand the later profile stamps on one side, and no plane fans an old stamp again.
+     */
+    suspend fun awaitCustodyParity(vararg nodes: LabNode) {
+        val ok = await(1) { if (nodes.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
+        assertTrue(
+            "custody never settled among ${nodes.map {
+                it.name
+            }}:\n${nodes.map { "  ${it.name}: ${it.custodyIds().sorted()}" }.joinToString(
+                "\n",
+            )}",
+            ok,
+        )
     }
 
     /** Waits until every pair in [nodes] has pinned the other's key — the profile exchange a link-up starts. */
@@ -362,6 +575,23 @@ data class LabLimits(
      * ([app.getknit.knit.mesh.AckSync.RIDE_HOLD_MS], ADR 2026-09.y5f3).
      */
     val rideHoldMs: Long = MeshLab.RIDE_HOLD_MS,
+    /**
+     * The custody store's bounds ([ForwardRepository]'s constructor). Give every node in a scenario the
+     * same numbers: the content digest is folded over what these keep, and the bound must be identical
+     * everywhere or the stores diverge by construction (`rules/mesh.md`).
+     */
+    val custodyTtlMs: Long = ForwardRepository.DEFAULT_TTL_MS,
+    val custodyBroadcastTtlMs: Long = ForwardRepository.DEFAULT_BROADCAST_TTL_MS,
+    val custodyMaxRows: Int = ForwardRepository.DEFAULT_MAX_ROWS,
+    val custodyMaxPerSender: Int = ForwardRepository.DEFAULT_MAX_PER_SENDER,
+    val custodyMaxPerGroup: Int = ForwardRepository.DEFAULT_MAX_PER_GROUP,
+    val custodyMaxBroadcast: Int = ForwardRepository.DEFAULT_MAX_BROADCAST,
+    /**
+     * The LoRa bridge's Trickle interval ([LoraGossipPolicy]; 5–15 min in the field). A scenario that waits
+     * for an OFFER or the backfill it drives shortens it; the field numbers would never fire inside an await.
+     */
+    val loraGossipMinMs: Long = LoraGossipPolicy.MIN_INTERVAL_MS,
+    val loraGossipMaxMs: Long = LoraGossipPolicy.MAX_INTERVAL_MS,
 )
 
 /**
@@ -422,6 +652,11 @@ class LabNode internal constructor(
         private set
     lateinit var metrics: MeshMetrics
         private set
+    lateinit var blobs: BlobRepository
+        private set
+    lateinit var reactionStore: ReactionRepository
+        private set
+    private lateinit var messageCrypto: MessageCrypto
 
     /** What this node has done for other people's messages — the Your mesh screen's lifetime numbers. */
     lateinit var ledger: ContributionLedger
@@ -436,7 +671,7 @@ class LabNode internal constructor(
     @Suppress("LongMethod") // the DI module's wiring, mirrored in one place on purpose
     internal suspend fun boot() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { this.scope = it }
-        transport = LabTransport(nodeId)
+        transport = LabTransport(nodeId, File(dir, "rx"))
         metrics = MeshMetrics()
         // The Internet plane is opted into through the same two settings the relay editor writes; the
         // settings file persists, so a restart() dials the same spool again.
@@ -447,7 +682,7 @@ class LabNode internal constructor(
         // The real DataStore-backed settings are the journal, so a restart() proves the totals persist.
         ledger = ContributionLedger(journal = settings, selfId = { nodeId })
         val keys = keyStore.keys()
-        val messageCrypto = MessageCrypto(keys.hybridPrivate, keys.sigPrivate)
+        messageCrypto = MessageCrypto(keys.hybridPrivate, keys.sigPrivate)
         messages =
             MessageRepository(
                 db.messageDao(),
@@ -455,17 +690,31 @@ class LabNode internal constructor(
                 roomMaxPerStranger = limits.roomMaxPerStranger,
             )
         peers = PeerRepository(db.peerDao(), settings, identity)
-        val reactions = ReactionRepository(db.reactionDao(), db)
+        val reactions = ReactionRepository(db.reactionDao(), db).also { reactionStore = it }
         receipts = MessageReceiptRepository(db.messageReceiptDao(), messages, db)
-        val blobs =
+        blobs =
             BlobRepository(db.blobDao(), db.messageDao(), db.peerDao(), settings, db.blobVerdictDao(), db.groupDao(), db.forwardDao(), db)
         val groupRatchetStore = GroupRatchetRepository(db.groupRatchetDao())
         val groupRoots = GroupRootRepository(db.groupRootDao())
         groups = GroupRepository(db.groupDao(), messages, db, groupRatchetStore, groupRoots)
-        forwardStore = ForwardRepository(db.forwardDao(), StoreDigest(), db)
-        // The leaves with a hardware or UI side. Text allowed, images never classified, notifications swallowed.
+        forwardStore =
+            ForwardRepository(
+                db.forwardDao(),
+                StoreDigest(),
+                db,
+                ttlMs = limits.custodyTtlMs,
+                broadcastTtlMs = limits.custodyBroadcastTtlMs,
+                maxRows = limits.custodyMaxRows,
+                maxPerSender = limits.custodyMaxPerSender,
+                maxPerGroup = limits.custodyMaxPerGroup,
+                maxBroadcast = limits.custodyMaxBroadcast,
+            )
+        // The leaves with a hardware or UI side. Text allowed, every picture allowed, notifications swallowed.
+        // (A relaxed ImageModerator mock hands back a mocked verdict whose `flagged` reads false by accident;
+        // the explicit answer is what the tflite model would say about a picture it does not mind.)
         val allowAll = mockk<ScopedTextModerator> { coEvery { classify(any(), any()) } returns TextVerdict.ALLOWED }
-        val imageScreening = ImageScreeningService(mockk<ImageModerator>(relaxed = true), db.blobVerdictDao(), allowAll)
+        val allowPictures = mockk<ImageModerator> { coEvery { classify(any()) } returns ImageVerdict.ALLOWED }
+        val imageScreening = ImageScreeningService(allowPictures, db.blobVerdictDao(), allowAll)
         val blobStore = MeshBlobStore(blobs, messages, imageScreening, File(dir, "blobtx"))
         val notifier = mockk<Notifier>(relaxed = true)
         // THE ratchet lock + the transaction that encloses it, shared by both session services (di/MeshModule).
@@ -496,7 +745,12 @@ class LabNode internal constructor(
                     log = { loraLog += it },
                     // No inter-packet gap and no Trickle jitter: the scenario's clock is the wall clock.
                     pace = LoraPacePolicy(minGapMs = 0),
-                    gossip = LoraGossipPolicy(random = { 0 }),
+                    gossip =
+                        LoraGossipPolicy(
+                            minIntervalMs = limits.loraGossipMinMs,
+                            maxIntervalMs = limits.loraGossipMaxMs,
+                            random = { 0 },
+                        ),
                 )
             }
         val meshTransport: MeshTransport = lora?.let { CompositeMeshTransport(listOf(transport, it), scope) } ?: transport
@@ -637,6 +891,126 @@ class LabNode internal constructor(
     }
 
     /**
+     * Reacts to [messageId] in [conversationId] with [emoji] — or retracts, when that is the emoji already
+     * held — as tapping the chip does (`ChatViewModel.react`): the thread decides the form, sealed for a DM
+     * or a group, cleartext for the room.
+     */
+    suspend fun react(
+        conversationId: String,
+        messageId: String,
+        emoji: String,
+    ) {
+        val isRoom = Conversations.isPublicRoom(conversationId)
+        val group = if (isRoom) null else groups.find(conversationId)?.toGroupInfo()
+        val recipientId = if (isRoom || group != null) null else conversationId
+        spaced { manager.sendReaction(messageId, emoji, recipientId, group) }
+    }
+
+    /** Leaves [groupId] as the group screen does: the signed leave floods first, then the local tombstone. */
+    suspend fun leaveGroup(groupId: String) {
+        spaced { manager.sendGroupLeave(groupId) }
+        groups.leave(groupId)
+    }
+
+    /** Renames [groupId] as the group screen does; last writer wins on the frame's clock. */
+    suspend fun renameGroup(
+        groupId: String,
+        newName: String,
+    ) {
+        val trimmed = normalizeSingleLine(newName).take(TextLimits.GROUP_NAME)
+        val group = checkNotNull(groups.find(groupId)) { "$name holds no group $groupId" }
+        val updated = group.copy(name = trimmed, nameUpdatedAt = System.currentTimeMillis())
+        groups.upsert(updated)
+        spaced { manager.sendGroupUpdate(updated.toGroupInfo()) }
+    }
+
+    suspend fun setStatus(value: String) = settings.setStatus(value)
+
+    suspend fun setOpenToChat(value: Boolean) = settings.setOpenToChat(value)
+
+    /** Blocks [peer] as every Block button does (the device tag rides along so a re-keyed peer stays blocked). */
+    suspend fun block(peer: LabNode) = settings.block(peer.nodeId, peers.find(peer.nodeId)?.deviceTag)
+
+    suspend fun unblock(peer: LabNode) = settings.unblock(peer.nodeId, peers.find(peer.nodeId)?.deviceTag)
+
+    /** Accepts a message request — one settings write, the whole of what the Requests inbox does. */
+    suspend fun accept(conversationId: String) = settings.accept(conversationId)
+
+    /**
+     * Sends [bytes] as an image — to [to], into [groupId], or into the room when both are null — the frame
+     * the composer sends after the picker. The bytes go straight into the blob store under their own hash,
+     * skipping `AttachmentStore.ingest`: under Robolectric's legacy graphics `Bitmap.compress` writes a
+     * placeholder, so two different pictures would collapse into one hash. From there the path is the app's:
+     * a DM or group seals the bytes to a fresh key and the frame carries the ciphertext hash (ADR 035).
+     */
+    suspend fun sendImage(
+        bytes: ByteArray,
+        text: String = "",
+        to: LabNode? = null,
+        groupId: String? = null,
+    ): Boolean {
+        val hash = sha256Hex(bytes)
+        blobs.insert(hash, IMAGE_MIME, bytes)
+        val attachment = AttachmentStore.Ingested(hash = hash, mime = IMAGE_MIME, sizeBytes = bytes.size)
+        val group = groupId?.let { checkNotNull(groups.find(it)) { "$name holds no group $it" }.toGroupInfo() }
+        return spaced {
+            manager.sendChat(
+                text = text,
+                attachment = attachment,
+                mentions = emptyList(),
+                recipientId = to?.nodeId,
+                group = group,
+                replyTo = null,
+            )
+        }
+    }
+
+    /** Sets our avatar to [bytes], as the Profile screen's crop confirm does once the store holds the JPEG. */
+    suspend fun setAvatar(bytes: ByteArray) {
+        val hash = sha256Hex(bytes)
+        val old = settings.ownAvatarHash.first()
+        blobs.insert(hash, IMAGE_MIME, bytes)
+        settings.setOwnAvatarHash(hash)
+        settings.setAvatarUpdatedAt(System.currentTimeMillis())
+        if (old != null && old != hash) blobs.deleteIfUnreferenced(old)
+    }
+
+    /** Sets [groupId]'s photo to [bytes], as the group screen's crop confirm does; the bytes cross as a blob. */
+    suspend fun setGroupPhoto(
+        groupId: String,
+        bytes: ByteArray,
+    ) {
+        val hash = sha256Hex(bytes)
+        blobs.insert(hash, IMAGE_MIME, bytes)
+        val group = checkNotNull(groups.find(groupId)) { "$name holds no group $groupId" }
+        val updated = group.copy(photoHash = hash, photoUpdatedAt = System.currentTimeMillis())
+        groups.upsert(updated)
+        spaced { manager.sendGroupUpdate(updated.toGroupInfo()) }
+    }
+
+    /** Our contact card in its compact link form, as the Verify screen shares it. */
+    suspend fun mintCard(): String = ContactCards(identity, settings, signRaw = messageCrypto::signRaw).mint().compact
+
+    /** Imports a card as the Add-by-link screen does; the intro driver and a key request start from here. */
+    suspend fun importCard(card: String) {
+        val importer = ContactImporter(peers, settings, identity, manager, internetPlane = spool != null)
+        val ready =
+            checkNotNull(importer.preview(ContactCard.parse(card)) as? ContactImporter.Preview.Ready) { "$name could not import the card" }
+        importer.import(ready)
+    }
+
+    /** Forces a DM session reset toward [peer] (Diagnostics' button): null once it went out, else the refusal. */
+    suspend fun resetSession(peer: LabNode): String? = manager.forceRatchetReset(peer.nodeId)
+
+    /** Runs the 15-minute heartbeat basket now. Fire-and-forget on the session scope: await the effect. */
+    fun heal() = manager.heal()
+
+    /** Drops every custody row, as a wiped database would; the digest is rebuilt over nothing. */
+    suspend fun wipeCustody() {
+        forwardStore.sweepExpired(Long.MAX_VALUE)
+    }
+
+    /**
      * Runs one send, then lets the wall clock tick over before returning, so no two of this node's frames
      * share a `sentAt`. A warm JIT sends in under a millisecond, and two posts stamped alike have no
      * "newer": the DAO's tiebreak is the random frame id, so which one a room sweep keeps — or which of two
@@ -686,6 +1060,14 @@ class LabNode internal constructor(
             }.filterValues { it.isNotEmpty() }
     }
 
+    /** Every row in [conversationId] as `body@sentAt via plane` — the listing a diagnosis wants. */
+    suspend fun rowsIn(conversationId: String): List<String> =
+        messages
+            .observeNewestMessages(conversationId, MeshLab.WINDOW)
+            .first()
+            .sortedBy { it.sentAt }
+            .map { "${it.body}@${it.sentAt} via ${DeliveryPlane.fromCode(it.receivedVia)} kind=${it.kind}" }
+
     /** The ordinary Nearby-room posts this node holds, keyed by author node id → bodies. */
     suspend fun roomPosts(): Map<String, Set<String>> =
         messages
@@ -728,8 +1110,24 @@ class LabNode internal constructor(
         metrics.snapshot().let {
             "  $name: originated=${it.framesOriginated} delivered=${it.framesDelivered} relayed=${it.framesRelayed} " +
                 "deduped=${it.framesDeduped} suppressed=${it.framesSuppressed} drops=${it.dropsByReason} " +
-                "seedsSent=${it.groupSeedsSent} seedsAdopted=${it.groupSeedsAdopted} seedsHeld=${it.groupSeedsHeld} seedsReplayed=${it.groupSeedsReplayed} keyReq=${it.groupKeyRequestsSent}"
-        }
+                "held=${it.framesHeld}/${it.framesReplayed} seedsSent=${it.groupSeedsSent} seedsAdopted=${it.groupSeedsAdopted} " +
+                "seedsHeld=${it.groupSeedsHeld} seedsReplayed=${it.groupSeedsReplayed} keyReq=${it.groupKeyRequestsSent}"
+        } + loraLine()
+
+    /** The LoRa plane's counters and the radio's own recent log lines — empty for a node without a board. */
+    fun loraLine(): String {
+        if (lora == null) return ""
+        val s = metrics.snapshot()
+        val lines =
+            loraLog
+                .filter { l -> LORA_LOG_KEYS.any { it in l } && "bridge held" !in l && "offer" !in l }
+                .takeLast(LORA_LOG_LINES)
+                .joinToString("\n         ")
+        return "\n    lora: sent=${s.loraSent} received=${s.loraReceived} suppressed=${s.loraSuppressed} passive=${s.loraPassive} " +
+            "offers=${s.loraOfferSent}/${s.loraOfferReceived} bridged=${s.loraBridged} nak=${s.loraNak} dropped=${s.loraDroppedQueue} " +
+            "stale=${s.loraStaleAtSendByReason} tickDeferred=${s.loraTickDeferred} reassembled=${s.loraReassembled} " +
+            "frag=${s.loraFragSent}\n    rx/tx: $lines"
+    }
 
     /** The DM thread id between this node and [peer], as this node names it. */
     fun dmWith(peer: LabNode): String = Conversations.idFor(nodeId, peer.nodeId, nodeId)
@@ -765,7 +1163,10 @@ class LabNode internal constructor(
         peer.nodeId in spoolPresentPeers(manager.spoolStatus(), System.currentTimeMillis(), SPOOL_COVER_MS)
 
     /** The DM scope this node shares with [peer] on its spool, as the relay editor would list it. */
-    fun dmScopeStatus(peer: LabNode): ScopeStatus? = manager.spoolStatus().flatMap { it.scopes }.firstOrNull { it.label == peer.nodeId }
+    fun dmScopeStatus(peer: LabNode): ScopeStatus? = scopeStatus(peer.nodeId)
+
+    /** The scope labelled [label] (a peer id for a DM scope, a group id for a group scope) on this node's spool. */
+    fun scopeStatus(label: String): ScopeStatus? = manager.spoolStatus().flatMap { it.scopes }.firstOrNull { it.label == label }
 
     /** How many DM-form chat frames this node custodies that it authored toward [peer] — a room tick must add none. */
     suspend fun custodiedChatsTo(peer: LabNode): Int =
@@ -773,6 +1174,159 @@ class LabNode internal constructor(
             it.envelope.type == FrameType.CHAT && it.envelope.senderId == nodeId && it.envelope.recipientId == peer.nodeId
         }
 
+    /** How many DM-form chat frames this node custodies from [sender] to [recipient] — what a carrier holds for an absent peer. */
+    suspend fun custodiedChatsFrom(
+        sender: LabNode,
+        recipient: LabNode,
+    ): Int =
+        forwardStore.liveFrames(System.currentTimeMillis()).count {
+            it.envelope.type == FrameType.CHAT && it.envelope.senderId == sender.nodeId && it.envelope.recipientId == recipient.nodeId
+        }
+
     /** How many `lora tx <label>…` lines this boot logged — what the board actually put on the air. */
     fun loraTx(label: String): Int = loraLog.count { it.startsWith("lora tx $label") }
+
+    /** Who reacted with what on [messageId], as (reactor, emoji). A retraction is a tombstone and is not listed. */
+    suspend fun reactions(messageId: String): Set<Pair<String, String>> =
+        reactionStore
+            .observeReactionsFor(messageId)
+            .first()
+            .mapNotNull { r -> r.emoji?.let { r.reactorNodeId to it } }
+            .toSet()
+
+    /** The group row as this node holds it, or null. */
+    suspend fun group(groupId: String): GroupEntity? = groups.find(groupId)
+
+    /**
+     * What every member must agree on about a group: who is in, who left, the name and the photo. Not
+     * `nameUpdatedAt` — the renamer stamps it from the wall clock and everyone else from the frame, so it
+     * legitimately differs by a few milliseconds.
+     */
+    suspend fun groupShape(groupId: String): GroupShape? =
+        group(groupId)?.let {
+            GroupShape(
+                members = GroupMembersStore.decode(it.members).toSet(),
+                departed = GroupMembersStore.decode(it.departed).toSet(),
+                name = it.name,
+                photoHash = it.photoHash,
+                photoUpdatedAt = it.photoUpdatedAt,
+                left = it.left,
+            )
+        }
+
+    private suspend fun row(
+        conversationId: String,
+        messageId: String,
+    ): MessageEntity? = messages.observeNewestMessages(conversationId, MeshLab.WINDOW).first().firstOrNull { it.id == messageId }
+
+    /** Whether the bytes behind the message's attachment are held here (true for a message that has none). */
+    suspend fun attachmentHeld(
+        conversationId: String,
+        messageId: String,
+    ): Boolean {
+        val hash = row(conversationId, messageId)?.attachmentHash ?: return true
+        return blobs.exists(hash)
+    }
+
+    /** The content hash the message's row names (the ciphertext hash for a DM or a group), or null. */
+    suspend fun attachmentHash(
+        conversationId: String,
+        messageId: String,
+    ): String? = row(conversationId, messageId)?.attachmentHash
+
+    /** Whether screening here has reached a verdict on the message's attachment. */
+    suspend fun attachmentScreened(
+        conversationId: String,
+        messageId: String,
+    ): Boolean {
+        val hash = row(conversationId, messageId)?.attachmentHash ?: return false
+        return db.blobVerdictDao().find(hash) != null
+    }
+
+    /** Whether screening here flagged the message's attachment. */
+    suspend fun attachmentFlagged(
+        conversationId: String,
+        messageId: String,
+    ): Boolean {
+        val hash = row(conversationId, messageId)?.attachmentHash ?: return false
+        return db.blobVerdictDao().find(hash)?.flagged == true
+    }
+
+    /** The attachment's plaintext as this node can read it (opened with the sealed key for a DM or a group). */
+    suspend fun attachmentPlain(
+        conversationId: String,
+        messageId: String,
+    ): ByteArray? {
+        val row = row(conversationId, messageId) ?: return null
+        val hash = row.attachmentHash ?: return null
+        val stored = blobs.bytes(hash) ?: return null
+        val key = row.attachmentKey ?: return stored
+        return AttachmentCrypto.open(stored, b64d(key))
+    }
+
+    /** [peer]'s row on this node: name, status, flag, avatar and the profile version they were last seen at. */
+    suspend fun peer(peer: LabNode): PeerEntity? = peers.find(peer.nodeId)
+
+    /** How this node presents [peer], in the fields a profile carries; null without a row. */
+    suspend fun presentationOf(peer: LabNode): Presentation? =
+        peer(peer)?.let { Presentation(it.name, it.status, it.openToChat, it.avatarHash, it.updatedAt) }
+
+    /** How this node presents itself — what every other node's [presentationOf] must converge on. */
+    suspend fun ownPresentation(): Presentation =
+        Presentation(
+            settings.displayName.first(),
+            settings.status.first(),
+            settings.openToChat.first(),
+            settings.ownAvatarHash.first(),
+            settings.profileVersion.first(),
+        )
+
+    /** The DM session with [peer] as Diagnostics lists it, or null when this node holds no row for them. */
+    suspend fun session(peer: LabNode): RatchetPeerState? = manager.ratchetState().firstOrNull { it.peerId == peer.nodeId }
+
+    /** Live custody rows addressed by their sender to themselves — always a bug (the self-pin loop's signature). */
+    suspend fun selfAddressedCustody(): List<String> =
+        forwardStore
+            .liveFrames(System.currentTimeMillis())
+            .filter { it.envelope.recipientId != null && it.envelope.recipientId == it.envelope.senderId }
+            .map { it.envelope.id }
+
+    /** The status-notice kinds in [conversationId], oldest first (`MessageEntity.KIND_*`). */
+    suspend fun notices(conversationId: String): List<Int> =
+        messages
+            .observeNewestMessages(conversationId, MeshLab.WINDOW)
+            .first()
+            .filter { it.kind != MessageEntity.KIND_NORMAL }
+            .sortedBy { it.sentAt }
+            .map { it.kind }
+
+    /** Where the intro toward [peer] stands, or null when none is pending. */
+    suspend fun introState(peer: LabNode): IntroState? = manager.introState(peer.nodeId).first()
+
+    private companion object {
+        const val IMAGE_MIME = "image/jpeg"
+        const val LORA_LOG_LINES = 24
+
+        /** The LoRa log lines worth reading on a failure — the radio's own traffic, not the bridge loop's bookkeeping. */
+        val LORA_LOG_KEYS = listOf("rx ", "profile-self", "ready", "fastSend", "send:", "far:", "fanout:", "held", "drop", "stale")
+    }
 }
+
+/** A peer as a profile presents them — the fields every other node's row must converge on. */
+data class Presentation(
+    val name: String,
+    val status: String,
+    val openToChat: Boolean,
+    val avatarHash: String?,
+    val version: Long,
+)
+
+/** The part of a group row every member must hold alike (see [LabNode.groupShape]). */
+data class GroupShape(
+    val members: Set<String>,
+    val departed: Set<String>,
+    val name: String,
+    val photoHash: String?,
+    val photoUpdatedAt: Long,
+    val left: Boolean,
+)

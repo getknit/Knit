@@ -76,7 +76,8 @@ doc). **Don't start a deferred item without explicit direction.**
   "Connected to N mesh nodes"** (`chat_connection_count`) with the screen's "people nearby" — one string, but
   `ChatScreen` reads it too and the KDoc and tests name it, so it was left out of the change on purpose.
   **Still owed:** the device trial (a third phone as carrier between P9 and P7, the carrier's numbers moving
-  within a minute, a force-stop and relaunch keeping them) and the ATF pass over the screen.
+  within a minute, a force-stop and relaunch keeping them — the same walk is pinned in the lab by
+  `ContributionLabTest`, restart included) and the ATF pass over the screen.
 
 - **"Search in this chat"** (app-wide search shipped 2026-09-10, ADR 2026-09.wnh6 + 2026-09.wdfz) — a
   scoped search from a thread's overflow menu, pre-filtered to that conversation. The data side is already
@@ -332,7 +333,12 @@ doc). **Don't start a deferred item without explicit direction.**
   type from its own decrypted row. ADR 019's M5 amendment records the five shape decisions). Still owed on the
   attachment half: **persisted partial downloads** (they are in memory today, so a process death
   mid-transfer refetches — the upload half already resumes off the spool's bitmap), and the same
-  two-island device trial the group half is waiting on.
+  two-island device trial the group half is waiting on. **Lab (2026-09-14):** `InternetPlaneLabTest` pins the
+  two-island group with a departure (the scope *rotation* waits on the six-hour mint grace, a clock-tier
+  scenario), ADR 032's receive-only DM scope, the §9.3 quarantine, a relay dropping every socket and ADR 020
+  over the relay; a group *founded* while a member is relay-only never delivers its roster to them (root
+  adoption needs the row, the roster rides the scope the root derives) — an ignored scenario awaits that
+  design decision.
 
 - **Attachment uploads are deferred while the radios carry them, SHIPPED 2026-08-17** (ADR 021,
   `mesh/spool/AttachmentDeferPolicy`, spec §9.5's MAY + §10): an attachment we authored, whose
@@ -343,7 +349,12 @@ doc). **Don't start a deferred item without explicit direction.**
   before the frame leaves custody. Groups never defer (the sealed group tick flips on the first
   member's receipt). Counted as `spoolAttachDeferred` in Diagnostics and the `SPOOL` bridge. Still
   owed: the same two-island trial — send a photo co-located (expect the deferred counter climbing and
-  no `aput`), separate the devices, expect the upload within one 60 s heal round.
+  no `aput`), separate the devices, expect the upload within one 60 s heal round. **The lab says this trial
+  would fail (2026-09-14):** `onCustodyChanged` wakes the worker the moment the frame is custodied, and that
+  round's attachment pass asks `AttachmentDeferPolicy.defer`, which needs the recipient's ack — a round trip
+  that cannot have completed. The chunk goes up, the counter stays at zero. `InternetPlaneLabTest`'s ignored
+  deferral scenario is the acceptance test for whatever fix is chosen (defer the attachment pass to the next
+  tick, or judge reachability alone inside the window).
 
 - **Sealed profile updates SHIPPED 2026-08-16** (ADR 020, was never a roadmap item — the gap surfaced in
   field testing after M5): `CTL_PROFILE = 8` carries name/status/avatar to established contacts inside v2
@@ -359,7 +370,8 @@ doc). **Don't start a deferred item without explicit direction.**
   scope** (spec §3.5) so a pair that has only exchanged cards meets at a spool before a session exists.
   **Still owed:** the two-device trial (both import, out of radio range, one shared spool — expect
   `introsSent ≥ 1` both sides within ~2 heal rounds, `confirmed: true` in `…debug.RATCHET`, the same DM
-  scope id in `…debug.SPOOL`, the pair scope gone ≤ 48 h later; then the LoRa variant), the
+  scope id in `…debug.SPOOL`, the pair scope gone ≤ 48 h later; then the LoRa variant — everything but the
+  48 h expiry is pinned in the lab by `InternetPlaneLabTest.twoCardHoldersMeetAtThePairScopeWithNoRadio`), the
   `getknit.app` assetlinks + `/c` landing page (out of repo — until then Android 12+ opens the https link
   in the browser; `knit://` and share-to-Knit work regardless). **Deferred, by design:** the **one-sided
   invite** (a *profile-only* token-derived rendezvous plus a contact-request inbox — needs per-token

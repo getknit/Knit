@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The in-process radio behind a [LabNode]: a [MeshTransport] whose links are other [LabTransport]s in the same
@@ -25,6 +27,13 @@ import java.io.File
  */
 class LabTransport(
     val nodeId: String,
+    /**
+     * Where a file *sent to this node* is staged before the blob store ingests it. The real transports write
+     * socket bytes into the receiver's own cache; the lab copies the sender's temp file here for the same
+     * reason — `MeshBlobStore.saveIncoming` deletes what it reads, and two receivers of one blob handed the
+     * sender's single path would race each other for it (the loser drops the blob silently).
+     */
+    private val stagingDir: File,
 ) : MeshTransport {
     private val _neighbors = MutableStateFlow<Set<Peer>>(emptySet())
     override val neighbors = _neighbors.asStateFlow()
@@ -43,14 +52,26 @@ class LabTransport(
     /** Outbound pipes, keyed by the far node id. */
     private val pipes = linkedMapOf<String, Pipe>()
 
-    /** One direction of a link: frames from this transport toward [target], held while [holding]. */
+    /**
+     * One direction of a link: frames from this transport toward [target], held while [holding], and dropped
+     * on the floor when [lossy] says so (a radio that lost the packet — nothing is parked, nothing is told).
+     */
     private class Pipe(
         val target: LabTransport,
     ) {
         @Volatile
         var holding = false
         val held = mutableListOf<WireEnvelope>()
+
+        @Volatile
+        var lossy: (WireEnvelope) -> Boolean = { false }
     }
+
+    /** Every frame a lossy pipe dropped, for a scenario that asserts on what the air ate. */
+    val lost = CopyOnWriteArrayList<WireEnvelope>()
+
+    /** Every frame this transport handed a peer, as `to type id` in send order — the diagnosis of "who served that". */
+    val sent = CopyOnWriteArrayList<String>()
 
     /**
      * Links both ways so the two become neighbors, as a data path coming up does. With [publish] false the
@@ -91,6 +112,21 @@ class LabTransport(
     }
 
     /**
+     * From now on, a frame this node sends [to] for which [drop] answers true is lost — not parked, not
+     * delivered, recorded in [lost]. The default answers false, so `lossy(to)` restores a clean link. Judged
+     * before [hold], so a held pipe still loses what it would have lost.
+     */
+    fun lossy(
+        to: LabTransport,
+        drop: (WireEnvelope) -> Boolean = { false },
+    ) {
+        pipe(to).lossy = drop
+    }
+
+    /** What is parked for [to] right now, in send order — for a scenario that waits for a frame to be held. */
+    fun held(to: LabTransport): List<WireEnvelope> = pipe(to).let { synchronized(it.held) { it.held.toList() } }
+
+    /**
      * Delivers everything parked for [to], in the order [reorder] returns (default: as sent), and stops holding.
      * Returns what was released, for a scenario that wants to assert on the frames themselves.
      */
@@ -125,7 +161,11 @@ class LabTransport(
     ) {
         val targets = if (to == null) pipes.values.toList() else listOfNotNull(pipes[to.nodeId])
         targets.forEach { pipe ->
-            if (pipe.holding) synchronized(pipe.held) { pipe.held += wire } else pipe.target.deliver(wire, nodeId)
+            when {
+                pipe.lossy(wire) -> lost += wire
+                pipe.holding -> synchronized(pipe.held) { pipe.held += wire }
+                else -> pipe.target.deliver(wire, nodeId)
+            }
         }
     }
 
@@ -135,7 +175,10 @@ class LabTransport(
         meta: FileMeta,
     ): Boolean {
         val target = pipes[to.nodeId]?.target ?: return false
-        target._incomingFiles.emit(ReceivedFile(nodeId, file.absolutePath, meta.kind, meta.key, meta.mime))
+        // The receiver ingests and then deletes the staged copy; it must be the receiver's own copy.
+        val staged = File(target.stagingDir.apply { mkdirs() }, "${meta.key}-${UUID.randomUUID()}")
+        file.copyTo(staged, overwrite = true)
+        target._incomingFiles.emit(ReceivedFile(nodeId, staged.absolutePath, meta.kind, meta.key, meta.mime))
         return true
     }
 
@@ -154,6 +197,9 @@ class LabTransport(
     ) {
         // Mirror the real transport: decode the routing envelope on receipt (drop undecodable bytes).
         val envelope = WireCodec.decodeEnvelope(wire.signed) ?: return
+        pipes[fromNodeId]?.target?.sent?.add(
+            "#${SEQ.incrementAndGet()} ${nodeId.take(6)} ${envelope.type} ${envelope.id} relay=${wire.relay}",
+        )
         _inbound.emit(InboundFrame(wire, envelope, fromNodeId))
     }
 
@@ -163,5 +209,10 @@ class LabTransport(
 
     private companion object {
         const val BUFFER = 1024
+
+        /** One counter across every transport in the JVM, so two nodes' send logs interleave by time. */
+        val SEQ =
+            java.util.concurrent.atomic
+                .AtomicLong()
     }
 }

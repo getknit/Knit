@@ -71,7 +71,7 @@ doc). **Don't start a deferred item without explicit direction.**
   call guarded against `SecurityException`); and swapping `KnitApp`'s inline nav transition for
   `KnitMotion.enterStep`/`exitStep`, the same recipe. **Still owed:** the emulator trial (deny twice → Open
   settings → grant → Start; `pm revoke` → relaunch on the permissions page; a cold contact link across the
-  gate), the ATF pass over the three pages, and re-capturing `08_onboarding.png`.
+  gate), the ATF pass over the three pages, and re-capturing the three onboarding shots (`onboarding`, `onboarding-name`, `onboarding-permissions` — website material since the 2026-09-14 listing swap; done 2026-09-14).
 
 - **The Your mesh screen's follow-ons** (ADR 2026-09.2v2t, 2026-09-13 — the screen ships with four numbers:
   nearby now, carrying now, passed along / handed straight to all time, people met). Named and left: **streaks

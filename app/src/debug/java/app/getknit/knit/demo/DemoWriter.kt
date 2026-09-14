@@ -28,6 +28,7 @@ import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.LinkPreviewBlob
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
+import kotlinx.coroutines.flow.first
 import org.koin.core.Koin
 import java.security.MessageDigest
 
@@ -173,14 +174,20 @@ class DemoWriter(
      * The custody rows go in through the DAO with empty bytes: the demo build never starts the mesh, so
      * nothing re-serves them, and the `ForwardRepository` digest is deliberately left untouched — there is
      * no cue plane here for it to drive. Every stat therefore reads non-zero without a radio in the room.
+     *
+     * The journal is additive by design (no read-before-write, so flushes never race), and the seed runs on
+     * every cold start of the demo build — so the lifetime numbers are banked only into an empty journal, or
+     * each screenshot launch would add another 212 to the one before it.
      */
     suspend fun seedYourMesh(now: Long) {
-        settings.addContributions(
-            passedAlong = YOUR_MESH_PASSED_ALONG,
-            deliveredToRecipient = YOUR_MESH_HANDED_DIRECT,
-            now =
-                now - YOUR_MESH_SINCE_MS,
-        )
+        if (settings.contributionTotals.first().passedAlong == 0L) {
+            settings.addContributions(
+                passedAlong = YOUR_MESH_PASSED_ALONG,
+                deliveredToRecipient = YOUR_MESH_HANDED_DIRECT,
+                now =
+                    now - YOUR_MESH_SINCE_MS,
+            )
+        }
         val strangers = (1..YOUR_MESH_STRANGERS).map { "stranger-%02d".format(it) }
         metPeers.recordMet(scenario.peers.map { nodeId(it.slot) } + strangers, now)
         repeat(YOUR_MESH_CARRYING) { i ->

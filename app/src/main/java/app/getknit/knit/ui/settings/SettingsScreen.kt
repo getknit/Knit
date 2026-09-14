@@ -56,8 +56,10 @@ import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
+import app.getknit.knit.ui.BackgroundBattery
+import app.getknit.knit.ui.backgroundBattery
+import app.getknit.knit.ui.camera.openAppSettings
 import app.getknit.knit.ui.components.Avatar
-import app.getknit.knit.ui.isIgnoringBatteryOptimizations
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
 import app.getknit.knit.ui.theme.DYNAMIC_COLOR_SUPPORTED
@@ -108,7 +110,7 @@ fun SettingsScreen(
                 relay = relay,
                 lora = lora,
             ),
-        batteryExempt = rememberBatteryExempt(),
+        battery = rememberBackgroundBattery(),
         onBack = onBack,
         onOpenProfile = onOpenProfile,
         onToggleContentFiltering = viewModel::setContentFilteringEnabled,
@@ -118,6 +120,7 @@ fun SettingsScreen(
         onOpenRelays = onOpenRelays,
         onOpenLora = onOpenLora,
         onAllowBattery = { requestIgnoreBatteryOptimizations(context) },
+        onOpenBatterySettings = { openAppSettings(context) },
     )
 }
 
@@ -125,7 +128,7 @@ fun SettingsScreen(
 @Composable
 internal fun SettingsScreenContent(
     form: SettingsFormState,
-    batteryExempt: Boolean,
+    battery: BackgroundBattery,
     onBack: () -> Unit,
     onOpenProfile: () -> Unit = {},
     onToggleContentFiltering: (Boolean) -> Unit,
@@ -146,6 +149,7 @@ internal fun SettingsScreenContent(
     // API level; see ui/theme/ThemeMode.kt.
     showThemeMode: Boolean = THEME_MODE_SUPPORTED,
     onAllowBattery: () -> Unit,
+    onOpenBatterySettings: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag("screen_settings"),
@@ -216,7 +220,7 @@ internal fun SettingsScreenContent(
 
             if (showLoraRadio) LoraRadioRow(summary = form.lora, onClick = onOpenLora)
 
-            BatteryOptimizationRow(exempt = batteryExempt, onAllow = onAllowBattery)
+            BatteryOptimizationRow(battery = battery, onAllow = onAllowBattery, onOpenSettings = onOpenBatterySettings)
         }
     }
 }
@@ -488,53 +492,78 @@ private fun loraConnectedSubtitle(
     }
 
 /**
- * Whether the app is currently exempt from battery optimization, refreshed on every screen resume.
- * Lives in the stateful wrapper (not [BatteryOptimizationRow]) because the `PowerManager` read is not
- * available to the preview renderer.
+ * Which position the app's battery setting is in, refreshed on every screen resume — the exemption prompt
+ * and the app-info page are both other activities. Lives in the stateful wrapper (not
+ * [BatteryOptimizationRow]) because the `PowerManager` / `ActivityManager` reads are not available to the
+ * preview renderer.
  */
 @Composable
-private fun rememberBatteryExempt(): Boolean {
+private fun rememberBackgroundBattery(): BackgroundBattery {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var exempt by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    var battery by remember { mutableStateOf(backgroundBattery(context)) }
 
     DisposableEffect(lifecycleOwner) {
         val observer =
             LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
-                    exempt = isIgnoringBatteryOptimizations(context)
+                    battery = backgroundBattery(context)
                 }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    return exempt
+    return battery
 }
 
-/** Shows whether the app is exempt from battery optimization, with an "allow" affordance when not. */
+/**
+ * The app's battery position and what it means for the mesh, with the one action that can move it:
+ * the exemption prompt from Optimized, the app-info page from Restricted (no prompt of ours lifts that one —
+ * ADR 2026-09.f69x is what a Restricted install used to crash on).
+ */
 @Composable
 private fun BatteryOptimizationRow(
-    exempt: Boolean,
+    battery: BackgroundBattery,
     onAllow: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("settings_battery"),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
             text =
-                if (exempt) {
-                    stringResource(R.string.battery_allowed)
-                } else {
-                    stringResource(R.string.battery_restricted)
-                },
+                stringResource(
+                    when (battery) {
+                        BackgroundBattery.Unrestricted -> R.string.battery_allowed
+                        BackgroundBattery.Optimized -> R.string.battery_optimized
+                        BackgroundBattery.Restricted -> R.string.battery_restricted
+                    },
+                ),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color =
+                if (battery == BackgroundBattery.Restricted) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             textAlign = TextAlign.Center,
         )
-        if (!exempt) {
-            TextButton(onClick = onAllow) {
-                Text(stringResource(R.string.battery_allow_button))
+        when (battery) {
+            BackgroundBattery.Unrestricted -> {
+                // Nothing to press: the quiet state.
+            }
+
+            BackgroundBattery.Optimized -> {
+                TextButton(onClick = onAllow, modifier = Modifier.testTag("settings_battery_allow")) {
+                    Text(stringResource(R.string.battery_allow_button))
+                }
+            }
+
+            BackgroundBattery.Restricted -> {
+                TextButton(onClick = onOpenSettings, modifier = Modifier.testTag("settings_battery_settings")) {
+                    Text(stringResource(R.string.action_open_settings))
+                }
             }
         }
     }
@@ -575,8 +604,9 @@ fun ThemeModeRowPreview() =
 fun BatteryOptimizationRowPreview() =
     KnitPreview {
         Column {
-            BatteryOptimizationRow(exempt = true, onAllow = {})
-            BatteryOptimizationRow(exempt = false, onAllow = {})
+            BatteryOptimizationRow(battery = BackgroundBattery.Unrestricted, onAllow = {}, onOpenSettings = {})
+            BatteryOptimizationRow(battery = BackgroundBattery.Optimized, onAllow = {}, onOpenSettings = {})
+            BatteryOptimizationRow(battery = BackgroundBattery.Restricted, onAllow = {}, onOpenSettings = {})
         }
     }
 
@@ -596,7 +626,7 @@ fun SettingsScreenPreview() =
                     relay = RelaySummary(enabled = true, configured = 2, active = 2, connected = 1),
                     lora = LoraSummary(enabled = true, boardName = "Meshtastic_1a2b", plane = LoraPlane.Live),
                 ),
-            batteryExempt = false,
+            battery = BackgroundBattery.Optimized,
             onBack = {},
             onToggleContentFiltering = {},
             onOpenRelays = {},
@@ -612,7 +642,7 @@ fun SettingsScreenNewUserPreview() =
     KnitPreview {
         SettingsScreenContent(
             form = SettingsFormState(header = ProfileHeader(name = "GentlyRustlingRabbit")),
-            batteryExempt = true,
+            battery = BackgroundBattery.Unrestricted,
             onBack = {},
             onToggleContentFiltering = {},
             onOpenRelays = {},

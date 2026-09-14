@@ -154,6 +154,28 @@ class OnboardingScreenContentTest {
         compose.onNodeWithTag("onboarding_battery").assertDoesNotExist()
     }
 
+    /**
+     * Battery use set to Restricted is the one battery state no dialog of ours can change (ADR 2026-09.f69x
+     * is what it used to crash on): the row lands on "Open settings" with its own hint, not Android's
+     * "won't ask again", and never on the exemption prompt — even when the exemption reads true underneath.
+     */
+    @Test
+    fun aRestrictedBatterySettingOffersSettingsWithItsOwnHint() {
+        val calls =
+            render(
+                OnboardingStep.PERMISSIONS,
+                rows = PermissionRows.ALL.copy(batteryRestricted = true),
+            )
+        compose.onNodeWithTag("onboarding_battery").assertDoesNotExist()
+        compose.onNodeWithTag("onboarding_battery_granted", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.onboarding_perm_battery_restricted_hint)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("onboarding_battery_settings").performScrollTo().performClick()
+        assertEquals(1, calls.settings)
+        assertEquals(0, calls.battery)
+        // Still optional: Start does not care.
+        compose.onNodeWithTag("onboarding_start").assertIsEnabled()
+    }
+
     @Test
     fun aRadioGrantAndroidWontAskForAgainOffersSettings() {
         val calls = render(OnboardingStep.PERMISSIONS, rows = PermissionRows.FRESH.copy(radioNeedsSettings = true))

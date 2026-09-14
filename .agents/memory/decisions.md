@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-127 decisions.
+128 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -112,6 +112,7 @@ carries; never renumber an old one.
 | [2026-09.emd7](decisions/2026-09-emd7-a-knit-board-tells-the-mesh-it-is-unmonitored.md) | A Knit board tells the mesh it is unmonitored | lora, meshtastic, provisioning |
 | [2026-09.f69x](decisions/2026-09-f69x-a-start-into-a-demoted-foreground-service-re-claims-the-state-instead-of-timing.md) | A start into a demoted foreground service re-claims the state instead of timing out | reliability, service, android |
 | [2026-09.fq6b](decisions/2026-09-fq6b-overscroll-and-ripple-take-their-colour-from-the-theme.md) | Overscroll and ripple take their colour from the theme | ui, theme |
+| [2026-09.gc3m](decisions/2026-09-gc3m-battery-use-set-to-restricted-is-its-own-state.md) | Battery use set to Restricted is its own state, shown where the exemption is | ui, onboarding, settings, reliability |
 | [2026-09.gdhp](decisions/2026-09-gdhp-every-sender-supplied-last-writer-wins-clock-is-clamped-to-the-skew-window.md) | Every sender-supplied last-writer-wins clock is clamped to the skew window | mesh, groups, profile, reactions |
 | [2026-09.ggq4](decisions/2026-09-ggq4-a-heard-meshtastic-post-is-verified-against-the-board-key-in-its-author-s-profil.md) | A heard Meshtastic post is verified against the board key in its author's profile | lora, meshtastic, mesh |
 | [2026-09.hd5n](decisions/2026-09-hd5n-the-chat-thread-reads-a-newest-anchored-window.md) | The chat thread reads a newest-anchored window, not the whole conversation | ui, data, perf |

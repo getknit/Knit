@@ -6,6 +6,14 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Already shipped (was deferred)
 
+- **A Restricted battery setting is shown for what it is SHIPPED** (2026-09-14, ADR 2026-09.gc3m, the
+  follow-up ADR 2026-09.f69x deferred) — `ui/BackgroundBattery.kt` reads the three-position setting
+  (`ActivityManager.isBackgroundRestricted()` over the exemption), Settings' battery line says allowed /
+  optimized / restricted with the one action that can move each, and the onboarding battery row lands on
+  "Open settings" with its own hint instead of offering an exemption prompt that cannot lift Restricted.
+  **Still owed:** the device trial (a Restricted phone opening Settings and the permissions page) and the ATF
+  pass over the new rows.
+
 - **An in-app light/dark override SHIPPED** (2026-09-09, ADR 2026-09.v5ck, superseding
   ADR 2026-09.m9h8's closing paragraph) — Settings carries a System / Light / Dark segmented control,
   defaulting to System. Built on `UiModeManager.setApplicationNightMode` rather than in Compose, so the
@@ -525,10 +533,3 @@ doc). **Don't start a deferred item without explicit direction.**
   so work that used to run eagerly inside `setContent` now queues, and any test that asserts without an
   explicit sync can start failing. Do it as its own change — migrate one Robolectric screen test, run the
   suite, then the rest — not as a side effect of a dependency bump.
-- **Tell a background-restricted install what it is getting** — `ActivityManager.isBackgroundRestricted()`
-  (API 28) is true when the user set Knit's battery use to Restricted, or accepted Android's offer to. The
-  platform then demotes the mesh service the moment the app leaves the screen and stops it a minute later,
-  so the mesh only ever runs while Knit is open; ADR 2026-09.f69x stopped that from *crashing* but did not
-  surface it. A row on the onboarding permissions page and Settings, in the same shape as the battery
-  exemption row, would say so and deep-link to the app's battery page. Product-shaped, not a fix: do it with
-  the copy pass, not as a hotfix.

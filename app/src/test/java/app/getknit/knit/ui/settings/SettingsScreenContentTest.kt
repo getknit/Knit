@@ -1,5 +1,6 @@
 package app.getknit.knit.ui.settings
 
+import android.content.Context
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
@@ -11,9 +12,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.R
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
+import app.getknit.knit.ui.BackgroundBattery
 import app.getknit.knit.ui.theme.KnitTheme
 import app.getknit.knit.ui.theme.ThemeMode
 import org.junit.Assert.assertEquals
@@ -33,6 +37,8 @@ class SettingsScreenContentTest {
     @get:Rule
     val compose = createComposeRule()
 
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
     private fun render(
         header: ProfileHeader = ProfileHeader(name = "Alice", alias = "Cool Fox"),
         onOpenProfile: () -> Unit = {},
@@ -51,6 +57,9 @@ class SettingsScreenContentTest {
         dynamicColor: Boolean = false,
         onToggleDynamicColor: (Boolean) -> Unit = {},
         showDynamicColor: Boolean = true,
+        battery: BackgroundBattery = BackgroundBattery.Unrestricted,
+        onAllowBattery: () -> Unit = {},
+        onOpenBatterySettings: () -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
@@ -65,7 +74,7 @@ class SettingsScreenContentTest {
                             relay = relay,
                             lora = lora,
                         ),
-                    batteryExempt = true,
+                    battery = battery,
                     onBack = {},
                     onOpenProfile = onOpenProfile,
                     onToggleContentFiltering = onToggleContentFiltering,
@@ -77,7 +86,8 @@ class SettingsScreenContentTest {
                     onOpenRelays = onOpenRelays,
                     onOpenLora = onOpenLora,
                     showInternetRelays = showInternetRelays,
-                    onAllowBattery = {},
+                    onAllowBattery = onAllowBattery,
+                    onOpenBatterySettings = onOpenBatterySettings,
                 )
             }
         }
@@ -225,5 +235,40 @@ class SettingsScreenContentTest {
     fun theLinkPreviewsRowFollowsTheInternetPlaneSwitch() {
         render(showInternetRelays = false)
         compose.onNodeWithTag("settings_link_previews").assertDoesNotExist()
+    }
+
+    /** Unrestricted is the quiet state: a status line and nothing to press. */
+    @Test
+    fun theBatteryRowIsQuietWhenUnrestricted() {
+        render(battery = BackgroundBattery.Unrestricted)
+        compose.onNodeWithText(context.getString(R.string.battery_allowed)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("settings_battery_allow").assertDoesNotExist()
+        compose.onNodeWithTag("settings_battery_settings").assertDoesNotExist()
+    }
+
+    /** Optimized (Android's default) offers the exemption prompt, the one dialog the app can raise itself. */
+    @Test
+    fun theBatteryRowOffersTheExemptionWhenOptimized() {
+        var allowed = 0
+        render(battery = BackgroundBattery.Optimized, onAllowBattery = { allowed++ })
+        compose.onNodeWithText(context.getString(R.string.battery_optimized)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("settings_battery_allow").performScrollTo().performClick()
+        assertEquals(1, allowed)
+    }
+
+    /**
+     * Restricted is the state ADR 2026-09.f69x's crash lived in, and no prompt of ours can lift it: the row
+     * says so and sends the user to the app's info page instead of the exemption dialog.
+     */
+    @Test
+    fun theBatteryRowSendsARestrictedInstallToSettings() {
+        var allowed = 0
+        var opened = 0
+        render(battery = BackgroundBattery.Restricted, onAllowBattery = { allowed++ }, onOpenBatterySettings = { opened++ })
+        compose.onNodeWithText(context.getString(R.string.battery_restricted)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("settings_battery_allow").assertDoesNotExist()
+        compose.onNodeWithTag("settings_battery_settings").performScrollTo().performClick()
+        assertEquals(1, opened)
+        assertEquals(0, allowed)
     }
 }

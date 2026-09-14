@@ -68,13 +68,17 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   state before it resolves the graph; keep it that way. The deadline is 30 s on Android 15 (10 s before), and
   `getForegroundServiceType()` cannot tell you it was lost. Regression: `MeshServiceForegroundReclaimTest`,
   `GraphlessProcessTest`, `MeshServiceStartTest`.
-- **When touching `ui/onboarding/`, `ui/Permissions.kt`, or `BootReceiver`'s start decision:** READ ADR
-  2026-09.nzpr. Entry is gated on `hasRadioPermissions` alone — the transports assume those grants
-  (`@SuppressLint("MissingPermission")` is a lint suppression, not a runtime guard), so the mesh never starts
-  without them. `POST_NOTIFICATIONS` and the battery exemption are optional rows on the permissions page
-  (`MessageNotifier` self-checks before posting), and `SettingsStore.onboardingSeen` only picks which page a
-  returning phone opens on, never whether onboarding shows. The name page writes through the shared
-  `ui/components/DisplayNameField`; a grant added to `requiredRadioPermissions` re-wedges the front door.
+- **When touching `ui/onboarding/`, `ui/Permissions.kt`, `ui/BackgroundBattery.kt`, or `BootReceiver`'s start
+  decision:** READ ADR 2026-09.nzpr. Entry is gated on `hasRadioPermissions` alone — the transports assume
+  those grants (`@SuppressLint("MissingPermission")` is a lint suppression, not a runtime guard), so the mesh
+  never starts without them. `POST_NOTIFICATIONS` and the battery exemption are optional rows on the
+  permissions page (`MessageNotifier` self-checks before posting), and `SettingsStore.onboardingSeen` only
+  picks which page a returning phone opens on, never whether onboarding shows. The name page writes through
+  the shared `ui/components/DisplayNameField`; a grant added to `requiredRadioPermissions` re-wedges the
+  front door.
+  The battery row (here and in Settings) reads `ui/BackgroundBattery.kt`'s three-position enum, not the bare
+  exemption — READ ADR 2026-09.gc3m before touching it: Restricted wins over a stale exemption, and no prompt
+  of ours can lift it, so that state always lands on "Open settings".
 - **When touching `data/draft/`, what the composer keeps between visits, or the chat list's `Draft: …`
   preview:** READ ADR 2026-09.qtg9. An unsent draft is a row in the encrypted DB (never the DataStore —
   it is message text), written debounced on the *application* scope, and handed to the composer exactly

@@ -302,11 +302,13 @@ internal fun PermissionsPage(
                 icon = Icons.Outlined.BatteryChargingFull,
                 title = stringResource(R.string.onboarding_perm_battery_title),
                 rationale = stringResource(R.string.onboarding_perm_battery_body),
-                // The battery dialog can always be shown again, so this row never lands on "Open settings".
-                state = rowState(granted = rows.batteryExempt, needsSettings = false),
+                // The exemption dialog can always be shown again, so the only way to "Open settings" here is
+                // a Restricted setting, which no dialog of ours can lift — and the hint says which setting.
+                state = rowState(granted = rows.batteryExempt && !rows.batteryRestricted, needsSettings = rows.batteryRestricted),
                 onAllow = onAllowBattery,
                 onOpenSettings = onOpenSettings,
                 actionTag = "onboarding_battery",
+                settingsHint = stringResource(R.string.onboarding_perm_battery_restricted_hint),
             )
         }
     }
@@ -340,6 +342,9 @@ private fun PermissionRow(
     onAllow: () -> Unit,
     onOpenSettings: () -> Unit,
     actionTag: String,
+    // What the row says under its rationale once it lands on "Open settings"; the permission rows share
+    // Android's "won't ask again", the battery row names the setting that put it there.
+    settingsHint: String = stringResource(R.string.onboarding_perm_denied_hint),
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).semantics(mergeDescendants = true) {},
@@ -361,7 +366,7 @@ private fun PermissionRow(
             )
             if (state == RowState.OpenSettings) {
                 Text(
-                    text = stringResource(R.string.onboarding_perm_denied_hint),
+                    text = settingsHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 2.dp),

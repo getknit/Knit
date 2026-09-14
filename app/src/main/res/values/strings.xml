@@ -95,6 +95,7 @@
     <string name="onboarding_perm_battery_title">Background battery use</string>
     <string name="onboarding_perm_battery_body">Keeps the mesh running with the screen off. Without it, Android may pause Knit until you open it again.</string>
     <string name="onboarding_perm_denied_hint">Android won\'t ask again — allow it in Settings.</string>
+    <string name="onboarding_perm_battery_restricted_hint">Knit is currently set to Restricted, so the mesh stops when you leave Knit. Pick Optimized or Unrestricted under App battery usage.</string>
     <string name="onboarding_optional">Optional</string>
     <string name="onboarding_allow">Allow</string>
     <!-- Screen-reader labels for the per-row buttons; %1$s is the row title ("Allow, Nearby devices") -->
@@ -491,7 +492,8 @@
     <string name="profile_node_id">Node ID: %1$s</string>
     <string name="profile_alias">Alias: %1$s</string>
     <string name="battery_allowed">Background battery use: allowed</string>
-    <string name="battery_restricted">Background battery use: restricted — the mesh may drop when idle</string>
+    <string name="battery_optimized">Background battery use: optimized — Android may pause the mesh while the screen is off.</string>
+    <string name="battery_restricted">Background battery use: restricted — the mesh stops as soon as you leave Knit. Choose Optimized or Unrestricted to keep it running.</string>
     <string name="battery_allow_button">Allow background battery use</string>
     <string name="profile_avatar_crop_hint">Drag and pinch to adjust</string>
     <string name="profile_avatar_crop_desc">Adjust profile photo</string>

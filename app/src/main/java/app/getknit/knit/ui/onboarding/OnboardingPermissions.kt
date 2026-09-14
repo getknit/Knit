@@ -18,8 +18,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import app.getknit.knit.ui.BackgroundBattery
+import app.getknit.knit.ui.backgroundBattery
 import app.getknit.knit.ui.camera.openAppSettings
-import app.getknit.knit.ui.isIgnoringBatteryOptimizations
 import app.getknit.knit.ui.optionalNotificationPermission
 import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
 import app.getknit.knit.ui.requiredRadioPermissions
@@ -36,6 +37,12 @@ data class PermissionRows(
     val notificationsGranted: Boolean,
     val notificationsNeedSettings: Boolean,
     val batteryExempt: Boolean,
+    /**
+     * Battery use set to Restricted (App info → App battery usage): the mesh stops the moment Knit leaves
+     * the screen, and no prompt the app can raise changes that — the row reads it back as "Open settings"
+     * with its own hint. Wins over [batteryExempt], which can still read true underneath it.
+     */
+    val batteryRestricted: Boolean = false,
 ) {
     companion object {
         /** A fresh install: nothing asked, nothing held. */
@@ -70,7 +77,7 @@ internal fun needsSettings(
 ): Boolean = asked && missing.any { !canAskAgain(it) }
 
 /**
- * The permissions page's state: the three probes (radio set, notification grant, battery exemption), the two
+ * The permissions page's state: the three probes (radio set, notification grant, battery position), the two
  * permission launchers, and the battery / app-settings intents. Everything that needs an `Activity` or a
  * `Context` lives here rather than in the ViewModel, in the `rememberLocationGate` / `MicGate` idiom.
  *
@@ -99,12 +106,14 @@ internal fun rememberOnboardingPermissions(sdkInt: Int = Build.VERSION.SDK_INT):
     fun probe(): PermissionRows {
         val missingRadio = radioSet.filter { !context.holds(it) }
         val missingNotifications = listOfNotNull(notificationPermission).filter { !context.holds(it) }
+        val battery = backgroundBattery(context)
         return PermissionRows(
             radioGranted = missingRadio.isEmpty(),
             radioNeedsSettings = needsSettings(radioAsked, missingRadio, ::canAskAgain),
             notificationsGranted = missingNotifications.isEmpty(),
             notificationsNeedSettings = needsSettings(notificationsAsked, missingNotifications, ::canAskAgain),
-            batteryExempt = isIgnoringBatteryOptimizations(context),
+            batteryExempt = battery == BackgroundBattery.Unrestricted,
+            batteryRestricted = battery == BackgroundBattery.Restricted,
         )
     }
     var rows by remember { mutableStateOf(probe()) }

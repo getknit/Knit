@@ -73,6 +73,8 @@ document:
 - A stranger who floods the Nearby room can no longer push out what you and your contacts posted there:
   their oldest posts go first, and each stranger keeps at most 200. A phone in range can also only pass Knit
   so many room posts a minute.
+- Settings and the permissions page now say when Knit's battery use is set to Restricted, and that the mesh
+  stops as soon as you leave the app. Both offer the system page where you can change it.
 
 ### Fixed
 

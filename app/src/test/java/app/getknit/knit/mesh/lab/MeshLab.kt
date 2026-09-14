@@ -120,6 +120,9 @@ class MeshLab {
     private val dir: File = Files.createTempDirectory("meshlab").toFile()
     private val nodes = mutableListOf<LabNode>()
 
+    /** The calendar every node reads; `clock.advance(ms)` moves it for all of them at once (see [LabClock]). */
+    val clock = LabClock()
+
     /**
      * Creates and starts a node — its own identity, database and settings file — and returns once its router
      * is listening, so a link made next cannot lose the profile push (see [LabTransport.collecting]).
@@ -132,7 +135,7 @@ class MeshLab {
         // A relay the node dials: the node gets the real Internet plane (`ScopeSync` over an in-process spool).
         spool: FakeSpool? = null,
     ): LabNode {
-        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits, air, spool)
+        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits, air, spool, clock)
         nodes += node
         node.boot()
         return node
@@ -606,7 +609,11 @@ class LabNode internal constructor(
     private val limits: LabLimits,
     private val air: FakeMeshtasticAir?,
     private val spool: FakeSpool?,
+    clock: LabClock,
 ) {
+    /** This node's clock: the lab's shared calendar, plus its own skew if a scenario gave it one. */
+    val now: () -> Long = clock.forNode(name)
+
     // --- persistent across restarts ---
 
     // The keystore-wrapped identity file, held as bytes: IdentityKeyStore only ever calls load()/store().
@@ -680,7 +687,7 @@ class LabNode internal constructor(
             settings.addSpoolUrl(MeshLab.SPOOL_URL)
         }
         // The real DataStore-backed settings are the journal, so a restart() proves the totals persist.
-        ledger = ContributionLedger(journal = settings, selfId = { nodeId })
+        ledger = ContributionLedger(journal = settings, selfId = { nodeId }, clock = now)
         val keys = keyStore.keys()
         messageCrypto = MessageCrypto(keys.hybridPrivate, keys.sigPrivate)
         messages =
@@ -700,7 +707,7 @@ class LabNode internal constructor(
         forwardStore =
             ForwardRepository(
                 db.forwardDao(),
-                StoreDigest(),
+                StoreDigest(clock = now),
                 db,
                 ttlMs = limits.custodyTtlMs,
                 broadcastTtlMs = limits.custodyBroadcastTtlMs,
@@ -740,8 +747,8 @@ class LabNode internal constructor(
                     onPublicPost = { manager.onPublicPostHeard(it) },
                     scope = scope,
                     metrics = metrics,
-                    clock = System::currentTimeMillis,
-                    wallClock = System::currentTimeMillis,
+                    clock = now,
+                    wallClock = now,
                     log = { loraLog += it },
                     // No inter-packet gap and no Trickle jitter: the scenario's clock is the wall clock.
                     pace = LoraPacePolicy(minGapMs = 0),
@@ -786,9 +793,10 @@ class LabNode internal constructor(
                 metrics = metrics,
                 ledger = ledger,
                 db = db,
+                clock = now,
                 tickDebounceMs = MeshLab.TICK_DEBOUNCE_MS,
                 rideHoldMs = limits.rideHoldMs,
-                ingressBudget = IngressBudget(burst = limits.ingressBurst, perMinute = limits.ingressPerMinute),
+                ingressBudget = IngressBudget(burst = limits.ingressBurst, perMinute = limits.ingressPerMinute, clock = now),
                 spoolDialer = spool,
             )
         manager.start()
@@ -864,7 +872,7 @@ class LabNode internal constructor(
         val groupId = Conversations.groupIdFor(members)
         val existing = groups.find(groupId)
         if (existing != null && !existing.left) return groupId
-        val createdAt = System.currentTimeMillis()
+        val createdAt = now()
         groups.upsert(
             GroupEntity(
                 groupId = groupId,
@@ -919,7 +927,7 @@ class LabNode internal constructor(
     ) {
         val trimmed = normalizeSingleLine(newName).take(TextLimits.GROUP_NAME)
         val group = checkNotNull(groups.find(groupId)) { "$name holds no group $groupId" }
-        val updated = group.copy(name = trimmed, nameUpdatedAt = System.currentTimeMillis())
+        val updated = group.copy(name = trimmed, nameUpdatedAt = now())
         groups.upsert(updated)
         spaced { manager.sendGroupUpdate(updated.toGroupInfo()) }
     }
@@ -971,7 +979,7 @@ class LabNode internal constructor(
         val old = settings.ownAvatarHash.first()
         blobs.insert(hash, IMAGE_MIME, bytes)
         settings.setOwnAvatarHash(hash)
-        settings.setAvatarUpdatedAt(System.currentTimeMillis())
+        settings.setAvatarUpdatedAt(now())
         if (old != null && old != hash) blobs.deleteIfUnreferenced(old)
     }
 
@@ -983,7 +991,7 @@ class LabNode internal constructor(
         val hash = sha256Hex(bytes)
         blobs.insert(hash, IMAGE_MIME, bytes)
         val group = checkNotNull(groups.find(groupId)) { "$name holds no group $groupId" }
-        val updated = group.copy(photoHash = hash, photoUpdatedAt = System.currentTimeMillis())
+        val updated = group.copy(photoHash = hash, photoUpdatedAt = now())
         groups.upsert(updated)
         spaced { manager.sendGroupUpdate(updated.toGroupInfo()) }
     }
@@ -1020,8 +1028,8 @@ class LabNode internal constructor(
      */
     private inline fun <T> spaced(send: () -> T): T {
         val result = send()
-        val stamped = System.currentTimeMillis()
-        while (System.currentTimeMillis() <= stamped) Thread.onSpinWait()
+        val stamped = now()
+        while (now() <= stamped) Thread.onSpinWait()
         return result
     }
 
@@ -1081,12 +1089,12 @@ class LabNode internal constructor(
     fun drops(reason: DropReason): Long = metrics.snapshot().dropsByReason[reason] ?: 0L
 
     /** The custody store's live id set, as the digest exchange advertises it. */
-    suspend fun custodyIds(): Set<String> = forwardStore.liveIds(System.currentTimeMillis()).toSet()
+    suspend fun custodyIds(): Set<String> = forwardStore.liveIds(now()).toSet()
 
     /** Every live custody row as `id:type:sender→recipient@sentAt#sigHash` — a diff of two of these names the odd frame out. */
     suspend fun custodyFrames(): List<String> =
         forwardStore
-            .liveFrames(System.currentTimeMillis())
+            .liveFrames(now())
             .map {
                 "${it.envelope.id}:${it.envelope.type}:${it.envelope.senderId.take(
                     6,
@@ -1159,8 +1167,7 @@ class LabNode internal constructor(
         receipts.observeForMessage(messageId).first().associate { it.ackerNodeId to DeliveryPlane.fromCode(it.via) }
 
     /** Whether a connected spool has heard from [peer] within the mesh's cover window (ADR 2026-09.y5f3). */
-    fun spoolPresent(peer: LabNode): Boolean =
-        peer.nodeId in spoolPresentPeers(manager.spoolStatus(), System.currentTimeMillis(), SPOOL_COVER_MS)
+    fun spoolPresent(peer: LabNode): Boolean = peer.nodeId in spoolPresentPeers(manager.spoolStatus(), now(), SPOOL_COVER_MS)
 
     /** The DM scope this node shares with [peer] on its spool, as the relay editor would list it. */
     fun dmScopeStatus(peer: LabNode): ScopeStatus? = scopeStatus(peer.nodeId)
@@ -1170,7 +1177,7 @@ class LabNode internal constructor(
 
     /** How many DM-form chat frames this node custodies that it authored toward [peer] — a room tick must add none. */
     suspend fun custodiedChatsTo(peer: LabNode): Int =
-        forwardStore.liveFrames(System.currentTimeMillis()).count {
+        forwardStore.liveFrames(now()).count {
             it.envelope.type == FrameType.CHAT && it.envelope.senderId == nodeId && it.envelope.recipientId == peer.nodeId
         }
 
@@ -1179,7 +1186,7 @@ class LabNode internal constructor(
         sender: LabNode,
         recipient: LabNode,
     ): Int =
-        forwardStore.liveFrames(System.currentTimeMillis()).count {
+        forwardStore.liveFrames(now()).count {
             it.envelope.type == FrameType.CHAT && it.envelope.senderId == sender.nodeId && it.envelope.recipientId == recipient.nodeId
         }
 
@@ -1287,7 +1294,7 @@ class LabNode internal constructor(
     /** Live custody rows addressed by their sender to themselves — always a bug (the self-pin loop's signature). */
     suspend fun selfAddressedCustody(): List<String> =
         forwardStore
-            .liveFrames(System.currentTimeMillis())
+            .liveFrames(now())
             .filter { it.envelope.recipientId != null && it.envelope.recipientId == it.envelope.senderId }
             .map { it.envelope.id }
 

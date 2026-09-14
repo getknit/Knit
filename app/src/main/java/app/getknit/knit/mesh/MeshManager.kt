@@ -201,6 +201,7 @@ class MeshManager(
             transport = transport,
             store = blobStore,
             selfId = { identity.nodeId() },
+            now = clock,
             // The chat list observes the blobs table for presence, so no per-message path write is needed
             // when an attachment arrives. A pulled blob may also be a (multi-hop) peer's avatar or a group
             // photo, so attribute it back to whoever advertised it, and — for an E2E attachment — screen its
@@ -214,6 +215,7 @@ class MeshManager(
         ForwardSync(
             transport = transport,
             store = forwardStore,
+            clock = clock,
             authenticate = { wire, env -> pipeline.canCarry(wire, env) },
             // Fired once when a chat frame is actually carried: eager-pull its image blob so a custodied image
             // survives to a late joiner (the carrier holds ciphertext it can't read, like the frame itself).
@@ -231,6 +233,7 @@ class MeshManager(
             transport = transport,
             selfId = { identity.nodeId() },
             signRaw = messageCrypto::signRaw,
+            now = clock,
             isBlocked = { it in settings.blockedNodeIds.first() },
             metrics = metrics,
         )
@@ -328,12 +331,12 @@ class MeshManager(
     // Bounded in-memory buffer of frames dropped for a missing sender key: parked alongside the key
     // request in verifyInbound and replayed through the deliver path once handleProfile pins the key, so
     // a frame that raced ahead of its sender's profile still lands. The inbound complement of flushPendingFor.
-    private val pendingInbound = PendingInbound(metrics = metrics)
+    private val pendingInbound = PendingInbound(now = clock, metrics = metrics)
 
     // The group-key sibling: a seed ctl DM that arrived for a group we hold no row for yet (the creator
     // floods the seed before the first frame that carries the roster) is parked before the ratchet commit
     // and replayed by InboundPipeline.reconcileGroup once the group lands. Swept beside pendingInbound.
-    private val pendingGroupKeys = PendingGroupKeys(metrics = metrics)
+    private val pendingGroupKeys = PendingGroupKeys(now = clock, metrics = metrics)
 
     // Receiver-side state for the best-effort "now typing" indicator: which senders are typing in which
     // conversation. Ephemeral and never custodied — a typing cue is fire-and-forget, so nothing is persisted
@@ -600,6 +603,9 @@ class MeshManager(
         MeshRouter(
             transport,
             routerScope,
+            // The dedup window on the same clock as everything else here, so a test that moves the calendar
+            // (the mesh-in-a-box lab) sees the window lapse; production's clock is the wall clock either way.
+            seen = SeenSet(clock = clock),
             metrics = metrics,
             budget = ingressBudget,
             onRelayed = { env, to -> ledger.onHandedOff(env, to) },

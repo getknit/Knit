@@ -159,6 +159,28 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
 - **Every sealed frame carries the epoch key**, so an absent recipient opens whatever survives a custody
   quota without the conversation's first frames and asks for no reset — the quota is loss, never a wedge
   (`CustodyQuotaLabTest`; the "evicted init needs a reset" premise was wrong).
+- **The calendar is a knob too** (`LabClock`, 2026-09-14): every node reads one shared clock the lab owns,
+  and `lab.clock.advance(ms)` moves it for all of them at once — so nodes still agree with each other (the
+  property `spaced {}` and ADR 2026-09.gdhp rely on) while a scenario steps past the router's 10-min seen
+  window, the 24 h custody TTL, the 12 h profile republish or the 48 h intro grace (`TimeLabTest`). A jump
+  moves *decisions* (expiry, floors, LWW, tombstones, presence), never *schedulers* — every periodic loop is
+  `delay()`-based and blind to it — so the scenario pokes the work itself: `node.heal()` (fire-and-forget:
+  await the effect), `sweepLocalStorage()`, `manager.refreshRelays()`, a re-link for the digest exchange, or
+  a fresh send. Forward only. The seam is `MeshManager(clock = …)` plus the one-liners that hand the same
+  clock to `ForwardSync` (load-bearing — its `now` is what `ForwardRepository.store`'s dead-on-arrival and
+  future-skew guards compare a frame's `sentAt` against), `KeyExchange`, `BlobExchange`, `PendingInbound`,
+  `PendingGroupKeys` and the router's `SeenSet`; production passes the wall clock everywhere. **Not** the
+  ratchet `now` in `InboundPipeline`'s two open paths (`peekOpen`/`commitOpen`, which stamp a receive
+  epoch's `lastUsedAt` and a skipped key's `createdAt`): those stay on the wall clock, because the 226-test
+  pipeline rig pins the ADR 023–027 era semantics against a fixed clock and eleven of its cases read the
+  ratchet's real time. The cost is a bound on the jump: **keep it under 48 h**, or `heal()`'s
+  `ratchet.sweep(clock())` reaps receive epochs and skipped keys stamped a real day ago as though they
+  were two days stale. A profile republish seeds custody rather than flooding, so a scenario that `heal()`s
+  past `PROFILE_REPUBLISH_MS` re-links before its oracle. `LabClock.skew(name, ms)` is the one seam to a *disagreeing*
+  clock, for a far-future-frame scenario (a skew past `Protocol.MAX_FUTURE_SKEW_MS` trips the custody
+  refusal and `clampFuture`). Side effects of a long jump: `IngressBudget` refills, the send epoch rotates
+  on the next seal (`MAX_EPOCH_AGE_MS`), a 7 d jump rotates the prekey and refloods the profile on `heal()`,
+  `deleteOrphans` reaps at 24 h, `sweepRetention` drops unaccepted request threads at 7 d.
 - **Order is a knob.** `alice.transport.hold(bob.transport)` parks what Alice sends Bob;
   `release(bob.transport) { reorder }` delivers it in the order you choose — how "custody serves the two in
   either order" becomes a deterministic case. Partition (group frames first, say) rather than blindly

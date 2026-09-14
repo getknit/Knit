@@ -726,7 +726,7 @@ each hear the channel for themselves.
   board queued it (`DeliveryPlane.LoRa`, never a ✓✓); a `PublicPostOutcome.Refused` reaches the composer as a
   toast with the draft kept, so a post never silently goes nowhere. `…debug.SEND --es conv m-public` drives it.
 - **Contacts.** The profile carries the bound board's node number (`ProfileContent.loraNode`, persisted as
-  `SettingsStore.loraBoardNode` when the board reports `Ready`, cleared on unbind, republished on change);
+  `SettingsStore.loraBoard` when the board reports `Ready`, cleared on unbind, republished on change);
   `PeerEntity.loraNode` stores a peer's claim; `deliverMeshPost` resolves `packet.from` through
   `PeerRepository.findByLoraNode` (newest `updatedAt` wins — a board that changed hands is claimed twice until
   the old holder's next profile drops it) **once, at ingest**, and freezes it as `messages.originPeerId`, so
@@ -736,8 +736,8 @@ each hear the channel for themselves.
   (`BLOCKED_CONTACT`). A row's body is shown word for word, since ADR 2026-09.9469 left nothing on the line
   but the words — a heard `"Sam: hi"` is a stranger's content, not a prefix to strip. The match rests on a
   self-asserted node number — **unless the signature checks out** (ADR 2026-09.ggq4). The profile also
-  carries the board's Curve25519 key (`ProfileContent.loraKey` ← `SettingsStore.loraBoardKey`, written with
-  the number in one edit and only while the board signs), `peers.loraKey` stores it, and `deliverMeshPost`
+  carries the board's Curve25519 key (`ProfileContent.loraKey` ← `SettingsStore.loraBoard.key`, written with
+  the number in one edit, read with it from one snapshot, and only while the board signs), `peers.loraKey` stores it, and `deliverMeshPost`
   verifies a signed post on the phone (`mesh/crypto/XeddsaVerify`, over `from ‖ id ‖ portnum ‖ payload` as
   heard — `MeshPost.payload`, never the trimmed body) and freezes the verdict on the row as
   `messages.originSigned`: `UNSIGNED` (nothing to say — pre-2.8 radios never sign, a post past the cliff

@@ -400,22 +400,21 @@ class SettingsStore(
     val loraChannelIndex: Flow<Int> = dataStore.data.map { it[KEY_LORA_CHANNEL] ?: 0 }
 
     /**
-     * The bound board's Meshtastic node number, as its last session reported it — what the profile advertises
-     * (`ProfileContent.loraNode`) so a contact can line a post their board heard up with this phone.
+     * The bound board as its last session reported it — its Meshtastic node number and, on firmware that
+     * signs, its key — or null while unbound. What the profile advertises (`ProfileContent.loraNode` /
+     * `loraKey`) so a contact can line a post their board heard up with this phone and verify it is ours.
      *
      * Persisted rather than read off the live link on purpose: the link drops on every BLE hiccup, and a
      * value that flipped to null with it would bump the profile version and re-flood the profile on each
      * reconnect. This changes only when a *different* board reports in, and clears with the binding.
+     *
+     * One flow over one snapshot, not a node flow beside a key flow: the profile watcher republishes on
+     * every emission, and two projections of the same edit are two collectors that can each run against a
+     * different snapshot — one edit seen as two, or a bind missed outright by the collector that only woke
+     * for the unbind after it, which then never republishes the clear.
      */
-    val loraBoardNode: Flow<Long?> = dataStore.data.map { it[KEY_LORA_NODE] }
-
-    /**
-     * The bound board's Curve25519 public key (base64 of 32 bytes), beside [loraBoardNode] — what the profile
-     * advertises (`ProfileContent.loraKey`) so a contact's phone can verify the posts firmware 2.8 signs for
-     * us. Null while unbound, and on a board whose firmware does not sign: a key that never signs verifies
-     * nothing, so it is not advertised. Written and cleared together with the node number, in one edit.
-     */
-    val loraBoardKey: Flow<String?> = dataStore.data.map { it[KEY_LORA_KEY] }
+    val loraBoard: Flow<LoraBoard?> =
+        dataStore.data.map { prefs -> prefs[KEY_LORA_NODE]?.let { LoraBoard(it, prefs[KEY_LORA_KEY]) } }
 
     /**
      * The LoRa plane's rate limiters as its last process left them, as a JSON blob
@@ -605,9 +604,9 @@ class SettingsStore(
     }
 
     /**
-     * The bound board reported its node number and, on firmware that signs, its key ([loraBoardNode],
-     * [loraBoardKey]). One edit on purpose: the profile republishes on every change to either, so writing
-     * them separately would flood it twice for one board.
+     * The bound board reported its node number and, on firmware that signs, its key ([loraBoard]). One edit
+     * on purpose: the profile republishes on every change to either, so writing them separately would flood
+     * it twice for one board.
      */
     suspend fun setLoraBoard(
         node: Long,

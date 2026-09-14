@@ -102,8 +102,8 @@ internal class LoraMeshTransport(
     /**
      * The bound board's node number and signing key, reported each time its session comes up. What the
      * profile advertises so a contact's phone can line a heard post up with this one and verify it
-     * (`SettingsStore.loraBoardNode` / `loraBoardKey`); persisted by the caller, so a link drop does not
-     * unsay it and only a different board changes it.
+     * (`SettingsStore.loraBoard`); persisted by the caller, so a link drop does not unsay it and only a
+     * different board changes it.
      */
     private val onBoardBound: suspend (BoardBinding) -> Unit = {},
     private val scope: CoroutineScope,

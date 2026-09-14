@@ -25,6 +25,7 @@ import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.GroupRootRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
 import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.data.settings.LoraBoard
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
@@ -71,7 +72,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -80,7 +80,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -99,6 +98,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Drives the **real** [MeshManager] outbound send-and-originate workflow — `sendChat` and the origination
@@ -134,12 +134,14 @@ class MeshManagerTest {
     private class RecordingTransport(
         scope: CoroutineScope,
     ) : MeshTransport {
-        val sent = mutableListOf<Pair<WireEnvelope, Peer?>>()
-        val longRangeFanouts = mutableListOf<WireEnvelope>()
-        val longRangeHints = mutableListOf<FanoutHint>()
-        val fastFanouts = mutableListOf<WireEnvelope>()
-        val fastSends = mutableListOf<Pair<WireEnvelope, Peer>>()
-        val internetCovers = mutableListOf<Set<String>>()
+        // Appended by the manager's session coroutines (a real Default thread) while a test's `await` poll
+        // reads them from another: snapshot-iterated, so a read never trips over a write in flight.
+        val sent = CopyOnWriteArrayList<Pair<WireEnvelope, Peer?>>()
+        val longRangeFanouts = CopyOnWriteArrayList<WireEnvelope>()
+        val longRangeHints = CopyOnWriteArrayList<FanoutHint>()
+        val fastFanouts = CopyOnWriteArrayList<WireEnvelope>()
+        val fastSends = CopyOnWriteArrayList<Pair<WireEnvelope, Peer>>()
+        val internetCovers = CopyOnWriteArrayList<Set<String>>()
 
         /** Drivable, so a test can bring a peer into range (the met-peers watcher reads the nearby set). */
         val nearby = MutableStateFlow<Set<Peer>>(emptySet())
@@ -203,6 +205,7 @@ class MeshManagerTest {
 
     /** Minimal in-memory [ForwardStore] so a test can assert what the send path captured for custody. */
     private class FakeForwardStore : ForwardStore {
+        // Written from the manager's session coroutines and read by a test's `await` poll on another thread.
         private val frames = linkedMapOf<String, CarriedFrame>()
 
         override suspend fun store(
@@ -210,28 +213,28 @@ class MeshManagerTest {
             origin: Int,
             now: Long,
         ): Boolean {
-            frames.putIfAbsent(frame.envelope.id, frame)
+            synchronized(frames) { frames.putIfAbsent(frame.envelope.id, frame) }
             return true
         }
 
-        override suspend fun liveFrames(now: Long): List<CarriedFrame> = frames.values.toList()
+        override suspend fun liveFrames(now: Long): List<CarriedFrame> = frames()
 
-        override suspend fun liveIds(now: Long): List<String> = frames.keys.toList()
+        override suspend fun liveIds(now: Long): List<String> = synchronized(frames) { frames.keys.toList() }
 
         override suspend fun attachmentHashesNeedingFetch(): List<String> = emptyList()
 
-        override suspend fun recipientOf(id: String): String? = frames[id]?.envelope?.recipientId
+        override suspend fun recipientOf(id: String): String? = synchronized(frames) { frames[id]?.envelope?.recipientId }
 
-        override suspend fun has(id: String): Boolean = frames.containsKey(id)
+        override suspend fun has(id: String): Boolean = synchronized(frames) { frames.containsKey(id) }
 
         override suspend fun remove(id: String) {
-            frames.remove(id)
+            synchronized(frames) { frames.remove(id) }
         }
 
         override suspend fun sweepExpired(now: Long): Int = 0
 
         /** Insertion-ordered view of everything custodied, for asserting what a re-serve would hand over. */
-        fun frames(): List<CarriedFrame> = frames.values.toList()
+        fun frames(): List<CarriedFrame> = synchronized(frames) { frames.values.toList() }
     }
 
     /** An in-memory [CommonsStore]: one joined room, everything the manager writes to it recorded. */
@@ -272,12 +275,6 @@ class MeshManagerTest {
             swept = before
         }
     }
-
-    /** A bound board as [SettingsStore.setLoraBoard] records it: its number and, on firmware that signs, its key. */
-    private data class Board(
-        val node: Long,
-        val key: String?,
-    )
 
     /** The manager under test, wired with real crypto + a recording transport + real custody + mocked repos. */
     private inner class Rig(
@@ -330,20 +327,13 @@ class MeshManagerTest {
         val openToChat = MutableStateFlow(false)
 
         /**
-         * The bound LoRa board — its node number and, on firmware that signs, its key — null until one reports
-         * in. One flow, as [SettingsStore.setLoraBoard] is one edit: the two settings flows the watcher folds
-         * into its fifth input are projections of it, the way the store's are of its one `data`. Two flows
-         * written one after the other would let the watcher (on a real Default thread) build a frame between
-         * the writes — a number without its key, or a cleared number beside a key not yet cleared — a state
-         * no phone produces, and one that flaked the clear step on CI.
+         * The bound LoRa board, the fifth input — null until one reports in. One [SettingsStore.loraBoard]
+         * value per edit, as on a phone: a bind or an unbind reaches the watcher as exactly one emission of
+         * one collector, so a test that saw the bind's flood knows the watcher holds the board before it
+         * clears it. (Two projections of this flow gave the watcher two collectors, and the one that missed
+         * the bind saw the unbind as no change — the clear step's CI flake.)
          */
-        val loraBoard = MutableStateFlow<Board?>(null)
-
-        /** [SettingsStore.loraBoardNode]: the bound board's number. */
-        val loraBoardNode: Flow<Long?> = loraBoard.map { it?.node }
-
-        /** [SettingsStore.loraBoardKey]: the bound board's signing key (base64), null on a board that does not sign. */
-        val loraBoardKey: Flow<String?> = loraBoard.map { it?.key }
+        val loraBoard = MutableStateFlow<LoraBoard?>(null)
 
         // Hoisted so a test can pre-shape group-ratchet state (e.g. a stale outbox ack) around the
         // manager's own send/flush paths — same instance the manager is wired with below.
@@ -364,8 +354,7 @@ class MeshManagerTest {
         init {
             coEvery { identity.nodeId() } returns me.nodeId
             coEvery { settings.displayName } returns displayName
-            coEvery { settings.loraBoardNode } returns loraBoardNode
-            coEvery { settings.loraBoardKey } returns loraBoardKey
+            coEvery { settings.loraBoard } returns loraBoard
             // The local delivery of anything we originate runs the inbound path, whose first act is a
             // blocklist read with `.first()`. A relaxed mock's empty flow throws there rather than hanging.
             coEvery { settings.blockedNodeIds } returns MutableStateFlow(emptySet())
@@ -432,8 +421,7 @@ class MeshManagerTest {
             coEvery { settings.status } returns MutableStateFlow("")
             coEvery { settings.avatarUpdatedAt } returns avatarUpdatedAt
             coEvery { settings.openToChat } returns openToChat
-            coEvery { settings.loraBoardNode } returns loraBoardNode
-            coEvery { settings.loraBoardKey } returns loraBoardKey
+            coEvery { settings.loraBoard } returns loraBoard
             // start() also reads the open-to-chat cue's persisted state once, with .first().
             coEvery { settings.openToChatNamed } returns MutableStateFlow(emptySet())
             coEvery { settings.openToChatLastPostAt } returns MutableStateFlow(0L)
@@ -2048,7 +2036,7 @@ class MeshManagerTest {
 
             rig.awaitProfileWatcher()
             rig.clockNow = rig.now + 26_000
-            rig.loraBoard.value = Board(0xdeadbeefL, "oR62IJmFUE0Tgcw0GcypU5ZqUFCQllVBy2snB/BKQA4=") // one edit: one flood
+            rig.loraBoard.value = LoraBoard(0xdeadbeefL, "oR62IJmFUE0Tgcw0GcypU5ZqUFCQllVBy2snB/BKQA4=") // one edit: one flood
             rig.await(1) { rig.floodedProfiles().size }
             val claimed = WireCodec.decodePayload<ProfileContent>(rig.floodedProfiles().single().payload)!!
             assertEquals("the profile now names the board", 0xdeadbeefL, claimed.loraNode)
@@ -2073,7 +2061,7 @@ class MeshManagerTest {
             rig.await(1) { rig.custodiedProfiles().size }
             rig.awaitProfileWatcher()
             rig.clockNow = rig.now + 26_000
-            rig.loraBoard.value = Board(0xdeadbeefL, key = null)
+            rig.loraBoard.value = LoraBoard(0xdeadbeefL, key = null)
             rig.await(1) { rig.floodedProfiles().size }
             val content = WireCodec.decodePayload<ProfileContent>(rig.floodedProfiles().single().payload)!!
             assertEquals(0xdeadbeefL, content.loraNode)

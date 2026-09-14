@@ -24,6 +24,7 @@ import app.getknit.knit.data.message.withReply
 import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.data.settings.LoraBoard
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.isValidReactionEmoji
@@ -2143,18 +2144,16 @@ class MeshManager(
 
     private fun watchProfileChanges(session: CoroutineScope) {
         session.launch {
-            // The board's number and key are written in one settings edit and move together, so they fold
-            // into one arm here — which also keeps the combine inside Kotlin's five-flow overload.
-            val board =
-                combine(settings.loraBoardNode, settings.loraBoardKey) { node, key -> node?.let { LoraBoardClaim(it, key) } }
+            // Five flows, each one settings edit: the board's number and key arrive as one value
+            // (SettingsStore.loraBoard), so a bind or an unbind is one emission here, never two.
             combine(
                 settings.displayName,
                 settings.status,
                 settings.avatarUpdatedAt,
                 settings.openToChat,
-                board,
-            ) { name, status, avatarAt, openToChat, claim ->
-                OwnPresentation(name, status, avatarAt, openToChat, claim)
+                settings.loraBoard,
+            ) { name, status, avatarAt, openToChat, board ->
+                OwnPresentation(name, status, avatarAt, openToChat, board)
             }.drop(1) // skip the initial stored value; only react to real edits
                 // A Save writes name+status in one transaction; without this the duplicate flow
                 // re-emits would broadcast more than once. Also drops no-op saves.
@@ -2289,8 +2288,9 @@ class MeshManager(
     private suspend fun currentProfilePayload(
         version: Long,
         avatarHash: String?,
-    ): MessageContent =
-        MessageContent(
+    ): MessageContent {
+        val board = settings.loraBoard.first()
+        return MessageContent(
             body = "",
             ctl = MessageContent.CTL_PROFILE,
             pr =
@@ -2300,10 +2300,11 @@ class MeshManager(
                     avatarHash = avatarHash,
                     version = version,
                     openToChat = settings.openToChat.first(),
-                    loraNode = settings.loraBoardNode.first(),
-                    loraKey = settings.loraBoardKey.first(),
+                    loraNode = board?.node,
+                    loraKey = board?.key,
                 ),
         )
+    }
 
     /**
      * The contact-card intro to [peerId] (`IntroSync`): one sealed `CTL_PROFILE` DM, exactly the frame
@@ -2389,6 +2390,8 @@ class MeshManager(
         // The current signed prekey rides every profile (v2 DM bootstrap) — its detached signature lets
         // receivers verify it against the bundle even stored apart from this frame.
         val spk = identity.currentPrekey(clock())
+        // One snapshot for both board fields: the number and key of the board this profile names must agree.
+        val board = settings.loraBoard.first()
         val content =
             ProfileContent(
                 // Normalize/cap defensively: covers legacy values stored before the field gained a cap and
@@ -2405,8 +2408,8 @@ class MeshManager(
                 openToChat = settings.openToChat.first(),
                 // The bound board's node number, so a contact's phone can line a heard radio post up with us —
                 // and, on a board that signs, the key that lets it verify the post is ours.
-                loraNode = settings.loraBoardNode.first(),
-                loraKey = settings.loraBoardKey.first(),
+                loraNode = board?.node,
+                loraKey = board?.key,
             )
         return RelayEnvelope(
             type = FrameType.PROFILE,
@@ -2874,13 +2877,7 @@ private data class OwnPresentation(
     val status: String,
     val avatarUpdatedAt: Long,
     val openToChat: Boolean,
-    val board: LoraBoardClaim?,
-)
-
-/** The bound board as the profile advertises it: its node number and, while it signs, its key (base64). */
-private data class LoraBoardClaim(
-    val node: Long,
-    val key: String?,
+    val board: LoraBoard?,
 )
 
 /** `"<peerId>|<millis>"` entries ↔ a peer→stamp map, the intro driver's two settings sets. */

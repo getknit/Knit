@@ -14,7 +14,7 @@ Phones talk straight to each other over Wi-Fi Aware and Bluetooth LE, relaying f
 ![Transports](https://img.shields.io/badge/radios-Wi--Fi%20Aware%20%2B%20BLE-00BCD4)
 ![Encryption](https://img.shields.io/badge/DMs%20%26%20groups-E2E%20%2B%20forward%20secrecy-2EA043?logo=signal&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
-[![Latest release](https://img.shields.io/github/v/release/getknit/knit?label=release&color=FF6F61)](https://github.com/getknit/knit/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/getknit/knit?label=release&color=E55E4C)](https://github.com/getknit/knit/releases/latest)
 [![Knit changelog on whatsnew.fyi](https://whatsnew.fyi/product/knit/badge.svg)](https://whatsnew.fyi/product/knit)
 
 <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01_chat-nearby.png"

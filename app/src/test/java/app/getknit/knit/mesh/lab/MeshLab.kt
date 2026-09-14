@@ -588,7 +588,7 @@ class LabNode internal constructor(
     }
 
     /** Posts in the Nearby room; the frame the app's composer would send. */
-    suspend fun sendRoom(text: String): Boolean = manager.sendChat(text = text)
+    suspend fun sendRoom(text: String): Boolean = spaced { manager.sendChat(text = text) }
 
     /** Runs the local-storage sweep the 10-minute prune loop runs, now. */
     suspend fun sweepLocalStorage() = manager.sweepLocalStorage()
@@ -597,7 +597,7 @@ class LabNode internal constructor(
     suspend fun sendDm(
         to: LabNode,
         text: String,
-    ): Boolean = manager.sendChat(text = text, recipientId = to.nodeId)
+    ): Boolean = spaced { manager.sendChat(text = text, recipientId = to.nodeId) }
 
     /**
      * Creates a group with [others], the way `ContactsViewModel.createGroup` does (mirrored here because the
@@ -633,7 +633,22 @@ class LabNode internal constructor(
         text: String,
     ): Boolean {
         val group = checkNotNull(groups.find(groupId)) { "$name holds no group $groupId" }
-        return manager.sendChat(text = text, group = group.toGroupInfo())
+        return spaced { manager.sendChat(text = text, group = group.toGroupInfo()) }
+    }
+
+    /**
+     * Runs one send, then lets the wall clock tick over before returning, so no two of this node's frames
+     * share a `sentAt`. A warm JIT sends in under a millisecond, and two posts stamped alike have no
+     * "newer": the DAO's tiebreak is the random frame id, so which one a room sweep keeps — or which of two
+     * reactions wins the LWW race — is a coin flip (`RoomFloodLabTest` flaked on CI exactly there). A phone
+     * never produces that tie; the lab must not either. A spin, not a skewed clock: the manager's clock
+     * stays the wall clock every peer shares, so nothing here can push a frame into a peer's future.
+     */
+    private inline fun <T> spaced(send: () -> T): T {
+        val result = send()
+        val stamped = System.currentTimeMillis()
+        while (System.currentTimeMillis() <= stamped) Thread.onSpinWait()
+        return result
     }
 
     // --- what a test reads back ---

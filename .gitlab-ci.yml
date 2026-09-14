@@ -188,7 +188,10 @@ test:mesh-lab:
 # koverXmlReportDebug depends on testDebugUnitTest, so the report tasks run the tests themselves. Kept a
 # separate job (not folded into test:unit) to mirror the detekt/trivy advisory-verify pattern and keep the
 # pass/fail test signal clean; the tradeoff is it re-runs the Robolectric suite. allow_failure so coverage
-# never blocks. The `coverage:` regex scrapes the % that koverLogDebug prints so GitLab shows it on the MR
+# never blocks. The mesh/lab scenarios are left out (-Pknit.skipMeshLab): they wait on wall-clock
+# convergence, instrumentation slows the suite ~3x, and a lab timeout here fails testDebugUnitTest before
+# the report tasks run — job 4347 shipped no artifacts at all for that reason. test:mesh-lab already runs
+# them three times uninstrumented, so the coverage % simply does not count their lines. The `coverage:` regex scrapes the % that koverLogDebug prints so GitLab shows it on the MR
 # and as the pipeline badge. HTML (browsable) + XML (JaCoCo format) are archived.
 test:coverage:
   extends: .android
@@ -198,7 +201,7 @@ test:coverage:
     # Same compile/run split as test:unit — the Kover report tasks run the suite themselves, so this job
     # has exactly the same daemon-plus-forked-test-JVM overlap that OOM-killed job 3500.
     - *compile-unit-tests
-    - ./gradlew :app:koverXmlReportDebug :app:koverHtmlReportDebug :app:koverLogDebug --stacktrace --console=plain
+    - ./gradlew :app:koverXmlReportDebug :app:koverHtmlReportDebug :app:koverLogDebug -Pknit.skipMeshLab=true --stacktrace --console=plain
   coverage: '/application line coverage: \d+\.\d+%/'
   artifacts:
     when: always

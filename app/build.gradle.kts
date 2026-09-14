@@ -377,6 +377,12 @@ android {
     }
 
     testOptions {
+        val skipMeshLab =
+            providers
+                .gradleProperty("knit.skipMeshLab")
+                .map(String::toBoolean)
+                .orElse(false)
+                .get()
         // Run instrumentation tests under Android Test Orchestrator (each test in its own process; combined
         // with the `clearPackageData` runner arg above). Only affects LOCAL connectedDebugAndroidTest —
         // FTL injects its own orchestrator via `--use-orchestrator`. animationsDisabled stabilizes UI tests.
@@ -397,6 +403,12 @@ android {
             // ApplicationSharedMemory is what walks into the interceptor. This is Robolectric's own
             // published list, kept verbatim so it can be diffed against the docs on the next bump.
             all { test ->
+                // `-Pknit.skipMeshLab=true` drops the mesh-in-a-box scenarios (app/src/test/.../mesh/lab/)
+                // from the run. They are wall-clock convergence waits (MeshLab.AWAIT_MS) and Kover's
+                // instrumentation slows the suite ~3x, so the coverage job ran them into their timeouts,
+                // failed testDebugUnitTest, and never produced a report; test:mesh-lab already runs them
+                // three times uninstrumented. `--tests` cannot express an exclude, hence the property.
+                if (skipMeshLab) test.filter.excludeTestsMatching("app.getknit.knit.mesh.lab.*")
                 test.jvmArgs(
                     "--add-opens=java.base/java.lang=ALL-UNNAMED",
                     "--add-opens=java.base/java.util=ALL-UNNAMED",

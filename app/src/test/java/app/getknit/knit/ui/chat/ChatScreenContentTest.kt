@@ -67,6 +67,7 @@ class ChatScreenContentTest {
     private var cancelledReply = 0
     private var files = 0
     private var clearedLocations = 0
+    private var locationClicks = 0
     private var accepts = 0
     private var consentsAccepted = 0
 
@@ -97,6 +98,7 @@ class ChatScreenContentTest {
                     pendingAttachment = pendingAttachment,
                     stagedLocation = stagedLocation,
                     onClearLocation = { clearedLocations++ },
+                    onLocationClick = { locationClicks++ },
                     linkPreviewLoading = linkPreviewLoading,
                     onDraftChanged = onDraftChanged,
                     replyingTo = replyingTo,
@@ -711,7 +713,9 @@ class ChatScreenContentTest {
         compose.onNodeWithTag("chat_location_staged").assert(hasContentDescription("Sent only to this chat", substring = true))
         compose.onNodeWithText("Refresh").assertIsDisplayed()
         compose.onNodeWithContentDescription("Send").assertIsDisplayed()
-        compose.onNodeWithTag("chat_attach_location").assertDoesNotExist()
+        // The overflow drops its offer while a tile is staged: the tile's Refresh is the way to ask again.
+        compose.onNodeWithContentDescription("More options").performClick()
+        compose.onNodeWithTag("chat_send_location").assertDoesNotExist()
         compose.onNodeWithTag("chat_location_clear").performClick()
         assertEquals(1, clearedLocations)
     }
@@ -734,20 +738,30 @@ class ChatScreenContentTest {
     }
 
     @Test
-    fun thePinIsOfferedInTheRoomAndInADmButNeverInTheBridgedRoom() {
+    fun sendLocationLivesInTheRoomsOverflowAndNowhereInTheField() {
         compose.setContent(content(input = "", state = ChatUiState(isRoom = true, myNodeId = "me")))
-        compose.onNodeWithTag("chat_attach_location").assertIsDisplayed()
-    }
-
-    @Test
-    fun thePinIsHiddenInTheBridgedRoom() {
-        compose.setContent(content(input = "", state = ChatUiState(isRoom = false, isBridged = true, myNodeId = "me")))
         compose.onNodeWithTag("chat_attach_location").assertDoesNotExist()
+        compose.onNodeWithContentDescription("More options").performClick()
+        compose.onNodeWithTag("chat_send_location").assertIsDisplayed()
+        // The room's menu is that one item: nobody to block, nothing to configure.
+        compose.onNodeWithTag("chat_send_large_file").assertDoesNotExist()
+        compose.onNodeWithText("Block").assertDoesNotExist()
+        compose.onNodeWithTag("chat_send_location").performClick()
+        assertEquals(1, locationClicks)
     }
 
     @Test
-    fun thePinGivesWayOnceThereIsSomethingToSend() {
+    fun sendLocationLeadsADmsOverflowAndStaysOfferedWithADraft() {
         compose.setContent(content(input = "hello", state = ChatUiState(isRoom = false, myNodeId = "me")))
-        compose.onNodeWithTag("chat_attach_location").assertDoesNotExist()
+        compose.onNodeWithContentDescription("More options").performClick()
+        compose.onNodeWithTag("chat_send_location").assertIsDisplayed()
+        compose.onNodeWithTag("chat_send_large_file").assertIsDisplayed()
+    }
+
+    @Test
+    fun theBridgedRoomOffersNoMenuAndSoNoLocation() {
+        compose.setContent(content(input = "", state = ChatUiState(isRoom = false, isBridged = true, myNodeId = "me")))
+        compose.onNodeWithContentDescription("More options").assertDoesNotExist()
+        compose.onNodeWithTag("chat_send_location").assertDoesNotExist()
     }
 }

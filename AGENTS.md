@@ -55,7 +55,7 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   `DirectWifi`/`TransferFiles`/`TransferSignals` seams, and `AndroidDirectWifi` is the one
   `android.net.wifi.p2p` importer. Wi-Fi Aware does **not** yield to our own P2P on Android 12+, so it must
   be paused explicitly — that is what `pause`/`resume` are for.
-- **When touching `location/`, the composer's "Send location" pin, or anything that reads the device's
+- **When touching `location/`, the chat overflow's "Send location" item, or anything that reads the device's
   position:** READ ADR 2026-09.tss4. A shared position is a `geo:` line in the message body (no wire field,
   no capability bit); it is read only between the pin tap and the send, by `ChatViewModel.startLocation`,
   the one collector of `LocationSource.fixes`, and `location/AndroidLocationSource` is the one

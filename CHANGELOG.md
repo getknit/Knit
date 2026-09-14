@@ -25,7 +25,7 @@ document:
 - Knit can take its colours from your wallpaper, the way Android does for its own apps. It stays off until
   you turn it on in Settings on Android 12 or newer, and the online dot and verified shield stay green
   either way.
-- You can send where you are from the pin in the message field. Knit reads your position only between
+- You can send where you are from the menu at the top of a chat. Knit reads your position only between
   that tap and the send, and the other phone gets a card that opens in any maps app. Android asks for the
   permission the first time you use it, never before.
 - Settings now lets you set Knit to light or dark instead of following your phone. It follows your phone

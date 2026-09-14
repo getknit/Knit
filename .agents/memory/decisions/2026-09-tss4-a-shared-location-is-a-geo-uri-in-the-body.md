@@ -72,3 +72,13 @@ so it goes through the same gate and the same tile, or it does not go in. What k
 `GeoUriTest`, `LocationFixPolicyTest`, the location cases in `ChatViewModelTest` (a `FakeLocationSource`
 that counts collectors), `ChatScreenContentTest`, `MeshManagerTest`'s capture of what the moderator was
 handed, `LexicalTextFilterTest`, `MentionTextTest` (a geo URI is not a link), and `PermissionsTest`.
+
+**Amended 2026-09-14 (the offer moved to the overflow):** the pin in the message field is gone. "Send
+location" is now the first item of the chat's top-bar overflow (`chat_send_location`), which for that
+reason now exists on the Nearby room too — its only item there, since the room has nobody to block and
+nothing to configure. The bridged room and the commons still have no menu, so nothing can be staged in
+either. The item is offered whenever no tile is staged, draft or not (the pin used to yield to anything
+sendable, a layout rule of the field, not a product one); once a tile stands the item is dropped, because
+the tile's own Refresh is the way to ask again. Everything downstream of the tap — the disclosure, the
+gate, `startLocation` as the one collector, the tile — is unchanged. `ChatScreenContentTest` pins the
+placement.

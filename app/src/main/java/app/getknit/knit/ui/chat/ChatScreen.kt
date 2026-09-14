@@ -678,8 +678,8 @@ internal fun ChatScreenContent(
     showPublicConsent: Boolean = false,
     onAcceptPublicConsent: () -> Unit = {},
     onDismissPublicConsent: () -> Unit = {},
-    // "Send location": the composer's staged position, the pin's first-use disclosure, and the pin's own
-    // actions. All defaulted so the previews and the content tests need not name them.
+    // "Send location": the composer's staged position, the first-use disclosure, and the overflow item's
+    // and tile's actions. All defaulted so the previews and the content tests need not name them.
     stagedLocation: ChatViewModel.StagedLocation? = null,
     showLocationConsent: Boolean = false,
     onAcceptLocationConsent: () -> Unit = {},
@@ -1022,12 +1022,16 @@ internal fun ChatScreenContent(
                     }
                 },
                 actions = {
-                    // The overflow lives on DM and group threads (the broadcast room has no actions).
-                    // A DM offers Block/Unblock; a group offers Settings, which opens the same
-                    // group-details screen as tapping the group avatar (the avatar tap stays too).
-                    // Neither room offers anything: the bridged one has no peer to block — its authors are
-                    // not peers, and blocking the gateway would silence a contact over somebody else's post.
-                    if (!state.isRoom && !state.isBridged && !state.isCommons) {
+                    // The overflow lives on DM and group threads and the Nearby room. Every one of them offers
+                    // "Send location" (ADR 2026-09.tss4) — from here rather than a pin in the message field, so
+                    // the field keeps to the mic and the paperclip and a position is a deliberate reach, not a
+                    // thumb-slip away from the keyboard. Then a DM offers Block/Unblock; a group offers Settings,
+                    // which opens the same group-details screen as tapping the group avatar (the avatar tap
+                    // stays too). The bridged room and the commons have no menu at all: neither carries a
+                    // position (a text-only channel, and a text-only room), and the bridged one has no peer to
+                    // block — its authors are not peers, and blocking the gateway would silence a contact over
+                    // somebody else's post.
+                    if (!state.isBridged && !state.isCommons) {
                         Box {
                             IconButton(onClick = { headerMenuOpen = true }, modifier = Modifier.size(48.dp)) {
                                 Icon(
@@ -1039,6 +1043,21 @@ internal fun ChatScreenContent(
                                 expanded = headerMenuOpen,
                                 onDismissRequest = { headerMenuOpen = false },
                             ) {
+                                // Gone while a position is staged: the tile above the field already carries
+                                // Refresh, and a second entry that restarted the same fix would only look like
+                                // it did something else.
+                                if (stagedLocation == null) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.chat_attach_location)) },
+                                        leadingIcon = { Icon(Icons.Filled.LocationOn, contentDescription = null) },
+                                        modifier = Modifier.testTag("chat_send_location"),
+                                        onClick = {
+                                            headerMenuOpen = false
+                                            onLocationClick()
+                                        },
+                                    )
+                                }
+                                // The room's menu ends there: nobody to block, nothing to configure.
                                 if (state.isGroup) {
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.chat_group_settings)) },
@@ -1049,7 +1068,7 @@ internal fun ChatScreenContent(
                                             onOpenGroupDetails(conversationId)
                                         },
                                     )
-                                } else {
+                                } else if (!state.isRoom) {
                                     // A direct transfer rides a one-shot Wi-Fi Direct link, not the mesh, so it is
                                     // a DM affair: one peer, in range, running a build that answers.
                                     DropdownMenuItem(
@@ -1120,12 +1139,11 @@ internal fun ChatScreenContent(
                         // Files are DM/group only, for the reason voice notes are: nothing on the device can screen
                         // one, and the room floods unencrypted to everyone in range. See docs/CONTENT_MODERATION.md §7.
                         fileEnabled = state.canSendFile,
-                        // A position is offered everywhere but the bridged room, whose channel carries one line of
-                        // text — and the commons, text-only in this revision.
-                        locationEnabled = !state.isBridged && !state.isCommons,
+                        // The staged position's tile. The offer itself lives in the top bar's overflow, which is
+                        // absent from the bridged room (a channel of one line of text) and the commons (text-only
+                        // in this revision), so no tile can be staged there.
                         locationScopeIsRoom = state.isRoom,
                         stagedLocation = stagedLocation,
-                        onLocationClick = onLocationClick,
                         onClearLocation = onClearLocation,
                         onRefreshLocation = onRefreshLocation,
                         onOpenLocationSettings = onOpenLocationSettings,
@@ -3485,12 +3503,10 @@ private fun MessageInput(
     // files is refused at the pick instead, by ChatViewModel.attachFile, so the refusal can say so.
     fileEnabled: Boolean = false,
     onFileClick: () -> Unit = {},
-    // "Send location", the pin inboard of the mic. Off in the bridged room only. `stagedLocation` is the
+    // "Send location" (offered from the top bar's overflow, not the field): `stagedLocation` is the
     // composer's staged position, drawn as a tile above the field until it is sent or cleared.
-    locationEnabled: Boolean = false,
     locationScopeIsRoom: Boolean = false,
     stagedLocation: ChatViewModel.StagedLocation? = null,
-    onLocationClick: () -> Unit = {},
     onClearLocation: () -> Unit = {},
     onRefreshLocation: () -> Unit = {},
     onOpenLocationSettings: () -> Unit = {},
@@ -3753,10 +3769,6 @@ private fun MessageInput(
             // something to send. That matches how attaching already works here — the trailing button is
             // Attach only until you type — so a file is picked first and captioned after, like a photo.
             val showFile = fileEnabled && voiceRecording == null && !canSend && !showSending
-            // The pin follows the paperclip's rule for when it shows, but takes the inboard slot, nearest the
-            // text: the buttons pack against the send button, so a new one at the *inner* end leaves the mic
-            // and the paperclip exactly where thumbs already find them, and the mic's hold gesture stays put.
-            val showLocation = locationEnabled && voiceRecording == null && !canSend && !showSending
             Row(verticalAlignment = Alignment.Bottom) {
                 // The field container holds the text field *and* the mic, the way Signal does: sharing the
                 // field's background makes the mic read as part of it rather than as a third button
@@ -3802,7 +3814,7 @@ private fun MessageInput(
                                         start = 16.dp,
                                         // The inline buttons carry 12dp of their own inset around the icon,
                                         // so the text only has to clear them rather than keep the full margin.
-                                        end = if (showMic || showFile || showLocation) 4.dp else 16.dp,
+                                        end = if (showMic || showFile) 4.dp else 16.dp,
                                         top = 12.dp,
                                         bottom = 12.dp,
                                     ),
@@ -3861,11 +3873,6 @@ private fun MessageInput(
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             )
                         }
-                    }
-                    // Inboard of the mic (see `showLocation`): the newest control takes the slot nearest the
-                    // text so the two that were already here do not move.
-                    if (showLocation) {
-                        AttachLocationButton(onClick = onLocationClick)
                     }
                     if (showMic) {
                         MicButton(
@@ -4126,32 +4133,6 @@ private fun AttachFileButton(onClick: () -> Unit) {
         Icon(
             Icons.Filled.AttachFile,
             contentDescription = stringResource(R.string.chat_attach_file),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp),
-        )
-    }
-}
-
-/**
- * "Send location": the pin in the field, inboard of the mic and styled as the paperclip's twin. The tap
- * stages a position (after the first-use disclosure and the system's own permission prompt, both asked
- * here and never at onboarding);
- * the position is read only from then until the send, and the tile above the field shows what was found.
- */
-@Composable
-private fun AttachLocationButton(onClick: () -> Unit) {
-    Box(
-        modifier =
-            Modifier
-                .size(48.dp)
-                .testTag("chat_attach_location")
-                .clip(CircleShape)
-                .clickable(onClick = onClick, role = Role.Button),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            Icons.Filled.LocationOn,
-            contentDescription = stringResource(R.string.chat_attach_location),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(24.dp),
         )

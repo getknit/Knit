@@ -217,7 +217,8 @@ Knit is built for situations where there's **no reliable network but people are 
   required.
   - Wi-Fi Aware uses Instant Communication Mode + `NEARBY_WIFI_DEVICES` on **API 33+**, falling back to
     `ACCESS_FINE_LOCATION` (location-scoped, no ICM) on **API 29–32**. The location permissions are
-    declared on every version for **Send location**, which asks for them the first time you tap the pin.
+    declared on every version for **Send location**, which asks for them the first time you pick it from
+    a chat's menu.
 - **JDK 21** and the **Android SDK** to build (versions in [Tech stack](#-tech-stack)).
 - Real mesh testing needs **two or more physical devices** — see [Running](#-running).
 
@@ -341,11 +342,11 @@ deliberately GMS-free dependency list.
 **Why does the app declare the location permission?**
 For two things, and it only ever asks for the permission when it needs one of them. On Android 10–12,
 finding peers over Wi-Fi Aware and Bluetooth LE requires it, so onboarding asks there — on Android 13+ it
-does not, and onboarding stays location-free. And for **Send location**: the pin in the composer reads
-your position once, between the tap and the send, shows you what it found, and puts it in the message as
-a `geo:` line the other phone draws as a card and can open in any maps app. That is the only place the
-app reads your position, never at start and never in the background. The first tap explains it, then
-lets Android ask.
+does not, and onboarding stays location-free. And for **Send location**, in the menu at the top of a
+chat: it reads your position once, between that tap and the send, shows you what it found, and puts it in
+the message as a `geo:` line the other phone draws as a card and can open in any maps app. That is the
+only place the app reads your position, never at start and never in the background. The first tap
+explains it, then lets Android ask.
 
 **How far can messages travel?**
 Further than any one radio reaches. Each phone relays for the others, so a message hops device to device

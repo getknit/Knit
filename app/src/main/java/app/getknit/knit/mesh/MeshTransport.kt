@@ -246,6 +246,17 @@ interface MeshTransport {
     fun suppressDataPath(peers: Set<String>) {}
 
     /**
+     * Hints that [peers] (by nodeId) were recently seen on a connected Internet spool (`ScopeSync`'s
+     * `peerSeenAt`, within `SPOOL_COVER_MS`), so a plane with no data path of its own need not spend air on
+     * a DM-form frame to them — the frame is in the spool anyway, and the spool is the reliable, free path
+     * (ADR 2026-09.y5f3). A **cover** hint and nothing more: it is fed from spool presence, never from a
+     * link, and must never become an election input (`LoraGatewayPolicy` reads [suppressDataPath]'s link
+     * set for that). Driven by `MeshManager`; forwarded to every child by [CompositeMeshTransport]. Default
+     * no-op — only the LoRa plane overrides it.
+     */
+    fun coveredByInternet(peers: Set<String>) {}
+
+    /**
      * Lends the Wi-Fi radio to another **same-app** role — the one-shot Wi-Fi Direct group of a direct file
      * transfer (`transfer/`). On Android 12+ two interface requests from one app carry equal priority and
      * neither evicts the other, so a transport whose radio cannot share (Wi-Fi Aware) has to let go of its

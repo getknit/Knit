@@ -299,12 +299,15 @@ internal data class RideGate(
 /**
  * Why a queued frame was refused at the moment it reached the air rather than sent. One per [RideGate]
  * question, because "the queue held it until the answer changed" is only actionable if it says *which*
- * answer: [LINKED] means the plane is doing its job, [STALE] means the queue is running deeper than the
- * freshness window, and [PASSIVE] means a co-pocket board took the role mid-flight.
+ * answer: [LINKED] and [INTERNET] mean the plane is doing its job, [STALE] means the queue is running deeper
+ * than the freshness window, and [PASSIVE] means a co-pocket board took the role mid-flight.
  */
 internal enum class StaleAtSend {
     /** A better plane linked to the addressee while this waited; the link has carried it. */
     LINKED,
+
+    /** The addressee turned up on a connected spool while this waited; the spool carries it (ADR 2026-09.y5f3). */
+    INTERNET,
 
     /** It aged past [LoraFramePolicy.FRESH_MS] in the queue; it is custody's business now, not a live plane's. */
     STALE,

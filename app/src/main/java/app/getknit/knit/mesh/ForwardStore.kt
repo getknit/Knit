@@ -71,6 +71,17 @@ interface ForwardStore {
 
     suspend fun has(id: String): Boolean
 
+    /**
+     * The carried frame [id] as this store holds it — the bytes every plane must put on air for that id
+     * (ADR 2026-09.y5f3): a second signing of the same id over content that moved underneath it is a variant
+     * no digest can reconcile. Null when not held or expired. The default walks [liveFrames]; the Room
+     * implementation reads the row.
+     */
+    suspend fun frame(
+        id: String,
+        now: Long,
+    ): CarriedFrame? = liveFrames(now).firstOrNull { it.envelope.id == id }
+
     suspend fun remove(id: String)
 
     /** Drops every frame whose TTL has elapsed by [now]; returns how many were removed. */

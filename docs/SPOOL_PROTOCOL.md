@@ -1097,11 +1097,20 @@ nor bounces between client and spool eviction. §6.2's guards close the loop fro
 |-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **C-9.4-1** | A blob that passes §4.4 MUST re-enter delivery wrapped in a fresh mesh envelope with a full hop budget — the custody re-serve shape: same `signed`/`sig`, ttl reset, hops 0 — flowing through the ordinary inbound path. |
 | **C-9.4-2** | Symmetrically, frames the member custodies for a scope, whether from the mesh or from its own sends, are sealed and pushed.                                                                                              |
+| **C-9.4-3** | A member MAY push a frame it does **not** custody, under the same §4.4 frame-set rule, the same C-9.2-1 guard and the same size bounds as any push — and MUST then account it per §9.6, so its own digest folds the blob it will never hold and its own heal loop never pulls it back. The receiving member sees an ordinary blob (C-9.4-1). |
 
 Flood-dedup, idempotent persistence, roster vetting and custody capture are all unchanged. One
 Internet-connected member thus bridges a whole radio island in both directions with zero new
 delivery
 semantics.
+
+> **Why C-9.4-3.** A room post's delivery tick is a `relay = false` frame by design — point-to-point,
+> never flooded, never custodied, because one custody row per acker on every carrier is more than a
+> room's tick is worth (ADR 2026-09.aa27). When the author is reachable through the relay and nothing
+> else, the tick still has a scope it belongs in; the direct push puts it there without the custody
+> step, and the accounting is what keeps the pusher's digest honest about a blob it deliberately does not
+> hold. `relay` is not part of the sealed record, so the author pulls it as any frame and custodies it as
+> any receipt it pulls — the "no custody row" holds on the pusher (ADR 2026-09.y5f3).
 
 ### 9.5 Attachments: fetch and refill
 
@@ -1221,7 +1230,7 @@ a relay.
 
 | ID          | Requirement                                                                                                                                                                          |
 |-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **C-9.6-1** | A pulled blob that passed §4.4 and was bridged per §9.4, but that local custody does **not** hold once delivery returns, MUST enter a bounded per-(spool, scope) **accounted set**. |
+| **C-9.6-1** | A pulled blob that passed §4.4 and was bridged per §9.4, but that local custody does **not** hold once delivery returns, MUST enter a bounded per-(spool, scope) **accounted set** — as MUST a blob the member pushed without custodying it (C-9.4-3). |
 | **C-9.6-2** | An accounted id MUST be folded into the client's local scope digest and counted as held, and MUST NOT be pulled again.                                                            |
 | **C-9.6-3** | An accounted id MUST be dropped as soon as a `list` for its scope no longer names it, and MUST NOT be folded in while the same id is also held in custody.                        |
 | **C-9.6-4** | The accounted set MUST outlive a connection. Retaining it across a process restart is permitted, not required.                                                                    |
@@ -1596,6 +1605,7 @@ wire.
 | §8 proof of work                                | Shipped both sides                                                                                                                         | `SpoolPow`                                                       |
 | §9.1–§9.4 heal loop, guard, invalid set, bridge | Shipped                                                                                                                                    | `ScopeSync`                                                      |
 | §9.6 accounted set                              | Shipped, per-connection lifetime only — a process restart re-pulls the band once (C-9.6-4 permits it)                                       | `ScopeSync`                                                      |
+| §9.4 C-9.4-3 direct push                        | Shipped — one frame class today, a room post's `relay = false` delivery tick at its ride deadline (ADR 2026-09.y5f3)                        | `ScopeSync.pushDirect`                                           |
 | §9.5 attachment fetch and refill                | Shipped, minus persisted partial downloads (§11)                                                                                           | `ScopeSync`, `ScopeAttachments`                                  |
 | §9.5 push-half deferral                         | Shipped, DM scopes only                                                                                                                    | `AttachmentDeferPolicy`                                          |
 | §10 Tor for the IP edge                         | Deferred                                                                                                                                   | §11                                                              |
@@ -1630,3 +1640,4 @@ the plane itself was unaffected either time, since a spool never decodes a frame
 | 2026-09-12 | **The commons (§7.4).** One shared scope per spool for a private relay's membership: the invite grammar, the two derivations (the spool's bare-hash id under the transport-plane prefix, the members' HKDF seal keys), the HELLO advertisement that never carries the id, pinned bounds, no creation gates, the non-striking spool-wide push budget, and the client half — a `profile`-plus-`commons` frame set, a post door that bypasses §9.4, bounded deferral of a post ahead of its author's profile, accounted-by-construction, the member's own profile kept live, single-spool affinity. §1.4 wording, §3.4 row, §12.2 defaults, five §13 derivation rows and two record vectors appended | **Spools:** optional; a spool with no commons omits the field and is unaffected. **Clients:** a new `commons` mesh frame type (non-custodial, additive) and a new label family under `knit/spool/v1/commons…`; no existing record, derivation or vector moved |
 | 2026-09-13 | **Client hardening against a hostile spool (ADR 2026-09.amzn).** §9.3 gains C-9.3-3 (an invalid entry may go once unlisted) and C-9.3-4 (the event path never quarantines); §9.5 C-9.5-11 (an attachment quarantine may expire at the scope TTL); §9.1 C-9.1-3…5 (an over-long `list` is refused whole; a silent spool is dropped after consecutive unanswered requests; a refused scope is parked, not re-`sub`bed every tick); §12.2 rows for the three. All client-side | None for spools. Clients: none of it is observable on the wire beyond fewer records — no record, derivation or vector moved |
 | 2026-09-12 | **Send-side moderation (§7.5).** One optional HELLO bool, `moderation`, by which an operator asks clients to run their on-device content screen before sending and to withhold what it flags, with no sender override; strictest wins across a multi-homed scope; receive-side behaviour untouched; no data-path change at the spool. §10.2 bullet, one §13 record vector appended | **Spools:** optional; a spool that does not set it omits the field and is unaffected. **Clients:** tolerate-and-ignore until the client half lands; no existing record, derivation or vector moved |
+| 2026-09-13 | **The direct push (§9.4 C-9.4-3, ADR 2026-09.y5f3).** A member may push a frame it does not custody — today one class, a room post's `relay = false` delivery tick at its ride deadline — under the ordinary §4.4 rule, C-9.2-1 and the size bounds, and must account it per §9.6 (C-9.6-1 gains the second writer). Appendix A row for `ScopeSync.pushDirect`. All client-side | None for spools: a pushed blob is a pushed blob. Clients: none of it is observable on the wire — no record, derivation or vector moved |

@@ -366,6 +366,11 @@ class CompositeMeshTransport(
         }
     }
 
+    /** Every child hears the Internet cover; only a plane with no data path acts on it (ADR 2026-09.y5f3). */
+    override fun coveredByInternet(peers: Set<String>) {
+        for (child in children) child.coveredByInternet(peers)
+    }
+
     /**
      * The long-range fan-out goes to every child and each decides for itself (the interface default is a
      * no-op; only a plane with no data path overrides it). Deliberately NO `send(wire, null)` fallback for a

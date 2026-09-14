@@ -195,6 +195,12 @@ internal class LoraMeshTransport(
     @Volatile
     private var linkedPeers: Set<String> = emptySet()
 
+    // Peers a connected spool was recently a path to (`coveredByInternet`, ADR 2026-09.y5f3). A cover for
+    // DM-form traffic only — the spool carries it for free — and deliberately NOT an election input: a
+    // spool-present board-holder is not a co-pocket rival, and the role must not move on it.
+    @Volatile
+    private var internetPeers: Set<String> = emptySet()
+
     @Volatile
     private var currentConfig: LoraConfig? = null
 
@@ -503,6 +509,11 @@ internal class LoraMeshTransport(
         recomputeRole()
     }
 
+    override fun coveredByInternet(peers: Set<String>) {
+        internetPeers = peers
+        publishStatus() // no recomputeRole(): a cover, never an election input
+    }
+
     /**
      * Sets the connected board up for Knit — the one-tap alternative to configuring a Meshtastic board by
      * hand. On [ProvisionResult.Provisioned] the settings VM persists the returned index so this plane binds
@@ -541,10 +552,7 @@ internal class LoraMeshTransport(
         }
         if (!LoraFramePolicy.eligible(env, wire, LoraFramePolicy.Path.FANOUT)) return
         if (LoraFramePolicy.isDmForm(env) && currentConfig?.dms != true) return // the user keeps DMs off this plane
-        if (coveredByLink(env)) {
-            metrics.onLoraSkippedLinked() // a live link carries it; a ~1 kbps medium must not pay for it twice
-            return
-        }
+        if (skipCovered(env)) return // a live link or a spool carries it; a ~1 kbps medium must not pay twice
         if (!LoraFramePolicy.isFresh(env, wallClock())) {
             metrics.onLoraSuppressed() // a custody re-serve of an old frame — custody's business, not a live plane's
             return
@@ -608,6 +616,13 @@ internal class LoraMeshTransport(
         // reachable-vs-linked error as the gateway election, and the second reason the field test lost its
         // receipts even once the role was right.
         if (to.nodeId in linkedPeers) return
+        // The first gate `fastSend` has had since ADR 044 said it must have none, and a different kind: the
+        // role gate was refused because a passive board holds no copy to relay, while a cover says the peer
+        // demonstrably has a path that costs nothing (ADR 2026-09.y5f3). Re-asked on the way out, too.
+        if (to.nodeId in internetPeers) {
+            metrics.onLoraSkippedInternet()
+            return
+        }
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return
         if (!LoraFramePolicy.eligible(env, wire, LoraFramePolicy.Path.TARGETED, to.nodeId)) return
         val label = "send:${env.type}->${to.nodeId}"
@@ -752,6 +767,10 @@ internal class LoraMeshTransport(
         // peer for real elsewhere, and `ForwardSync`'s digest exchange runs off `neighbors` — a sighting
         // never triggers it, so skipping on one strands the very DMs this path exists to deliver.
         if (currentConfig?.dms != true || peer.nodeId in linkedPeers) return
+        if (peer.nodeId in internetPeers) {
+            metrics.onLoraSkippedInternet() // the spool re-serves to this peer for real, and for free
+            return
+        }
         farFrames(peer.nodeId).forEach { wire -> reofferOne(wire, peer.nodeId) }
     }
 
@@ -843,6 +862,30 @@ internal class LoraMeshTransport(
     }
 
     /**
+     * The second cover (ADR 2026-09.y5f3): a DM-form frame whose addressee a connected spool was recently a
+     * path to. Counted apart from [coveredByLink] so the two reasons a frame stayed off the air can be told
+     * apart in the field.
+     */
+    private fun coveredByInternet(env: RelayEnvelope): Boolean {
+        if (!LoraFramePolicy.isDmForm(env)) return false
+        val to = env.recipientId ?: return false
+        return to in internetPeers
+    }
+
+    /** Both covers at once, each counted under its own name; true means the caller must not put [env] on air. */
+    private fun skipCovered(env: RelayEnvelope): Boolean {
+        if (coveredByLink(env)) {
+            metrics.onLoraSkippedLinked()
+            return true
+        }
+        if (coveredByInternet(env)) {
+            metrics.onLoraSkippedInternet()
+            return true
+        }
+        return false
+    }
+
+    /**
      * When [LoraFramePolicy.isFresh] would start refusing [env], or null for a type it exempts. The gate is a
      * deadline rather than an age, so the queue can carry it without carrying the envelope.
      */
@@ -869,6 +912,7 @@ internal class LoraMeshTransport(
         if (gate.recipientId != null && (gate.recipientId == selfIdCached || gate.recipientId in linkedPeers)) {
             return StaleAtSend.LINKED
         }
+        if (gate.recipientId != null && gate.recipientId in internetPeers) return StaleAtSend.INTERNET
         if (gate.freshUntil != null && wallClock() > gate.freshUntil) return StaleAtSend.STALE
         if (gate.roleGated && role != LoraGatewayPolicy.Role.ACTIVE) return StaleAtSend.PASSIVE
         return null
@@ -1129,10 +1173,7 @@ internal class LoraMeshTransport(
      */
     private fun serveOne(wire: WireEnvelope): Serve {
         val env = WireCodec.decodeEnvelope(wire.signed) ?: return Serve.SKIPPED
-        if (coveredByLink(env)) {
-            metrics.onLoraSkippedLinked() // the far pocket would only ever be a carrier for a frame its addressee already holds
-            return Serve.SKIPPED
-        }
+        if (skipCovered(env)) return Serve.SKIPPED // the far pocket would only ever carry a frame its addressee already holds
         val label = "bridge:${env.id}"
         val parts = encodeOrNull(wire, label) ?: return Serve.SKIPPED
         // Its natural class, so a room post still cannot evict a DM in the queue, but the BRIDGE bucket, so
@@ -1594,6 +1635,7 @@ internal class LoraMeshTransport(
                 role = role,
                 pocketLinks = linkedPeers.size,
                 pocketSightings = foreignReachable.size,
+                internetCovered = internetPeers.size,
                 gatewaysHeard = gateway.heard,
             )
     }

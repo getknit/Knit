@@ -4,6 +4,7 @@ import app.getknit.knit.mesh.CarriedFrame
 import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshMetrics
 import app.getknit.knit.mesh.PRESENCE_FRESH_MS
+import app.getknit.knit.mesh.SPOOL_COVER_MS
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireEnvelope
@@ -89,6 +90,8 @@ class ScopeSyncTest {
         clock: () -> Long = { now },
         // What the member dials — the spool itself, or a wrapper that watches the dials and closes.
         dialer: SpoolDialer = spool,
+        // The present-set callback (ADR 2026-09.y5f3); the default drops it, as every earlier test did.
+        presence: (Set<String>) -> Unit = {},
     ): Member {
         val metrics = MeshMetrics()
         val delivered = mutableListOf<RelayEnvelope>()
@@ -116,6 +119,7 @@ class ScopeSyncTest {
                 blobs = blobs,
                 onAttachmentObtained = { obtained.add(it) },
                 deferAttachment = deferAttachment,
+                onPresenceChanged = presence,
                 metrics = metrics,
                 clock = clock,
                 jitter = { 0L },
@@ -320,6 +324,154 @@ class ScopeSyncTest {
             )
             sender.sync.stop()
             receiver.sync.stop()
+        }
+
+    @Test
+    fun `a peer's presence is reported once when it appears and withdrawn when it lapses`() =
+        runTest {
+            // The mesh reads presence as a push, not a poll (ADR 2026-09.y5f3): the LoRa plane's Internet cover
+            // and AckSync's spool route follow this callback, at the 15-min window, and a stamp that lapses
+            // is withdrawn on the worker's own tick.
+            val spool = FakeSpool()
+            var t = now
+            val seen = mutableListOf<Set<String>>()
+            val sender = member(spool, alice, bob)
+            val receiver = member(spool, bob, alice, clock = { t }, presence = { seen += it })
+            receiver.sync.start(backgroundScope)
+            pump()
+            assertTrue("a connected, converged scope says nothing about its peer", seen.none { alice in it })
+
+            sender.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            sender.sync.start(backgroundScope)
+            pump()
+            assertEquals("alice's fresh frame puts her on the plane, once", listOf(setOf(alice)), seen.filter { it.isNotEmpty() })
+            assertEquals(setOf(alice), receiver.sync.presentPeers(t))
+
+            t = now + SPOOL_COVER_MS + 1
+            pump(70) // past the worker's 60 s tick, which is what lets a stamp lapse
+            assertEquals("and the cover is withdrawn when the window closes", emptySet<String>(), seen.last())
+            assertEquals(emptySet<String>(), receiver.sync.presentPeers(t))
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `presence is stamped before the frame is delivered`() =
+        runTest {
+            // The receipt answering the DM that reveals the peer is originated inside `deliver`; the cover has
+            // to already know the peer for that receipt to stay off the board (ADR 2026-09.y5f3). Still never a
+            // gate — the frame is delivered either way.
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            var presentAtDelivery: Set<String>? = null
+            val custody = FakeCustody()
+            lateinit var receiverSync: ScopeSync
+            receiverSync =
+                ScopeSync(
+                    registry = ScopeRegistry({ bob }, { listOf(ScopeRoots(alice, pairwiseRoot)) }),
+                    dialer = spool,
+                    store = custody,
+                    selfId = { bob },
+                    urls = { listOf(url) },
+                    canCarry = { _, _ -> true },
+                    deliver = { wire, env, _ ->
+                        presentAtDelivery = receiverSync.presentPeers(now)
+                        custody.store(CarriedFrame(env, wire.sig, wire.signed), ForwardStore.ORIGIN_RELAY, now)
+                    },
+                    clock = { now },
+                    jitter = { 0L },
+                )
+            sender.custody.store(dmFrame("m1", from = alice, to = bob, sentAt = now), ForwardStore.ORIGIN_SELF, now)
+            sender.sync.start(backgroundScope)
+            receiverSync.start(backgroundScope)
+            pump()
+
+            assertEquals(setOf(alice), presentAtDelivery)
+            sender.sync.stop()
+            receiverSync.stop()
+        }
+
+    // --- the direct push (spec §9.4 C-9.4-3, ADR 2026-09.y5f3) ---
+
+    /** A room post's delivery tick as the ride deadline seals it: signed, `relay = false`, and never custodied here. */
+    private fun tickWire(frame: CarriedFrame) = WireEnvelope(relay = false, sig = frame.sig, signed = frame.signed)
+
+    @Test
+    fun `a directly pushed tick reaches the peer, is never re-pulled by its pusher, and leaves both digests converged`() =
+        runTest {
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            val receiver = member(spool, bob, alice)
+            sender.sync.start(backgroundScope)
+            receiver.sync.start(backgroundScope)
+            pump()
+
+            val tick = dmFrame("tick-1", from = alice, to = bob, sentAt = now)
+            assertTrue(sender.sync.pushDirect(bob, tick.envelope, tickWire(tick)))
+            pump()
+
+            assertEquals("the peer has it", listOf("tick-1"), receiver.delivered.map { it.id })
+            assertEquals(1, spool.pushed.size)
+            assertFalse("the pusher never custodied it", sender.custody.has("tick-1"))
+            assertEquals(1, sender.metrics.snapshot().spoolPushed)
+
+            // The pusher's own heal loop must neither pull it back nor list on its account: many ticks, then
+            // a dropped socket and a fresh session, and the scope reads converged throughout.
+            pump(130)
+            spool.dropSockets()
+            pump(130)
+            assertTrue("never delivered back to its pusher", sender.delivered.isEmpty())
+            val scope =
+                sender.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single()
+            assertTrue("the pusher's digest matches the spool's", scope.converged)
+            assertEquals("carried in the accounted band, not custody", 1, scope.accountedCount)
+            assertEquals(scope.spoolCount, scope.localCount)
+            assertTrue(
+                "and the peer's does too",
+                receiver.sync
+                    .status()
+                    .single()
+                    .scopes
+                    .single()
+                    .converged,
+            )
+            sender.sync.stop()
+            receiver.sync.stop()
+        }
+
+    @Test
+    fun `a direct push reports false when no connected spool holds the scope`() =
+        runTest {
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            val tick = dmFrame("tick-1", from = alice, to = bob, sentAt = now)
+            assertFalse("not started: nothing is connected", sender.sync.pushDirect(bob, tick.envelope, tickWire(tick)))
+
+            sender.sync.start(backgroundScope)
+            pump()
+            assertFalse("no scope with carol", sender.sync.pushDirect("carol", tick.envelope, tickWire(tick)))
+            assertTrue(spool.pushed.isEmpty())
+            sender.sync.stop()
+        }
+
+    @Test
+    fun `a direct push is refused for a frame outside the scope rule`() =
+        runTest {
+            // §4.4 governs both directions; the direct push is not a way around it.
+            val spool = FakeSpool()
+            val sender = member(spool, alice, bob)
+            sender.sync.start(backgroundScope)
+            pump()
+            val stray = dmFrame("stray", from = alice, to = "carol", sentAt = now)
+            assertFalse(sender.sync.pushDirect(bob, stray.envelope, tickWire(stray)))
+            val stale = dmFrame("stale", from = alice, to = bob, sentAt = now - ScopeRegistry.DEFAULT_TTL_MS)
+            assertFalse("dead on arrival at the spool's own TTL", sender.sync.pushDirect(bob, stale.envelope, tickWire(stale)))
+            assertTrue(spool.pushed.isEmpty())
+            sender.sync.stop()
         }
 
     /**

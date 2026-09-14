@@ -61,3 +61,12 @@ internal const val PRESENCE_PROFILE_MS = 13 * 60 * 60_000L
  * linger the plane sweeps against, this one is how long a Diagnostics reader is told a path exists.
  */
 internal const val PRESENCE_LINGER_MS = 45 * 60_000L
+
+/**
+ * How recently a peer must have pushed into a scope on a connected spool for the mesh to treat the spool
+ * as that peer's path (ADR 2026-09.y5f3): `AckSync` sends a room tick there first, and the LoRa plane keeps
+ * every DM-form frame to such a peer off the air. Deliberately shorter than [PRESENCE_LINGER_MS] — that one
+ * is a statement to a Diagnostics reader, this one spends chain keys and airtime — and the same window as
+ * [PRESENCE_FRESH_MS], the evidence rule it rests on.
+ */
+internal const val SPOOL_COVER_MS = 15 * 60_000L

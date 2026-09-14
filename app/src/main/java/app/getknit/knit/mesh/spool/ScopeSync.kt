@@ -3,6 +3,7 @@ package app.getknit.knit.mesh.spool
 import app.getknit.knit.mesh.CarriedFrame
 import app.getknit.knit.mesh.ForwardStore
 import app.getknit.knit.mesh.MeshMetrics
+import app.getknit.knit.mesh.SPOOL_COVER_MS
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.crypto.scope.SpoolPow
 import app.getknit.knit.mesh.isPresenceEvidence
@@ -20,6 +21,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
@@ -180,12 +183,21 @@ class ScopeSync(
     // A commons refused our own profile as tombstoned — count-evicted inside the republish window — so a
     // fresh stamp is owed now rather than at the 12 h mark.
     private val onOwnProfileTombstoned: suspend () -> Unit = {},
+    // The set of DM/pair peers a connected spool is currently a path to, at [presenceLingerMs] — fired
+    // (on the caller's coroutine) only when it changes: a fresh stamp, a connect or disconnect, or the tick
+    // that lets one lapse (ADR 2026-09.y5f3). `MeshManager` turns it into the LoRa plane's Internet cover
+    // and `AckSync`'s spool route. Never a delivery gate — nothing here is.
+    private val onPresenceChanged: (Set<String>) -> Unit = {},
+    private val presenceLingerMs: Long = SPOOL_COVER_MS,
     private val metrics: MeshMetrics = MeshMetrics(),
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val jitter: () -> Long = { Random.nextLong(RECONNECT_JITTER_MS) },
 ) {
     private val workers = ConcurrentHashMap<String, Worker>()
     private val sealCache = SealCache(SEAL_CACHE_MAX)
+
+    @Volatile
+    private var lastPresent: Set<String> = emptySet()
 
     @Volatile
     private var session: CoroutineScope? = null
@@ -217,6 +229,46 @@ class ScopeSync(
         workers.clear()
         scopes = emptyList()
         session = null
+        republishPresence()
+    }
+
+    /**
+     * The DM/pair peers a connected spool is currently a path to — [spoolPresentPeers] over [status], the
+     * one rule the presence dot reads, at the mesh's shorter window (ADR 2026-09.y5f3). Synchronous and
+     * cheap: `AckSync` asks it at a ride's deadline and `MeshManager` on every change.
+     */
+    fun presentPeers(
+        now: Long,
+        lingerMs: Long = presenceLingerMs,
+    ): Set<String> = spoolPresentPeers(status(), now, lingerMs)
+
+    /**
+     * Pushes [wire] — a frame this device will **not** custody — straight into every non-retiring DM or pair
+     * scope shared with [peerId], on every connected spool (§9.4 C-9.4-3, ADR 2026-09.y5f3). The one push
+     * on this plane not sourced from custody, and it exists for exactly one frame: a room post's sealed
+     * `relay = false` delivery tick, whose custody row per acker aa27 refused. The caller guarantees the
+     * **signed** form — `ScopeCrypto.seal` takes the 64-byte signature, so ADR 059's unsigned tick cannot
+     * ride here. Returns whether at least one spool accepted it; false leaves the caller its wire.
+     */
+    suspend fun pushDirect(
+        peerId: String,
+        env: RelayEnvelope,
+        wire: WireEnvelope,
+    ): Boolean {
+        val targets = scopes.filter { it.peerId == peerId && !it.retiring }
+        if (targets.isEmpty()) return false
+        var any = false
+        for (worker in workers.values) if (worker.pushDirect(targets, env, wire)) any = true
+        return any
+    }
+
+    /** Fires [onPresenceChanged] when the present set differs from what was last published. */
+    @Synchronized
+    private fun republishPresence() {
+        val current = if (workers.isEmpty()) emptySet() else presentPeers(clock())
+        if (current == lastPresent) return
+        lastPresent = current
+        onPresenceChanged(current)
     }
 
     /**
@@ -339,8 +391,15 @@ class ScopeSync(
         // The ONLY thing on this plane that says anything about the peer rather than about the spool, and the
         // reason it exists: a scope is derived from the pairwise ratchet root, so it is subscribed and
         // converged whether or not its peer has been online this month. Survives a reconnect — losing the
-        // socket is our event, not theirs — and is diagnostics-only; nothing routes on it.
+        // socket is our event, not theirs. Since ADR 2026-09.y5f3 it is also what [presentPeers] reads for the
+        // LoRa plane's Internet cover and `AckSync`'s spool route — still never a gate on anything inbound.
         private val peerSeenAt = ConcurrentHashMap<String, Long>()
+
+        // Serialises a heal round against a direct push (ADR 2026-09.y5f3): a push that lands between a
+        // round's `accountedFor` read and its LIST would be pulled straight back into custody — the one
+        // outcome the direct push exists to avoid. Never held across a call back into the mesh that could
+        // push (nothing on the inbound path does; `AckSync` pushes from its own flush coroutine).
+        private val round = Mutex()
 
         // Partially-received attachments, keyed "scopeHex|aHash". In memory by design (§9.5): the
         // plane persists nothing, and the spool's bitmap makes a restarted download cheap to resume.
@@ -472,6 +531,7 @@ class ScopeSync(
                 // of our own carried from the last session, or a scope the spool refused and we parked.
                 if (carriedFault == null && refusedUntil.values.none { it > clock() }) lastError = null
                 subscribe(conn, mine(scopes, conn))
+                republishPresence() // a connected spool is what makes a stamped peer count
                 while (pump.isActive && currentCoroutineContext().isActive) {
                     withTimeoutOrNull(TICK_INTERVAL_MS) { wakeup.receive() }
                     healAll(conn)
@@ -494,6 +554,7 @@ class ScopeSync(
             retryFloorMs = socket.retryAfterMs ?: 0L
             socket.close(SpoolCloseCode.NORMAL, "done")
             connection = null
+            republishPresence() // and a disconnected one covers nobody
             spoolDigests.clear()
             pinnedBounds.clear()
             // The per-connection race guard goes; the §9.6 accounted set deliberately does NOT. Dropping
@@ -587,6 +648,7 @@ class ScopeSync(
             }
 
         private suspend fun healAll(conn: SpoolConnection) {
+            republishPresence() // the tick is what lets a stamp lapse out of the present set
             if (conn.answered) retireFault(SpoolConnection.UNRESPONSIVE)
             val current = mine(scopes, conn)
             // Sub-before-use is per connection, and the scope table changes as sessions are established.
@@ -596,6 +658,11 @@ class ScopeSync(
 
         /** §9.1: one scope's heal round against this spool. A no-op while the two digests agree. */
         private suspend fun heal(
+            conn: SpoolConnection,
+            scope: Scope,
+        ) = round.withLock { healLocked(conn, scope) }
+
+        private suspend fun healLocked(
             conn: SpoolConnection,
             scope: Scope,
         ) {
@@ -783,6 +850,59 @@ class ScopeSync(
                 .values
                 .filterNot { ScopeFrames.deadOnArrival(it.carried.envelope, bounds.ttlMs, now) }
                 .filter { it.sealed.blob.size <= maxBlob }
+        }
+
+        /**
+         * The §9.4 exception (C-9.4-3, ADR 2026-09.y5f3): one frame this device does **not** custody, sealed
+         * into each of [targets] this worker carries and pushed now. The frame is then *accounted* (§9.6) and
+         * folded into the anchor exactly as a round's own push would be, so the next round neither re-pulls
+         * it — into custody and onto the radios, the cost this path exists to avoid — nor lists on its
+         * account. Every gate a round applies still applies: the §4.4 frame-set rule, the outward
+         * dead-on-arrival guard, the size bound, a retiring scope. Returns whether any scope accepted it.
+         */
+        suspend fun pushDirect(
+            targets: List<Scope>,
+            env: RelayEnvelope,
+            wire: WireEnvelope,
+        ): Boolean =
+            round.withLock {
+                val conn = connection ?: return@withLock false
+                val me = selfId()
+                var any = false
+                for (scope in mine(targets, conn)) if (pushDirectInto(conn, scope, me, env, wire)) any = true
+                // The next round folds the accounted band into the local digest, so the status reads
+                // converged now rather than at the 60 s tick — no LIST, the anchor already matches.
+                if (any) wake()
+                any
+            }
+
+        /** One scope's share of [pushDirect]: every gate a round's push meets, then the push and its accounting. */
+        private suspend fun pushDirectInto(
+            conn: SpoolConnection,
+            scope: Scope,
+            me: String,
+            env: RelayEnvelope,
+            wire: WireEnvelope,
+        ): Boolean {
+            if (scope.retiring || !conn.isSubscribed(scope.idHex)) return false
+            if (!ScopeFrames.eligibleFor(env, me, scope)) return false
+            val bounds = boundsFor(scope)
+            if (ScopeFrames.deadOnArrival(env, bounds.ttlMs, clock())) return false
+            val sealed = ScopeFrames.seal(scope, wire.sig, wire.signed)
+            if (sealed.blob.size > minOf(conn.limits?.maxBlob ?: Int.MAX_VALUE, bounds.maxBlob)) return false
+            val reply = conn.push(scope.id, sealed.blobId, sealed.blob, stampFor(scope, conn.powBits))
+            if (reply is SpoolReply.Failed) {
+                metrics.onSpoolError()
+                lastError = reply.code
+            }
+            if (reply !is SpoolReply.Ok) return false
+            if (account(scope.idHex, hex(sealed.blobId), sealed.blobId)) metrics.onSpoolAccounted()
+            // Fold into the anchor only where one exists — before the SUB is answered there is nothing to
+            // fold into, and inventing one would be a digest the spool never sent.
+            spoolDigests.computeIfPresent(scope.idHex) { _, fold -> fold xor ScopeCrypto.fnv64(sealed.blobId) }
+            spoolCounts.computeIfPresent(scope.idHex) { _, count -> count + 1 }
+            metrics.onSpoolPushed()
+            return true
         }
 
         /**
@@ -1157,9 +1277,12 @@ class ScopeSync(
             }
             if (!canCarry(opened.wire, opened.env)) return refuse(scope, idHex, source)
             metrics.onSpoolPulled()
+            // Stamped BEFORE delivery, still never a gate (ADR 2026-09.y5f3): the receipt answering the DM
+            // that reveals this peer is originated inside [deliver], and the LoRa plane's Internet cover
+            // has to already know the peer is here for that receipt to stay off the air.
+            notePeerPresence(scope, opened.env)
             deliver(opened.wire, opened.env, SPOOL_SOURCE_PREFIX + url)
             metrics.onSpoolBridged()
-            notePeerPresence(scope, opened.env)
             if (scope.commonsId != null) {
                 // A member's profile (the only other frame a commons carries). Custody keeps it — it is a
                 // profile — so the store-asks rule below would never account it, and our own push set holds
@@ -1251,7 +1374,9 @@ class ScopeSync(
             val peer = scope.peerId ?: return
             if (env.senderId != peer) return
             val now = clock()
-            if (isPresenceEvidence(env, now)) peerSeenAt[scope.idHex] = now
+            if (!isPresenceEvidence(env, now)) return
+            peerSeenAt[scope.idHex] = now
+            republishPresence()
         }
 
         /**

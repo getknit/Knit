@@ -169,6 +169,9 @@ class MeshManager(
     // harness (`mesh/lab`) can watch a tick cross a relay in milliseconds rather than wait out the field
     // value; production wiring takes the default.
     private val tickDebounceMs: Long = AckSync.TICK_BATCH_DEBOUNCE_MS,
+    // How long a room tick waits for a ride before it is sealed and sent by itself
+    // ([AckSync.RIDE_HOLD_MS], ADR 2026-09.y5f3). Injectable for `mesh/lab` exactly like [tickDebounceMs].
+    private val rideHoldMs: Long = AckSync.RIDE_HOLD_MS,
     // The per-link meter on broadcast-room posts ([IngressBudget]), handed to the router. A policy object,
     // injectable like [tickDebounceMs] so `mesh/lab` can flood a room past a tiny budget in one scenario;
     // production wiring takes the default and shares [clock].
@@ -273,12 +276,17 @@ class MeshManager(
             transport = transport,
             selfId = { identity.nodeId() },
             signRaw = messageCrypto::signRaw,
+            now = clock,
             metrics = metrics,
             sealTick = { authorId, ackIds -> sealDeliveryTick(authorId, ackIds) },
             canSeal = { authorId -> canSealTickTo(authorId) },
             originateTick = { authorId, ackIds -> originateDeliveryTick(authorId, ackIds) },
             flushScope = { sessionScope },
             debounceMs = tickDebounceMs,
+            rideHoldMs = rideHoldMs,
+            // Both read [scopeSync], declared below — lazily, at call time, like every other lambda here.
+            spoolPresent = { authorId -> isSpoolPresent(authorId) },
+            spoolTick = { authorId, ackIds -> spoolDeliveryTick(authorId, ackIds) },
         )
 
     // The ✓✓ for a DM that arrived over the LoRa board waits here (ADR 054): a burst from one author becomes
@@ -440,6 +448,7 @@ class MeshManager(
                 deliverCommons = { env, chat, conversationId, _ -> pipeline.deliverCommonsPost(env, chat, conversationId) },
                 onCommonsMember = ::onCommonsMember,
                 onOwnProfileTombstoned = { republishProfile(force = true) },
+                onPresenceChanged = ::onSpoolPresenceChanged,
                 blobs = scopeBlobs(),
                 // The same hook a radio pull fires, so NSFW screening, the message rows, and the UI all
                 // run unchanged for a spool-delivered image (§9.5).
@@ -840,6 +849,7 @@ class MeshManager(
             if (carried) {
                 metrics.onReceiptCoalesced(inlineAcks.dm.size)
                 metrics.onReceiptRidden(inlineAcks.room.size)
+                ackSync.rode(inlineAcks.room)
             } else {
                 // Each half goes back to the hold that owns it. A room ack must never land in [dmAcks]:
                 // that hold *originates* what it still holds when the debounce runs out, which is the
@@ -1541,11 +1551,60 @@ class MeshManager(
     private suspend fun originateDeliveryTick(
         authorId: String,
         ackIds: List<String>,
+        riderCap: Int = AckSync.MAX_BATCH_ACKS,
     ): Boolean {
-        val tick = sealDeliveryTickEnvelope(authorId, ackIds) ?: return false
+        // The best carrier there is (ADR 2026-09.aa27): this frame is already sealed to that author, already
+        // originated and already custodied, so the room ticks waiting for a ride cost it a few bytes and no
+        // row of their own. [riderCap] is the hop's: a frame built for the 3-packet LoRa hop takes at most
+        // `DmAckCoalescer.MAX_LORA_TICK_ACKS` ids in all, riders included (ADR 2026-09.y5f3).
+        val riding = ackSync.takeRiding(authorId, riderCap - ackIds.size)
+        val tick = sealDeliveryTickEnvelope(authorId, ackIds + riding)
+        if (tick == null) {
+            ackSync.giveBackRiding(authorId, riding)
+            return false
+        }
         originateSigned(tick.env, FanoutHint.TICK)
         metrics.onReceiptCustodied()
+        ackSync.rode(riding)
+        metrics.onReceiptRidden(riding.size)
         return true
+    }
+
+    /**
+     * The ride deadline's spool form (ADR 2026-09.y5f3): the same sealed tick, **signed** and `relay = false`
+     * — signed because `ScopeCrypto.seal` takes the 64-byte signature, `relay = false` because it is pushed
+     * straight into the author's scope(s) through [ScopeSync.pushDirect] and never originated, so no
+     * custody row and no frame on the radios. Null when the seal fails; `pushed = false` when no connected
+     * spool took it, and AckSync keeps the signed wire as an owed entry that rides every other path.
+     */
+    private suspend fun spoolDeliveryTick(
+        authorId: String,
+        ackIds: List<String>,
+    ): AckSync.SpoolTick? {
+        val tick = sealDeliveryTickEnvelope(authorId, ackIds) ?: return null
+        val wire = sign(tick.env, relay = false)
+        val pushed = scopeSync?.pushDirect(authorId, tick.env, wire) == true
+        if (pushed) metrics.onReceiptSpooled()
+        return AckSync.SpoolTick(wire, pushed)
+    }
+
+    /** Whether a connected spool heard from [authorId] within `SPOOL_COVER_MS` — AckSync's first route. */
+    private fun isSpoolPresent(authorId: String): Boolean = scopeSync?.presentPeers(clock(), SPOOL_COVER_MS)?.contains(authorId) == true
+
+    @Volatile
+    private var spoolPresent: Set<String> = emptySet()
+
+    /**
+     * The spool's present set changed (ADR 2026-09.y5f3): the LoRa plane's Internet cover follows it, and a
+     * peer that just appeared gets the same treatment as a radio sighting — a parked room tick or a
+     * backed-off sealed tick toward it is tried now.
+     */
+    private fun onSpoolPresenceChanged(present: Set<String>) {
+        val newcomers = present - spoolPresent
+        spoolPresent = present
+        transport.coveredByInternet(present)
+        if (newcomers.isEmpty()) return
+        sessionScope?.launch { newcomers.forEach { ackSync.onReachable(Peer(it)) } }
     }
 
     /**
@@ -1603,13 +1662,10 @@ class MeshManager(
         // row of their own. Field case: the pocket member that owed two room ticks originated exactly this
         // frame 3 minutes later for an unrelated DM ack, and they would have crossed there instead of
         // waiting 45 minutes for a link.
-        val riding = ackSync.takeRiding(authorId, AckSync.MAX_BATCH_ACKS - ackIds.size)
-        if (originateDeliveryTick(authorId, ackIds + riding)) {
+        if (originateDeliveryTick(authorId, ackIds, riderCap = DmAckCoalescer.MAX_LORA_TICK_ACKS)) {
             metrics.onReceiptCoalesced(ackIds.size - 1)
-            metrics.onReceiptRidden(riding.size)
             return
         }
-        ackSync.giveBackRiding(authorId, riding)
         val me = identity.nodeId()
         ackIds.forEach { pipeline.ackCleartext(it, me) }
     }
@@ -2009,8 +2065,7 @@ class MeshManager(
             // ago would otherwise seed a frame custody refuses as dead on arrival, and this seeding exists
             // precisely so first contact has a frame to diverge on.
             republishProfileIfStale()
-            val env = currentProfileEnvelope()
-            forwardSync.onSeen(sign(env), env, ForwardStore.ORIGIN_SELF)
+            ownProfile() // seeds the row when the stamp is new; reuses it when custody already holds it
         }
     }
 
@@ -2033,10 +2088,14 @@ class MeshManager(
                 val newcomers = ids - known
                 known = ids
                 if (newcomers.isEmpty()) return@collect
+                // A sighting is what a parked room tick or a backed-off sealed tick was waiting for
+                // (ADR 2026-09.y5f3) — before the reflood throttle, which is about our profile, not theirs.
+                newcomers.forEach { ackSync.onReachable(Peer(it)) }
                 val now = clock()
                 if (now - lastFloodAt < PROFILE_REFLOOD_MIN_MS) return@collect
                 lastFloodAt = now
-                originateSigned(currentProfileEnvelope())
+                val (wire, env) = ownProfile()
+                originateWire(wire, env)
             }
         }
     }
@@ -2128,13 +2187,11 @@ class MeshManager(
     }
 
     private suspend fun pushProfileTo(peer: Peer) {
-        val env = currentProfileEnvelope()
-        val wire = sign(env)
         // Custody our own profile (ORIGIN_SELF), exactly as a peer that receives it carries it (ORIGIN_RELAY).
         // Without this our store is permanently missing our own profile while every peer holds it, so the
         // store-and-forward digests never converge and the mesh churns NDPs forever. Idempotent on the (now
         // persisted, restart-stable) version, so repeated connects don't re-store it.
-        forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_SELF)
+        val (wire, env) = ownProfile()
         router.sendOwn(wire, env.id, peer)
         sendAvatarIfNeeded(peer)
     }
@@ -2391,17 +2448,25 @@ class MeshManager(
         env: RelayEnvelope,
         hint: FanoutHint = FanoutHint.CONTENT,
     ) {
-        val wire = sign(env)
+        // The targeted sibling inside: a sealed DM-form frame goes straight to its addressee over the
+        // coordination plane, so it does not wait on an NDP that may not exist. Size-gated and no-op'd by the
+        // transport when the peer isn't coordination-plane reachable; custody is still the reliable path.
+        // Our own sends are the latency-sensitive case, so the Internet plane is nudged instead of waiting
+        // for its tick. Relayed frames ride the next heal round — they are already in flight on the radios.
+        originateWire(sign(env), env, hint)
+    }
+
+    /** [originateSigned] for a wire already signed — the custodied profile, whose bytes must not be re-minted. */
+    private suspend fun originateWire(
+        wire: WireEnvelope,
+        env: RelayEnvelope,
+        hint: FanoutHint = FanoutHint.CONTENT,
+    ) {
         router.originate(wire, env.id)
         forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_SELF)
         if (shouldFastFanout(env)) transport.fastFanout(wire)
-        // The targeted sibling: a sealed DM-form frame goes straight to its addressee over the coordination
-        // plane, so it does not wait on an NDP that may not exist. Size-gated and no-op'd by the transport
-        // when the peer isn't coordination-plane reachable; custody below is still the reliable path.
         env.recipientId?.let { if (shouldFastSend(env)) transport.fastSend(wire, Peer(it)) }
         if (shouldLongRangeFanout(env)) transport.longRangeFanout(wire, hint)
-        // Our own sends are the latency-sensitive case, so nudge the Internet plane instead of waiting for
-        // its tick. Relayed frames ride the next heal round — they are already in flight on the radios.
         scopeSync?.onCustodyChanged()
     }
 
@@ -2433,7 +2498,22 @@ class MeshManager(
      * custodying it — the stable `profile-<me>-<publishedAt>` id makes re-hearing it a SeenSet no-op, so a
      * beacon never floods the mesh a second time.
      */
-    override suspend fun signedProfile(): WireEnvelope = sign(currentProfileEnvelope())
+    override suspend fun signedProfile(): WireEnvelope = ownProfile().first
+
+    /**
+     * Our profile as every plane must put it on air: the custodied row for the current publish stamp when
+     * there is one, else a fresh signing that is custodied here and now. One id, one set of bytes
+     * (ADR 2026-09.y5f3): the mesh-in-a-box lab caught a LoRa beacon signing `profile-me-<stamp>` while a
+     * settings write was still landing, so the peer custodied the beacon's bytes and this device its seed's —
+     * two blobs under one id at the spool, and a scope digest that could never converge.
+     */
+    private suspend fun ownProfile(): Pair<WireEnvelope, RelayEnvelope> {
+        val env = currentProfileEnvelope()
+        forwardStore.frame(env.id, clock())?.let { held -> return WireEnvelope(sig = held.sig, signed = held.signed) to held.envelope }
+        val wire = sign(env)
+        forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_SELF)
+        return wire to env
+    }
 
     /**
      * [MeshPostSink]: one post the bound board heard on its primary channel, delivered into the Meshtastic

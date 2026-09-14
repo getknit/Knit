@@ -31,7 +31,10 @@ behind each lives in `context/mesh-transport.md`, `context/wire-format.md`, and
   coordination plane). `MeshTransport.shortRange` (LoRa = false) tells the composite a sighting doesn't imply
   proximity, so it's excluded from the foreign-reachable union and from `shortRangeReachable`. The socket
   record codec (`mesh/link/LinkFraming`) is transport-neutral and shared by the NAN NDP socket and the BLE
-  L2CAP socket.
+  L2CAP socket. `MeshTransport.coveredByInternet` (ADR 2026-09.y5f3) is the third hint beside
+  `suppressDataPath` and `onForeignReachable`: peers a connected spool recently heard from, so a plane with
+  no data path keeps DM-form frames to them off the air. It is fed from spool presence only, forwarded to
+  every child, acted on by LoRa alone, and must never move the gateway role.
 - After changing the `MeshTransport` interface, run `:app:testDebugUnitTest` — a test double
   (`RecordingTransport` in `MeshRouterTest`) implements that interface and won't be caught by
   `assembleDebug`. Same trap on `ForwardStore` (`FakeForwardStore`, `FakeCustody`) and `RatchetStore`.
@@ -117,7 +120,29 @@ free). Two invariants that are easy to break:
   `notePeerPresence` stamps only for a bridged frame whose author is the scope's own `peerId` and which
   passes `mesh/FramePresence.kt`'s `isPresenceEvidence` — the spool's 48 h retention means a client pulls
   old frames as a matter of course, so without the age rule one backlog pull resurrects its author. It is
-  presence bookkeeping and **never** a delivery gate: a frame that fails it still bridges.
+  presence bookkeeping and **never** a delivery gate: a frame that fails it still bridges. Since ADR
+  2026-09.y5f3 it is also a **mesh input**: `ScopeSync.presentPeers` / `onPresenceChanged` (one function,
+  `mesh/spool/SpoolPresence.kt`, read at `SPOOL_COVER_MS` = 15 min by the mesh and at `PRESENCE_LINGER_MS`
+  by the presence dot) feeds `MeshTransport.coveredByInternet` — the LoRa plane's second cover, a
+  **cover hint and never an election input** (the ADR 044 election reads `suppressDataPath`'s link set;
+  never reuse `linkedPeers` for this) — and `AckSync`'s spool route. The stamp now precedes `deliver`
+  on purpose (the receipt answering the revealing DM is originated inside it), and is still not a gate.
+- **The direct push is the one push not sourced from custody, and it is accounted** (`ScopeSync.pushDirect`,
+  spec §9.4 C-9.4-3, ADR 2026-09.y5f3). It carries exactly one frame class — a room post's **signed**
+  `relay = false` delivery tick at its ride deadline (`ScopeCrypto.seal` takes the 64-byte signature, so
+  ADR 059's unsigned form cannot ride here) — through the same §4.4 rule, the outward dead-on-arrival
+  guard and the size bound as a round's push, and then writes the §9.6 accounted set and folds the anchor
+  exactly as `reanchor` would. Skip the accounting and the pusher's next round pulls its own tick back
+  into custody and onto the radios — the cost the push exists to avoid. It takes the worker's `round`
+  mutex, which `heal` also holds; nothing on the inbound path may push, or that is a deadlock.
+- **One frame id, one set of bytes.** A node's own profile is signed from live settings
+  (`currentProfileEnvelope`), and its id keys on the publish stamp — so a second signing of the same stamp
+  while a settings write is still landing is a *variant*: same id, different `signed`, a second blob at
+  the spool that neither side's custody can ever fold, and a scope digest that never converges. The
+  mesh-in-a-box lab caught the LoRa beacon doing exactly that. `MeshManager.ownProfile()` is the one
+  source now — the custodied row for the current stamp when there is one, a fresh signing that is
+  custodied at once otherwise — and every plane, reflood and first-contact push reads it. Don't sign a
+  profile anywhere else.
 - **Group-root minting is damped; group-root adoption is not** (`GroupRootPolicy`, spec §3.2). Several
   members minting version 1 at once is normal and self-healing — `(version, minter)` collapses the
   lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping

@@ -326,8 +326,14 @@ class FakeSpool(
             channel.close()
         }
 
-        @Synchronized
-        private fun handle(bytes: ByteArray) {
+        // Locked on the spool, not the socket: the scope state is shared by every socket, and the mesh-in-a-box
+        // lab drives two real nodes at it from Dispatchers.Default. Nothing in here suspends.
+        private fun handle(bytes: ByteArray) =
+            synchronized(this@FakeSpool) {
+                handleLocked(bytes)
+            }
+
+        private fun handleLocked(bytes: ByteArray) {
             when (SpoolCodec.peekType(bytes)) {
                 SpoolRecordType.HELLO -> {}
 

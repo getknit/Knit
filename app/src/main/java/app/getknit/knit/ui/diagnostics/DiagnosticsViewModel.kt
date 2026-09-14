@@ -19,10 +19,10 @@ import app.getknit.knit.mesh.TransportStatus
 import app.getknit.knit.mesh.lora.LoraFacts
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.spool.SpoolStatus
+import app.getknit.knit.mesh.spool.spoolPresentPeers
 import app.getknit.knit.moderation.ModelLoadGuard
 import app.getknit.knit.ui.Reach
 import app.getknit.knit.ui.reachOf
-import app.getknit.knit.ui.spoolPresentPeers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow

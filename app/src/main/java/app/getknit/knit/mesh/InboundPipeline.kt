@@ -2614,7 +2614,13 @@ class InboundPipeline(
         val now = clock()
         val id = FrameId.new()
         val aad = MessageCrypto.header(id, me, now, env.senderId)
-        val (plaintext, scheme) = MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = env.id).sealBytes(peer.readsCryptoV3())
+        // A frame already sealed to this author is a ride for the room ticks waiting on one (ADR 2026-09.y5f3
+        // — the field case aa27's two carriers missed: the DM came off the spool, not the board). Capped
+        // for the 3-packet LoRa hop, `ack` included; given back — never to the DM coalescer — if the seal
+        // falls through, since that hold originates what it still holds and a room tick must never cost a row.
+        val riding = ackSync.takeRiding(env.senderId, DmAckCoalescer.MAX_LORA_TICK_ACKS - 1)
+        val content = MessageContent(body = "", ctl = MessageContent.CTL_RECEIPT, ack = env.id, acks = riding.takeIf { it.isNotEmpty() })
+        val (plaintext, scheme) = content.sealBytes(peer.readsCryptoV3())
         val sealed =
             ratchet.sealDm(
                 env.senderId,
@@ -2626,6 +2632,7 @@ class InboundPipeline(
                 scheme = scheme,
             )
                 ?: run {
+                    ackSync.giveBackRiding(env.senderId, riding)
                     metrics.onReceiptSealedFallback()
                     return false
                 }
@@ -2641,6 +2648,8 @@ class InboundPipeline(
             ),
         )
         metrics.onReceiptSealed()
+        ackSync.rode(riding)
+        metrics.onReceiptRidden(riding.size)
         return true
     }
 

@@ -224,7 +224,16 @@ doc). **Don't start a deferred item without explicit direction.**
   the board), a 15-min budget window at the same 5 %, a `TICK` class that sheds first and never spends a
   window's tail, coalesced DM receipts (`DmAckCoalescer`, ≤ 45 s hold, one tick per burst) piggybacked on a
   reply behind `CAP_INLINE_ACK`, and the saturated-chat notice. **Still owed:** its three-phone trial
-  (`context/lora-bridge.md`). **Meshtastic 2.8 caught up with** (2026-08-31): `LoraAirtime` now charges for
+  (`context/lora-bridge.md`). **The room ✓✓ over LoRa and the relay SHIPPED** (2026-09-13, ADR
+  2026-09.y5f3, from a field day on which two room posts crossed the board in seconds and their ticks
+  waited 48 min for Bluetooth): aa27's ride hold has a 60 s deadline, after which the tick goes to a spool
+  the author was recently seen on (a signed `relay = false` frame pushed direct, spec §9.4 C-9.4-3) or over
+  LoRa's targeted path; the instant DM receipt and the escalated group tick are rides too; every DM-form
+  frame to a spool-present peer stays off the board (`coveredByInternet`, 15 min). Pinned by
+  `RoomTickPlanesLabTest` over the real LoRa and spool planes in the lab. **Still owed:** the field re-run —
+  a LoRa-only author and a spool-only author each get a room ✓✓ within ~1 min; `lora tx send:` appears on
+  the acker; `receiptsSpooled` and `loraSkippedInternet` move in `…debug.LORA`. The residual is an author
+  reachable only through a relay with no board and no spool. **Meshtastic 2.8 caught up with** (2026-08-31): `LoraAirtime` now charges for
   the 66-byte XEdDSA signature 2.8 bolts onto any broadcast under 165 B (gated on the board's firmware),
   `ModemPreset` names codes 9–16 (`LongTurbo` is 2.8's new US default and is deaf to `LongFast`), `LoraRegion`
   names the duty-limited regions that were collapsing into `OTHER`'s 100 % (`EU_866` 2.5 %, `EU_N_868` 10 %,

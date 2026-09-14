@@ -4515,6 +4515,26 @@ class InboundPipelineTest {
             assertTrue(rig.forwardStore.has("v2-cap1"))
         }
 
+    @Test
+    fun aSealedDmReceiptCarriesTheRoomTicksWaitingForItsAuthor() =
+        runTest {
+            // The field case aa27's carriers missed (ADR 2026-09.y5f3): the DM came off the spool, so its
+            // receipt was sealed instantly — a frame already going to the author, and now a ride too.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pinRatchetCapable(alice, RatchetCrypto.generateKeyPair().pub)
+            rig.ackSync.giveBackRiding(alice.nodeId, listOf("room-1", "room-2"))
+            val author = V2Author(alice, rig)
+
+            rig.deliver(alice, author.dm("v2-ride", "hello"))
+
+            assertEquals(1, rig.originated.count { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+            assertEquals("both room ticks rode the receipt", 2L, rig.metrics.snapshot().receiptsRidden)
+            assertEquals("nothing left waiting", 0, rig.ackSync.ridingFor(alice.nodeId))
+            rig.ackSync.owe("room-1", alice.nodeId)
+            assertEquals("and a re-serve of the post parks nothing", 0, rig.ackSync.ridingFor(alice.nodeId))
+        }
+
     // --- crypto scheme v3 and the unsigned door (ADR 059) ---
 
     /** The unsigned form of [env]: `relay = false`, an empty signature — what `MeshManager.sealDeliveryTick` sends a v3 author. */

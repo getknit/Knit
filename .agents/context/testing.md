@@ -63,9 +63,30 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   Mallory–Alice–Bob where Alice's per-link `IngressBudget` is five (Bob holds the same five, Alice's
   `INGRESS_REFUSED` counter reads fifteen, Bob's own post still crosses). `LabLimits` shrinks the policy numbers
   per node — same rules, same paths. Two traps: a **room** tick toward an author who is not a live neighbor
-  deliberately never escalates into custody (ADR 2026-09.aa27), so a room scenario that ends in the full oracle
-  needs a triangle, not a line, or its tick check waits forever; and the sweep runs at boot and on the 10-min
-  loop, so a scenario calls `node.sweepLocalStorage()` itself.
+  never escalates into custody (ADR 2026-09.aa27) and, over links alone, has nowhere else to go — its ride
+  deadline (ADR 2026-09.y5f3) sends it over a spool or a fast plane, and a `LabTransport` line has neither —
+  so a link-only room scenario that ends in the full oracle still needs a triangle, not a line, or its tick
+  check waits forever; and the sweep runs at boot and on the 10-min loop, so a scenario calls
+  `node.sweepLocalStorage()` itself.
+- **`RoomTickPlanesLabTest` is the long-range set** (ADR 2026-09.y5f3): a node can boot with a board on a
+  shared `FakeMeshtasticAir` (`lab.node(name, air = air)` — the **real** `LoraMeshTransport`, composed with
+  the radio through the real `CompositeMeshTransport`, so the covers, the election inputs and the fast-plane
+  dispatch are production's) and with a relay (`spool = FakeSpool()` — the real `ScopeSync` over the
+  in-process spool; the node opts in through the same two settings the relay editor writes). Three
+  scenarios: a room tick to an author only the board can hear goes out over the board once the ride hold
+  (`LabLimits.rideHoldMs`, 300 ms by default) runs out; a room tick rides the instant receipt for a DM that
+  came off the relay, with the DM's LoRa copy never sent (`loraSkippedInternet`); and a room tick with no
+  ride is pushed straight into the relay, custodied nowhere on the acker (`receiptsSpooled`, the scope's
+  `accountedCount`), with a re-link before the oracle because the author custodies what it pulled and the
+  acker never does — one ordinary re-serve, not a second send. Traps the suite hit on the way in: presence
+  is stamped only on a frame the spool *pulls*, and both nodes already hold each other's link-phase frames,
+  so `meetOnTheRelay` DMs once more with the air made lossy (`air.lossy`) — the relay is then the only path;
+  a both-initiate DM race can leave a responder's session unconfirmed for a long time, so the fixture waits
+  for the first DM to land before the reply; the DM scope derives on the 15 s reconcile and a worker that
+  missed an event waits for its own 60 s tick, hence `MeshLab.SPOOL_AWAIT_MS`; and the oracle found a real
+  divergence — the LoRa beacon re-signing the node's own profile under the same id while a settings write
+  was landing (two blobs, one id, a scope that never converges; `MeshManager.ownProfile()` is the fix).
+  `awaitDmScope`'s failure message lists both custodies row by row for the next one of those.
 - **Order is a knob.** `alice.transport.hold(bob.transport)` parks what Alice sends Bob;
   `release(bob.transport) { reorder }` delivers it in the order you choose — how "custody serves the two in
   either order" becomes a deterministic case. Partition (group frames first, say) rather than blindly

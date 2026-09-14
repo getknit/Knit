@@ -40,6 +40,12 @@ internal data class LoraStatus(
      */
     val pocketSightings: Int = 0,
     /**
+     * Peers a connected spool was recently a path to — the Internet cover (ADR 2026-09.y5f3): DM-form frames
+     * to them stay off the air. Beside [pocketLinks] because both answer "why did this frame not fly?", and
+     * unlike it this one never moves the gateway role.
+     */
+    val internetCovered: Int = 0,
+    /**
      * Frames waiting in the pacer. Beside [airtime] it is the difference between a quiet plane and a starved
      * one: a spent bucket holds frames rather than dropping them, so without a depth the dump reads healthy
      * until the queue overflows and the drops arrive all at once (2026-09-04).

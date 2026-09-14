@@ -92,9 +92,17 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
 - **When touching a presence dot or an online / offline label** (Profile Details, Diagnostics' node
   sections, the Contacts dot): the three evidence tiers live in `ui/Reach.kt` — `Direct` is
   `MeshController.neighbors` (a short-range radio saw the peer's own radio), `Relay` is the long-range reach
-  set or a spool scope its peer recently pushed to, `Known` is a bare profile row — and both labelled surfaces
-  derive from `reachOf` so they cannot disagree. READ ADR 2026-09.2ajk before loosening any tier; the
-  Contacts list still draws a binary dot from `neighbors` alone.
+  set or a spool scope its peer recently pushed to (`mesh/spool/SpoolPresence.kt`, one function the dot reads
+  at 45 min and the mesh at `SPOOL_COVER_MS` = 15 min), `Known` is a bare profile row — and both labelled
+  surfaces derive from `reachOf` so they cannot disagree. READ ADR 2026-09.2ajk before loosening any tier;
+  the Contacts list still draws a binary dot from `neighbors` alone.
+- **When touching how a Nearby-room post's ✓✓ gets home** — `AckSync`'s ride hold / `RIDE_HOLD_MS`,
+  `MeshTransport.coveredByInternet`, `ScopeSync.pushDirect` / `presentPeers`, or `MeshManager.ownProfile`:
+  READ ADR 2026-09.y5f3 (aa27's ride hold now has a 60 s deadline; the tick then goes to a spool the author
+  was recently seen on — a signed `relay = false` frame pushed direct and accounted, never custodied on the
+  acker — else over LoRa's targeted path; every DM-form frame to a spool-present peer stays off the board;
+  a node's own profile has one set of bytes per publish stamp). Then `docs/ENCRYPTED_RECEIPTS_REACTIONS.md`
+  §5, spec §9.4 C-9.4-3, and `RoomTickPlanesLabTest` in `mesh/lab/` for the end-to-end shape.
 - **When touching `ui/components/Avatar`, `ui/components/GroupAvatar`, `ui/theme/AvatarTint.kt`,
   `data/message/GroupFaces.kt`, `ui/util/ClusterGeometry.kt`, or the notification avatars in
   `notifications/NotificationAvatars`:** READ ADR 2026-09.j8c7. A photo-less avatar's colour is keyed on the

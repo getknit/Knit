@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.lora
 
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * A tiny in-memory LoRa "air": every registered [FakeMeshtasticLink] floods each send to every OTHER
@@ -9,7 +10,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * exercised end-to-end on the JVM with no radio and no GATT. Single-threaded by test contract.
  */
 internal class FakeMeshtasticAir {
-    private val links = mutableListOf<FakeMeshtasticLink>()
+    // Copy-on-write: the mesh-in-a-box lab registers boards from one node's coroutine while another node is
+    // already broadcasting on Dispatchers.Default; the single-SUT rigs are single-threaded either way.
+    private val links = CopyOnWriteArrayList<FakeMeshtasticLink>()
     var lossy: (from: UInt, to: UInt) -> Boolean = { _, _ -> false }
 
     fun register(link: FakeMeshtasticLink) {

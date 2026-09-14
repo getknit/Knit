@@ -68,6 +68,7 @@ class CompositeMeshTransportTest {
         val fastSends = mutableListOf<Peer>()
         val suppressCalls = mutableListOf<Set<String>>()
         val foreignCalls = mutableListOf<Set<String>>()
+        val internetCalls = mutableListOf<Set<String>>()
         var starts = 0
         var stops = 0
         var heals = 0
@@ -97,6 +98,10 @@ class CompositeMeshTransportTest {
 
         override fun suppressDataPath(peers: Set<String>) {
             suppressCalls += peers
+        }
+
+        override fun coveredByInternet(peers: Set<String>) {
+            internetCalls += peers
         }
 
         override fun onForeignReachable(peers: Set<String>) {
@@ -637,6 +642,20 @@ class CompositeMeshTransportTest {
             bt.setNeighbors(Peer("p")) // q drops off BLE
             advanceUntilIdle()
             assertEquals("q resumes on NAN once it leaves the preferred plane", setOf("p"), nan.suppressCalls.last())
+        }
+
+    @Test
+    fun internetCoverIsForwardedToEveryChild() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The spool's present set is a cover hint for a plane with no data path (ADR 2026-09.y5f3); the
+            // composite has no opinion on which child acts on it, so every child hears it as given.
+            val bt = FakeChild()
+            val lora = FakeChild(hasFastPlane = true, kind = TransportKind.LoRa, shortRange = false)
+            val composite = CompositeMeshTransport(listOf(bt, lora), backgroundScope)
+            composite.coveredByInternet(setOf("p", "q"))
+            assertEquals(listOf(setOf("p", "q")), bt.internetCalls)
+            assertEquals(listOf(setOf("p", "q")), lora.internetCalls)
+            assertTrue("a cover is never a link", bt.suppressCalls.all { it.isEmpty() } && lora.suppressCalls.all { it.isEmpty() })
         }
 
     @Test

@@ -138,7 +138,10 @@ the purge left zero), bounded by the existing quotas (1000 global / 200 per send
 | Group message delivered | author incapable | cleartext tick (fresh id per retry, coordination-plane capable) | — |
 | Group reaction | every member ratchet-eligible | — | sealed group form via `sealGroup` (all-or-nothing; may mint + distribute a seed, like any group send) |
 | Group reaction | any member ineligible | — | cleartext reaction |
-| Broadcast room | always | cleartext tick (`ackBlockedRoomChat` unchanged, ADR 010) | cleartext reaction |
+| Broadcast room | author capable, live-linked | sealed single-ack ctl DM over the link, `relay = false`, never custodied (the group row's form) | cleartext reaction |
+| Broadcast room | author capable, absent | the bare id waits in `AckSync`'s **ride hold** ≤ `RIDE_HOLD_MS` (60 s) for a frame already sealed toward the author — an outbound DM's inline acks, the coalesced DM tick, the instant DM receipt, an escalated group tick (ADR 2026-09.aa27 / y5f3); riders on a LoRa-bound frame capped at `MAX_LORA_TICK_ACKS` in all | — |
+| Broadcast room | …and nothing rode | at the deadline, sealed **once** and routed: author seen on a connected spool within `SPOOL_COVER_MS` → **signed** `relay = false` tick pushed straight into the pair's scope(s) (`ScopeSync.pushDirect`, no custody row here); else author on a fast plane → the sealed tick `fastSend` (LoRa TARGETED, one packet; retried as one owed entry on the backoff, dropped on a link); else still held (ADR 2026-09.y5f3) | — |
+| Broadcast room | author incapable | cleartext tick (`ackBlockedRoomChat` unchanged, ADR 010) | cleartext reaction |
 
 The sealed tick's two deliberate constraints: **seal-once-resend-verbatim** (sealing consumes a DM
 chain key; per-retry re-sealing at the 15-min heartbeat would burn epochs and starve real DMs out of
@@ -174,13 +177,27 @@ re-leak the delivery event this scheme sealed away, and the room is the ambient,
 
 A room tick toward an **absent** sealed-capable author instead **rides** (ADR 2026-09.aa27): the bare id
 waits in `AckSync`'s ride hold for a frame this device is going to seal toward that author anyway — an
-outbound DM's inline acks (§ `CAP_INLINE_ACK`, ADR 054) or the coalesced `CTL_RECEIPT` that `flushDmAcks`
-originates — so it crosses for no frame and no custody row of its own. It seals nothing up front, which is
+outbound DM's inline acks (§ `CAP_INLINE_ACK`, ADR 054), the coalesced `CTL_RECEIPT` that `flushDmAcks`
+originates, the instant receipt `sealDmReceipt` sends for a DM off any other plane, or an escalated group
+tick (the last two since ADR 2026-09.y5f3, which found the field case where every frame to the author was
+one of them) — so it crosses for no frame and no custody row of its own. It seals nothing up front, which is
 what the old form spent a chain key on before re-sending those bytes on a backoff to nobody; a live link
 still ends the wait, as one tick covering the batch. The receiving half is unchanged: `applySealedReceipt`
 admits an id whose `recipientOf` is null (a broadcast post) and `ackerFor` has a `NEARBY` arm. Counted as
-`receiptsRidden`. An acker that never sends that author anything still ages out silently, so the room's
-details list stays "everyone we heard back from", never a census.
+`receiptsRidden`.
+
+The hold has a **deadline** (ADR 2026-09.y5f3): `RIDE_HOLD_MS` = 60 s after the oldest id — longer than
+both 45 s holds, so a receipt sealed in the same minute carries it first. A ride nobody took is then sealed
+**once** and sent the cheapest way there is. An author a connected spool heard from within `SPOOL_COVER_MS`
+(15 min) gets a **signed** `relay = false` tick pushed straight into the pair's DM scope(s)
+(`ScopeSync.pushDirect`, spec §9.4 C-9.4-3): signed because the scope seal takes the 64-byte signature, so
+this is the one place the ADR 059 unsigned form cannot go; no custody row on the acker, no frame on the
+radios, counted `receiptsSpooled`. Otherwise an author a fast plane currently reaches gets the sealed tick
+over `fastSend` — LoRa's targeted path, one packet — kept as one owed entry on the ordinary backoff and
+dropped the moment a link carries it. Otherwise it keeps waiting: a link, a sighting or a spool newcomer
+re-runs the deadline, and no chain key is ever spent on nobody. The residual is an author reachable only
+through a relay with no board and no spool, so the room's details list stays "everyone we heard back
+from", never a census.
 
 ## 6. Blocked-sender posture (ADR 010)
 
@@ -224,6 +241,8 @@ receipt and reaction are untouched.
 | sealed receipt custody TTL | 24 h via stamped `sentAt` | frame-global custody expiry (ADR 006; the e11aa89 lesson) |
 | tick seal budget | 1 chain key per owed tick / per escalated batch | AckSync seal-once cache; ≤500 owed entries / 24 h |
 | `TICK_BATCH_DEBOUNCE_MS` | 45 s | how long an absent author's acks accumulate before escalating (heal is the backstop) |
+| `AckSync.RIDE_HOLD_MS` | 60 s | how long a room tick waits for a ride before it is sealed and sent by itself — longer than both 45 s holds on purpose (ADR 2026-09.y5f3) |
+| `SPOOL_COVER_MS` | 15 min | how recently a connected spool must have heard from a peer for the mesh to route on it: the ride deadline's first route, and the LoRa plane's Internet cover on every DM-form frame |
 | `MAX_BATCH_ACKS` | 64 | ids per escalated tick (overflow flushes early); receiver applies ≤ 2× (128) |
 | `DmAckCoalescer.HOLD_MS` | 45 s | how long a LoRa-delivered DM's receipt waits for company (ADR 054; `heal` is the backstop) |
 | `DmAckCoalescer.MAX_LORA_TICK_ACKS` | 12 | ids per coalesced DM tick — pinned to fit 3 LoRa packets at the ESP32 cap |

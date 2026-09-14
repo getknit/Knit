@@ -92,6 +92,12 @@ document:
 - Knit no longer crashes if Android is backing it up at the moment the mesh tries to restart. The restart
   now waits for the backup to finish, and the mesh comes back on its own rather than staying off until you
   next open Knit.
+- The delivered tick on a Nearby post now reaches you over a paired LoRa radio or a relay, so you no longer
+  wait for the other phone to be back on Bluetooth or Wi-Fi. Knit gives a reply a minute to carry it first,
+  then sends it on its own.
+- If you use a relay, Knit no longer spends your LoRa radio's airtime on direct messages the relay is already
+  carrying to that person. The radio still carries the Nearby room, and messages to anyone the relay can't
+  reach.
 - A new group's first message now opens even when Knit was shut down on your phone between the key arriving
   and the group itself. It used to stay unreadable for up to fifteen minutes after you came back.
 - A contact you could only reach through an Internet relay or a LoRa board showed as Offline on their

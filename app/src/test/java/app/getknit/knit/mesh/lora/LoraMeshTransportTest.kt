@@ -2095,6 +2095,167 @@ class LoraMeshTransportTest {
             a.transport.stop()
         }
 
+    // --- the Internet cover (ADR 2026-09.y5f3) ---
+
+    @Test
+    fun aDmFormFrameToAPeerTheInternetPlaneCarriesIsKeptOffTheAir() =
+        runTest {
+            // The second cover beside ADR 054's link: a peer a connected spool recently heard from has a
+            // reliable path that costs no air, and every DM-form frame to them stays off the board — the
+            // field day spent a window on DM copies the spool had already delivered. Counted apart from the
+            // link so the two reasons can be told apart.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+            val afterBeacon = a.link.sent.size
+
+            a.transport.coveredByInternet(setOf("bob"))
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "sealed"))
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "carol", recipientId = "bob", body = "sealed tick"))
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertEquals("nothing on the air for a spool-covered recipient", afterBeacon, a.link.sent.size)
+            assertEquals(2L, a.metrics.snapshot().loraSkippedInternet)
+            assertEquals("not counted as a link", 0L, a.metrics.snapshot().loraSkippedLinked)
+            assertEquals(1, a.transport.status.value.internetCovered)
+
+            // The cover lapses with the spool's evidence: the same DM rides again.
+            a.transport.coveredByInternet(emptySet())
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", body = "sealed"))
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertTrue("uncovered, it rides", a.link.sent.size > afterBeacon)
+            a.transport.stop()
+        }
+
+    @Test
+    fun aRoomPostIsNeverKeptOffTheAirByInternetCover() =
+        runTest {
+            // The spool does not carry the room, so the cover has nothing to say about a broadcast.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+            val afterBeacon = a.link.sent.size
+            a.transport.coveredByInternet(setOf("bob", "carol"))
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "room post"))
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertTrue("a room post still rides", a.link.sent.size > afterBeacon)
+            assertEquals(0L, a.metrics.snapshot().loraSkippedInternet)
+            a.transport.stop()
+        }
+
+    @Test
+    fun aTargetedTickToASpoolPresentPeerIsKeptOffTheAir() =
+        runTest {
+            // The first gate fastSend has had since ADR 044: a cover, not a role. The peer demonstrably has a
+            // path that costs nothing, and the tick is in the spool anyway.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            b.transport.start()
+            runCurrent()
+            a.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "ping")) // bob hears alice
+            runCurrent()
+            val bSentBefore = b.link.sent.size
+
+            b.transport.coveredByInternet(setOf("alice"))
+            b.transport.fastSend(frame(FrameType.RECEIPT, "bob"), Peer("alice"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertEquals("the spool carries her tick", bSentBefore, b.link.sent.size)
+            assertEquals(1L, b.metrics.snapshot().loraSkippedInternet)
+
+            b.transport.coveredByInternet(emptySet())
+            b.transport.fastSend(frame(FrameType.RECEIPT, "bob"), Peer("alice"))
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertTrue("uncovered, the targeted tick rides", b.link.sent.size > bSentBefore)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    @Test
+    fun aReofferIsSkippedForAPeerTheInternetPlaneCarries() =
+        runTest {
+            val air = FakeMeshtasticAir()
+            val asked = mutableListOf<String>()
+            val a =
+                rig(air, 1u, "alice", backgroundScope, farFrames = { peer ->
+                    asked += peer
+                    listOf(frame(FrameType.CHAT, "alice", recipientId = "bob"))
+                }) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            // The spool re-serves to bob for real, and for free.
+            a.transport.coveredByInternet(setOf("bob"))
+            val b = rig(air, 2u, "bob", backgroundScope) { testScheduler.currentTime }
+            b.transport.start()
+            advanceTimeBy(4_000)
+            runCurrent()
+            assertTrue("custody is not even asked", asked.isEmpty())
+            assertEquals(0L, a.metrics.snapshot().loraReoffered)
+            assertEquals(1L, a.metrics.snapshot().loraSkippedInternet)
+            a.transport.stop()
+            b.transport.stop()
+        }
+
+    @Test
+    fun aQueuedFrameIsAbandonedWhenItsRecipientAppearsOnTheInternetPlaneWhileItWaits() =
+        runTest {
+            // The same race ADR 054's LINKED reason closes, for the spool: a frame queued before the peer's
+            // presence arrived must not be aired after it.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+
+            a.link.free = 0
+            runCurrent()
+            val sentBefore = a.link.sent.size
+            a.transport.longRangeFanout(frame(FrameType.CHAT, "alice", recipientId = "bob", relay = false), FanoutHint.TICK)
+            runCurrent()
+            assertEquals("it is queued, not aired", sentBefore, a.link.sent.size)
+
+            a.transport.coveredByInternet(setOf("bob"))
+            a.link.updateHeadroom(16)
+            advanceTimeBy(10_000)
+            runCurrent()
+
+            assertEquals("the spool carried it; the board must not repeat it", sentBefore, a.link.sent.size)
+            val snap = a.metrics.snapshot()
+            assertEquals(1L, snap.loraStaleAtSend)
+            assertEquals(mapOf(StaleAtSend.INTERNET.name to 1L), snap.loraStaleAtSendByReason)
+            a.transport.stop()
+        }
+
+    @Test
+    fun internetCoverNeverMovesTheGatewayRole() =
+        runTest {
+            // A spool-present board-holder is not a co-pocket rival: the election reads links alone.
+            val air = FakeMeshtasticAir()
+            val a = rig(air, 1u, "alice", backgroundScope) { testScheduler.currentTime }
+            a.transport.start()
+            runCurrent()
+            advanceTimeBy(1)
+            runCurrent()
+            val role = a.transport.status.value.role
+            a.transport.coveredByInternet(setOf("bob", "carol"))
+            runCurrent()
+            assertEquals(role, a.transport.status.value.role)
+            assertEquals(0, a.transport.status.value.pocketLinks)
+            a.transport.stop()
+        }
+
     /**
      * The originator's [FanoutHint.TICK] lands as [FrameClass.TICK] (ADR 054): with the queue full, a DM evicts a
      * hinted tick, and a tick arriving behind a DM yields — while the same bytes without the hint are DM class

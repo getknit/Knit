@@ -73,9 +73,13 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -125,16 +129,24 @@ class MeshManagerTest {
     }
 
     /** A [MeshTransport] that records every frame the manager originates (both flood + fast-fanout copies). */
-    private class RecordingTransport : MeshTransport {
+    private class RecordingTransport(
+        scope: CoroutineScope,
+    ) : MeshTransport {
         val sent = mutableListOf<Pair<WireEnvelope, Peer?>>()
         val longRangeFanouts = mutableListOf<WireEnvelope>()
         val longRangeHints = mutableListOf<FanoutHint>()
         val fastFanouts = mutableListOf<WireEnvelope>()
         val fastSends = mutableListOf<Pair<WireEnvelope, Peer>>()
+        val internetCovers = mutableListOf<Set<String>>()
 
         /** Drivable, so a test can bring a peer into range (the met-peers watcher reads the nearby set). */
         val nearby = MutableStateFlow<Set<Peer>>(emptySet())
         override val neighbors = nearby.asStateFlow()
+
+        /** Peers sighted but not linked — an author heard only over a board. [reachable] is the union. */
+        val sighted = MutableStateFlow<Set<Peer>>(emptySet())
+        override val reachable: StateFlow<Set<Peer>> =
+            combine(nearby, sighted) { linked, seen -> linked + seen }.stateIn(scope, SharingStarted.Eagerly, emptySet())
         override val health = MutableStateFlow(TransportHealth.Healthy).asStateFlow()
         override val inbound = MutableSharedFlow<InboundFrame>().asSharedFlow()
         override val incomingFiles = emptyFlow<ReceivedFile>()
@@ -161,6 +173,10 @@ class MeshManagerTest {
             to: Peer,
         ) {
             fastSends += wire to to
+        }
+
+        override fun coveredByInternet(peers: Set<String>) {
+            internetCovers += peers
         }
 
         override fun longRangeFanout(
@@ -262,7 +278,7 @@ class MeshManagerTest {
     ) {
         val me = party()
         val bob = party()
-        val transport = RecordingTransport()
+        val transport = RecordingTransport(scope)
         val forwardStore = FakeForwardStore()
         val messages = mockk<MessageRepository>(relaxed = true)
         val receipts = mockk<MessageReceiptRepository>(relaxed = true)
@@ -1277,6 +1293,99 @@ class MeshManagerTest {
             assertEquals("one originated tick, not three", 1, rig.sentChatFrames().size)
             assertEquals(1L, rig.metrics.snapshot().receiptsCustodied)
             assertEquals(2L, rig.metrics.snapshot().receiptsRidden)
+            assertEquals(0, rig.manager.ackSync.ridingFor(rig.bob.nodeId))
+        }
+
+    @Test
+    fun aCoalescedTickNeverCarriesMoreRidersThanTheLoraHopFits() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The coalesced tick is built for the 3-packet LoRa hop, which `MAX_LORA_TICK_ACKS` sizes at
+            // twelve ids in all; aa27 let up to 64 riders onto it (ADR 2026-09.y5f3 caps the riders).
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            repeat(DmAckCoalescer.MAX_LORA_TICK_ACKS) { rig.manager.dmAcks.hold(rig.bob.nodeId, "dm-$it") }
+            rig.manager.ackSync.giveBackRiding(rig.bob.nodeId, List(5) { "room-$it" })
+            rig.clockNow += DmAckCoalescer.HOLD_MS
+            rig.manager.dmAcks.flushDue()
+            advanceUntilIdle()
+
+            assertEquals(1, rig.sentChatFrames().size)
+            assertEquals("no room left on a full LoRa tick", 0L, rig.metrics.snapshot().receiptsRidden)
+            assertEquals("the riders wait for the next carrier", 5, rig.manager.ackSync.ridingFor(rig.bob.nodeId))
+        }
+
+    @Test
+    fun theGroupBatchTickCarriesTheRoomTicksWaitingForTheSameAuthor() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The third carrier (ADR 2026-09.y5f3): an escalated group tick is a frame already sealed and
+            // custodied toward the author, so the room ticks parked for them ride it too.
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            rig.manager.ackSync.giveBackRiding(rig.bob.nodeId, listOf("room-1"))
+            rig.manager.ackSync.owe("group-1", rig.bob.nodeId, escalatable = true)
+            rig.clockNow += AckSync.TICK_BATCH_DEBOUNCE_MS + 1
+            rig.manager.ackSync.retryPending()
+            advanceUntilIdle()
+
+            assertEquals("one originated tick", 1, rig.sentChatFrames().size)
+            assertEquals(1L, rig.metrics.snapshot().receiptsCustodied)
+            assertEquals(1L, rig.metrics.snapshot().receiptsRidden)
+            assertEquals(0, rig.manager.ackSync.ridingFor(rig.bob.nodeId))
+        }
+
+    @Test
+    fun theRideDeadlineSendsATickOverTheFastPlaneToAReachableAuthor() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The field day's missing send (ADR 2026-09.y5f3): bob is heard over the board and nowhere else,
+            // nothing rode, and the deadline puts one sealed `relay = false` tick on the targeted path.
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            rig.transport.sighted.value = setOf(Peer(rig.bob.nodeId))
+            rig.manager.ackSync.giveBackRiding(rig.bob.nodeId, listOf("room-1", "room-2"))
+            rig.clockNow += AckSync.RIDE_HOLD_MS + 1
+            rig.manager.ackSync.retryPending()
+            advanceUntilIdle()
+
+            val (wire, to) = rig.transport.fastSends.single()
+            assertEquals(rig.bob.nodeId, to.nodeId)
+            assertFalse("point-to-point, never custodied", wire.relay)
+            assertEquals(FrameType.CHAT, WireCodec.decodeEnvelope(wire.signed)!!.type)
+            assertEquals("nothing originated into custody", 0, rig.sentChatFrames().size)
+            assertEquals(1L, rig.metrics.snapshot().receiptsSealed)
+            assertEquals(0, rig.manager.ackSync.ridingFor(rig.bob.nodeId))
+        }
+
+    @Test
+    fun theRideDeadlineKeepsHoldingWhenTheAuthorIsNowhere() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            rig.manager.ackSync.giveBackRiding(rig.bob.nodeId, listOf("room-1"))
+            rig.clockNow += AckSync.RIDE_HOLD_MS + 1
+            rig.manager.ackSync.retryPending()
+            advanceUntilIdle()
+
+            assertTrue(rig.transport.fastSends.isEmpty())
+            assertEquals("no chain key spent on nobody", 0L, rig.metrics.snapshot().receiptsSealed)
+            assertEquals(1, rig.manager.ackSync.ridingFor(rig.bob.nodeId))
+        }
+
+    @Test
+    fun aNewSightingOfTheAuthorFlushesADueRideAtOnce() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+            rig.manager.start() // watchReachable is the session's; it is what turns a sighting into onReachable
+            rig.manager.ackSync.giveBackRiding(rig.bob.nodeId, listOf("room-1"))
+            rig.clockNow += AckSync.RIDE_HOLD_MS + 1
+            rig.manager.ackSync.retryPending()
+            advanceUntilIdle()
+            assertTrue("nowhere to send it yet", rig.transport.fastSends.isEmpty())
+
+            rig.transport.sighted.value = setOf(Peer(rig.bob.nodeId)) // the board hears bob
+            rig.await(1) { rig.transport.fastSends.size }
+
+            assertEquals("the sighting is the event the hold was waiting for", 1, rig.transport.fastSends.size)
             assertEquals(0, rig.manager.ackSync.ridingFor(rig.bob.nodeId))
         }
 

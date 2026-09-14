@@ -202,6 +202,14 @@ class ForwardRepository(
 
     override suspend fun has(id: String): Boolean = dao.exists(id)
 
+    override suspend fun frame(
+        id: String,
+        now: Long,
+    ): CarriedFrame? =
+        dao.liveRow(id, now)?.let { row ->
+            WireCodec.decodeEnvelope(row.signed)?.let { CarriedFrame(it, row.sig, row.signed) }
+        }
+
     override suspend fun remove(id: String) {
         // Single delete needs no transaction, but the mutex keeps the digest.remove atomic with it and serial
         // against a concurrent store/sweep (see [mutex]).

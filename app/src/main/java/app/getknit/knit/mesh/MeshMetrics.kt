@@ -196,6 +196,7 @@ class MeshMetrics {
     private val receiptsCustodied = AtomicLong()
     private val receiptsCoalesced = AtomicLong()
     private val receiptsRidden = AtomicLong()
+    private val receiptsSpooled = AtomicLong()
     private val reactionsSealed = AtomicLong()
     private val reactionsSealedFallback = AtomicLong()
     private val groupSealedRatchet = AtomicLong()
@@ -263,6 +264,7 @@ class MeshMetrics {
     private val loraBridgeRefused = AtomicLong()
     private val loraPassive = AtomicLong()
     private val loraSkippedLinked = AtomicLong()
+    private val loraSkippedInternet = AtomicLong()
     private val loraStaleAtSend = AtomicLong()
     private val loraStaleAtSendByReason = ConcurrentHashMap<String, AtomicLong>()
     private val loraTickDeferred = AtomicLong()
@@ -412,6 +414,15 @@ class MeshMetrics {
      */
     fun onReceiptRidden(count: Int) {
         receiptsRidden.addAndGet(count.toLong())
+    }
+
+    /**
+     * A room tick batch that waited out its ride hold and was pushed straight into its author's spool scope
+     * (ADR 2026-09.y5f3): sealed once, no frame on the radios, no custody row here. Beside [onReceiptRidden]
+     * and `receiptsResent`, this is the third way a room ✓✓ leaves a phone with no link to its author.
+     */
+    fun onReceiptSpooled() {
+        receiptsSpooled.incrementAndGet()
     }
 
     /** A reaction sealed as a v2 ctl frame (DM or group form). */
@@ -806,6 +817,15 @@ class MeshMetrics {
     }
 
     /**
+     * A DM-form frame kept off LoRa because its recipient was seen on a connected spool within
+     * `SPOOL_COVER_MS` (ADR 2026-09.y5f3) — the spool carries it, for free. Split from [onLoraSkippedLinked]
+     * on purpose: climbing here while the phones are far apart is airtime saved, climbing there is a link.
+     */
+    fun onLoraSkippedInternet() {
+        loraSkippedInternet.incrementAndGet()
+    }
+
+    /**
      * A queued frame was refused at the moment it reached the air, because an enqueue-time gate had since
      * changed its answer (`StaleAtSend`: the addressee linked on a better plane, the frame aged past the
      * freshness window, or we stood down to a co-pocket gateway).
@@ -901,6 +921,7 @@ class MeshMetrics {
             receiptsCustodied = receiptsCustodied.get(),
             receiptsCoalesced = receiptsCoalesced.get(),
             receiptsRidden = receiptsRidden.get(),
+            receiptsSpooled = receiptsSpooled.get(),
             reactionsSealed = reactionsSealed.get(),
             reactionsSealedFallback = reactionsSealedFallback.get(),
             groupSealedRatchet = groupSealedRatchet.get(),
@@ -965,6 +986,7 @@ class MeshMetrics {
             loraBridgeRefused = loraBridgeRefused.get(),
             loraPassive = loraPassive.get(),
             loraSkippedLinked = loraSkippedLinked.get(),
+            loraSkippedInternet = loraSkippedInternet.get(),
             loraStaleAtSend = loraStaleAtSend.get(),
             loraStaleAtSendByReason = loraStaleAtSendByReason.mapValues { it.value.get() },
             loraTickDeferred = loraTickDeferred.get(),
@@ -1007,6 +1029,7 @@ class MeshMetrics {
         val receiptsCustodied: Long = 0,
         val receiptsCoalesced: Long = 0,
         val receiptsRidden: Long = 0,
+        val receiptsSpooled: Long = 0,
         val reactionsSealed: Long = 0,
         val reactionsSealedFallback: Long = 0,
         val groupSealedRatchet: Long = 0,
@@ -1071,6 +1094,7 @@ class MeshMetrics {
         val loraBridgeRefused: Long = 0,
         val loraPassive: Long = 0,
         val loraSkippedLinked: Long = 0,
+        val loraSkippedInternet: Long = 0,
         val loraStaleAtSend: Long = 0,
         val loraStaleAtSendByReason: Map<String, Long> = emptyMap(),
         val loraTickDeferred: Long = 0,

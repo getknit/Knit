@@ -49,6 +49,13 @@ interface ForwardDao {
     @Query("SELECT EXISTS(SELECT 1 FROM forward_store WHERE id = :id)")
     suspend fun exists(id: String): Boolean
 
+    /** The live row [id], or null if not held or expired by [now]. */
+    @Query("SELECT * FROM forward_store WHERE id = :id AND expiresAt >= :now")
+    suspend fun liveRow(
+        id: String,
+        now: Long,
+    ): ForwardEntity?
+
     /** The carried DM's cleartext recipient, or null if not held — gates the recipient-authenticated purge. */
     @Query("SELECT recipientId FROM forward_store WHERE id = :id")
     suspend fun recipientOf(id: String): String?

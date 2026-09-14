@@ -14,9 +14,9 @@ import app.getknit.knit.mesh.crypto.SafetyNumber
 import app.getknit.knit.mesh.crypto.VerifyPayload
 import app.getknit.knit.mesh.meshNodeLabel
 import app.getknit.knit.mesh.spool.SpoolStatus
+import app.getknit.knit.mesh.spool.spoolPresentPeers
 import app.getknit.knit.ui.Reach
 import app.getknit.knit.ui.reachOf
-import app.getknit.knit.ui.spoolPresentPeers
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow

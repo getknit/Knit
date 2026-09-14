@@ -30,10 +30,23 @@ blob pulls never touch the ~1 kbps link — `send`/`sendFile`/`sendDigest` are n
   `onDeliver` — never widen `shouldFastFanout` for this; that predicate is the NAN coordination plane's.
   **The recipient gate (ADR 054):** a DM-form frame addressed to us, or to a peer BLE/NAN holds a **live link**
   to (`coveredByLink`, read off `linkedPeers` — links, never sightings), is skipped on this path and on the
-  bridge backfill before the sig-dedup slot is spent: the link carries it. Counted `loraSkippedLinked`. The
+  bridge backfill before the sig-dedup slot is spent: the link carries it. Counted `loraSkippedLinked`. **The
+  second cover (ADR 2026-09.y5f3):** a DM-form frame to a peer a connected spool heard from within
+  `SPOOL_COVER_MS` (15 min) is skipped the same way — fan-out, backfill, targeted send and the first-hearing
+  re-offer alike, and a frame already queued is abandoned at dequeue (`StaleAtSend.INTERNET`) — because the
+  frame is in the spool anyway and the spool costs no air; the field day spent a window on DM copies the
+  spool had already delivered. Fed by `MeshTransport.coveredByInternet` (`internetPeers`, from
+  `MeshManager`'s spool-presence watch), counted `loraSkippedInternet`, shown as `internetCovered` in
+  `…debug.LORA`. A cover, never an election input: it does not touch `linkedPeers` or the role. The
   originator's `FanoutHint` (`CONTENT`/`TICK`) rides beside the frame — see Pacing.
-- **TARGETED** (`fastSend`, unchanged): `receipt`, and `chat && !wire.relay && recipientId == to` (AckSync's
-  sealed `CTL_RECEIPT` tick — a flooded DM never rides this path, so no `fastSend` caller can widen it).
+- **TARGETED** (`fastSend`): `receipt`, and `chat && !wire.relay && recipientId == to` (AckSync's sealed
+  `CTL_RECEIPT` tick — a flooded DM never rides this path, so no `fastSend` caller can widen it). Since ADR
+  2026-09.y5f3 this is how a **room post's** ✓✓ reaches an author only the board can hear: the tick waits
+  `AckSync.RIDE_HOLD_MS` (60 s) for a frame already going that way, then — if no spool covers the author —
+  is sealed once and fast-sent here, one packet, class `TICK`, retried on the owed backoff. Between ADR aa27
+  (2026-09-05) and this it was never asked: "absent" meant no BLE/NAN link, and a LoRa-only author was absent
+  (zero `lora tx send:` on two phones over a whole field day). The Internet cover above is the one gate this
+  path has; ADR 044's "never gate `fastSend`" was about the role, and a cover is not a role.
 
 Everything else (group-form chat, `groupupdate`/`groupleave`, `typing`, `blobreq`/`keyreq`) is refused.
 

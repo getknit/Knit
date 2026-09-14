@@ -20,6 +20,7 @@ import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.data.peer.MetPeerRepository
@@ -30,16 +31,29 @@ import app.getknit.knit.data.settings.ContributionTotals
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.CompositeMeshTransport
 import app.getknit.knit.mesh.ContributionLedger
 import app.getknit.knit.mesh.DropReason
 import app.getknit.knit.mesh.IngressBudget
 import app.getknit.knit.mesh.MeshManager
 import app.getknit.knit.mesh.MeshMetrics
+import app.getknit.knit.mesh.MeshTransport
+import app.getknit.knit.mesh.SPOOL_COVER_MS
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.SessionTransactor
+import app.getknit.knit.mesh.lora.FakeMeshtasticAir
+import app.getknit.knit.mesh.lora.FakeMeshtasticLink
+import app.getknit.knit.mesh.lora.LoraConfig
+import app.getknit.knit.mesh.lora.LoraGossipPolicy
+import app.getknit.knit.mesh.lora.LoraMeshTransport
+import app.getknit.knit.mesh.lora.LoraPacePolicy
+import app.getknit.knit.mesh.protocol.FrameType
+import app.getknit.knit.mesh.spool.FakeSpool
+import app.getknit.knit.mesh.spool.ScopeStatus
+import app.getknit.knit.mesh.spool.spoolPresentPeers
 import app.getknit.knit.moderation.ImageModerator
 import app.getknit.knit.moderation.ImageScreeningService
 import app.getknit.knit.moderation.ScopedTextModerator
@@ -53,6 +67,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -63,6 +78,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * **Mesh in a box**: N complete, real Knit stacks in one JVM — the real [MeshManager] (and so the real
@@ -95,11 +111,15 @@ class MeshLab {
      * Creates and starts a node — its own identity, database and settings file — and returns once its router
      * is listening, so a link made next cannot lose the profile push (see [LabTransport.collecting]).
      */
-    suspend fun node(
+    internal suspend fun node(
         name: String,
         limits: LabLimits = LabLimits(),
+        // A board on a shared air: the node gets the real LoRa plane beside its radio (ADR 2026-09.y5f3).
+        air: FakeMeshtasticAir? = null,
+        // A relay the node dials: the node gets the real Internet plane (`ScopeSync` over an in-process spool).
+        spool: FakeSpool? = null,
     ): LabNode {
-        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits)
+        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits, air, spool)
         nodes += node
         node.boot()
         return node
@@ -234,6 +254,53 @@ class MeshLab {
         conversation: (LabNode) -> String,
     ): String = nodes.map { n -> "  ${n.name}: ${n.decrypted(conversation(n)).map { it.second }}" }.joinToString("\n")
 
+    /**
+     * Waits until [node]'s relay lists the DM scope it shares with [peer] as converged — derived on the 15 s
+     * reconcile once the session is confirmed.
+     */
+    suspend fun awaitDmScope(
+        node: LabNode,
+        peer: LabNode,
+    ) {
+        val ok = await(1, timeoutMs = SPOOL_AWAIT_MS) { if (node.dmScopeStatus(peer)?.converged == true) 1 else 0 }
+        if (ok) return
+        // A scope that will not converge is nearly always one frame id held as two byte-variants (the
+        // profile case ADR 2026-09.y5f3 fixed); the per-row listing shows which, the id sets whether it is
+        // that or a frame one side simply never got.
+        val mine = node.custodyFrames()
+        val theirs = peer.custodyFrames()
+        throw AssertionError(
+            "${node.name}'s relay never converged a DM scope with ${peer.name}: ${node.manager.spoolStatus().map { spool ->
+                "${spool.url} connected=${spool.connected} err=${spool.lastError} scopes=${spool.scopes.map {
+                    "${it.label.take(
+                        8,
+                    )} local=${it.localCount} spool=${it.spoolCount} converged=${it.converged} invalid=${it.invalidCount} accounted=${it.accountedCount}"
+                }}"
+            }}\n  ${node.name}-only rows: ${mine - theirs.toSet()}\n  ${peer.name}-only rows: ${theirs - mine.toSet()}",
+        )
+    }
+
+    /** Waits until [node]'s spool has heard from [peer] recently enough for the mesh to route on it. */
+    suspend fun awaitSpoolPresent(
+        node: LabNode,
+        peer: LabNode,
+    ) {
+        // The scope is derived on the 15 s reconcile once the session is confirmed, then the profiles cross.
+        val ok = await(1, timeoutMs = SPOOL_AWAIT_MS) { if (node.spoolPresent(peer)) 1 else 0 }
+        assertTrue("${node.name} never saw ${peer.name} on the spool", ok)
+    }
+
+    /** Waits until [author]'s row for [messageId] carries [acker]'s receipt, and returns the plane it came over. */
+    suspend fun awaitReceipt(
+        author: LabNode,
+        messageId: String,
+        acker: LabNode,
+    ): DeliveryPlane {
+        val ok = await(1) { if (author.receiptPlanes(messageId).containsKey(acker.nodeId)) 1 else 0 }
+        assertTrue("${author.name} never got ${acker.name}'s tick for $messageId", ok)
+        return author.receiptPlanes(messageId).getValue(acker.nodeId)
+    }
+
     /** Waits until every pair in [nodes] has pinned the other's key — the profile exchange a link-up starts. */
     suspend fun awaitAcquainted(vararg nodes: LabNode) {
         val pairs = nodes.flatMap { a -> nodes.filter { it !== a }.map { b -> a to b } }
@@ -257,6 +324,21 @@ class MeshLab {
          */
         const val TICK_DEBOUNCE_MS = 300L
 
+        /**
+         * The ride hold, shortened the same way ([app.getknit.knit.mesh.AckSync.RIDE_HOLD_MS] is 60 s): a
+         * scenario that wants the ride to win passes a longer one through [LabLimits.rideHoldMs].
+         */
+        const val RIDE_HOLD_MS = 300L
+
+        /**
+         * Long enough for the scope reconcile (15 s) and a worker that missed an event and waits for its own
+         * 60 s tick — the slow path a real relay client takes too; the fast path is a second or two.
+         */
+        const val SPOOL_AWAIT_MS = 90_000L
+
+        /** What a node with a [FakeSpool] dials; the fake ignores the address. */
+        const val SPOOL_URL = "wss://lab.spool/spool/v1"
+
         /** How long a departure is left visible before the next topology change ([unlink], [LabNode.restart]). */
         const val SETTLE_MS = 100L
     }
@@ -275,6 +357,11 @@ data class LabLimits(
     val ingressBurst: Int = IngressBudget.DEFAULT_BURST,
     /** Room posts per minute one link may sustain ([IngressBudget]'s `perMinute`). */
     val ingressPerMinute: Int = IngressBudget.DEFAULT_PER_MINUTE,
+    /**
+     * How long a room tick waits for a ride before it goes on its own
+     * ([app.getknit.knit.mesh.AckSync.RIDE_HOLD_MS], ADR 2026-09.y5f3).
+     */
+    val rideHoldMs: Long = MeshLab.RIDE_HOLD_MS,
 )
 
 /**
@@ -287,6 +374,8 @@ class LabNode internal constructor(
     private val context: Context,
     private val dir: File,
     private val limits: LabLimits,
+    private val air: FakeMeshtasticAir?,
+    private val spool: FakeSpool?,
 ) {
     // --- persistent across restarts ---
 
@@ -313,8 +402,16 @@ class LabNode internal constructor(
 
     // --- the live stack, rebuilt by boot() ---
 
+    /** The short-range radio — links, holds and releases. The LoRa child, when there is one, sits beside it. */
     lateinit var transport: LabTransport
         private set
+
+    /** The real LoRa plane over the shared air, or null for a node without a board. */
+    internal var lora: LoraMeshTransport? = null
+        private set
+
+    /** Everything the LoRa plane logged this boot — `lora tx <label> parts=N` lines are the air oracle. */
+    val loraLog = CopyOnWriteArrayList<String>()
     lateinit var manager: MeshManager
         private set
     lateinit var messages: MessageRepository
@@ -341,6 +438,12 @@ class LabNode internal constructor(
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { this.scope = it }
         transport = LabTransport(nodeId)
         metrics = MeshMetrics()
+        // The Internet plane is opted into through the same two settings the relay editor writes; the
+        // settings file persists, so a restart() dials the same spool again.
+        if (spool != null) {
+            settings.setSpoolEnabled(true)
+            settings.addSpoolUrl(MeshLab.SPOOL_URL)
+        }
         // The real DataStore-backed settings are the journal, so a restart() proves the totals persist.
         ledger = ContributionLedger(journal = settings, selfId = { nodeId })
         val keys = keyStore.keys()
@@ -371,9 +474,35 @@ class LabNode internal constructor(
             object : SessionTransactor {
                 override suspend fun <T> transact(block: suspend () -> T): T = db.withWriteTransaction { block() }
             }
+        // The LoRa child is built the way `di/MeshModule` builds it — the real transport over the fake air,
+        // its frame sources late-bound to the manager exactly as the DI lambdas are — and composed with the
+        // radio through the real composite, so the cover, the election inputs and the fast-plane dispatch
+        // are the production ones.
+        lora =
+            air?.let { air ->
+                LoraMeshTransport(
+                    selfId = { nodeId },
+                    link = FakeMeshtasticLink(loraNodeNum(), air),
+                    config = MutableStateFlow(LoraConfig("AA:$name", 0)),
+                    selfProfile = { manager.signedProfile() },
+                    farFrames = { manager.framesFor(it) },
+                    offerPrefixes = { manager.offerPrefixes(it) },
+                    framesMissing = { prefixes, limit, dms -> manager.framesMissing(prefixes, limit, dms) },
+                    onPublicPost = { manager.onPublicPostHeard(it) },
+                    scope = scope,
+                    metrics = metrics,
+                    clock = System::currentTimeMillis,
+                    wallClock = System::currentTimeMillis,
+                    log = { loraLog += it },
+                    // No inter-packet gap and no Trickle jitter: the scenario's clock is the wall clock.
+                    pace = LoraPacePolicy(minGapMs = 0),
+                    gossip = LoraGossipPolicy(random = { 0 }),
+                )
+            }
+        val meshTransport: MeshTransport = lora?.let { CompositeMeshTransport(listOf(transport, it), scope) } ?: transport
         manager =
             MeshManager(
-                transport = transport,
+                transport = meshTransport,
                 messages = messages,
                 receipts = receipts,
                 groups = groups,
@@ -404,7 +533,9 @@ class LabNode internal constructor(
                 ledger = ledger,
                 db = db,
                 tickDebounceMs = MeshLab.TICK_DEBOUNCE_MS,
+                rideHoldMs = limits.rideHoldMs,
                 ingressBudget = IngressBudget(burst = limits.ingressBurst, perMinute = limits.ingressPerMinute),
+                spoolDialer = spool,
             )
         manager.start()
         // The session's collectors subscribe asynchronously; a frame sent before that is emitted into nobody.
@@ -436,8 +567,12 @@ class LabNode internal constructor(
         db.close()
     }
 
+    /** A stable board number per name, so two nodes on one air are never the same board. */
+    private fun loraNodeNum(): UInt = (name.hashCode().toUInt() and 0x7FFF_FFFFu) + 1u
+
     private fun shutdownLive() {
         transport.disconnectAll()
+        loraLog.clear()
         // stop() banks the ledger on the app scope, which the next line cancels; in the lab the "app" scope is
         // this session's, so bank it here first — the process-death the restart models is the orderly kind.
         runBlocking { ledger.flush() }
@@ -551,6 +686,16 @@ class LabNode internal constructor(
     /** The custody store's live id set, as the digest exchange advertises it. */
     suspend fun custodyIds(): Set<String> = forwardStore.liveIds(System.currentTimeMillis()).toSet()
 
+    /** Every live custody row as `id:type:sender→recipient@sentAt#sigHash` — a diff of two of these names the odd frame out. */
+    suspend fun custodyFrames(): List<String> =
+        forwardStore
+            .liveFrames(System.currentTimeMillis())
+            .map {
+                "${it.envelope.id}:${it.envelope.type}:${it.envelope.senderId.take(
+                    6,
+                )}→${it.envelope.recipientId?.take(6)}@${it.envelope.sentAt}#${it.sig.contentHashCode()}/${it.signed.contentHashCode()}"
+            }.sorted()
+
     /** `liveFingerprint`: the digest recomputed over the live rows — what two converged stores share. */
     suspend fun custodyFingerprint(): Long = StoreDigest.fingerprint(custodyIds())
 
@@ -573,4 +718,46 @@ class LabNode internal constructor(
 
     /** The DM thread id between this node and [peer], as this node names it. */
     fun dmWith(peer: LabNode): String = Conversations.idFor(nodeId, peer.nodeId, nodeId)
+
+    /** The id of the ordinary message this node authored in [conversationId] with [body], once it is in its store. */
+    suspend fun ownMessageId(
+        conversationId: String,
+        body: String,
+    ): String =
+        checkNotNull(
+            messages
+                .observeNewestMessages(conversationId, MeshLab.WINDOW)
+                .first()
+                .firstOrNull { it.kind == MessageEntity.KIND_NORMAL && it.senderId == nodeId && it.body == body }
+                ?.id,
+        ) { "$name holds no own message \"$body\" in $conversationId" }
+
+    /** The plane this node's row for [messageId] in [conversationId] crossed to get here, as the bubble would say it. */
+    suspend fun receivedVia(
+        conversationId: String,
+        messageId: String,
+    ): DeliveryPlane {
+        val row = messages.observeNewestMessages(conversationId, MeshLab.WINDOW).first().firstOrNull { it.id == messageId }
+        return DeliveryPlane.fromCode(checkNotNull(row) { "$name holds no $messageId in $conversationId" }.receivedVia)
+    }
+
+    /** Who has told this node they received [messageId], and over which plane each tick arrived. */
+    suspend fun receiptPlanes(messageId: String): Map<String, DeliveryPlane> =
+        receipts.observeForMessage(messageId).first().associate { it.ackerNodeId to DeliveryPlane.fromCode(it.via) }
+
+    /** Whether a connected spool has heard from [peer] within the mesh's cover window (ADR 2026-09.y5f3). */
+    fun spoolPresent(peer: LabNode): Boolean =
+        peer.nodeId in spoolPresentPeers(manager.spoolStatus(), System.currentTimeMillis(), SPOOL_COVER_MS)
+
+    /** The DM scope this node shares with [peer] on its spool, as the relay editor would list it. */
+    fun dmScopeStatus(peer: LabNode): ScopeStatus? = manager.spoolStatus().flatMap { it.scopes }.firstOrNull { it.label == peer.nodeId }
+
+    /** How many DM-form chat frames this node custodies that it authored toward [peer] — a room tick must add none. */
+    suspend fun custodiedChatsTo(peer: LabNode): Int =
+        forwardStore.liveFrames(System.currentTimeMillis()).count {
+            it.envelope.type == FrameType.CHAT && it.envelope.senderId == nodeId && it.envelope.recipientId == peer.nodeId
+        }
+
+    /** How many `lora tx <label>…` lines this boot logged — what the board actually put on the air. */
+    fun loraTx(label: String): Int = loraLog.count { it.startsWith("lora tx $label") }
 }

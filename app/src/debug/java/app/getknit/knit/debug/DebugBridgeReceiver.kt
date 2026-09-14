@@ -1018,6 +1018,7 @@ class DebugBridgeReceiver :
             .put("receiptsCustodied", snap.receiptsCustodied)
             .put("receiptsCoalesced", snap.receiptsCoalesced)
             .put("receiptsRidden", snap.receiptsRidden)
+            .put("receiptsSpooled", snap.receiptsSpooled)
             .put("reactionsSealed", snap.reactionsSealed)
             .put("reactionsSealedFallback", snap.reactionsSealedFallback)
             .put("dropsByReason", JSONObject(snap.dropsByReason.mapKeys { it.key.name }))
@@ -1073,6 +1074,7 @@ class DebugBridgeReceiver :
             .put("loraBridgeRefused", snap.loraBridgeRefused)
             .put("loraPassive", snap.loraPassive)
             .put("loraSkippedLinked", snap.loraSkippedLinked)
+            .put("loraSkippedInternet", snap.loraSkippedInternet)
             // The same gates as `loraSkippedLinked`, asked again at the moment of sending: how much air the
             // queue would have spent on frames whose answer changed while they waited (LINKED/STALE/PASSIVE).
             .put("loraStaleAtSend", snap.loraStaleAtSend)
@@ -1353,6 +1355,8 @@ class DebugBridgeReceiver :
             .put("gatewaysHeard", status.gatewaysHeard)
             // pocketSightings > pocketLinks is the shape of the field failure: peers heard but not linked.
             .put("pocketSightings", status.pocketSightings)
+            // Peers a connected spool covers: DM-form frames to them stay off the air (ADR 2026-09.y5f3).
+            .put("internetCovered", status.internetCovered)
             .put("radio", status.airtime?.let { "${it.region}/${it.preset}${if (it.known) "" else " (assumed)"}" } ?: JSONObject.NULL)
             // ADR 067: true means the board is on its own RF slot, so the budgets below are off the
             // politeness ceiling and bounded only by the region's duty cycle.

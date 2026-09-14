@@ -1,8 +1,6 @@
 package app.getknit.knit.ui
 
 import app.getknit.knit.mesh.MeshController
-import app.getknit.knit.mesh.PRESENCE_LINGER_MS
-import app.getknit.knit.mesh.spool.SpoolStatus
 
 /**
  * How we can currently get a frame to a node — each backed by evidence, which is the whole point of the
@@ -29,28 +27,9 @@ enum class Reach {
 }
 
 /**
- * The DM peers the Internet plane is currently a path to. A scope existing proves nothing about its peer:
- * it is derived from the pairwise ratchet root, so it stays subscribed and converged while its peer sits
- * switched off in a drawer, and reading that as reach put two long-dead emulators under "reachable via
- * relay" the day Diagnostics shipped (ADR 2026-09.2ajk). Only `ScopeStatus.peerSeenAt` — that peer's own
- * recent traffic, within [PRESENCE_LINGER_MS] of [now] — is evidence, and only on a connected spool. The
- * label is the DM peer's node id, so a group scope's `g-…` matches no peer; a retiring scope is a drained
- * rotation and carries nothing new either way.
- */
-fun spoolPresentPeers(
-    spools: List<SpoolStatus>,
-    now: Long,
-): Set<String> =
-    spools
-        .filter { it.connected }
-        .flatMap { it.scopes }
-        .filter { !it.retiring && it.peerSeenAt != null && now - it.peerSeenAt <= PRESENCE_LINGER_MS }
-        .mapTo(mutableSetOf()) { it.label }
-
-/**
  * Classifies one node by the best evidence it has: [nearby] is [MeshController.neighbors] (the short-range
  * planes, the only ones that sight the peer's own radio), [reachable] is [MeshController.reachable] (every
- * plane, long-range included) and [spoolPresent] is [spoolPresentPeers]. The mesh is a pure flood network
+ * plane, long-range included) and [spoolPresent] is [app.getknit.knit.mesh.spool.spoolPresentPeers]. The mesh is a pure flood network
  * with no routing table, so no tier claims a *route* — only that something reached us from that node, or
  * could carry a frame back.
  */

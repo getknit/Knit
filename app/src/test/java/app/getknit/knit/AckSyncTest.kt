@@ -12,6 +12,8 @@ import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -31,76 +33,6 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AckSyncTest {
-    /** The message author: records every frame it receives, exposing the delivery-receipt ack ids. */
-    private class Author(
-        val id: String,
-    ) {
-        val transport = FakeLoopTransport(id)
-        private val received = CopyOnWriteArrayList<InboundFrame>()
-
-        fun start(scope: CoroutineScope) {
-            scope.launch { transport.inbound.collect { received.add(it) } }
-        }
-
-        fun received(): List<InboundFrame> = received.toList()
-
-        fun receipts(): List<InboundFrame> = received.filter { it.envelope.type == FrameType.RECEIPT }
-
-        fun ackIds(): List<String> = receipts().mapNotNull { WireCodec.decodePayload<ReceiptContent>(it.envelope.payload)?.ackId }
-    }
-
-    private fun ackSyncOn(
-        transport: MeshTransport,
-        id: String,
-        clock: () -> Long = { 0L },
-        canSeal: suspend (String) -> Boolean = { false },
-        originateTick: suspend (String, List<String>) -> Boolean = { _, _ -> false },
-        flushScope: () -> CoroutineScope? = { null },
-        sealTick: suspend (String, List<String>) -> WireEnvelope? = { _, _ -> null },
-    ) = AckSync(
-        transport = transport,
-        selfId = { id },
-        signRaw = { byteArrayOf(SIG_MARKER) },
-        now = clock,
-        sealTick = sealTick,
-        canSeal = canSeal,
-        originateTick = originateTick,
-        flushScope = flushScope,
-    )
-
-    /** A stand-in sealed tick: a signed CHAT-shaped wire whose bytes identify the (author, first-ackId) seal. */
-    private fun sealedWire(
-        me: String,
-        authorId: String,
-        ackIds: List<String>,
-    ): WireEnvelope {
-        val env =
-            RelayEnvelope(
-                type = FrameType.CHAT,
-                id = "sealed-${ackIds.first()}",
-                senderId = me,
-                sentAt = 1L,
-                recipientId = authorId,
-                payload = WireCodec.encodePayload(ReceiptContent(ackIds.joinToString("+"))),
-            )
-        val signed = WireCodec.encodeEnvelope(env)
-        return WireEnvelope(relay = false, sig = byteArrayOf(SIG_MARKER), signed = signed)
-    }
-
-    /** Records coordination-plane [MeshTransport.fastSend] attempts, delegating everything else. */
-    private class FastSendRecorder(
-        inner: FakeLoopTransport,
-    ) : MeshTransport by inner {
-        val fastSent = CopyOnWriteArrayList<WireEnvelope>()
-
-        override fun fastSend(
-            wire: WireEnvelope,
-            to: Peer,
-        ) {
-            fastSent.add(wire)
-        }
-    }
-
     @Test
     fun tickReachesAuthorWhenAlreadyALiveNeighbor() =
         runTest(UnconfinedTestDispatcher()) {
@@ -698,8 +630,4 @@ class AckSyncTest {
 
             assertEquals("a legacy author's tick still retries every heartbeat", 4, recorder.fastSent.size)
         }
-
-    private companion object {
-        const val SIG_MARKER: Byte = 0x5A
-    }
 }

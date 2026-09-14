@@ -17,6 +17,7 @@ import app.getknit.knit.data.MessageReceiptRepository
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.commons.CommonsRepository
 import app.getknit.knit.data.crypto.IdentityKeyStore
 import app.getknit.knit.data.crypto.KeystoreSecret
 import app.getknit.knit.data.forward.ForwardRepository
@@ -32,6 +33,7 @@ import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.GroupRootRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
+import app.getknit.knit.data.relay.RelayInviteApplier
 import app.getknit.knit.data.settings.ContributionTotals
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
@@ -63,6 +65,7 @@ import app.getknit.knit.mesh.lora.LoraPacePolicy
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.sha256Hex
 import app.getknit.knit.mesh.spool.FakeSpool
+import app.getknit.knit.mesh.spool.RelayInvite
 import app.getknit.knit.mesh.spool.ScopeStatus
 import app.getknit.knit.mesh.spool.spoolPresentPeers
 import app.getknit.knit.moderation.ImageModerator
@@ -134,8 +137,14 @@ class MeshLab {
         air: FakeMeshtasticAir? = null,
         // A relay the node dials: the node gets the real Internet plane (`ScopeSync` over an in-process spool).
         spool: FakeSpool? = null,
+        // Whether the rig opts the node into that relay at boot, as the relay editor would. False leaves the
+        // plane off with the relay unknown — the state a relay invite (docs/RELAY_INVITE.md) starts from.
+        spoolOptIn: Boolean = true,
+        // A commons store (§7.4) behind the manager, so the node can join and post to a spool's room. Off by
+        // default: every other scenario runs the manager exactly as it did before the commons existed.
+        commons: Boolean = false,
     ): LabNode {
-        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits, air, spool, clock)
+        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits, air, spool, spoolOptIn, commons, clock)
         nodes += node
         node.boot()
         return node
@@ -602,6 +611,7 @@ data class LabLimits(
  * [restart] is a real process death: every in-memory structure — `PendingInbound`, `PendingGroupKeys`, the
  * ratchet caches, the seen set — is rebuilt from what was committed.
  */
+@Suppress("LargeClass") // one phone's whole DI wiring plus every verb a scenario drives it with; splitting would scatter the mirror
 class LabNode internal constructor(
     val name: String,
     private val context: Context,
@@ -609,6 +619,8 @@ class LabNode internal constructor(
     private val limits: LabLimits,
     private val air: FakeMeshtasticAir?,
     private val spool: FakeSpool?,
+    private val spoolOptIn: Boolean,
+    private val withCommons: Boolean,
     clock: LabClock,
 ) {
     /** This node's clock: the lab's shared calendar, plus its own skew if a scenario gave it one. */
@@ -656,6 +668,7 @@ class LabNode internal constructor(
     lateinit var groups: GroupRepository
         private set
     lateinit var peers: PeerRepository
+    private var commons: CommonsRepository? = null
         private set
     lateinit var metrics: MeshMetrics
         private set
@@ -682,7 +695,7 @@ class LabNode internal constructor(
         metrics = MeshMetrics()
         // The Internet plane is opted into through the same two settings the relay editor writes; the
         // settings file persists, so a restart() dials the same spool again.
-        if (spool != null) {
+        if (spool != null && spoolOptIn) {
             settings.setSpoolEnabled(true)
             settings.addSpoolUrl(MeshLab.SPOOL_URL)
         }
@@ -697,6 +710,7 @@ class LabNode internal constructor(
                 roomMaxPerStranger = limits.roomMaxPerStranger,
             )
         peers = PeerRepository(db.peerDao(), settings, identity)
+        commons = if (withCommons) CommonsRepository(db.commonsDao(), messages, db) else null
         val reactions = ReactionRepository(db.reactionDao(), db).also { reactionStore = it }
         receipts = MessageReceiptRepository(db.messageReceiptDao(), messages, db)
         blobs =
@@ -798,6 +812,7 @@ class LabNode internal constructor(
                 rideHoldMs = limits.rideHoldMs,
                 ingressBudget = IngressBudget(burst = limits.ingressBurst, perMinute = limits.ingressPerMinute, clock = now),
                 spoolDialer = spool,
+                commons = commons,
             )
         manager.start()
         // The session's collectors subscribe asynchronously; a frame sent before that is emitted into nobody.
@@ -1006,6 +1021,48 @@ class LabNode internal constructor(
             checkNotNull(importer.preview(ContactCard.parse(card)) as? ContactImporter.Preview.Ready) { "$name could not import the card" }
         importer.import(ready)
     }
+
+    /**
+     * The relay invite for this node's spool as the relay row shares it (docs/RELAY_INVITE.md §4): the URL
+     * as stored, plus the room this node has joined there, if any.
+     */
+    suspend fun mintInvite(): String {
+        val room = commons?.roots()?.firstOrNull { it.spoolUrl == MeshLab.SPOOL_URL }
+        val name = room?.let { commons?.find(it.conversationId)?.name }
+        return RelayInvite.url(RelayInvite.mint(MeshLab.SPOOL_URL, room?.secret, name))
+    }
+
+    /** Applies a relay invite as the sheet's confirmation does: consent, the relay, the room, dial now. */
+    suspend fun applyInvite(link: String) {
+        val invite =
+            checkNotNull(RelayInvite.parse(link, allowCleartext = false) as? RelayInvite.Parsed.Invite) { "$name got no invite: $link" }
+        val applier = RelayInviteApplier(settings, commons, manager, clock = now)
+        applier.apply(applier.preview(invite))
+    }
+
+    /** Joins the spool's commons as the relay row's Join does, and nudges the plane so it subscribes now. */
+    suspend fun joinCommons(
+        secret: ByteArray,
+        roomName: String?,
+    ): String {
+        val id = checkNotNull(commons) { "$name has no commons store" }.join(MeshLab.SPOOL_URL, secret, roomName, now())
+        manager.refreshRelays()
+        return id
+    }
+
+    /** The rooms this node has joined, by conversation id. */
+    suspend fun joinedRooms(): Set<String> =
+        commons
+            ?.roots()
+            ?.map { it.conversationId }
+            ?.toSet()
+            .orEmpty()
+
+    /** Posts to a joined commons; false when the room is unknown or the text was refused. */
+    suspend fun postCommons(
+        conversationId: String,
+        text: String,
+    ): Boolean = spaced { manager.sendCommons(conversationId, text, emptyList(), null) }
 
     /** Forces a DM session reset toward [peer] (Diagnostics' button): null once it went out, else the refusal. */
     suspend fun resetSession(peer: LabNode): String? = manager.forceRatchetReset(peer.nodeId)

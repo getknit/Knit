@@ -54,8 +54,10 @@ whoever sent the card. So an import **pins + accepts but never verifies**; the s
 at import and on the profile for the pair to compare over a call, and the preview also shows the alias
 derived from the key (ADR 058) — and the `Name (Alias)` form if the card's name is one this device already
 knows another identity by. A differing key for a node id already
-pinned is refused, never swapped in. Relay hints are displayed, never applied — adding a relay hands it
-every scope id and IP this device has, so that stays a deliberate edit in the relay settings.
+pinned is refused, never swapped in. Relay hints are displayed, never applied *silently* — adding a relay
+hands it every scope id and IP this device has, so a hint's inline **Add** goes through the relay invite
+sheet (`docs/RELAY_INVITE.md`, ADR 2026-09.tmbq): the host named, the cost stated, the disclosure folded in
+the first time, nothing stored before the tap.
 
 ## 4. The intro driver (`IntroSync`)
 
@@ -94,7 +96,8 @@ minimalCard = no name, no sp, iat 0:
 certificates (Play App Signing, and the distribution key F-Droid/GitHub/offline-share installs carry) for
 the `https` link to open the app on Android 12+; until then an unverified link opens in the browser, so
 the `/c` landing page must build the `knit://c/<fragment>` link client-side ("Open in Knit") beside the
-install links, and must not redirect `/c` to `/c/`. Lab devices (debug-signed) never verify — use
+install links, and must not redirect `/c` to `/c/`; the relay invite's `/r` (`docs/RELAY_INVITE.md` §6)
+needs the same treatment. Lab devices (debug-signed) never verify — use
 `adb shell pm set-app-links --package app.getknit.knit 2 getknit.app` or the `knit://` form.
 
 ## 7. Deferred

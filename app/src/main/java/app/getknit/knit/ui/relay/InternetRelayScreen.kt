@@ -1,5 +1,7 @@
 package app.getknit.knit.ui.relay
 
+import android.content.ClipData
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,7 +21,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,12 +32,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +48,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -50,9 +61,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
+import app.getknit.knit.data.relay.RelayInviteApplier
+import app.getknit.knit.mesh.spool.RelayInvite
 import app.getknit.knit.mesh.spool.SpoolErrCode
 import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.shareText
 import app.getknit.knit.ui.theme.knitColors
 import org.koin.androidx.compose.koinViewModel
 
@@ -72,10 +86,46 @@ fun InternetRelayScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val showConsent by viewModel.showConsent.collectAsStateWithLifecycle()
+    val invitePreview by viewModel.invitePreview.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val clipboard = LocalClipboard.current
+
+    // Share / copy of a relay invite, and the sheet's outcomes. Android 13+ shows its own copy
+    // confirmation, so the snackbar only fires below it (the Add-contact screen's idiom).
+    val shareMessage = stringResource(R.string.relays_invite_share_text)
+    val shareTitle = stringResource(R.string.relays_invite_chooser_title)
+    val copiedMessage = stringResource(R.string.relays_invite_copied)
+    val refusedMessage = stringResource(R.string.relays_invite_refused)
+    val refusedUrlMessage = stringResource(R.string.relays_invite_refused_url)
+    val appliedMessage = stringResource(R.string.relays_invite_applied)
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is InternetRelayEvent.ShareInvite -> {
+                    shareText(context, shareMessage.format(event.url), shareTitle)
+                }
+
+                is InternetRelayEvent.CopyInvite -> {
+                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Knit relay invite", event.url)))
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) snackbarHostState.showSnackbar(copiedMessage)
+                }
+
+                is InternetRelayEvent.InviteRefused -> {
+                    snackbarHostState.showSnackbar(if (event.reason == RelayInvite.Reason.BAD_URL) refusedUrlMessage else refusedMessage)
+                }
+
+                is InternetRelayEvent.InviteApplied -> {
+                    snackbarHostState.showSnackbar(appliedMessage.format(event.host))
+                }
+            }
+        }
+    }
 
     InternetRelayScreenContent(
         state = state,
         showConsent = showConsent,
+        snackbarHostState = snackbarHostState,
         onBack = onBack,
         onToggle = viewModel::onToggle,
         onAcceptConsent = viewModel::acceptConsent,
@@ -87,14 +137,21 @@ fun InternetRelayScreen(
         onJoinCommons = viewModel::joinCommons,
         onLeaveCommons = viewModel::leaveCommons,
         isValidInvite = viewModel::isValidInvite,
+        invitePreview = invitePreview,
+        onConfirmInvite = viewModel::confirmInvite,
+        onDismissInvite = viewModel::dismissInvite,
+        onShareInvite = viewModel::shareInvite,
+        onCopyInvite = viewModel::copyInvite,
     )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+@Suppress("LongMethod") // one screen's wiring: the list, four dialogs and two sheets, mirrored in one place
 @Composable
 internal fun InternetRelayScreenContent(
     state: InternetRelayUiState,
     showConsent: Boolean = false,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     onBack: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onAcceptConsent: () -> Unit = {},
@@ -106,6 +163,11 @@ internal fun InternetRelayScreenContent(
     onJoinCommons: (String, String) -> Unit = { _, _ -> },
     onLeaveCommons: (String) -> Unit = {},
     isValidInvite: (String) -> Boolean = { it.startsWith("knit-commons:v1:") },
+    invitePreview: RelayInviteApplier.Preview? = null,
+    onConfirmInvite: () -> Unit = {},
+    onDismissInvite: () -> Unit = {},
+    onShareInvite: (String) -> Unit = {},
+    onCopyInvite: (String) -> Unit = {},
 ) {
     var addDialogOpen by remember { mutableStateOf(false) }
     var pendingRemoval by remember { mutableStateOf<RelayRow?>(null) }
@@ -114,6 +176,7 @@ internal fun InternetRelayScreenContent(
 
     Scaffold(
         modifier = Modifier.testTag("screen_internet_relays"),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -167,6 +230,8 @@ internal fun InternetRelayScreenContent(
                         onRemove = { pendingRemoval = relay },
                         onJoinCommons = { joining = relay },
                         onLeaveCommons = { leaving = relay },
+                        onShareInvite = { onShareInvite(relay.url) },
+                        onCopyInvite = { onCopyInvite(relay.url) },
                     )
                 }
             }
@@ -260,6 +325,10 @@ internal fun InternetRelayScreenContent(
             RelayConsentBody(onAccept = onAcceptConsent, onDecline = onDismissConsent)
         }
     }
+
+    invitePreview?.let { preview ->
+        RelayInviteSheet(preview = preview, onConfirm = onConfirmInvite, onDismiss = onDismissInvite)
+    }
 }
 
 /**
@@ -318,9 +387,11 @@ private fun RelayListRow(
     onRemove: () -> Unit,
     onJoinCommons: () -> Unit = {},
     onLeaveCommons: () -> Unit = {},
+    onShareInvite: () -> Unit = {},
+    onCopyInvite: () -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        RelayHeadRow(relay, planeEnabled, onSetEnabled, onRemove)
+        RelayHeadRow(relay, planeEnabled, onSetEnabled, onRemove, onShareInvite, onCopyInvite)
         // The relay's commons (§7.4), once its HELLO has advertised one: the room's name and one verb —
         // Join while this device is outside it, Leave once inside. Below the head row rather than in it, so
         // the switch and the delete button stay the two controls a screen reader already knows there.
@@ -357,6 +428,8 @@ private fun RelayHeadRow(
     planeEnabled: Boolean,
     onSetEnabled: (Boolean) -> Unit,
     onRemove: () -> Unit,
+    onShareInvite: () -> Unit,
+    onCopyInvite: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -414,6 +487,9 @@ private fun RelayHeadRow(
             Spacer(Modifier.width(12.dp))
             Switch(checked = relay.enabled, onCheckedChange = null, enabled = planeEnabled)
         }
+        // The invite (docs/RELAY_INVITE.md §4): a sibling of the delete button, outside the toggle for the
+        // same reason — one labelled button per verb. A menu rather than two buttons keeps the row's width.
+        RelayInviteMenu(relay = relay, onShare = onShareInvite, onCopy = onCopyInvite)
         IconButton(onClick = onRemove, modifier = Modifier.size(48.dp)) {
             Icon(
                 Icons.Filled.Delete,
@@ -421,6 +497,40 @@ private fun RelayHeadRow(
                 modifier = Modifier.size(20.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun RelayInviteMenu(
+    relay: RelayRow,
+    onShare: () -> Unit,
+    onCopy: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    IconButton(onClick = { open = true }, modifier = Modifier.size(48.dp).testTag("relay_invite_${relay.host}")) {
+        Icon(
+            Icons.Filled.Share,
+            contentDescription = stringResource(R.string.relays_invite_share_desc, relay.host),
+            modifier = Modifier.size(20.dp),
+        )
+    }
+    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.relays_invite_share)) },
+            onClick = {
+                open = false
+                onShare()
+            },
+            modifier = Modifier.testTag("relay_invite_share_${relay.host}"),
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.relays_invite_copy)) },
+            onClick = {
+                open = false
+                onCopy()
+            },
+            modifier = Modifier.testTag("relay_invite_copy_${relay.host}"),
+        )
     }
 }
 
@@ -605,58 +715,6 @@ private fun JoinCommonsDialog(
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
-}
-
-/**
- * The first-enable disclosure. Split can/cannot rather than a paragraph because the two halves are
- * exactly what a person needs to weigh, and burying "a relay sees your IP address" mid-sentence would
- * be the kind of technically-true disclosure nobody reads.
- */
-@Composable
-private fun RelayConsentBody(
-    onAccept: () -> Unit,
-    onDecline: () -> Unit,
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.relays_consent_title),
-            style = MaterialTheme.typography.headlineSmall,
-        )
-        Text(
-            text = stringResource(R.string.relays_consent_can_title),
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Text(
-            text = stringResource(R.string.relays_consent_can_body),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            text = stringResource(R.string.relays_consent_cannot_title),
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Text(
-            text = stringResource(R.string.relays_consent_cannot_body),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            text = stringResource(R.string.relays_consent_scope),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(onClick = onDecline) { Text(stringResource(R.string.relays_consent_decline)) }
-            Spacer(Modifier.width(8.dp))
-            TextButton(onClick = onAccept, modifier = Modifier.testTag("relays_consent_accept")) {
-                Text(stringResource(R.string.relays_consent_accept))
-            }
-        }
-    }
 }
 
 /** `SpoolStatus.lastError` when the socket could not be opened at all (`ScopeSync.UNREACHABLE`). */

@@ -29,7 +29,7 @@ import org.junit.Test
 /**
  * The import rules on plain JVM: a card pins + accepts + registers the intro but never verifies; a
  * differing pinned key is refused; our own card and a stranger's junk are told apart; relay hints are
- * surfaced, never applied. Cards are minted with real keys so the codec's checks run for real.
+ * surfaced, never applied silently. Cards are minted with real keys so the codec's checks run for real.
  */
 class ContactImporterTest {
     private val peers = mockk<PeerRepository>(relaxed = true)
@@ -140,7 +140,7 @@ class ContactImporterTest {
         }
 
     @Test
-    fun relayHintsAreSurfacedNeverApplied() =
+    fun relayHintsAreSurfacedNeverAppliedSilently() =
         runTest {
             val card = bob.card(spools = listOf("wss://theirs.example/spool/v1", "wss://mine.example/spool/v1"))
             val ready = importer().preview(card) as ContactImporter.Preview.Ready
@@ -148,11 +148,15 @@ class ContactImporterTest {
             importer().import(ready)
             coVerify(exactly = 0) { settings.addSpoolUrl(any()) }
 
+            // The plane being off no longer hides the hint: the sheet its Add raises carries the consent.
             spoolEnabled.value = false
             val off = importer().preview(card) as ContactImporter.Preview.Ready
             assertTrue(off.relaysOff)
-            assertEquals(emptyList<String>(), off.unknownRelays)
-            assertTrue((importer(internetPlane = false).preview(card) as ContactImporter.Preview.Ready).relaysOff)
+            assertEquals(listOf("wss://theirs.example/spool/v1"), off.unknownRelays)
+            // A build with the plane dark has nowhere to add one, so it lists none.
+            val dark = importer(internetPlane = false).preview(card) as ContactImporter.Preview.Ready
+            assertTrue(dark.relaysOff)
+            assertEquals(emptyList<String>(), dark.unknownRelays)
         }
 
     @Test

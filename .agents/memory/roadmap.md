@@ -290,7 +290,9 @@ doc). **Don't start a deferred item without explicit direction.**
   relay row) and the room's notification channel. The code is **not** stripped (R8 prunes the
   `if (COMMONS)` branches), and DB v13's three tables ship empty. **To introduce it:** flip the release
   default in `app/build.gradle.kts`, the way ADR 064 / ADR 2026-09.6gtm did for the two planes, after the
-  follow-ons the ADR lists (attachments, reactions, a members list, deep-linked invites) are decided.
+  follow-ons the ADR lists (attachments, reactions, a members list, ~~deep-linked invites~~ — **done
+  2026-09-14**, ADR 2026-09.tmbq / `docs/RELAY_INVITE.md`: one `getknit.app/r` link carries the relay, its
+  token and the room secret, applied on one sheet; device trial still owed) are decided.
 - **The spool plane beyond the spec** — everything that makes the protocol run, in order: ~~the
   `knit-spool` reference daemon + conformance suite~~ (**done 2026-08-16** in the `knit-spool`
   repo — full v1 daemon with SQLite persistence, rate limits, watermark, ops surface, plus the

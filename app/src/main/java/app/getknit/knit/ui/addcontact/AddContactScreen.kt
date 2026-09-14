@@ -31,6 +31,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,10 +54,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.contacts.ContactImporter
+import app.getknit.knit.data.relay.RelayInviteApplier
 import app.getknit.knit.mesh.spool.SpoolUrl
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.relay.RelayInviteSheet
 import app.getknit.knit.ui.scan.QrScanner
 import app.getknit.knit.ui.shareText
 import app.getknit.knit.ui.verify.EncryptionSection
@@ -83,6 +86,7 @@ fun AddContactScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val input by viewModel.input.collectAsStateWithLifecycle()
     val myQrPayload by viewModel.myQrPayload.collectAsStateWithLifecycle()
+    val relayInvite by viewModel.relayInvite.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val clipboard = LocalClipboard.current
@@ -99,6 +103,8 @@ fun AddContactScreen(
     val shareMessage = stringResource(R.string.contact_link_share_text)
     val shareTitle = stringResource(R.string.contact_link_chooser_title)
     val copiedMessage = stringResource(R.string.contact_link_copied)
+    val relayAddedMessage = stringResource(R.string.relays_invite_applied)
+    val relayRefusedMessage = stringResource(R.string.relays_invite_refused_url)
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
@@ -137,6 +143,14 @@ fun AddContactScreen(
                     clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Knit contact link", event.url)))
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) snackbarHostState.showSnackbar(copiedMessage)
                 }
+
+                is AddContactEvent.RelayAdded -> {
+                    snackbarHostState.showSnackbar(relayAddedMessage.format(event.host))
+                }
+
+                AddContactEvent.RelayRefused -> {
+                    snackbarHostState.showSnackbar(relayRefusedMessage)
+                }
             }
         }
     }
@@ -173,6 +187,10 @@ fun AddContactScreen(
             },
             onLookup = viewModel::lookup,
             onConfirm = { unblock -> viewModel.confirm(unblock) },
+            onAddRelay = viewModel::previewRelay,
+            relayInvite = relayInvite,
+            onConfirmRelay = viewModel::confirmRelay,
+            onDismissRelay = viewModel::dismissRelay,
         )
     }
 }
@@ -198,7 +216,14 @@ internal fun AddContactScreenContent(
     onPaste: () -> Unit,
     onLookup: () -> Unit,
     onConfirm: (unblock: Boolean) -> Unit,
+    onAddRelay: (String) -> Unit = {},
+    relayInvite: RelayInviteApplier.Preview? = null,
+    onConfirmRelay: () -> Unit = {},
+    onDismissRelay: () -> Unit = {},
 ) {
+    relayInvite?.let { preview ->
+        RelayInviteSheet(preview = preview, onConfirm = onConfirmRelay, onDismiss = onDismissRelay)
+    }
     Scaffold(
         modifier = Modifier.testTag("screen_add_contact"),
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -268,7 +293,7 @@ internal fun AddContactScreenContent(
             }
 
             when (state) {
-                is AddContactUiState.Preview -> PreviewCard(state.ready, onConfirm = onConfirm)
+                is AddContactUiState.Preview -> PreviewCard(state.ready, onConfirm = onConfirm, onAddRelay = onAddRelay)
                 AddContactUiState.Importing -> Text(stringResource(R.string.add_contact_importing))
                 AddContactUiState.Idle -> Unit
             }
@@ -280,6 +305,7 @@ internal fun AddContactScreenContent(
 private fun PreviewCard(
     ready: ContactImporter.Preview.Ready,
     onConfirm: (unblock: Boolean) -> Unit,
+    onAddRelay: (String) -> Unit = {},
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().testTag("add_contact_preview"),
@@ -337,18 +363,34 @@ private fun PreviewCard(
                 textAlign = TextAlign.Center,
             )
         }
+        // A relay the card names that this device lacks: one row per relay with an Add that goes through
+        // the relay invite sheet — never applied silently (docs/RELAY_INVITE.md, ADR 042 as amended).
         if (ready.unknownRelays.isNotEmpty()) {
             Text(
-                text =
-                    stringResource(
-                        R.string.add_contact_relay_hint,
-                        ready.displayName,
-                        ready.unknownRelays.joinToString { SpoolUrl.host(it) },
-                    ),
+                text = stringResource(R.string.add_contact_relay_hint, ready.displayName),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            for (url in ready.unknownRelays) {
+                val host = SpoolUrl.host(url)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = host,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { onAddRelay(url) },
+                        modifier = Modifier.testTag("add_contact_relay_add_$host"),
+                    ) {
+                        Text(stringResource(R.string.add_contact_relay_add))
+                    }
+                }
+            }
         }
         Button(
             onClick = { onConfirm(ready.blocked) },

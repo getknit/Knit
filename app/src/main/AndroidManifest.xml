@@ -146,6 +146,30 @@
                     android:host="c"
                     android:scheme="knit" />
             </intent-filter>
+            <!-- Relay invites (docs/RELAY_INVITE.md): https://getknit.app/r#<invite> — the invite rides the
+                 fragment for the same reason a card does, and more so: it carries a spool's bearer token.
+                 Same assetlinks prerequisite and the same knit:// fallback as the card's filters above. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="getknit.app"
+                    android:path="/r"
+                    android:scheme="https" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="r"
+                    android:scheme="knit" />
+            </intent-filter>
         </activity>
 
         <service

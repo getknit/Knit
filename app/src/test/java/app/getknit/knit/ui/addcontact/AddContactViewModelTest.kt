@@ -5,6 +5,7 @@ package app.getknit.knit.ui.addcontact
 import app.getknit.knit.contacts.ContactCards
 import app.getknit.knit.contacts.ContactImporter
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.relay.RelayInviteApplier
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.crypto.ContactCard
@@ -41,6 +42,7 @@ class AddContactViewModelTest {
     private val peers = mockk<PeerRepository>(relaxed = true)
     private val identity = mockk<Identity>(relaxed = true)
     private val cards = mockk<ContactCards>(relaxed = true)
+    private val relays = mockk<RelayInviteApplier>(relaxed = true)
     private val inbox = ContactCardInbox()
     private val link = ContactCard.url("A".repeat(260))
     private val ready =
@@ -75,7 +77,7 @@ class AddContactViewModelTest {
     @After
     fun tearDown() = Dispatchers.resetMain()
 
-    private fun vm() = AddContactViewModel(inbox, importer, peers, identity, cards)
+    private fun vm() = AddContactViewModel(inbox, importer, peers, identity, cards, relays)
 
     @Test
     fun aLinkInTheInboxIsPreviewedAndConfirmImportsIt() =
@@ -238,6 +240,58 @@ class AddContactViewModelTest {
                 listOf<AddContactEvent>(AddContactEvent.ShareLink(link), AddContactEvent.CopyLink(link)),
                 events,
             )
+        }
+
+    @Test
+    fun aRelayHintsAddRaisesTheInviteSheetAndConfirmingAppliesThenRePreviews() =
+        runTest {
+            val hinted = ready.copy(unknownRelays = listOf("wss://theirs.example/spool/v1"))
+            val relayPreview =
+                RelayInviteApplier.Preview(
+                    url = "wss://theirs.example/spool/v1",
+                    host = "theirs.example",
+                    private = false,
+                    alreadyAdded = false,
+                    parked = false,
+                    replaces = null,
+                    planeOff = true,
+                    consentNeeded = true,
+                    room = null,
+                )
+            coEvery { importer.preview(any()) } returns hinted
+            coEvery { relays.preview(any(), any()) } returns relayPreview
+            val vm = vm()
+            val events = collect(vm)
+            vm.setInput(link)
+            vm.lookup()
+            advanceUntilIdle()
+
+            vm.previewRelay("wss://theirs.example/spool/v1")
+            advanceUntilIdle()
+            assertEquals(relayPreview, vm.relayInvite.value)
+            coVerify { relays.preview(match { it.url == "wss://theirs.example/spool/v1" && it.secret == null }, null) }
+
+            // Confirming applies, drops the sheet, and looks the card up again so the hint reflects the add.
+            coEvery { importer.preview(any()) } returns ready
+            vm.confirmRelay()
+            advanceUntilIdle()
+            coVerify { relays.apply(relayPreview) }
+            assertEquals(null, vm.relayInvite.value)
+            assertEquals(AddContactUiState.Preview(ready), vm.state.value)
+            assertEquals(listOf<AddContactEvent>(AddContactEvent.RelayAdded("theirs.example")), events)
+        }
+
+    @Test
+    fun aRelayHintThisBuildCannotDialIsRefusedRatherThanPreviewed() =
+        runTest {
+            val vm = vm()
+            val events = collect(vm)
+            vm.previewRelay("http://theirs.example/spool/v1")
+            advanceUntilIdle()
+            assertEquals(listOf<AddContactEvent>(AddContactEvent.RelayRefused), events)
+            assertEquals(null, vm.relayInvite.value)
+            coVerify(exactly = 0) { relays.preview(any(), any()) }
+            vm.dismissRelay()
         }
 
     /** Records every one-shot event the screen would react to; the flow has no replay, so collect first. */

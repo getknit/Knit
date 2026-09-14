@@ -5,19 +5,24 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.getknit.knit.data.relay.RelayInviteApplier
 import app.getknit.knit.mesh.spool.CommonsInvite
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -51,6 +56,11 @@ class InternetRelayScreenContentTest {
         onAcceptConsent: () -> Unit = {},
         onJoinCommons: (String, String) -> Unit = { _, _ -> },
         onLeaveCommons: (String) -> Unit = {},
+        invitePreview: RelayInviteApplier.Preview? = null,
+        onConfirmInvite: () -> Unit = {},
+        onDismissInvite: () -> Unit = {},
+        onShareInvite: (String) -> Unit = {},
+        onCopyInvite: (String) -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
@@ -67,10 +77,41 @@ class InternetRelayScreenContentTest {
                     onJoinCommons = onJoinCommons,
                     onLeaveCommons = onLeaveCommons,
                     isValidInvite = { CommonsInvite.looksLikeInvite(it) },
+                    invitePreview = invitePreview,
+                    onConfirmInvite = onConfirmInvite,
+                    onDismissInvite = onDismissInvite,
+                    onShareInvite = onShareInvite,
+                    onCopyInvite = onCopyInvite,
                 )
             }
         }
     }
+
+    private fun preview(
+        private: Boolean = true,
+        alreadyAdded: Boolean = false,
+        parked: Boolean = false,
+        replaces: String? = null,
+        planeOff: Boolean = false,
+        consentNeeded: Boolean = false,
+        room: RelayInviteApplier.Room? = null,
+    ) = RelayInviteApplier.Preview(
+        url = "wss://home.example.org/spool/v1?k=t0ken",
+        host = "home.example.org",
+        private = private,
+        alreadyAdded = alreadyAdded,
+        parked = parked,
+        replaces = replaces,
+        planeOff = planeOff,
+        consentNeeded = consentNeeded,
+        room = room,
+    )
+
+    private fun room(
+        name: String? = "Home",
+        alreadyJoined: Boolean = false,
+        replacesRoom: Boolean = false,
+    ) = RelayInviteApplier.Room(secret = ByteArray(32), name = name, alreadyJoined = alreadyJoined, replacesRoom = replacesRoom)
 
     private fun relay(
         host: String = "lax.spool.getknit.app",
@@ -294,6 +335,104 @@ class InternetRelayScreenContentTest {
         compose.onNodeWithText("The people in it stay in your contacts.", substring = true).assertIsDisplayed()
         compose.onNodeWithTag("relay_commons_leave_confirm").performClick()
         assertEquals("c-abc", left)
+    }
+
+    @Test
+    fun aFirstInviteCarriesTheWholeDisclosureAndSaysWhatConfirmingDoes() {
+        // The link is a bearer credential over an unauthenticated channel: the host is the headline, the
+        // private relay and the room are named, and — the plane never having been consented to — the
+        // master switch's own disclosure is the body, so confirming here is that same consent.
+        var confirmed = false
+        render(
+            InternetRelayUiState(),
+            invitePreview = preview(consentNeeded = true, planeOff = true, room = room(name = "Home")),
+            onConfirmInvite = { confirmed = true },
+        )
+        compose.onNodeWithTag("relay_invite_host").assertIsDisplayed()
+        compose.onNodeWithText("home.example.org").assertIsDisplayed()
+        compose.onNodeWithTag("relay_invite_private").assertIsDisplayed()
+        compose.onNodeWithText("Joins its room, Home.", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("A relay can see").assertIsDisplayed()
+        compose.onNodeWithText("A relay cannot see").assertIsDisplayed()
+        compose
+            .onNodeWithTag("relay_invite_confirm")
+            .performScrollTo()
+            .assertTextEquals("Turn on and join")
+            .performClick()
+        assertTrue(confirmed)
+    }
+
+    @Test
+    fun aLaterInviteStatesTheRelaysOwnCostInsteadOfTheDisclosure() {
+        render(InternetRelayUiState(enabled = true), invitePreview = preview(private = false))
+        compose.onNodeWithTag("relay_invite_sees").assertIsDisplayed()
+        compose.onAllNodesWithText("A relay can see").assertCountEquals(0)
+        compose.onAllNodesWithTag("relay_invite_private").assertCountEquals(0)
+        compose.onNodeWithTag("relay_invite_confirm").assertTextEquals("Add relay")
+    }
+
+    @Test
+    fun aRepeatedInviteAnswersRatherThanRefusing() {
+        // A re-tapped link converges: the sheet says the relay is already listed, states no cost (nothing
+        // new is being handed anything), and the button is a plain OK rather than a disabled Add.
+        var dismissed = false
+        render(
+            InternetRelayUiState(enabled = true),
+            invitePreview = preview(alreadyAdded = true, room = room(alreadyJoined = true)),
+            onDismissInvite = { dismissed = true },
+        )
+        compose.onNodeWithTag("relay_invite_already").assertIsDisplayed()
+        compose.onNodeWithTag("relay_invite_room_joined").assertIsDisplayed()
+        compose.onAllNodesWithTag("relay_invite_sees").assertCountEquals(0)
+        compose.onNodeWithTag("relay_invite_confirm").assertTextEquals("OK")
+        compose.onNodeWithTag("relay_invite_decline").performClick()
+        assertTrue(dismissed)
+    }
+
+    @Test
+    fun aRotatedInviteSaysTheOldRoomGoes() {
+        render(
+            InternetRelayUiState(enabled = true),
+            invitePreview = preview(alreadyAdded = true, room = room(replacesRoom = true)),
+        )
+        compose.onNodeWithTag("relay_invite_room_replaces").assertIsDisplayed()
+        compose.onNodeWithText("That room and its history leave this phone", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("relay_invite_confirm").assertTextEquals("Join room")
+    }
+
+    @Test
+    fun aParkedRelaysInviteSaysItTurnsBackOn() {
+        render(InternetRelayUiState(enabled = true), invitePreview = preview(alreadyAdded = true, parked = true))
+        compose.onNodeWithTag("relay_invite_parked").assertIsDisplayed()
+        compose.onNodeWithTag("relay_invite_confirm").assertTextEquals("Add relay")
+    }
+
+    @Test
+    fun aTokenedInviteOverAnUntokenedEntrySaysItReplacesIt() {
+        val old = "wss://home.example.org/spool/v1"
+        render(InternetRelayUiState(enabled = true), invitePreview = preview(replaces = old))
+        compose.onNodeWithTag("relay_invite_replaces").assertIsDisplayed()
+        compose.onNodeWithTag("relay_invite_sees").assertIsDisplayed()
+    }
+
+    @Test
+    fun theRowsShareMenuReportsItsOwnUrl() {
+        var shared: String? = null
+        var copied: String? = null
+        val row = relay()
+        render(
+            InternetRelayUiState(enabled = true, relays = listOf(row)),
+            onShareInvite = { shared = it },
+            onCopyInvite = { copied = it },
+        )
+        compose.onNodeWithTag("relay_invite_${row.host}").performClick()
+        compose.onNodeWithTag("relay_invite_share_${row.host}").performClick()
+        assertEquals(row.url, shared)
+        assertEquals(null, copied)
+        compose.onNodeWithTag("relay_invite_${row.host}").performClick()
+        compose.onNodeWithTag("relay_invite_copy_${row.host}").performClick()
+        assertEquals(row.url, copied)
+        assertFalse(shared == null)
     }
 
     @Test

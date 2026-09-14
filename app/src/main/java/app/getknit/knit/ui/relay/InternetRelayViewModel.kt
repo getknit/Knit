@@ -4,14 +4,19 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.commons.CommonsRepository
+import app.getknit.knit.data.relay.RelayInviteApplier
 import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.spool.CommonsInvite
+import app.getknit.knit.mesh.spool.RelayInvite
 import app.getknit.knit.mesh.spool.SpoolUrl
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -55,6 +60,29 @@ data class InternetRelayUiState(
     val relays: List<RelayRow> = emptyList(),
 )
 
+/** One-shot outcomes for the screen's snackbar and share sheet. */
+sealed interface InternetRelayEvent {
+    /** A freshly minted relay invite for the share sheet. */
+    data class ShareInvite(
+        val url: String,
+    ) : InternetRelayEvent
+
+    /** A freshly minted relay invite for the clipboard. */
+    data class CopyInvite(
+        val url: String,
+    ) : InternetRelayEvent
+
+    /** Text that arrived as an invite but does not parse as one this build can use. */
+    data class InviteRefused(
+        val reason: RelayInvite.Reason,
+    ) : InternetRelayEvent
+
+    /** The invite was applied; [host] is the relay's redacted host for the confirmation. */
+    data class InviteApplied(
+        val host: String,
+    ) : InternetRelayEvent
+}
+
 /**
  * The Internet relays screen: the master switch, the relay list editor with a switch per relay, and each
  * relay's live health.
@@ -72,6 +100,11 @@ class InternetRelayViewModel(
     // `BuildConfig.COMMONS` is on, and without one the row shows no room and the verbs are no-ops.
     private val commons: CommonsRepository? = null,
     private val mesh: MeshController? = null,
+    // The relay invite's two halves (docs/RELAY_INVITE.md): the link handoff a tapped `getknit.app/r` link
+    // lands in, and the one apply sequence the sheet confirms. Observed rather than read once, so a second
+    // link arriving while the screen is up (`launchSingleTop`) still raises the sheet.
+    private val inbox: RelayInviteInbox? = null,
+    private val applier: RelayInviteApplier? = null,
 ) : ViewModel() {
     val state: StateFlow<InternetRelayUiState> =
         combine(
@@ -114,6 +147,85 @@ class InternetRelayViewModel(
     /** True while the first-enable disclosure sheet should be on screen. */
     val showConsent: StateFlow<Boolean> = _showConsent.asStateFlow()
 
+    private val _invitePreview = MutableStateFlow<RelayInviteApplier.Preview?>(null)
+
+    /** The invite awaiting confirmation on the sheet, or null while none is. */
+    val invitePreview: StateFlow<RelayInviteApplier.Preview?> = _invitePreview.asStateFlow()
+
+    private val _events = MutableSharedFlow<InternetRelayEvent>(extraBufferCapacity = 1)
+    val events: SharedFlow<InternetRelayEvent> = _events.asSharedFlow()
+
+    init {
+        if (inbox != null) {
+            viewModelScope.launch {
+                inbox.pending.collect { text ->
+                    if (text == null) return@collect
+                    inbox.consume()
+                    previewInvite(text)
+                }
+            }
+        }
+    }
+
+    /**
+     * Parses [text] as a relay invite and raises the sheet for it, or reports why it cannot be one. The
+     * scheme policy is the editor's own (`BuildConfig.DEBUG` allows `ws://`), so a link is refused at entry
+     * exactly where a typed URL would be.
+     */
+    fun previewInvite(text: String) {
+        val applier = applier ?: return
+        when (val parsed = RelayInvite.parse(text, BuildConfig.DEBUG)) {
+            is RelayInvite.Parsed.Invalid -> {
+                _events.tryEmit(InternetRelayEvent.InviteRefused(parsed.reason))
+            }
+
+            is RelayInvite.Parsed.Invite -> {
+                viewModelScope.launch {
+                    val liveName =
+                        state.value.relays
+                            .firstOrNull { it.url == parsed.url }
+                            ?.commons
+                            ?.name
+                    _invitePreview.value = applier.preview(parsed, liveName)
+                }
+            }
+        }
+    }
+
+    /** The sheet's confirmation: applies the previewed invite and drops the sheet. */
+    fun confirmInvite() {
+        val applier = applier ?: return
+        val preview = _invitePreview.value ?: return
+        viewModelScope.launch {
+            applier.apply(preview)
+            _invitePreview.value = null
+            _events.tryEmit(InternetRelayEvent.InviteApplied(preview.host))
+        }
+    }
+
+    /** The sheet dismissed: nothing is stored, and the link is gone — the user can tap it again. */
+    fun dismissInvite() {
+        _invitePreview.value = null
+    }
+
+    /**
+     * Mints the invite for [url] as stored — token included, that is the point — plus the room this device
+     * has joined there, if any (docs/RELAY_INVITE.md §4), for the share sheet.
+     */
+    fun shareInvite(url: String) {
+        viewModelScope.launch { _events.tryEmit(InternetRelayEvent.ShareInvite(mintInvite(url))) }
+    }
+
+    /** As [shareInvite], for the clipboard. */
+    fun copyInvite(url: String) {
+        viewModelScope.launch { _events.tryEmit(InternetRelayEvent.CopyInvite(mintInvite(url))) }
+    }
+
+    private suspend fun mintInvite(url: String): String {
+        val room = commons?.observeAll()?.first()?.firstOrNull { it.spoolUrl == url }
+        return RelayInvite.url(RelayInvite.mint(url, room?.secret, room?.name))
+    }
+
     fun onToggle(on: Boolean) {
         viewModelScope.launch {
             when {
@@ -147,7 +259,12 @@ class InternetRelayViewModel(
     fun addRelay(url: String) {
         val trimmed = url.trim()
         if (!isValidUrl(trimmed)) return
-        viewModelScope.launch { settings.addSpoolUrl(trimmed) }
+        viewModelScope.launch {
+            settings.addSpoolUrl(trimmed)
+            // Dial now rather than at the next reconcile tick, so the row the user just added goes green
+            // while they are still looking at it.
+            mesh?.refreshRelays()
+        }
     }
 
     fun removeRelay(url: String) {

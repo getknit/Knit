@@ -42,6 +42,8 @@ document:
 - Tap the nearby count above the chat list for a new Your mesh screen: messages your phone passed along or
   handed straight to the person they were for, what it is carrying right now, and how many people it has
   met. Every number is counted on your phone and stays there.
+- Tap a relay invite link and Knit adds that relay and turns relays on for you, once you have read what the
+  relay will see. A contact card that names a relay you don't use now offers to add it the same way.
 
 ### Changed
 

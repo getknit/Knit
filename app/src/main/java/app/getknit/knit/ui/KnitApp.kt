@@ -51,6 +51,7 @@ import app.getknit.knit.ui.onboarding.OnboardingScreen
 import app.getknit.knit.ui.profile.ProfileDetailsScreen
 import app.getknit.knit.ui.profile.ProfileScreen
 import app.getknit.knit.ui.relay.InternetRelayScreen
+import app.getknit.knit.ui.relay.RelayInviteInbox
 import app.getknit.knit.ui.requests.MessageRequestsScreen
 import app.getknit.knit.ui.review.RateReviewDialog
 import app.getknit.knit.ui.review.ReviewPromptInbox
@@ -129,6 +130,8 @@ fun KnitApp(startRoute: String? = null) {
     val pendingRoute by routeInbox.pending.collectAsStateWithLifecycle()
     val contactCardInbox = koinInject<ContactCardInbox>()
     val pendingCard by contactCardInbox.pending.collectAsStateWithLifecycle()
+    val relayInviteInbox = koinInject<RelayInviteInbox>()
+    val pendingInvite by relayInviteInbox.pending.collectAsStateWithLifecycle()
     val reviewPrompter = koinInject<ReviewPrompter>()
     val reviewInbox = koinInject<ReviewPromptInbox>()
     val startGate = koinInject<MeshStartGate>()
@@ -231,6 +234,20 @@ fun KnitApp(startRoute: String? = null) {
     LaunchedEffect(pendingCard != null, onboarded) {
         if (pendingCard == null || !onboarded) return@LaunchedEffect
         navController.navigate(Routes.ADD_CONTACT) { launchSingleTop = true }
+    }
+
+    // A relay invite arrived (a tapped getknit.app/r link, or a shared text carrying one). Kept across
+    // onboarding for the card's reason — an operator's link on a fresh install is the primary way one
+    // arrives. It lands on the Internet-relays screen, whose ViewModel consumes it and raises the preview
+    // sheet, so after Join the row it added is right there going green. In a build where the plane is dark
+    // that route is not registered (below), so the invite is dropped rather than navigated into a wall.
+    LaunchedEffect(pendingInvite != null, onboarded) {
+        if (pendingInvite == null || !onboarded) return@LaunchedEffect
+        if (!BuildConfig.INTERNET_PLANE) {
+            relayInviteInbox.clear()
+            return@LaunchedEffect
+        }
+        navController.navigate(Routes.INTERNET_RELAYS) { launchSingleTop = true }
     }
 
     // One transition for the whole graph rather than per-destination overrides: every route here is a peer

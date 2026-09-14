@@ -975,6 +975,12 @@ spool cannot read its own commons" structural rather than a promise.
 > session with each over the §3.5 pair scope — bounded by the intro driver's own cap, eight at a time — so a
 > DM between two members rides the same spool the room does. A member's own first DM to another registers
 > that intro at once.
+>
+> **The invite as a link (client policy, non-normative).** The reference client also accepts the relay
+> and its room as one tappable link, `https://getknit.app/r#…`, whose body carries the spool URL (token
+> included), the same 32-byte secret and the room's name — `docs/RELAY_INVITE.md`, with its own golden
+> vectors. A daemon's `commons-invite` SHOULD print that link beside the text invite. Nothing here reaches
+> the wire: a spool never sees the link, and no §13 vector is involved.
 
 ### 7.5 Send-side moderation
 
@@ -1641,3 +1647,4 @@ the plane itself was unaffected either time, since a spool never decodes a frame
 | 2026-09-13 | **Client hardening against a hostile spool (ADR 2026-09.amzn).** §9.3 gains C-9.3-3 (an invalid entry may go once unlisted) and C-9.3-4 (the event path never quarantines); §9.5 C-9.5-11 (an attachment quarantine may expire at the scope TTL); §9.1 C-9.1-3…5 (an over-long `list` is refused whole; a silent spool is dropped after consecutive unanswered requests; a refused scope is parked, not re-`sub`bed every tick); §12.2 rows for the three. All client-side | None for spools. Clients: none of it is observable on the wire beyond fewer records — no record, derivation or vector moved |
 | 2026-09-12 | **Send-side moderation (§7.5).** One optional HELLO bool, `moderation`, by which an operator asks clients to run their on-device content screen before sending and to withhold what it flags, with no sender override; strictest wins across a multi-homed scope; receive-side behaviour untouched; no data-path change at the spool. §10.2 bullet, one §13 record vector appended | **Spools:** optional; a spool that does not set it omits the field and is unaffected. **Clients:** tolerate-and-ignore until the client half lands; no existing record, derivation or vector moved |
 | 2026-09-13 | **The direct push (§9.4 C-9.4-3, ADR 2026-09.y5f3).** A member may push a frame it does not custody — today one class, a room post's `relay = false` delivery tick at its ride deadline — under the ordinary §4.4 rule, C-9.2-1 and the size bounds, and must account it per §9.6 (C-9.6-1 gains the second writer). Appendix A row for `ScopeSync.pushDirect`. All client-side | None for spools: a pushed blob is a pushed blob. Clients: none of it is observable on the wire — no record, derivation or vector moved |
+| 2026-09-14 | **The relay invite link (§7.4 note, `docs/RELAY_INVITE.md`).** A non-normative pointer: the reference client mints and accepts the relay, its token and its commons secret as one `https://getknit.app/r#…` link, applied on one confirmation. Client-side only; the link never reaches a spool | None for spools. Daemons SHOULD print the link beside `knit-commons:v1:…`; no record, derivation or vector moved |

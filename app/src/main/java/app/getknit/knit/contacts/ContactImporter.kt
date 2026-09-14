@@ -20,8 +20,10 @@ import kotlinx.coroutines.flow.first
  * chosen by whoever sent it, so an import pins + accepts but never sets `verified` — the safety number
  * is shown for the pair to compare out of band, exactly as for a peer met over the radios.
  *
- * Relay hints are surfaced, never applied: adding a relay hands it every scope id and IP this device
- * has, so that stays a deliberate edit in the relay settings.
+ * Relay hints are surfaced, never applied *silently*: adding a relay hands it every scope id and IP this
+ * device has, so a hint becomes a relay only through the relay invite sheet (docs/RELAY_INVITE.md) — the
+ * host named, the cost stated, the disclosure folded in when it has not been accepted — never through
+ * [import].
  */
 class ContactImporter(
     private val peers: PeerRepository,
@@ -81,7 +83,9 @@ class ContactImporter(
             alreadyContact = existing?.verified == true || card.nodeId in settings.acceptedConversations.first(),
             blocked = card.nodeId in settings.blockedNodeIds.first(),
             relaysOff = !relaysOn,
-            unknownRelays = if (relaysOn) card.spools - settings.spoolUrls.first() else emptyList(),
+            // Listed whether or not the plane is on — the sheet an "Add" raises owns the consent — but never
+            // in a build where the plane is dark, where there is no screen to add one to.
+            unknownRelays = if (internetPlane) card.spools - settings.spoolUrls.first() else emptyList(),
             card = card,
         )
     }

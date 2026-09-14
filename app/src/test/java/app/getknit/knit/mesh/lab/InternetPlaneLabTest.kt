@@ -1,6 +1,9 @@
 package app.getknit.knit.mesh.lab
 
+import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.spool.FakeSpool
+import app.getknit.knit.mesh.spool.SpoolCommonsInfo
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -266,6 +269,52 @@ class InternetPlaneLabTest {
 
             assertTrue(alice.sendDm(bob, "we met through a link"))
             lab.assertConverged(listOf(alice, bob), atLeast = 1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { alice.dmThreadWith(bob)(it) }
+        }
+
+    /**
+     * docs/RELAY_INVITE.md: Bob has never turned relays on and knows no relay. Alice, who runs on the spool and
+     * has joined its commons, shares the invite her relay row mints. Bob applies it once: consent is recorded,
+     * the plane is on, the relay is stored, the room is joined and subscribed — and from there the two meet
+     * as any two card holders do, plus a room post crosses.
+     */
+    @Test
+    fun aRelayInviteTurnsThePlaneOnAddsTheRelayAndJoinsTheRoomInOneStep() =
+        runBlocking {
+            val secret = ByteArray(32) { ((it * 7 + 10) and 0xFF).toByte() }
+            val spool =
+                FakeSpool(
+                    commons =
+                        ScopeCrypto.commonsScopeId(secret) to
+                            SpoolCommonsInfo(name = "Home", maxFrames = 500, ttlMs = 86_400_000L, maxBlob = 65_536),
+                )
+            val alice = lab.node("alice", spool = spool, commons = true).apply { setDisplayName("Alice") }
+            val room = alice.joinCommons(secret, "Home")
+            val bob = lab.node("bob", spool = spool, spoolOptIn = false, commons = true).apply { setDisplayName("Bob") }
+            assertEquals(false, bob.settings.spoolEnabled.first())
+            assertEquals(false, bob.settings.spoolConsented.first())
+            assertEquals(emptySet<String>(), bob.settings.spoolUrls.first())
+
+            bob.applyInvite(alice.mintInvite())
+
+            assertTrue(bob.settings.spoolConsented.first())
+            assertTrue(bob.settings.spoolEnabled.first())
+            assertEquals(setOf(MeshLab.SPOOL_URL), bob.settings.spoolUrls.first())
+            assertEquals(setOf(room), bob.joinedRooms())
+
+            // The room pins its members to each other (§7.4): Bob learns Alice from her profile in the room.
+            assertTrue(
+                "the room never introduced them",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.peers.find(alice.nodeId)?.pubKey != null) 1 else 0 },
+            )
+            assertTrue(alice.postCommons(room, "welcome to the house"))
+            assertTrue(
+                "the post never reached Bob",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { bob.decrypted(room).count { it.second == "welcome to the house" } },
+            )
+            // Applying the same invite again changes nothing: still one relay, still one room.
+            bob.applyInvite(alice.mintInvite())
+            assertEquals(setOf(MeshLab.SPOOL_URL), bob.settings.spoolUrls.first())
+            assertEquals(setOf(room), bob.joinedRooms())
         }
 
     /** A relay that drops every socket mid-way: the clients reconnect on their own and the next DM still crosses. */

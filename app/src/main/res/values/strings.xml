@@ -571,7 +571,9 @@
     <string name="add_contact_already">%1$s is already in your contacts. Adding again just refreshes the connection.</string>
     <string name="add_contact_blocked">You\'ve blocked this person.</string>
     <string name="add_contact_relays_off">Internet relays are off, so you\'ll connect when you\'re nearby or over LoRa. Turn relays on in Settings to connect over the Internet.</string>
-    <string name="add_contact_relay_hint">%1$s uses relay %2$s, which you don\'t. To meet over the Internet, add it under Settings › Internet relays.</string>
+    <string name="add_contact_relay_hint">%1$s uses a relay you don\'t. Add it to stay in touch over the Internet when neither of you is in radio range.</string>
+    <string name="add_contact_relay_add">Add</string>
+    <string name="add_contact_relay_add_desc">Add relay %1$s</string>
     <string name="add_contact_mismatch">This link\'s key doesn\'t match the one you already have for %1$s. Ask them to confirm their safety number.</string>
     <string name="add_contact_invalid">That\'s not a Knit contact link.</string>
     <string name="intro_status_awaiting_key">Waiting to reach %1$s — connects once their device is heard nearby, over LoRa, or through a relay. If you added them from a link, they need to add yours too.</string>
@@ -921,6 +923,33 @@
     <string name="relays_consent_scope">This applies to every conversation, not just one. You can turn it off at any time; new uploads stop immediately and sealed copies already on a relay expire within 48 hours.</string>
     <string name="relays_consent_accept">Turn on</string>
     <string name="relays_consent_decline">Not now</string>
+
+    <!-- Relay invite (docs/RELAY_INVITE.md): the sheet a tapped invite link raises, and the row's share actions -->
+    <string name="relays_invite_title">Relay invite</string>
+    <string name="relays_invite_private">A private relay. The link carries its access key, so only people who were given the link can use it.</string>
+    <string name="relays_invite_room">Joins its room, %1$s. Everyone there becomes a contact, and their messages skip your requests inbox.</string>
+    <string name="relays_invite_room_unnamed">Joins its shared room. Everyone there becomes a contact, and their messages skip your requests inbox.</string>
+    <string name="relays_invite_room_joined">You\'re already in its room.</string>
+    <string name="relays_invite_room_replaces">Replaces the room you joined here. That room and its history leave this phone; the people in it stay in your contacts.</string>
+    <string name="relays_invite_already">Already in your list.</string>
+    <string name="relays_invite_parked">In your list, turned off. This turns it back on.</string>
+    <string name="relays_invite_replaces">Replaces your entry for this relay with one that carries its access key.</string>
+    <string name="relays_invite_sees">This relay will see your IP address and which of your conversations are active, never what is in them.</string>
+    <string name="relays_invite_confirm_add">Add relay</string>
+    <string name="relays_invite_confirm_join">Join room</string>
+    <string name="relays_invite_confirm_turn_on_add">Turn on and add</string>
+    <string name="relays_invite_confirm_turn_on_join">Turn on and join</string>
+    <string name="relays_invite_confirm_noop">OK</string>
+    <string name="relays_invite_decline">Not now</string>
+    <string name="relays_invite_share_desc">Invite others to %1$s</string>
+    <string name="relays_invite_share">Share invite link</string>
+    <string name="relays_invite_copy">Copy invite link</string>
+    <string name="relays_invite_share_text">Join this relay on Knit: %1$s</string>
+    <string name="relays_invite_chooser_title">Share relay invite</string>
+    <string name="relays_invite_copied">Invite link copied</string>
+    <string name="relays_invite_refused">That\'s not a Knit relay invite.</string>
+    <string name="relays_invite_refused_url">That invite points at a relay this app can\'t use.</string>
+    <string name="relays_invite_applied">Added %1$s</string>
 
     <!-- Relay reach, shown in a conversation -->
     <string name="chat_relay_room">Nearby is never sent over the Internet</string>

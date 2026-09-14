@@ -2,13 +2,17 @@ package app.getknit.knit.ui.addcontact
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.getknit.knit.BuildConfig
 import app.getknit.knit.contacts.ContactCards
 import app.getknit.knit.contacts.ContactImporter
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.peer.PeerEntity
+import app.getknit.knit.data.relay.RelayInviteApplier
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.crypto.ContactCard
 import app.getknit.knit.mesh.crypto.VerifyPayload
+import app.getknit.knit.mesh.spool.RelayInvite
+import app.getknit.knit.mesh.spool.SpoolUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -74,6 +78,14 @@ sealed interface AddContactEvent {
     data class CopyLink(
         val url: String,
     ) : AddContactEvent
+
+    /** A card's relay hint was added through the invite sheet; [host] for the confirmation. */
+    data class RelayAdded(
+        val host: String,
+    ) : AddContactEvent
+
+    /** A card's relay hint names a relay this build cannot dial (the editor's own scheme rule). */
+    data object RelayRefused : AddContactEvent
 }
 
 /**
@@ -100,6 +112,8 @@ class AddContactViewModel(
     private val peers: PeerRepository,
     private val identity: Identity,
     private val cards: ContactCards,
+    // The relay invite sheet's apply sequence (docs/RELAY_INVITE.md), for a card's relay hint's "Add".
+    private val relays: RelayInviteApplier? = null,
 ) : ViewModel() {
     val input = MutableStateFlow("")
 
@@ -112,6 +126,11 @@ class AddContactViewModel(
     /** This device's identity code, for a peer standing next to us to scan. */
     private val _myQrPayload = MutableStateFlow<String?>(null)
     val myQrPayload: StateFlow<String?> = _myQrPayload.asStateFlow()
+
+    private val _relayInvite = MutableStateFlow<RelayInviteApplier.Preview?>(null)
+
+    /** A relay hint awaiting confirmation on the invite sheet, or null while none is. */
+    val relayInvite: StateFlow<RelayInviteApplier.Preview?> = _relayInvite.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -153,6 +172,36 @@ class AddContactViewModel(
             _events.tryEmit(AddContactEvent.Imported(preview.nodeId))
             _state.value = AddContactUiState.Idle
         }
+    }
+
+    /**
+     * A card's relay hint tapped: raises the invite sheet for [url] the way a tapped link would, so adding
+     * it from here shows the same host, the same cost and, the first time, the same disclosure. A card's
+     * hint is untokened by construction (`ContactCards.mint`), so there is no room half.
+     */
+    fun previewRelay(url: String) {
+        val relays = relays ?: return
+        if (!SpoolUrl.isAcceptable(url, BuildConfig.DEBUG)) {
+            _events.tryEmit(AddContactEvent.RelayRefused)
+            return
+        }
+        viewModelScope.launch { _relayInvite.value = relays.preview(RelayInvite.Parsed.Invite(url, secret = null, name = null)) }
+    }
+
+    /** The invite sheet confirmed: applies it, drops the sheet, and re-previews the card so the hint updates. */
+    fun confirmRelay() {
+        val relays = relays ?: return
+        val preview = _relayInvite.value ?: return
+        viewModelScope.launch {
+            relays.apply(preview)
+            _relayInvite.value = null
+            _events.tryEmit(AddContactEvent.RelayAdded(preview.host))
+            if (_state.value is AddContactUiState.Preview) lookup()
+        }
+    }
+
+    fun dismissRelay() {
+        _relayInvite.value = null
     }
 
     /** Mints this device's contact link for the share sheet — the QR's job at a distance. */

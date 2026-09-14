@@ -136,6 +136,14 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);
   decision record ADR 042. The card is versioned by `v` and additive under the WIRE_COMPAT rules; import
   never sets `verified`.
+- **When touching relay invites — `getknit.app/r` / `knit://r`, `mesh/spool/RelayInvite`,
+  `data/relay/RelayInviteApplier`, `ui/relay/RelayInviteSheet` / `RelayInviteInbox`, the relay row's
+  Share / Copy, or the Add-contact preview's relay "Add":** READ `docs/RELAY_INVITE.md` (layout, the
+  bearer-link trust rules, golden vectors, the daemon contract) and ADR 2026-09.tmbq. One unsigned link
+  carries the relay URL *with* its `?k=` token and the commons secret; it is applied only through the
+  sheet (host named, cost stated, the master switch's disclosure folded in), by the one applier both doors
+  share — `acceptSpoolConsent()` stays the only consent write (ADR 063), a relay is matched by
+  `SpoolUrl.redact`, and a different room secret at the same relay is a rotation.
 - **When touching `data/commons/`, `mesh/spool/Commons*`, `ConversationKind.COMMONS`, or the relay row's
   Join/Leave:** READ ADR 2026-09.wx8e and `docs/SPOOL_PROTOCOL.md` §7.4. The commons is a private relay's
   group chat: members' `profile` frames pin them through the ordinary door and make them accepted contacts,

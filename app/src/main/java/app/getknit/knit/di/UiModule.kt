@@ -129,10 +129,17 @@ val uiModule =
         }
         viewModel { BlockedUsersViewModel(get(), get()) }
         viewModel { MessageRequestsViewModel(get(), get(), get(), get(), get(), get(), androidContext()) }
-        viewModel { AddContactViewModel(get(), get(), get(), get(), get()) }
+        viewModel { AddContactViewModel(get(), get(), get(), get(), get(), relays = get()) }
         // Same seam as the mesh's: no store while the commons is hidden, so the relay editor draws no room.
         viewModel {
-            InternetRelayViewModel(get(), get(), if (BuildConfig.COMMONS) get<CommonsRepository>() else null, get<MeshController>())
+            InternetRelayViewModel(
+                get(),
+                get(),
+                if (BuildConfig.COMMONS) get<CommonsRepository>() else null,
+                get<MeshController>(),
+                inbox = get(),
+                applier = get(),
+            )
         }
         viewModel { LoraRadioViewModel(get(), get(), get(), get()) }
     }

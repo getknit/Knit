@@ -34,6 +34,7 @@ import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.ratchet.GroupRatchetRepository
 import app.getknit.knit.data.ratchet.GroupRootRepository
 import app.getknit.knit.data.ratchet.RatchetRepository
+import app.getknit.knit.data.relay.RelayInviteApplier
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.demo.DemoComposer
 import app.getknit.knit.identity.AndroidDeviceIdSource
@@ -60,6 +61,7 @@ import app.getknit.knit.notifications.Notifier
 import app.getknit.knit.review.ReviewPrompter
 import app.getknit.knit.ui.RouteInbox
 import app.getknit.knit.ui.addcontact.ContactCardInbox
+import app.getknit.knit.ui.relay.RelayInviteInbox
 import app.getknit.knit.ui.review.ReviewPromptInbox
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.theme.AndroidNightMode
@@ -142,6 +144,10 @@ val appModule =
         single { ContactCardInbox() }
         single { ContactCards(get(), get(), get<MessageCrypto>()::signRaw) }
         single { ContactImporter(get(), get(), get(), get(), BuildConfig.INTERNET_PLANE) }
+        // Relay invites (docs/RELAY_INVITE.md): the link handoff inbox and the one apply sequence both doors
+        // share. The commons store rides only while `BuildConfig.COMMONS` is on — null is the wx8e seam.
+        single { RelayInviteInbox() }
+        single { RelayInviteApplier(get(), if (BuildConfig.COMMONS) get<CommonsRepository>() else null, get()) }
         // Single-shot signal that the rate/review prompt should show (drained by KnitApp).
         single { ReviewPromptInbox() }
         // Decides when to ask for an app rating and where to route it (installer-aware); no-op in demo builds.

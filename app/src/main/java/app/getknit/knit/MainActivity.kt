@@ -22,6 +22,8 @@ import app.getknit.knit.ui.RouteInbox
 import app.getknit.knit.ui.WindowWedgePolicy
 import app.getknit.knit.ui.addcontact.ContactCardInbox
 import app.getknit.knit.ui.addcontact.contactLinkFrom
+import app.getknit.knit.ui.relay.RelayInviteInbox
+import app.getknit.knit.ui.relay.relayInviteFrom
 import app.getknit.knit.ui.share.ShareInbox
 import app.getknit.knit.ui.share.SharedContent
 import app.getknit.knit.ui.theme.KnitTheme
@@ -41,6 +43,9 @@ class MainActivity : ComponentActivity() {
     // Single-shot holder for a contact link (a tapped getknit.app/c link, or a shared text carrying one).
     private val contactCardInbox: ContactCardInbox by inject()
 
+    // Single-shot holder for a relay invite (a tapped getknit.app/r link, or a shared text carrying one).
+    private val relayInviteInbox: RelayInviteInbox by inject()
+
     // The theme flags, already warmed by KnitApplication so the first composition reads a settled value.
     private val themePrefs: ThemePreferences by inject()
 
@@ -55,6 +60,8 @@ class MainActivity : ComponentActivity() {
         handleRouteIntent(intent)
         // A cold-start contact link: stage it so KnitApp opens the Add-contact screen.
         handleContactLinkIntent(intent)
+        // A cold-start relay invite: stage it so KnitApp opens the Internet-relays screen.
+        handleRelayInviteIntent(intent)
         // Debug builds honor a deep-link route extra so screenshots (demo builds) and automation agents
         // (any debug build, over the real mesh) can jump straight to a screen, e.g.
         // `adb shell am start -n app.getknit.knit/.MainActivity --es demo_route chat/nearby`. Gated to
@@ -151,12 +158,19 @@ class MainActivity : ComponentActivity() {
         // A notification tap on an already-running instance: stage the deep-link route; KnitApp navigates.
         handleRouteIntent(intent)
         handleContactLinkIntent(intent)
+        handleRelayInviteIntent(intent)
     }
 
     /** Stage a contact link (a VIEW of a card link, or a SEND whose text carries one) into the [ContactCardInbox]. */
     private fun handleContactLinkIntent(intent: Intent?) {
         val link = contactLinkFrom(intent?.action, intent?.dataString, intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString())
         if (link != null) contactCardInbox.offer(link)
+    }
+
+    /** Stage a relay invite (a VIEW of an invite link, or a SEND whose text carries one) into the [RelayInviteInbox]. */
+    private fun handleRelayInviteIntent(intent: Intent?) {
+        val link = relayInviteFrom(intent?.action, intent?.dataString, intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString())
+        if (link != null) relayInviteInbox.offer(link)
     }
 
     /** Stage a notification deep-link route ([EXTRA_ROUTE], e.g. "chat/<id>") into the [RouteInbox]. */
@@ -168,9 +182,10 @@ class MainActivity : ComponentActivity() {
     private fun handleShareIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND) return
         val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-        // A shared text that IS a contact link is an import, not a message draft — the Android-idiomatic
-        // route for a link on 12+, where an unverified https link opens in the browser rather than here.
-        if (contactLinkFrom(intent.action, null, text) != null) return
+        // A shared text that IS a contact link or a relay invite is an import, not a message draft — the
+        // Android-idiomatic route for a link on 12+, where an unverified https link opens in the browser
+        // rather than here.
+        if (contactLinkFrom(intent.action, null, text) != null || relayInviteFrom(intent.action, null, text) != null) return
         // EXTRA_STREAM is read-granted for any stream our filters accept, which since ADR 2026-09.qq2r is
         // any type at all. The split is by *destination*, not by grant: an image can be attached in any
         // thread, while a file is offered only in DMs and groups, so the two ride separate fields and the

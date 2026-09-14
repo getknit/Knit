@@ -133,8 +133,11 @@ fun KnitApp(startRoute: String? = null) {
     val reviewInbox = koinInject<ReviewPromptInbox>()
     val startGate = koinInject<MeshStartGate>()
     val showReviewPrompt by reviewInbox.pending.collectAsStateWithLifecycle()
-    // Past onboarding once mesh permissions are granted (demo builds skip the gate).
-    val onboarded = BuildConfig.SEED_DEMO || hasAllMeshPermissions(context)
+    // Past onboarding once the radio permissions are granted (demo builds skip the gate). Radios only:
+    // notifications and the battery exemption are optional rows on the onboarding permissions page, never a
+    // gate. A plain val, recomputed on every recomposition — the pending-card effect below relies on the
+    // recomposition that onReady's navigate triggers to see it flip.
+    val onboarded = BuildConfig.SEED_DEMO || hasRadioPermissions(context)
     // Demo-screenshot mode skips the permission gate (and an optional [startRoute] jumps straight to a
     // screen for deterministic capture); otherwise gate on permissions as usual.
     val start =

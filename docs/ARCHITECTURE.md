@@ -650,10 +650,15 @@ that budget is a purely local knob that can differ per node without breaking cue
   `onboarding`, `chatlist`, `contacts`, `settings`, `profile`, and `chat/{conversationId}` (the conversation id
   is the Nearby room, a peer node id, or a `g-…` group id; it defaults to `Conversations.NEARBY`), plus
   group details, diagnostics, blocked-users, donate, and an offline app-share flow. Start destination is
-  `chatlist` if permissions are granted, else `onboarding`. `MeshService` is started by a
+  `chatlist` if the radio permissions are granted, else `onboarding`. `MeshService` is started by a
   `LaunchedEffect` once the user is past onboarding.
 - **Screens:**
-  - `OnboardingScreen` — rationale + `RequestMultiplePermissions` + battery-opt prompt.
+  - `OnboardingScreen` — a three-page stepper (ADR 2026-09.nzpr): welcome (brand mark + how it works), an
+    optional display name (a live `Avatar` preview of the initial peers will see, keyed on the node id, over the
+    shared `DisplayNameField`; stored via `SettingsStore.setDisplayName` on leaving the page), and permissions as one row per concept with live state — the radio set gates
+    Start, while notifications (33+) and the battery exemption are optional rows that can also point at
+    app-info Settings once Android stops showing the dialog. `onboardingSeen` opens a returning phone (a
+    grant revoked later) on the permissions page directly.
   - `ChatListScreen` — one row per conversation (always-present Nearby room + DM threads with
     messages), each with a leading visual (room icon vs. peer `Avatar`), last-message preview,
     relative time, and an unread `Badge`; a FAB opens Contacts, an overflow menu opens Settings.

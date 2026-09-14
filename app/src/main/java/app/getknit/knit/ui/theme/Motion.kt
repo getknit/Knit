@@ -17,6 +17,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
@@ -131,6 +133,31 @@ object KnitMotion {
         } else {
             shrinkVertically(animationSpec = spatial()) + fadeOut(animationSpec = effects())
         }
+
+    /**
+     * A peer arriving: a fade carrying a small horizontal offset — a twenty-fourth of the width, not a
+     * page slide — from the end when going [forward], from the start when coming back. It reads as depth
+     * rather than travel, which is what keeps it from tiring on a screen opened dozens of times a day. The
+     * onboarding stepper's page change; the same recipe `KnitApp`'s NavHost uses between routes.
+     */
+    @Composable
+    fun enterStep(forward: Boolean): EnterTransition =
+        if (LocalReduceMotion.current) {
+            EnterTransition.None
+        } else {
+            fadeIn(animationSpec = effects()) +
+                slideInHorizontally(animationSpec = spatial()) { (if (forward) it else -it) / STEP_SLIDE_DIVISOR }
+        }
+
+    /** The counterpart to [enterStep]: the departing peer drifts the other way. */
+    @Composable
+    fun exitStep(forward: Boolean): ExitTransition =
+        if (LocalReduceMotion.current) {
+            ExitTransition.None
+        } else {
+            fadeOut(animationSpec = effects()) +
+                slideOutHorizontally(animationSpec = spatial()) { (if (forward) -it else it) / STEP_SLIDE_DIVISOR }
+        }
 }
 
 // M3's standard motion tokens (androidx.compose.material3.tokens.StandardMotionTokens). Spatial motion is
@@ -142,6 +169,9 @@ private const val SPATIAL_FAST_STIFFNESS = 1400f
 private const val EFFECTS_DAMPING = 1f
 private const val EFFECTS_DEFAULT_STIFFNESS = 1600f
 private const val EFFECTS_FAST_STIFFNESS = 3800f
+
+// A step slides a twenty-fourth of the width: enough to give the fade a direction, too little to read as travel.
+private const val STEP_SLIDE_DIVISOR = 24
 
 /**
  * The scale a control should draw at while [interactionSource] reports it pressed — 1 at rest, a shade under

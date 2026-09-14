@@ -322,6 +322,16 @@ class SettingsStore(
     val directTransferConsented: Flow<Boolean> = dataStore.data.map { it[KEY_DIRECT_TRANSFER_CONSENTED] ?: false }
 
     /**
+     * Whether this phone has been through onboarding's welcome and name pages. A later visit to onboarding —
+     * a radio grant revoked by the user, or by Android's unused-app permission hygiene — opens on the
+     * permissions page instead of "Welcome to Knit". Never a gate: whether the app opens on onboarding at
+     * all is decided by [app.getknit.knit.ui.hasRadioPermissions] alone, and this flag only picks the page.
+     * Not inferred from [displayName]: a seeded demo build writes a name, and its store screenshot must
+     * open on the welcome page.
+     */
+    val onboardingSeen: Flow<Boolean> = dataStore.data.map { it[KEY_ONBOARDING_SEEN] ?: false }
+
+    /**
      * Whether the user has dismissed the Nearby room's "never sent over the Internet" notice. Sticky by
      * design: the notice states a permanent structural fact (the room is not scope-eligible, spec §4.4),
      * so it is the one relay notice that will never retire itself — a dismissal that came back on the next
@@ -681,6 +691,9 @@ class SettingsStore(
     /** Records that the user accepted the disclosure behind [directTransferConsented]. */
     suspend fun acceptDirectTransferConsent() = dataStore.edit { it[KEY_DIRECT_TRANSFER_CONSENTED] = true }
 
+    /** Records that onboarding's welcome and name pages have been shown — see [onboardingSeen]. */
+    suspend fun markOnboardingSeen() = dataStore.edit { it[KEY_ONBOARDING_SEEN] = true }
+
     /**
      * Seeds the shipped default spools (`res/values/spools.xml`) into [spoolUrls] exactly once, marking
      * the install as seeded so a **removal sticks**. A default the app kept re-adding would not be a
@@ -809,6 +822,7 @@ class SettingsStore(
         val KEY_MESHTASTIC_POST_CONSENTED = booleanPreferencesKey("meshtastic_post_consented")
         val KEY_LOCATION_SHARE_CONSENTED = booleanPreferencesKey("location_share_consented")
         val KEY_DIRECT_TRANSFER_CONSENTED = booleanPreferencesKey("direct_transfer_consented")
+        val KEY_ONBOARDING_SEEN = booleanPreferencesKey("onboarding_seen")
         val KEY_RELAY_ROOM_NOTICE_DISMISSED = booleanPreferencesKey("relay_room_notice_dismissed")
         val KEY_LORA_ENABLED = booleanPreferencesKey("lora_enabled")
         val KEY_LORA_DM_ENABLED = booleanPreferencesKey("lora_dm_enabled")

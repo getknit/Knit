@@ -21,6 +21,7 @@ import app.getknit.knit.ui.diagnostics.CrashLogViewModel
 import app.getknit.knit.ui.diagnostics.DiagnosticsViewModel
 import app.getknit.knit.ui.group.GroupDetailsViewModel
 import app.getknit.knit.ui.lora.LoraRadioViewModel
+import app.getknit.knit.ui.onboarding.OnboardingViewModel
 import app.getknit.knit.ui.profile.ProfileDetailsViewModel
 import app.getknit.knit.ui.profile.ProfileViewModel
 import app.getknit.knit.ui.relay.InternetRelayViewModel
@@ -112,6 +113,7 @@ val uiModule =
         // "carrying now" count — a UI projection deliberately kept off the ForwardStore seam.
         viewModel { YourMeshViewModel(get(), get(), get(), get<ForwardRepository>(), get()) }
         viewModel { ProfileViewModel(get(), get(), get(), get()) }
+        viewModel { OnboardingViewModel(get(), get()) }
         viewModel {
             SettingsViewModel(get(), get(), get<RelayStatusRepository>().facts, get<LoraStatusRepository>().facts)
         }

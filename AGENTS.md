@@ -60,6 +60,13 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   no capability bit); it is read only between the pin tap and the send, by `ChatViewModel.startLocation`,
   the one collector of `LocationSource.fixes`, and `location/AndroidLocationSource` is the one
   `android.location` importer (detekt-enforced). Never ask for the grant at onboarding.
+- **When touching `ui/onboarding/`, `ui/Permissions.kt`, or `BootReceiver`'s start decision:** READ ADR
+  2026-09.nzpr. Entry is gated on `hasRadioPermissions` alone — the transports assume those grants
+  (`@SuppressLint("MissingPermission")` is a lint suppression, not a runtime guard), so the mesh never starts
+  without them. `POST_NOTIFICATIONS` and the battery exemption are optional rows on the permissions page
+  (`MessageNotifier` self-checks before posting), and `SettingsStore.onboardingSeen` only picks which page a
+  returning phone opens on, never whether onboarding shows. The name page writes through the shared
+  `ui/components/DisplayNameField`; a grant added to `requiredRadioPermissions` re-wedges the front door.
 - **When touching `data/draft/`, what the composer keeps between visits, or the chat list's `Draft: …`
   preview:** READ ADR 2026-09.qtg9. An unsent draft is a row in the encrypted DB (never the DataStore —
   it is message text), written debounced on the *application* scope, and handed to the composer exactly

@@ -45,6 +45,8 @@ document:
 
 ### Changed
 
+- Setting up Knit is now three pages: what it does, your name, and the permissions it needs. Only the
+  nearby-devices permission gets you in; you can leave notifications and background battery use for later.
 - Direct messages and group chats now keep every message, however long they run. Knit used to drop the
   oldest once a chat passed 5,000, and the Nearby room and a paired radio's channel still keep only the last
   30 days.

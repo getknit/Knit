@@ -7,7 +7,7 @@ import android.util.Log
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.di.isKoinStarted
-import app.getknit.knit.ui.hasAllMeshPermissions
+import app.getknit.knit.ui.hasRadioPermissions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -20,7 +20,7 @@ import org.koin.core.component.inject
  * ([app.getknit.knit.ui.KnitApp]) and `START_STICKY` doesn't survive a reboot.
  *
  * Gated on the persisted [SettingsStore.meshEnabled] flag (which the service sets false on a manual Stop
- * and true whenever it starts), the current mesh permissions, and `!SEED_DEMO`. Registered for
+ * and true whenever it starts), the radio permissions, and `!SEED_DEMO`. Registered for
  * `BOOT_COMPLETED` — delivered post-unlock, so the credential-encrypted settings DataStore is readable,
  * and an exemption to the Android 12+ background foreground-service-start restrictions (the mesh's
  * `connectedDevice` type is boot-permitted). Suspending work (a DataStore read + the FGS start) is kept
@@ -60,11 +60,12 @@ class BootReceiver :
 }
 
 /**
- * Whether to start the mesh on boot: only if it was left enabled, the mesh permissions are still granted,
- * and this isn't a seeded demo build. A top-level function so the decision is unit-testable without a Koin
- * bootstrap (the receiver just resolves its dependencies and delegates here).
+ * Whether to start the mesh on boot: only if it was left enabled, the radio permissions are still granted
+ * (notifications are optional and never a gate), and this isn't a seeded demo build. A top-level function
+ * so the decision is unit-testable without a Koin bootstrap (the receiver just resolves its dependencies
+ * and delegates here).
  */
 suspend fun shouldStartMeshOnBoot(
     context: Context,
     settings: SettingsStore,
-): Boolean = !BuildConfig.SEED_DEMO && settings.meshEnabled.first() && hasAllMeshPermissions(context)
+): Boolean = !BuildConfig.SEED_DEMO && settings.meshEnabled.first() && hasRadioPermissions(context)

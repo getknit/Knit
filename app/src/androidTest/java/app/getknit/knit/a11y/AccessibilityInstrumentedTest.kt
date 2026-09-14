@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.tryPerformAccessibilityChecks
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -140,6 +141,29 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
     @Test fun crashLog() = audit(route = "crash") { awaitTag("screen_crash_log") }
 
     @Test fun addContact() = audit(route = "addContact") { awaitTag("screen_add_contact") }
+
+    // Onboarding, all three pages. The seeded build normally skips the gate, but the demo route lands on it
+    // directly; nothing here needs seeded data, and the audit never taps Allow (the system dialog is another
+    // window, not this screen).
+    @Test fun onboardingWelcome() = audit(route = "onboarding") { awaitTag("onboarding_page_welcome") }
+
+    @Test
+    fun onboardingName() =
+        audit(route = "onboarding") {
+            awaitTag("onboarding_page_welcome")
+            compose.onNodeWithTag("onboarding_next").performClick()
+            awaitTag("onboarding_page_name")
+        }
+
+    @Test
+    fun onboardingPermissions() =
+        audit(route = "onboarding") {
+            awaitTag("onboarding_page_welcome")
+            compose.onNodeWithTag("onboarding_next").performClick()
+            awaitTag("onboarding_page_name")
+            compose.onNodeWithTag("onboarding_next").performClick()
+            awaitTag("onboarding_page_permissions")
+        }
 
     // Search, three ways: the idle field, a query with all three sections answering (Sam is a chat, a
     // contact and a speaker), and the no-results state.

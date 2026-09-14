@@ -69,11 +69,38 @@
         <item quantity="other">%d message requests</item>
     </plurals>
 
-    <!-- Onboarding -->
+    <!-- Onboarding: three pages — welcome, name, permissions -->
     <string name="onboarding_title">Welcome to Knit</string>
-    <string name="onboarding_blurb">Knit connects directly to nearby phones over Wi-Fi Aware to relay encrypted messages — no internet, no servers. It needs the nearby-devices permission to find peers, and works best when allowed to run in the background.</string>
-    <string name="onboarding_grant_permissions">Grant permissions</string>
-    <string name="onboarding_permissions_granted">Permissions granted</string>
+    <string name="onboarding_tagline">Talk to people nearby — no account, no internet needed.</string>
+    <string name="onboarding_how_hop_title">Phone to phone</string>
+    <string name="onboarding_how_hop_body">Phones in range link up over Wi-Fi and Bluetooth. Messages hop from one to the next — no network in between.</string>
+    <string name="onboarding_how_sealed_title">Sealed end to end</string>
+    <string name="onboarding_how_sealed_body">Direct messages and groups are encrypted end to end — the phones that carry them can\'t read them. The Nearby room is open to everyone in range.</string>
+    <string name="onboarding_how_carry_title">Carried by the crowd</string>
+    <string name="onboarding_how_carry_body">Your phone holds sealed messages for others and hands them on when it meets the right phone. That\'s how a message crosses a crowd without a server.</string>
+    <string name="onboarding_get_started">Get started</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_step_of">Step %1$d of %2$d</string>
+    <string name="onboarding_name_title">What should people call you?</string>
+    <string name="onboarding_name_body">This is the name people nearby see. Leave it blank to go by your alias for now — you can change it any time in your profile.</string>
+    <string name="onboarding_name_skip">Skip for now</string>
+    <string name="onboarding_permissions_title">Let Knit find phones nearby</string>
+    <string name="onboarding_perm_nearby_title">Nearby devices</string>
+    <string name="onboarding_perm_nearby_body">Finds phones in range over Wi-Fi Aware and Bluetooth.</string>
+    <string name="onboarding_perm_location_bt_title">Location and Bluetooth</string>
+    <string name="onboarding_perm_location_title">Location</string>
+    <string name="onboarding_perm_location_body">Android ties scanning for nearby phones to location. Knit uses it to find phones, and reads where you are only if you send your location.</string>
+    <string name="onboarding_perm_notifications_title">Notifications</string>
+    <string name="onboarding_perm_notifications_body">Tells you when a message arrives while Knit is in the background.</string>
+    <string name="onboarding_perm_battery_title">Background battery use</string>
+    <string name="onboarding_perm_battery_body">Keeps the mesh running with the screen off. Without it, Android may pause Knit until you open it again.</string>
+    <string name="onboarding_perm_denied_hint">Android won\'t ask again — allow it in Settings.</string>
+    <string name="onboarding_optional">Optional</string>
+    <string name="onboarding_allow">Allow</string>
+    <!-- Screen-reader labels for the per-row buttons; %1$s is the row title ("Allow, Nearby devices") -->
+    <string name="onboarding_allow_desc">Allow, %1$s</string>
+    <string name="onboarding_open_settings_desc">Open settings, %1$s</string>
+    <string name="onboarding_allowed">Allowed</string>
     <string name="onboarding_unsupported">This phone has neither Wi-Fi Aware nor Bluetooth LE, so Knit can\'t reach phones nearby. You can still open the app and read what you already have.</string>
     <string name="onboarding_start">Start meshing</string>
 

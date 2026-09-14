@@ -54,6 +54,17 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **Onboarding's follow-ons** (ADR 2026-09.nzpr, 2026-09-13 — three pages, the radio grants as the only gate,
+  notifications and battery as optional rows, `onboardingSeen` for the returning phone). Named and left: a
+  **Notifications row in Settings** beside `BatteryOptimizationRow` (hidden below 33, "Open settings" once
+  Android stops asking) — the one gap the change opens, since a grant declined at onboarding has no in-app
+  path back; a **photo step** (the crop dialog stays on the Profile screen on purpose); **per-plane degrade**
+  when only one radio's grant is held (would need every `android.bluetooth.*` / `android.net.wifi.aware.*`
+  call guarded against `SecurityException`); and swapping `KnitApp`'s inline nav transition for
+  `KnitMotion.enterStep`/`exitStep`, the same recipe. **Still owed:** the emulator trial (deny twice → Open
+  settings → grant → Start; `pm revoke` → relaunch on the permissions page; a cold contact link across the
+  gate), the ATF pass over the three pages, and re-capturing `08_onboarding.png`.
+
 - **The Your mesh screen's follow-ons** (ADR 2026-09.2v2t, 2026-09-13 — the screen ships with four numbers:
   nearby now, carrying now, passed along / handed straight to all time, people met). Named and left: **streaks
   or per-week views** (two additive longs cannot answer "this week"; it needs daily buckets); a **"your phone

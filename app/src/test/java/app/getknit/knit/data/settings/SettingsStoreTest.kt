@@ -153,6 +153,17 @@ class SettingsStoreTest {
         }
 
     @Test
+    fun `onboarding seen defaults off and is one-way`() =
+        runTest {
+            val store = newStore()
+            assertFalse(store.onboardingSeen.first())
+            store.markOnboardingSeen()
+            assertTrue(store.onboardingSeen.first())
+            store.markOnboardingSeen()
+            assertTrue(store.onboardingSeen.first())
+        }
+
+    @Test
     fun `dynamic color defaults off and round-trips on`() =
         runTest {
             // Note the flow is NOT gated on Build.VERSION here: isReturnDefaultValues makes SDK_INT 0 on the

@@ -54,10 +54,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -65,6 +61,8 @@ import app.getknit.knit.R
 import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.ui.components.Avatar
+import app.getknit.knit.ui.components.CharCounter
+import app.getknit.knit.ui.components.DisplayNameField
 import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
 import org.koin.androidx.compose.koinViewModel
@@ -203,28 +201,15 @@ internal fun ProfileScreenContent(
                 }
             }
 
-            OutlinedTextField(
+            // Shared with onboarding's name page (ui/components/DisplayNameField) so the two fields can't drift.
+            DisplayNameField(
                 value = form.name,
+                alias = form.alias,
+                aliasMore = form.aliasMore,
                 onValueChange = onNameChange,
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .testTag("profile_name")
-                        .noAutofillMenu()
-                        .onFocusChanged { if (!it.isFocused) onNameCommit() },
-                label = { Text(stringResource(R.string.profile_display_name_label)) },
-                placeholder = { if (form.alias.isNotEmpty()) Text(form.alias) },
-                singleLine = true,
-                supportingText = {
-                    Column {
-                        // The alias is what tells two same-named people apart (ADR 058), so it stays
-                        // visible after a name is typed — the placeholder alone vanishes then.
-                        if (form.alias.isNotEmpty()) {
-                            AliasLine(form.alias, form.aliasMore, Modifier.testTag("profile_alias"))
-                        }
-                        CharCounter(form.name.length, TextLimits.DISPLAY_NAME)
-                    }
-                },
+                onCommit = onNameCommit,
+                modifier = Modifier.fillMaxWidth().testTag("profile_name"),
+                aliasLineModifier = Modifier.testTag("profile_alias"),
             )
             OutlinedTextField(
                 value = form.status,
@@ -301,49 +286,6 @@ private fun BoxScope.RemovePhotoButton(onClick: () -> Unit) {
 }
 
 /**
- * `Alias: **SmartlyBrightSparrow** ElegantlyCheeryPlover` on one line: the alias bold, since it is what
- * tells two same-named people apart (ADR 058) and usually all the owner needs to know; the token after it
- * in the supporting text's own muted colour, for the day a label grows past the alias on someone else's
- * phone (ADR 2026-09.wuqj). One `Text`, one semantics node.
- */
-@Composable
-private fun AliasLine(
-    alias: String,
-    aliasMore: String,
-    modifier: Modifier = Modifier,
-) {
-    val line = stringResource(R.string.profile_alias, alias)
-    val emphasis = MaterialTheme.colorScheme.onSurface
-    val annotated =
-        remember(line, alias, aliasMore, emphasis) {
-            buildAnnotatedString {
-                append(line)
-                val start = line.indexOf(alias)
-                if (start >= 0) {
-                    addStyle(SpanStyle(fontWeight = FontWeight.Bold, color = emphasis), start, start + alias.length)
-                }
-                if (aliasMore.isNotEmpty()) append(" $aliasMore")
-            }
-        }
-    Text(text = annotated, modifier = modifier)
-}
-
-/** Right-aligned "used / limit" counter shown beneath a capped single-line field. */
-@Composable
-private fun CharCounter(
-    length: Int,
-    limit: Int,
-) {
-    Text(
-        text = "$length / $limit",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.End,
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
-/**
  * The open-to-chat flag as a titled switch row. The one switch on this screen: it is a profile field
  * peers read off your card (ADR 2026-09.74fq), not an app setting, so it stays beside the name and
  * status it travels with rather than moving to Settings.
@@ -380,16 +322,6 @@ private fun OpenToChatRow(
         Switch(checked = enabled, onCheckedChange = null)
     }
 }
-
-@Preview(showBackground = true)
-@Composable
-fun CharCounterPreview() =
-    KnitPreview {
-        Column {
-            CharCounter(length = 12, limit = 40)
-            CharCounter(length = 40, limit = 40)
-        }
-    }
 
 @Preview(showBackground = true)
 @Composable

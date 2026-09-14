@@ -214,8 +214,12 @@ adb -s B shell am broadcast -a app.getknit.knit.debug.SPOOL -p app.getknit.knit
 The root sets `testTagsAsResourceId` (in `KnitApp`), so `Modifier.testTag`s surface in `uiautomator dump`
 as `resource-id="<tag>"` (the bare tag — some Android/uiautomator versions prefix it
 `app.getknit.knit:id/<tag>`, so a matcher should accept either form). Tagged so far: `chat_input`, `chat_send`, `chat_row_<conversationId>` (e.g.
-`chat_row_nearby`), `chatlist_fab`, `contacts_fab`, `contact_<nodeId>`, `onboarding_grant`,
-`onboarding_start`, `profile_name`, `profile_status`, `profile_save`, `settings_profile_row` (Settings'
+`chat_row_nearby`), `chatlist_fab`, `contacts_fab`, `contact_<nodeId>`, the onboarding stepper's
+`screen_onboarding`, `onboarding_page_{welcome,name,permissions}`, `onboarding_next` (the footer CTA on the
+first two pages — tap it twice to reach the permissions page), `onboarding_avatar` (the name page's live
+preview), `onboarding_name`, `onboarding_grant` (the
+radio row's Allow; `onboarding_grant_settings` once Android stops asking, `onboarding_grant_granted` the
+check), `onboarding_notifications`, `onboarding_battery`, `onboarding_start`, `profile_name`, `profile_status`, `profile_save`, `settings_profile_row` (Settings'
 header row, which opens the profile editor), `settings_theme_mode` (the System/Light/Dark segmented
 control; API 31+ only, absent below), `settings_relays`, `settings_lora`, `chat_group_avatar`
 (opens group details), plus screen-root tags on the otherwise-untagged destinations — `screen_settings`,

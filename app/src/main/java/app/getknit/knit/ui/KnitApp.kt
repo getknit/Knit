@@ -175,7 +175,9 @@ fun KnitApp(startRoute: String? = null) {
                     // way this composition can come back to a dead service (a stillbirth stopSelf'd into a
                     // process the Activity kept alive, an OEM sweep that took the service and not us) and the
                     // effect above only re-fires on a navigation the user may never make. Starting an
-                    // already-running service is an idempotent null-action onStartCommand — one binder call.
+                    // already-running service is one binder call, and the service re-claims its foreground
+                    // state on that start — which is not a no-op when the system has quietly demoted it
+                    // (ADR 2026-09.f69x).
                     val route = currentRoute
                     if (route != null && route != Routes.ONBOARDING) startGate.record(MeshService.start(context))
                     meshManager.heal()

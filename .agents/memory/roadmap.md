@@ -525,3 +525,10 @@ doc). **Don't start a deferred item without explicit direction.**
   so work that used to run eagerly inside `setContent` now queues, and any test that asserts without an
   explicit sync can start failing. Do it as its own change — migrate one Robolectric screen test, run the
   suite, then the rest — not as a side effect of a dependency bump.
+- **Tell a background-restricted install what it is getting** — `ActivityManager.isBackgroundRestricted()`
+  (API 28) is true when the user set Knit's battery use to Restricted, or accepted Android's offer to. The
+  platform then demotes the mesh service the moment the app leaves the screen and stops it a minute later,
+  so the mesh only ever runs while Knit is open; ADR 2026-09.f69x stopped that from *crashing* but did not
+  surface it. A row on the onboarding permissions page and Settings, in the same shape as the battery
+  exemption row, would say so and deep-link to the app's battery page. Product-shaped, not a fix: do it with
+  the copy pass, not as a hotfix.

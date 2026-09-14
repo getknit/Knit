@@ -60,6 +60,14 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   no capability bit); it is read only between the pin tap and the send, by `ChatViewModel.startLocation`,
   the one collector of `LocationSource.fixes`, and `location/AndroidLocationSource` is the one
   `android.location` importer (detekt-enforced). Never ask for the grant at onboarding.
+- **When touching `mesh/MeshService` (`onCreate` / `onStartCommand` / `postForeground`), `MeshService.start`,
+  `canReclaimForegroundService`, or the `KnitApp` effects that start the mesh:** READ ADR 043 (a refused claim
+  makes a stillbirth; the caller-side guard and the resume retry) and ADR 2026-09.f69x (every non-Stop start
+  re-claims the foreground state — the system demotes a background-restricted app's service silently, and a
+  `startForegroundService` into that instance arms a deadline nothing else would meet). `onCreate` claims the
+  state before it resolves the graph; keep it that way. The deadline is 30 s on Android 15 (10 s before), and
+  `getForegroundServiceType()` cannot tell you it was lost. Regression: `MeshServiceForegroundReclaimTest`,
+  `GraphlessProcessTest`, `MeshServiceStartTest`.
 - **When touching `ui/onboarding/`, `ui/Permissions.kt`, or `BootReceiver`'s start decision:** READ ADR
   2026-09.nzpr. Entry is gated on `hasRadioPermissions` alone — the transports assume those grants
   (`@SuppressLint("MissingPermission")` is a lint suppression, not a runtime guard), so the mesh never starts

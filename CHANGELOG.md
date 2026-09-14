@@ -112,6 +112,9 @@ document:
 - A phone in a group chat kept sending itself a sealed key message every hour or two, and every phone
   around it carried the copies. Knit no longer mistakes its own profile for a contact's, which is what
   started the loop.
+- Knit no longer crashes when you open it again within a minute of leaving, if you have set its battery
+  use to Restricted. Android stops the mesh when a restricted app leaves the screen, and opening Knit
+  starts it again.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

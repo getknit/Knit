@@ -88,7 +88,7 @@ class MeshService : LifecycleService() {
         NotificationChannels.ensure(this)
         // Claim the foreground state before anything resolves the Koin graph — see [startForeground]. Every
         // line below it (observeStatus, powerMonitor, meshManager, settings) opens the database and the
-        // keystore identity, and doing that first is what used to blow the 10 s startForegroundService grace.
+        // keystore identity, and doing that first is what used to blow the startForegroundService deadline.
         foregrounded = startForeground()
         // Refused (see [postForeground]): leave without resolving the graph and without clearing `meshEnabled`,
         // so the next foreground app open (KnitApp) or the next reboot (BootReceiver) starts the mesh normally.
@@ -131,6 +131,21 @@ class MeshService : LifecycleService() {
             ACTION_HEAL -> {
                 meshManager.heal()
             }
+        }
+        // Re-claim the foreground state on every start, not only the first. The system can take it from a
+        // running service without telling it: a background-restricted app loses it the moment it leaves the
+        // screen (`ActiveServices.stopAllForegroundServicesLocked`, a `stopForeground` with no callback), and
+        // the service runs on as a plain background service for the ~60 s settle time before it is stopped.
+        // A `startForegroundService` into that demoted instance — `KnitApp`'s resume observer, the very next
+        // open — arms the startForeground() deadline against this method, which used to return without ever
+        // calling it: `ForegroundServiceDidNotStartInTimeException`, Play-reported on 2.5.1 / Android 15. Same
+        // call `observeStatus` makes on every update, so it is idempotent and cheap; a refusal means the state
+        // is gone for this session, and stopping here (the mesh comes down in `onDestroy`) beats running a
+        // service the system is about to stop anyway. ADR 2026-09.f69x.
+        if (!postForeground(buildNotification(meshManager.neighborCount.value, meshManager.transportHealth.value))) {
+            Log.w(TAG, "foreground state refused on restart — stopping until the app is next opened")
+            stopSelf()
+            return START_NOT_STICKY
         }
         return START_STICKY
     }
@@ -185,8 +200,9 @@ class MeshService : LifecycleService() {
      * **Deliberately reads nothing from [meshManager].** Touching it here would resolve the mesh half of
      * the Koin graph — opening the SQLCipher-backed Room database and minting/unwrapping the keystore
      * identity — before we ever reach [ServiceCompat.startForeground], and `onCreate` runs on the main
-     * thread. AOSP gives `startForegroundService` a 10 s grace (`SERVICE_START_FOREGROUND_TIMEOUT`) and
-     * kills the process with `ForegroundServiceDidNotStartInTimeException` when it lapses, so on slow
+     * thread. AOSP gives `startForegroundService` a deadline (`mServiceStartForegroundTimeoutMs`: 10 s
+     * through Android 14, 30 s on 15) and kills the process with
+     * `ForegroundServiceDidNotStartInTimeException` when it lapses, so on slow
      * hardware that graph build was a launch-time crash. Now the foreground state is claimed first and the
      * graph is built after, where it can take as long as it needs; [observeStatus] replaces this text with
      * the live count/health as soon as the first value arrives.

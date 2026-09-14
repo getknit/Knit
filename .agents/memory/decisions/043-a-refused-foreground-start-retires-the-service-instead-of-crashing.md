@@ -89,3 +89,8 @@ from a live one with no peers: `transportHealth` sits at its default and `MeshMa
 own `started` flag. Recovery does not depend on the flag being right — the retry above is unconditional —
 so it can only ever be a diagnostic. No Diagnostics-screen row: the refusal is transient by construction
 (it clears on the very next resume), so a row would be unobservable in practice.
+
+*Amendment (2026-09-14, ADR 2026-09.f69x).* "An idempotent null-action `onStartCommand`" held only while the
+system still agreed the service was foreground. A background-restricted app is silently demoted on leaving
+the screen, and a start into that instance armed the `startForeground()` deadline against an
+`onStartCommand` that never called it. The service now re-claims the state on every non-Stop start.

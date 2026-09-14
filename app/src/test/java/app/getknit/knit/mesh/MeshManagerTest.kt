@@ -71,6 +71,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -79,6 +80,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -271,6 +273,12 @@ class MeshManagerTest {
         }
     }
 
+    /** A bound board as [SettingsStore.setLoraBoard] records it: its number and, on firmware that signs, its key. */
+    private data class Board(
+        val node: Long,
+        val key: String?,
+    )
+
     /** The manager under test, wired with real crypto + a recording transport + real custody + mocked repos. */
     private inner class Rig(
         scope: CoroutineScope,
@@ -321,11 +329,21 @@ class MeshManagerTest {
         /** The own open-to-chat flag, the fourth input of the profile watcher's combine. */
         val openToChat = MutableStateFlow(false)
 
-        /** The bound LoRa board's node number, the fifth input — null until a board reports in. */
-        val loraBoardNode = MutableStateFlow<Long?>(null)
+        /**
+         * The bound LoRa board — its node number and, on firmware that signs, its key — null until one reports
+         * in. One flow, as [SettingsStore.setLoraBoard] is one edit: the two settings flows the watcher folds
+         * into its fifth input are projections of it, the way the store's are of its one `data`. Two flows
+         * written one after the other would let the watcher (on a real Default thread) build a frame between
+         * the writes — a number without its key, or a cleared number beside a key not yet cleared — a state
+         * no phone produces, and one that flaked the clear step on CI.
+         */
+        val loraBoard = MutableStateFlow<Board?>(null)
 
-        /** The bound board's signing key (base64), folded into the fifth input beside the node — null until a signing board reports in. */
-        val loraBoardKey = MutableStateFlow<String?>(null)
+        /** [SettingsStore.loraBoardNode]: the bound board's number. */
+        val loraBoardNode: Flow<Long?> = loraBoard.map { it?.node }
+
+        /** [SettingsStore.loraBoardKey]: the bound board's signing key (base64), null on a board that does not sign. */
+        val loraBoardKey: Flow<String?> = loraBoard.map { it?.key }
 
         // Hoisted so a test can pre-shape group-ratchet state (e.g. a stale outbox ack) around the
         // manager's own send/flush paths — same instance the manager is wired with below.
@@ -2030,18 +2048,14 @@ class MeshManagerTest {
 
             rig.awaitProfileWatcher()
             rig.clockNow = rig.now + 26_000
-            // A key without a number is nothing to advertise yet (the settings write both in one edit; here
-            // the key lands first), so this alone floods nothing …
-            rig.loraBoardKey.value = "oR62IJmFUE0Tgcw0GcypU5ZqUFCQllVBy2snB/BKQA4="
-            rig.loraBoardNode.value = 0xdeadbeefL // … and the board's number completes the claim: one flood.
+            rig.loraBoard.value = Board(0xdeadbeefL, "oR62IJmFUE0Tgcw0GcypU5ZqUFCQllVBy2snB/BKQA4=") // one edit: one flood
             rig.await(1) { rig.floodedProfiles().size }
             val claimed = WireCodec.decodePayload<ProfileContent>(rig.floodedProfiles().single().payload)!!
             assertEquals("the profile now names the board", 0xdeadbeefL, claimed.loraNode)
             assertEquals("and the key it signs under", "oR62IJmFUE0Tgcw0GcypU5ZqUFCQllVBy2snB/BKQA4=", claimed.loraKey)
 
             rig.clockNow = rig.now + 52_000
-            rig.loraBoardNode.value = null // unbound: the next profile omits both, which is how a clear arrives
-            rig.loraBoardKey.value = null
+            rig.loraBoard.value = null // unbound: the next profile omits both, which is how a clear arrives
             rig.await(2) { rig.floodedProfiles().size }
             val cleared = WireCodec.decodePayload<ProfileContent>(rig.floodedProfiles().last().payload)!!
             assertNull(cleared.loraNode)
@@ -2059,7 +2073,7 @@ class MeshManagerTest {
             rig.await(1) { rig.custodiedProfiles().size }
             rig.awaitProfileWatcher()
             rig.clockNow = rig.now + 26_000
-            rig.loraBoardNode.value = 0xdeadbeefL
+            rig.loraBoard.value = Board(0xdeadbeefL, key = null)
             rig.await(1) { rig.floodedProfiles().size }
             val content = WireCodec.decodePayload<ProfileContent>(rig.floodedProfiles().single().payload)!!
             assertEquals(0xdeadbeefL, content.loraNode)

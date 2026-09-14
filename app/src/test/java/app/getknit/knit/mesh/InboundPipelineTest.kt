@@ -1976,8 +1976,12 @@ class InboundPipelineTest {
 
     // --- Tier 3: custody gate, notifications, avatar path, attachment screening, decrypt version ---
 
+    /**
+     * ADR 2026-09.bts9 (#45): the block list is a delivery-path input and never a custody one — a blocker's
+     * refusal would diverge its digest from every peer's for the life of the block.
+     */
     @Test
-    fun canCarryRefusesABlockedSender() =
+    fun canCarryStillCarriesABlockedSender() =
         runTest {
             val rig = Rig(backgroundScope)
             val alice = party()
@@ -1985,7 +1989,8 @@ class InboundPipelineTest {
             rig.settings.blocked.value = setOf(alice.nodeId)
             val env = rig.broadcastChat(alice, id = "c1", body = "hi")
 
-            assertFalse(rig.pipeline.canCarry(alice.sign(env), env))
+            assertTrue(rig.pipeline.canCarry(alice.sign(env), env))
+            assertEquals(0L, rig.drops(DropReason.CARRY_REFUSED))
         }
 
     @Test

@@ -138,13 +138,14 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   §9.3 quarantine, ADR 042's card intro, a relay dropping every socket, ADR 020 over the relay) and
   `LoraPocketLabTest` (two pockets, ADR 054's gate, y8pu's backfill, the election, a DM through the bridge).
 - **A scenario that fails on HEAD for a reason that is a design decision, not a bug, stays in the suite
-  under `@Ignore("finding: …")`** with the finding in its KDoc, so the acceptance test exists before the
-  decision does. Four sit there as of 2026-09-14: a blocker refusing custody of the blocked sender's frames
-  (`canCarry`, against ADR 010's "never folded into custody"), the attachment deferral judged in the round the
-  send itself triggers (before the ack it needs can exist), a group founded across the relay never delivering
-  its roster to the relay-only member (root adoption needs the row; the roster rides the scope the root
-  derives), and — in the clock tier — a `relay = false` key-request-served profile deduping its own custody
-  re-serve for the seen window.
+  under `@Ignore("#NN: …")`**, naming its GitLab work item, with the finding in its KDoc, so the acceptance
+  test exists before the decision does. Three sit there as of 2026-09-14: the attachment deferral judged in
+  the round the send itself triggers, before the ack it needs can exist (#46); a group founded across the
+  relay never delivering its roster to the relay-only member — root adoption needs the row, and the roster
+  rides the scope the root derives (#47); and a far pocket's room tick stopping at the gateway's board (#48).
+  The first one decided, #45 (a blocker refusing custody of the blocked sender's frames), became ADR
+  2026-09.bts9 and its scenario now runs; #49 (a `relay = false` key-request-served profile deduping its own
+  custody re-serve for the seen window) closed in the clock tier.
 - **Neither long-range plane carries a third party's DM-form frames** — alice↔bob's ticks and seeds are in
   no scope of carol's, and a DM-form frame to a linked peer never rides the board — so custody agrees across
   a relay or across two pockets only once the parties meet by radio again. A spool scenario with three nodes

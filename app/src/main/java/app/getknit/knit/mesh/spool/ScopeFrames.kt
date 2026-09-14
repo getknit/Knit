@@ -55,8 +55,8 @@ class Scope(
  * no IO, no state, so the whole rule set is unit-testable against fixtures.
  *
  * The Ed25519 sender check the spec's §4.4 pipeline also demands is deliberately **not** re-implemented
- * here — it is `InboundPipeline.canCarry`, which already resolves the pinned key, rejects a blocked
- * sender, and verifies the signature byte-exact. [ScopeSync] runs it as the step between [open] and the
+ * here — it is `InboundPipeline.canCarry`, which already resolves the pinned key and verifies the
+ * signature byte-exact (never the block list: ADR 2026-09.bts9). [ScopeSync] runs it as the step between [open] and the
  * mesh bridge, the way [app.getknit.knit.mesh.ForwardSync] injects its `authenticate` hook.
  */
 object ScopeFrames {

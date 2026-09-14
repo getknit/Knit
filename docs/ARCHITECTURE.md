@@ -275,8 +275,9 @@ frame in `PendingInbound` and asks `KeyExchange` for the sender's profile), then
 cleartext `RelayEnvelope.type` **string** (a discriminator, not a sealed subtype — §4) and its decoded
 per-type content:
 
-- **`chat`** → blocked-sender drop. A **group** message (`group != null`) reconciles the self-describing
-  roster and delivers if we're a member; a **DM** addressed to someone else (`!Conversations.isForMe(...)`)
+- **`chat`** → blocked-sender drop (local surfacing only — the frame is still carried and relayed, ADR 010).
+  A **group** message (`group != null`) reconciles the self-describing roster and delivers if we're a
+  member; a **DM** addressed to someone else (`!Conversations.isForMe(...)`)
   is only relayed + carried (don't persist/notify/ack). For a DM/group meant for us the `ChatContent.enc`
   envelope is **decrypted** (`decryptAndDeliver`; dropped on any failure, and never throwing — §14) before
   persisting to Room (unacked), screening the body/image on-device (`docs/CONTENT_MODERATION.md`), pulling

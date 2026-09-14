@@ -356,8 +356,9 @@ class InboundPipeline(
         chat: ChatContent,
         conversationId: String,
     ) {
-        // The carry gate already refused a blocked author; re-checked here because this door is public
-        // to the plane and the gate is not the only way in during a test.
+        // The one block gate on this door: the carry gate never reads the block list (ADR 010 — blocking is a
+        // delivery-path decision, so the same post is accounted for the scope like any member's), and a
+        // blocked member's post is dropped here, exactly as [handleChat] drops their radio-borne chat.
         if (env.senderId in settings.blockedNodeIds.first()) return
         deliverChat(
             env = env,
@@ -1839,21 +1840,26 @@ class InboundPipeline(
 
     /**
      * Whether we should carry a relayed frame for store-and-forward (the [ForwardSync] authenticate hook for
-     * ORIGIN_RELAY). The sender must not be blocked and the frame signature must verify byte-exact over the
-     * received signed bytes against the key that derives to its senderId (via [verifierBundle], so a profile
-     * authenticates on its in-band key and every other type on the sender's pinned key) — a node never stores
-     * unauthenticated junk, only frames an identified sender actually authored. A DM/group *chat* frame is
-     * carried only in its encrypted form (a carrier holds it without reading); the broadcast room and the
-     * cleartext metadata frames (reaction/receipt/group-update/group-leave/profile) carry no enc envelope and
-     * are held on their signature alone. Without carrying these, only a frame's author would hold it (via
-     * ORIGIN_SELF), so custody / cue-plane anti-entropy would never converge between peers. Our own sends
-     * bypass this check.
+     * ORIGIN_RELAY). The frame signature must verify byte-exact over the received signed bytes against the
+     * key that derives to its senderId (via [verifierBundle], so a profile authenticates on its in-band key
+     * and every other type on the sender's pinned key) — a node never stores unauthenticated junk, only
+     * frames an identified sender actually authored. A DM/group *chat* frame is carried only in its encrypted
+     * form (a carrier holds it without reading); the broadcast room and the cleartext metadata frames
+     * (reaction/receipt/group-update/group-leave/profile) carry no enc envelope and are held on their
+     * signature alone. Without carrying these, only a frame's author would hold it (via ORIGIN_SELF), so
+     * custody / cue-plane anti-entropy would never converge between peers. Our own sends bypass this check.
+     *
+     * The block list is deliberately **not** consulted here (ADR 010, ADR 2026-09.bts9, work item #45): the
+     * content digest is folded over what this gate admits, so anything it refuses on a per-node input diverges
+     * this node's live set from every peer's for as long as that input holds — a blocker would be re-served
+     * the blocked sender's frames every exchange and refuse them every time. A blocked sender's frames are
+     * carried and relayed like anyone else's and dropped on the *delivery* path ([handleChat]), which is the
+     * only place blocking is read; the per-sender custody quota bounds what they can cost.
      */
     suspend fun canCarry(
         wire: WireEnvelope,
         env: RelayEnvelope,
     ): Boolean {
-        if (env.senderId in settings.blockedNodeIds.first()) return false
         if (env.type == FrameType.CHAT) {
             val content = WireCodec.decodePayload<ChatContent>(env.payload) ?: return false
             val isBroadcast = env.recipientId == null && env.group == null

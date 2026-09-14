@@ -128,6 +128,9 @@ document:
 - Knit no longer crashes when you open it again within a minute of leaving, if you have set its battery
   use to Restricted. Android stops the mesh when a restricted app leaves the screen, and opening Knit
   starts it again.
+- Blocking someone no longer makes your phone keep re-syncing with the phones around it for as long as the
+  block stands, which was costing radio time and battery. Anything they sent while blocked stays hidden
+  after you unblock them.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

@@ -163,7 +163,7 @@ class ScopeSync(
     private val selfId: suspend () -> String,
     // Configured spool URLs; empty (the plane switched off, or nothing configured) parks every worker.
     private val urls: suspend () -> List<String>,
-    // The mesh's own carry gate — pinned sender key, not blocked, signature valid. Reused rather than
+    // The mesh's own carry gate — pinned sender key, signature valid. Reused rather than
     // re-implemented so a spool-delivered frame is authenticated by exactly the rule the radios use.
     private val canCarry: suspend (WireEnvelope, RelayEnvelope) -> Boolean,
     // The mesh bridge: `MeshRouter.handleInbound`. Dedup, delivery, custody, and relay live behind it.
@@ -1333,7 +1333,7 @@ class ScopeSync(
 
         /**
          * The commons door (§7.4). A post is authenticated by exactly the carry gate every frame meets —
-         * pinned key, not blocked, signature byte-exact — but delivered through [deliverCommons], never
+         * pinned key, signature byte-exact — but delivered through [deliverCommons], never
          * [deliver]: the router's door relays onto the radios and custodies, and a commons post does
          * neither. The one thing the gate cannot say is *why* it refused, so a sender we have not pinned
          * yet is asked about first and the post parked for the profile that is on its way — every member

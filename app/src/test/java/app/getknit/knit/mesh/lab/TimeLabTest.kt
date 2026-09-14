@@ -5,6 +5,7 @@ import app.getknit.knit.mesh.DropReason
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -16,8 +17,8 @@ import org.robolectric.RobolectricTestRunner
  * The clock tier: what the field waits minutes or days for, moved with [LabClock.advance] and then poked —
  * a re-link for the digest exchange, `heal()` for the heartbeat basket — because the jump moves decisions,
  * never schedulers. The router's 10-minute seen window (the self-pin loop, a DM received while its sender
- * was blocked), the 24 h custody TTL, the 12 h profile republish, and the ratchet's retention sweeps after
- * a reset (ADR 027).
+ * was blocked — which stays unseen past it), the 24 h custody TTL, the 12 h profile republish, and the
+ * ratchet's retention sweeps after a reset (ADR 027).
  */
 @RunWith(RobolectricTestRunner::class)
 class TimeLabTest {
@@ -63,12 +64,13 @@ class TimeLabTest {
         }
 
     /**
-     * A DM that arrived while its sender was blocked is dropped on the delivery path but marked seen by the
-     * router, so the sender's custody re-serve after the unblock is deduped for the window. Past it, the
-     * next link-up delivers it.
+     * A DM that arrived while its sender was blocked is dropped on the delivery path and custodied like any
+     * addressed DM (ADR 2026-09.bts9: the block list never enters the carry gate), so once the block is lifted
+     * there is nothing for the sender's re-serve to bring — the stores already agree — and the message stays
+     * unseen past the seen window too. Before bts9 it trickled in here by accident, off the peer's re-serve.
      */
     @Test
-    fun aDmReceivedWhileBlockedArrivesAfterTheUnblockOnceTheSeenWindowLapses() =
+    fun aDmReceivedWhileBlockedStaysUnseenAfterTheUnblock() =
         runBlocking {
             val alice = lab.node("alice").apply { setDisplayName("Alice") }
             val bob = lab.node("bob").apply { setDisplayName("Bob") }
@@ -77,15 +79,20 @@ class TimeLabTest {
 
             bob.block(alice)
             assertTrue(alice.sendDm(bob, "while blocked"))
-            lab.settle()
-            lab.settle()
+            val dm = alice.ownMessageId(alice.dmWith(bob), "while blocked")
+            lab.awaitCustodyParity(alice, bob)
+            assertTrue("bob custodied the DM he would not surface", bob.custodyIds().contains(dm))
             assertTrue("nothing surfaced while blocked", bob.decrypted(bob.dmWith(alice)).isEmpty())
 
             bob.unblock(alice)
             lab.clock.advance(SEEN_WINDOW_LAPSED_MS)
             lab.unlink(alice, bob)
             lab.link(alice, bob)
-            lab.assertConverged(listOf(alice, bob), atLeast = 1) { it.dmWith(if (it === alice) bob else alice) }
+            lab.awaitCustodyParity(alice, bob)
+            lab.settle()
+            lab.settle()
+            assertTrue("still nothing after the unblock", bob.decrypted(bob.dmWith(alice)).isEmpty())
+            assertFalse("and alice never got bob's tick", alice.receiptPlanes(dm).containsKey(bob.nodeId))
         }
 
     /**

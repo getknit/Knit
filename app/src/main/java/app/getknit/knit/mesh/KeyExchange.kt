@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * The request is **signed** and `relay = false`: signed so a responder authenticates it against the
  * requester's pinned key (always present — direct neighbors exchange profiles on connect) and can ignore
- * blocked/unknown askers; point-to-point so it never floods (which would also have a verify-bootstrap
+ * unknown askers; point-to-point so it never floods (which would also have a verify-bootstrap
  * problem at relays that lack the requester's key). The *response* needs no signing or new type — the
  * peer's cached, originator-signed [FrameType.PROFILE] frame is replayed verbatim ([signed]/[sig]
  * byte-for-byte), and the existing profile path self-certifies it on pin (the nodeId must derive to the
@@ -44,8 +44,6 @@ class KeyExchange(
     // Raw Ed25519 over the canonical RelayEnvelope bytes — the same signer MeshManager.sign uses, injected
     // so the request authenticates like every other frame while this class stays free of the crypto stack.
     private val signRaw: (ByteArray) -> ByteArray,
-    // Don't chase the key of a blocked peer (we drop its frames anyway); MeshManager passes its block set.
-    private val isBlocked: suspend (String) -> Boolean = { false },
     private val now: () -> Long = { System.currentTimeMillis() },
     private val newRequestId: () -> String = { FrameId.new() },
     private val metrics: MeshMetrics = MeshMetrics(),
@@ -85,12 +83,14 @@ class KeyExchange(
 
     /**
      * We dropped a frame from [nodeId] because its key isn't pinned: request it from every direct neighbor,
-     * unless it's us, blocked, already cached, or we've asked within the cooldown. The id is remembered as
-     * missing so a later-joining neighbor is re-asked ([onNeighborAdded]) even while the cooldown holds.
+     * unless it's us, already cached, or we've asked within the cooldown. The id is remembered as missing so
+     * a later-joining neighbor is re-asked ([onNeighborAdded]) even while the cooldown holds. A blocked
+     * peer's key is chased like anyone's: its frames are carried for the mesh (ADR 2026-09.bts9) and carrying
+     * needs the key; the request names the peer to our neighbors and never reaches it, so nothing leaks.
      */
     suspend fun want(nodeId: String) {
         val me = selfId()
-        if (nodeId == me || cache.containsKey(nodeId) || isBlocked(nodeId)) return
+        if (nodeId == me || cache.containsKey(nodeId)) return
         val targets = transport.neighbors.value
         if (!recordWant(nodeId, now())) return // remembered-as-missing; cooldown says don't broadcast yet
         val req = keyRequest(me, listOf(nodeId))

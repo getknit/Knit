@@ -86,9 +86,12 @@ quota** — each enforced by evicting its **oldest frame by `sentAt`** (a frame-
 keeps the identical newest-N and their content digests converge) rather than refusing the new one, and
 applied to **our own sends too** (not just relayed traffic). Ordering by a per-node key (`receivedAt`) or
 exempting `ORIGIN_SELF` breaks convergence and churns the cue plane forever — see the convergent-quota
-section below. A carrier stores a message only when its sender is **pinned, not blocked, and its frame
-signature verifies** (`MeshManager.canCarry` → `MessageCrypto.verify` over the received `signed` bytes,
-authenticating without decrypting — a carrier holds no wrapped key). Notifications fire only on first
+section below. A carrier stores a message only when its sender is **pinned and its frame signature
+verifies** (`InboundPipeline.canCarry` → `MessageCrypto.verify` over the received `signed` bytes,
+authenticating without decrypting — a carrier holds no wrapped key). The block list is **never** read there
+(ADR 010, ADR 2026-09.bts9): it is a delivery-path input, and a per-node input in the carry gate diverges that
+node's digest from every peer's for as long as it holds — a blocker carries, re-serves and accounts a blocked
+sender's frames like anyone else's and drops them only on delivery. Notifications fire only on first
 delivery (`deliverChat` `isNew` gate, conversation-agnostic) so a re-served message (after the 10-min
 `SeenSet` window, or a restart that empties it) never replays. The pure logic (`ForwardSync`,
 `ForwardStore`) is JVM-tested with `FakeLoopTransport` (`ForwardSyncTest`).

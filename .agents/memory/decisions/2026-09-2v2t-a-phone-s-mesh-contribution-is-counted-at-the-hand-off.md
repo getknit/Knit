@@ -34,7 +34,10 @@ frames only, never one we authored and never a DM addressed to us (custody holds
 anyone); to someone other than the author (re-serving an author its own frame is a wipe reconverging, not a
 delivery); and **once per frame**, under a 24 h `SeenSet` memo — the custody re-offer runs every 60 s for as long
 as a frame lives, and a peer that can never store a frame (it blocks the sender) is offered it every round, so
-without the memo one such frame credits ~1,440 hand-offs a day. "Passed along" is the first hand-off to anyone;
+without the memo one such frame credits ~1,440 hand-offs a day. *Amendment (2026-09-14, #45).* A blocker now
+stores the frame like anyone else (ADR 2026-09.bts9); the memo's case is a peer that has not pinned the author
+yet, which `canCarry` refuses on the key and is offered the frame every round until the profile lands.
+"Passed along" is the first hand-off to anyone;
 "handed straight to" is the first hand-off to the DM's addressee, a subset by construction. It is a send over a
 live link, not a confirmed delivery, so the copy never says "delivered". `fastSend` and LoRa fan-outs are
 deliberately uncounted: they return `Unit` and may have sent nothing. The alternative a reader reaches for first

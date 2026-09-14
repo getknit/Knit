@@ -38,7 +38,6 @@ class KeyExchangeTest {
     private class Node(
         val id: String,
         scope: CoroutineScope,
-        val blocked: Set<String> = emptySet(),
         maxMissing: Int = 256,
         maxWanters: Int = 256,
         maxIdsPerReq: Int = 128,
@@ -54,7 +53,6 @@ class KeyExchangeTest {
                 transport = transport,
                 selfId = { id },
                 signRaw = { byteArrayOf(SIG_MARKER) },
-                isBlocked = { it in blocked },
                 now = clock,
                 maxMissing = maxMissing,
                 maxWanters = maxWanters,
@@ -123,17 +121,16 @@ class KeyExchangeTest {
         }
 
     @Test
-    fun selfBlockedAndAlreadyHeldKeysAreNotRequested() =
+    fun selfAndAlreadyHeldKeysAreNotRequested() =
         runTest(UnconfinedTestDispatcher()) {
             var clock = 0L
-            val r = Node("r", backgroundScope, blocked = setOf("blocked")) { clock }
+            val r = Node("r", backgroundScope) { clock }
             val n = Node("n", backgroundScope) { clock }
             r.transport.connect(n.transport)
             r.start(backgroundScope)
             n.start(backgroundScope)
 
             r.exchange.want("r") // our own id
-            r.exchange.want("blocked") // a blocked peer — we drop its frames anyway
             r.exchange.onProfilePinned("cached", profileWire("cached", "K")) // now held
             r.exchange.want("cached") // already cached
 

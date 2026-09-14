@@ -28,8 +28,9 @@ class ForwardSync(
     private val transport: MeshTransport,
     private val store: ForwardStore,
     private val clock: () -> Long = { System.currentTimeMillis() },
-    // Authenticates a relayed DM before we carry it (sender pinned + not blocked + signature valid), so a
-    // node never stores unauthenticated junk. Our own sends skip this (trivially authentic).
+    // Authenticates a relayed frame before we carry it (sender pinned + signature valid — never the block
+    // list, ADR 2026-09.bts9), so a node never stores unauthenticated junk. Our own sends skip this
+    // (trivially authentic).
     private val authenticate: suspend (WireEnvelope, RelayEnvelope) -> Boolean = { _, _ -> true },
     // Invoked once when a frame is actually persisted, so the orchestrator can custody any out-of-band blob it
     // references (an image): the frame carries only a content hash, so the carrier eager-pulls + holds the bytes

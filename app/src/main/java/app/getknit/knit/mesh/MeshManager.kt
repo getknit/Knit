@@ -235,7 +235,6 @@ class MeshManager(
             selfId = { identity.nodeId() },
             signRaw = messageCrypto::signRaw,
             now = clock,
-            isBlocked = { it in settings.blockedNodeIds.first() },
             metrics = metrics,
         )
 

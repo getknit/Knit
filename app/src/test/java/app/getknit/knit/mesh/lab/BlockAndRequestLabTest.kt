@@ -32,7 +32,7 @@ class BlockAndRequestLabTest {
     }
 
     /**
-     * FINDING (2026-09-14, first run): the delivery half holds — Bob's room never shows the post and Alice
+     * FINDING #45 (2026-09-14, first run): the delivery half holds — Bob's room never shows the post and Alice
      * still gets Bob's tick — but the custody oracle fails: `InboundPipeline.canCarry` refuses a blocked
      * author, so Bob's live set lacks every frame Alice sends while Carol's holds them, and since the
      * digest exchange pushes what a peer lacks, Carol re-serves them to Bob on every exchange and Bob
@@ -42,7 +42,7 @@ class BlockAndRequestLabTest {
      * second. Ignored until that is decided; the router already relays a blocked sender's frames live, so
      * carrying them is the consistent choice.
      */
-    @Ignore("finding: canCarry folds the block list into custody, so a blocker's digest never converges — awaiting a decision")
+    @Ignore("#45: canCarry folds the block list into custody, so a blocker's digest never converges")
     @Test
     fun aBlockedSendersRoomPostIsStillAckedAndBlockingStaysInvisible() =
         runBlocking {

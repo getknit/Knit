@@ -85,7 +85,7 @@ class LoraPocketLabTest {
         }
 
     /**
-     * FINDING (2026-09-14, first run): Carol's ✓✓ for Bob's post leaves her board as the targeted
+     * FINDING #48 (2026-09-14, first run): Carol's ✓✓ for Bob's post leaves her board as the targeted
      * `send:chat` (the ride hold runs out, ADR 2026-09.y5f3), Alice's board hears it — and it stops there:
      * a targeted tick is a point-to-point `relay = false` frame, so Alice neither delivers it (not hers) nor
      * relays it the one link to Bob, and a room tick never escalates into custody (ADR 2026-09.aa27). A
@@ -94,7 +94,7 @@ class LoraPocketLabTest {
      * decides — the gateway forwarding a targeted tick addressed to a linked peer over that link is the
      * obvious shape.
      */
-    @Ignore("finding: a far pocket's room tick stops at the gateway's board and never reaches a board-less author behind it")
+    @Ignore("#48: a far pocket's room tick stops at the gateway's board and never reaches a board-less author behind it")
     @Test
     fun aFarPocketsTickReachesABoardLessAuthorBehindTheGateway() =
         runBlocking {

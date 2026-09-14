@@ -83,7 +83,7 @@ class KeyExchangeLabTest {
             )
             assertTrue("carol never pinned alice", lab.await(1) { if (carol.knows(alice)) 1 else 0 })
 
-            // FINDING (2026-09-14, first run): the served profile is a point-to-point `relay = false` frame,
+            // FINDING #49 (2026-09-14, first run): the served profile is a point-to-point `relay = false` frame,
             // so Carol delivers it without custodying it — and having seen its id, her router dedups the
             // custodial copy the next digest exchange serves for the whole SeenSet window (10 min). Her
             // custody is short exactly that one frame until the window lapses and a re-offer lands; the

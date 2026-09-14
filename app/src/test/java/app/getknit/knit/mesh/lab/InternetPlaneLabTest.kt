@@ -100,7 +100,7 @@ class InternetPlaneLabTest {
         }
 
     /**
-     * FINDING (2026-09-14, first run): a group founded while one member is reachable only over the relay
+     * FINDING #47 (2026-09-14, first run): a group founded while one member is reachable only over the relay
      * never reaches that member. The seed rides Carol's DM scope and parks (`PendingGroupKeys`, group
      * unknown) with the group root inside it; the roster rides only the group scope, which derives from
      * that root, which `adoptGroupRoot` refuses without the group row — so the roster can never be pulled,
@@ -109,7 +109,7 @@ class InternetPlaneLabTest {
      * carries the roster frame itself. Ignored until the design decides how a founding roster crosses a
      * relay (the seed carrying the roster, or the founding frame riding the members' DM scopes).
      */
-    @Ignore("finding: a group founded across the relay never delivers its roster to the relay-only member — awaiting a decision")
+    @Ignore("#47: a group founded across the relay never delivers its roster to the relay-only member")
     @Test
     fun aGroupFoundedAcrossTheRelayReachesTheRelayOnlyMember() =
         runBlocking {
@@ -150,7 +150,7 @@ class InternetPlaneLabTest {
         }
 
     /**
-     * ADR 021's owed trial, and a FINDING (2026-09-14, first run): the chunk went up while Bob was in range.
+     * ADR 021's owed trial, and FINDING #46 (2026-09-14, first run): the chunk went up while Bob was in range.
      * `ScopeSync.onCustodyChanged` wakes the worker the moment the frame is custodied, and that round's
      * `healAttachments` runs `AttachmentDeferPolicy.defer`, whose rule needs the recipient's ack
      * (`ackedBySender`) — which cannot exist yet: the ack is a round trip over the link and the round is
@@ -158,7 +158,7 @@ class InternetPlaneLabTest {
      * never allows, and the counter the trial expects to climb stays at zero. Ignored until the design
      * decides (defer the attachment pass to the next tick, or judge reachability alone within the window).
      */
-    @Ignore("finding: the attachment pass runs in the round the send triggers, before the ack the deferral needs — awaiting a decision")
+    @Ignore("#46: the attachment pass runs in the round the send triggers, before the ack the deferral needs")
     @Test
     fun aPhotoTheRadioCarriedIsNotUploadedUntilThePeersPart() =
         runBlocking {

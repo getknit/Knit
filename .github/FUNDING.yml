@@ -1,6 +1,6 @@
 # Shows a "Sponsor" button on the repo, linking to https://github.com/sponsors/getknit,
-# https://ko-fi.com/zaventh and https://liberapay.com/zaventh/
+# https://ko-fi.com/knit and https://liberapay.com/zaventh/
 # https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
 github: getknit
-ko_fi: zaventh
+ko_fi: knit
 liberapay: zaventh

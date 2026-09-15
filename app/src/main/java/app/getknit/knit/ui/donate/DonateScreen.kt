@@ -132,7 +132,7 @@ private data class DonationPlatform(
 
 private val DONATION_PLATFORMS =
     listOf(
-        DonationPlatform(R.string.donate_kofi, Icons.Filled.Coffee, "https://ko-fi.com/getknit"),
+        DonationPlatform(R.string.donate_kofi, Icons.Filled.Coffee, "https://ko-fi.com/knit"),
         DonationPlatform(
             R.string.donate_liberapay,
             Icons.Filled.VolunteerActivism,

@@ -4,6 +4,8 @@
 
 package app.getknit.knit.ui.profile
 
+import android.content.ClipData
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,26 +32,31 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -62,9 +70,13 @@ import app.getknit.knit.TextLimits
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.CharCounter
+import app.getknit.knit.ui.components.DetailCard
+import app.getknit.knit.ui.components.DetailRow
 import app.getknit.knit.ui.components.DisplayNameField
+import app.getknit.knit.ui.components.SectionHeader
 import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
 /** UI-local projection of [ProfileViewModel]'s per-field flows for the stateless content. */
@@ -160,14 +172,38 @@ internal fun ProfileScreenContent(
     onClearPhoto: () -> Unit,
     onSave: () -> Unit,
 ) {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    // Android 13+ shows its own copy confirmation, so the snackbar only fires below it (the CrashLogScreen
+    // idiom, also followed by Add contact).
+    val copiedMessage = stringResource(R.string.action_copied)
+    val nodeIdLabel = stringResource(R.string.profile_node_id_label)
+
     Scaffold(
         modifier = Modifier.testTag("screen_profile"),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.profile_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                    }
+                },
+                actions = {
+                    // Save belongs here, not at the foot of the column. It batches the name/status write
+                    // that republishes the profile, while everything below it on this screen persists on
+                    // toggle — and a button sitting under a switch reads as though it saves that too
+                    // (ADR 2026-09.m7vn left this as the open item). Nothing follows the switch now, so
+                    // nothing can imply it. The explicit height is the accessibility touch target:
+                    // Material's text button is 40dp, which the ATF suite flags.
+                    TextButton(
+                        onClick = onSave,
+                        enabled = form.isDirty,
+                        modifier = Modifier.height(48.dp).testTag("profile_save"),
+                    ) {
+                        Text(stringResource(R.string.action_save))
                     }
                 },
             )
@@ -179,11 +215,13 @@ internal fun ProfileScreenContent(
                     .fillMaxSize()
                     .padding(padding)
                     .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .padding(vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Box {
+            // The photo is the one thing here that isn't a field or a row, so it keeps the centred hero
+            // position. Everything under it is left-aligned like every other list in the app, and the
+            // horizontal inset moves onto the children so the section headings line up with their rows.
+            Box(modifier = Modifier.align(Alignment.CenterHorizontally)) {
                 Avatar(
                     avatarHash = form.avatarHash,
                     name = displayNameFor(form.name, form.nodeId),
@@ -201,48 +239,64 @@ internal fun ProfileScreenContent(
                 }
             }
 
-            // Shared with onboarding's name page (ui/components/DisplayNameField) so the two fields can't drift.
-            DisplayNameField(
-                value = form.name,
-                alias = form.alias,
-                aliasMore = form.aliasMore,
-                onValueChange = onNameChange,
-                onCommit = onNameCommit,
-                modifier = Modifier.fillMaxWidth().testTag("profile_name"),
-                aliasLineModifier = Modifier.testTag("profile_alias"),
-            )
-            OutlinedTextField(
-                value = form.status,
-                onValueChange = onStatusChange,
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .testTag("profile_status")
-                        .noAutofillMenu()
-                        .onFocusChanged { if (!it.isFocused) onStatusCommit() },
-                label = { Text(stringResource(R.string.profile_status_label)) },
-                singleLine = true,
-                supportingText = { CharCounter(form.status.length, TextLimits.STATUS) },
-            )
-            Text(
-                text = stringResource(R.string.profile_node_id, form.nodeId),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            // A profile field like the name and status above it (peers see it on your profile), but a switch:
-            // persisted on toggle, not on Save, since that write is what republishes the profile.
-            OpenToChatRow(
-                enabled = form.openToChat,
-                onToggle = onToggleOpenToChat,
-            )
-
-            Button(
-                onClick = onSave,
-                enabled = form.isDirty,
-                modifier = Modifier.fillMaxWidth().testTag("profile_save"),
+            SectionHeader(stringResource(R.string.profile_section_public))
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text(stringResource(R.string.action_save))
+                // Shared with onboarding's name page (ui/components/DisplayNameField) so the two fields
+                // can't drift. It renders the alias as supporting text, which is why no alias row repeats
+                // it below — two copies would make TalkBack say the same word twice.
+                DisplayNameField(
+                    value = form.name,
+                    alias = form.alias,
+                    aliasMore = form.aliasMore,
+                    onValueChange = onNameChange,
+                    onCommit = onNameCommit,
+                    modifier = Modifier.fillMaxWidth().testTag("profile_name"),
+                    aliasLineModifier = Modifier.testTag("profile_alias"),
+                )
+                OutlinedTextField(
+                    value = form.status,
+                    onValueChange = onStatusChange,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .testTag("profile_status")
+                            .noAutofillMenu()
+                            .onFocusChanged { if (!it.isFocused) onStatusCommit() },
+                    label = { Text(stringResource(R.string.profile_status_label)) },
+                    singleLine = true,
+                    supportingText = { CharCounter(form.status.length, TextLimits.STATUS) },
+                )
+
+                // A profile field like the name and status above it (peers see it on your profile), but a
+                // switch: persisted on toggle, not on Save, since that write is what republishes the
+                // profile. It sits inside this section for exactly that reason.
+                OpenToChatRow(
+                    enabled = form.openToChat,
+                    onToggle = onToggleOpenToChat,
+                )
+            }
+
+            // The node id names the device, not the person, so it gets its own heading rather than
+            // trailing the fields peers read.
+            SectionHeader(stringResource(R.string.profile_section_device))
+            DetailCard {
+                DetailRow(
+                    label = nodeIdLabel,
+                    value = form.nodeId,
+                    modifier = Modifier.testTag("profile_node_id"),
+                    copyLabel = stringResource(R.string.action_copy),
+                    onCopy = {
+                        scope.launch {
+                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(nodeIdLabel, form.nodeId)))
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                                snackbarHostState.showSnackbar(copiedMessage)
+                            }
+                        }
+                    },
+                )
             }
         }
     }

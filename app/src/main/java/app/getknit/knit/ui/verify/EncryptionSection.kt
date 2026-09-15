@@ -16,11 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -64,6 +64,10 @@ data class PeerVerification(
  * action, and — when bound to a specific [peer] — that peer's end-to-end key-verification status (badge,
  * safety number, and mark-verified/clear actions).
  *
+ * The block draws no heading of its own. Neither caller wanted the one it used to have: Add contact's top
+ * bar already names the screen, and the peer profile now draws `SectionHeader` in the same register as its
+ * other sections (ADR 2026-09.hknx).
+ *
  * Rendered in two places:
  *  - a peer's read-only profile ([app.getknit.knit.ui.profile.ProfileDetailsScreenContent]) passes a
  *    non-null [peer] and shows the full verification section; and
@@ -88,15 +92,6 @@ fun EncryptionSection(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Standalone mode is the whole top half of the Add-contact screen, whose top bar already names it;
-        // a second "Encryption" heading there would label the screen twice.
-        if (peer != null) {
-            Text(
-                text = stringResource(R.string.verify_section_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-        }
-
         if (peer != null && !peer.hasKey) {
             Text(
                 text = stringResource(R.string.verify_no_key),
@@ -111,7 +106,9 @@ fun EncryptionSection(
             // Verified / not-verified badge.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = if (peer.verified) Icons.Filled.CheckCircle else Icons.Filled.Lock,
+                    // The app's one verified mark (the DM header's shield, the profile's badge), so the
+                    // same fact never wears two symbols on the one screen that shows both.
+                    imageVector = if (peer.verified) Icons.Filled.VerifiedUser else Icons.Filled.Lock,
                     contentDescription = null,
                     tint =
                         if (peer.verified) {

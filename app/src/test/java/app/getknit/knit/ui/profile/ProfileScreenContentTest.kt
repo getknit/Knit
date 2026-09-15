@@ -1,5 +1,6 @@
 package app.getknit.knit.ui.profile
 
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -18,7 +19,8 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * Save mirrors the ViewModel's `isDirty`: disabled with no unsaved edits, enabled (and firing) once
- * dirty. Plus the alias line and the open-to-chat flag, the two things on this screen that peers see.
+ * dirty — from the top app bar, where it no longer sits under a switch that saves itself. Plus the alias
+ * line and the open-to-chat flag, the two things on this screen that peers see, and the node-id row.
  * The app's own settings live on their own screen now — see `ui/settings/SettingsScreenContentTest`.
  */
 @RunWith(AndroidJUnit4::class)
@@ -118,8 +120,23 @@ class ProfileScreenContentTest {
         render(isDirty = true, onSave = { saves++ })
 
         compose.onNodeWithTag("profile_save").assertIsEnabled()
-        // The save button is the last item in a vertically-scrolled column, so bring it on-screen before clicking.
-        compose.onNodeWithTag("profile_save").performScrollTo().performClick()
+        // Save lives in the top app bar now, so it is always on screen — no performScrollTo (which would
+        // throw, having no scrollable ancestor there).
+        compose.onNodeWithTag("profile_save").performClick()
         assertEquals(1, saves)
+    }
+
+    /**
+     * The node id sits under its own heading as a labelled row rather than the centred "Node ID: x"
+     * sentence it used to be, and copying it is a first-class action.
+     */
+    @Test
+    fun theNodeIdIsALabelledRowThatCopies() {
+        render(isDirty = false)
+        val row = compose.onNodeWithTag("profile_node_id")
+        row.performScrollTo().assertIsDisplayed()
+        row.assertTextContains("node-abc", substring = true)
+        // The row is one merged tap target carrying the copy action, not an unlabelled icon beside a Text.
+        row.assertHasClickAction()
     }
 }

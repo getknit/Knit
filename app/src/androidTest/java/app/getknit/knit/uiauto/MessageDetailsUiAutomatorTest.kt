@@ -38,7 +38,10 @@ class MessageDetailsUiAutomatorTest : SeededUiAutomatorTest() {
         assertText(SAM_NAME)
 
         requireTag("reactor_row_$SAM").click()
-        assertText(str(R.string.profile_details_title))
+        // The peer profile's top bar carries the contact's name, not the word "Profile" (ADR 2026-09.hknx),
+        // so the name is what proves we landed on Sam's profile rather than anyone's.
+        assertTag("screen_profile_details")
+        assertText(SAM_NAME)
     }
 
     /**

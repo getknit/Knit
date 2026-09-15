@@ -21,6 +21,14 @@ class MetPeerRepository(
     /** How many distinct phones have been met; re-emits on every first sighting. */
     fun observeCount(): Flow<Int> = dao.observeCount()
 
+    /**
+     * When this phone first and last met [nodeId], or null for a node it has never been in radio range of.
+     *
+     * "Met" is short-range evidence only (see [MetPeerEntity]) — a peer reachable over LoRa or a spool may
+     * have no row here at all, so a caller must not word this as "last seen".
+     */
+    fun observe(nodeId: String): Flow<MetPeerEntity?> = dao.observe(nodeId)
+
     /** Records that every id in [nodeIds] is in range now: a first sighting inserts, a repeat only touches. */
     suspend fun recordMet(
         nodeIds: Collection<String>,

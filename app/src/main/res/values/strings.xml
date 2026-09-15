@@ -483,7 +483,8 @@
     <string name="search_empty">No results for \u201c%1$s\u201d</string>
 
     <!-- Settings, and your own profile behind the header row at the top of it. Two screens, so two titles;
-         `profile_details_title` below is a third thing again, the read-only view of somebody else. The
+         the read-only view of somebody else is a third thing again, and its top bar carries the contact's
+         own name rather than a title string at all (ADR 2026-09.hknx). The
          open-to-chat pair is `profile_`, not `settings_`, because it is a field peers read off your card. -->
     <string name="settings_title">Settings</string>
     <string name="profile_title">Profile</string>
@@ -501,6 +502,13 @@
     <string name="profile_remove_photo_desc">Remove profile photo</string>
     <string name="profile_open_to_chat_title">Open to chat</string>
     <string name="profile_open_to_chat_subtitle">Let people nearby know you\'re up for a conversation. You\'ll both get a nudge when you\'re near each other.</string>
+    <!-- Section headings and bare row labels. `profile_node_id` / `profile_alias` above keep their
+         "Label: %s" sentence form for the surfaces that still draw one line (Settings' header row,
+         Add contact, Diagnostics); the two Profile screens use these labels in a label/value row. -->
+    <string name="profile_section_public">What people see</string>
+    <string name="profile_section_device">This device</string>
+    <string name="profile_node_id_label">Node ID</string>
+    <string name="profile_alias_label">Alias</string>
     <string name="settings_content_filtering_title">Content filtering</string>
     <string name="settings_content_filtering_subtitle">Hide explicit images and abusive messages you receive from others</string>
     <string name="settings_theme_title">Theme</string>
@@ -514,7 +522,6 @@
     <string name="settings_link_previews_subtitle">When you type a link, Knit fetches the page\'s title and picture over the Internet and sends them with your message. The site sees your IP address; the people you send to never contact it.</string>
 
     <!-- Profile details (another peer) -->
-    <string name="profile_details_title">Profile</string>
     <string name="profile_details_message">Message</string>
     <string name="profile_details_online">Online</string>
     <string name="profile_details_via_relay">Reachable via relay</string>
@@ -522,6 +529,16 @@
     <string name="profile_details_open_to_chat">Open to chat</string>
     <string name="profile_details_view_photo">View photo</string>
     <string name="profile_details_lora_node">LoRa radio: %1$s</string>
+    <string name="profile_details_lora_label">LoRa radio</string>
+    <string name="profile_details_blocked">Blocked</string>
+    <string name="profile_details_section_in_common">In common</string>
+    <string name="profile_details_section_details">Details</string>
+    <string name="profile_details_groups">Groups</string>
+    <!-- Historical, and short-range only: `met_peers` records a sighting of the peer\'s own radio, so a
+         contact reachable over LoRa or a relay may never have been met. Never word these "last seen" —
+         the presence badge is the only claim about now. -->
+    <string name="profile_details_first_met">First met</string>
+    <string name="profile_details_last_met">Last met</string>
 
     <!-- Encryption indicator in the chat header -->
     <string name="chat_encrypted_desc">Encrypted</string>
@@ -765,6 +782,8 @@
     <string name="action_dismiss">Dismiss</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_save">Save</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_copied">Copied</string>
 
     <!-- Content moderation (on-device) -->
     <string name="moderation_text_blocked">Message not sent: it may contain abusive language</string>

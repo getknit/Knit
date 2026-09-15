@@ -8,6 +8,7 @@ import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetStore
 import app.getknit.knit.mesh.spool.GroupRootStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /** Single source of truth for group chats (and, transactionally, their group-ratchet state hooks). */
 class GroupRepository(
@@ -37,6 +38,18 @@ class GroupRepository(
      * triggers (docs/GROUP_FORWARD_SECRECY.md §3).
      */
     suspend fun groupsWith(memberId: String): List<GroupEntity> = active().filter { memberId in GroupMembersStore.decode(it.members) }
+
+    /**
+     * [groupsWith] as a live flow, for surfaces that show "groups in common" beside a peer.
+     *
+     * The `left` filter is explicit here because [GroupDao.observeAll] has none — only `allActive()`
+     * carries `WHERE left = 0`. Drop it and a group you have already walked out of keeps listing itself
+     * as shared.
+     */
+    fun observeGroupsWith(memberId: String): Flow<List<GroupEntity>> =
+        dao.observeAll().map { groups ->
+            groups.filter { !it.left && memberId in GroupMembersStore.decode(it.members) }
+        }
 
     /**
      * Records that [leaverId] left [groupId] (from their own signed `groupleave` frame): drops them from

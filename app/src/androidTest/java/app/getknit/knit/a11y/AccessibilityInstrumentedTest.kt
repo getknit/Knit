@@ -102,6 +102,12 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
 
     @Test fun profile() = audit(route = "profile") { awaitTag("profile_name") }
 
+    // A contact who is verified, open to chat, in a group with us and claims a board, so this audits the
+    // badge strip, the Message button and every row of both sections at once — the peer profile had no
+    // ATF case at all before its sections landed (ADR 2026-09.hknx). Anchored on the node-id row, the
+    // last one the "in common" pre-combine fills.
+    @Test fun profileDetails() = audit(route = "profileDetails/danich01") { awaitTag("profile_details_node_id") }
+
     // Anchored on the header row rather than the Scaffold tag: `screen_settings` exists from the first
     // frame, before the header's DataStore read lands, so it would audit a half-empty screen.
     @Test fun settings() = audit(route = "settings") { awaitTag("settings_profile_row") }

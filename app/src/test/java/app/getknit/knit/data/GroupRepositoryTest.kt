@@ -208,4 +208,40 @@ class GroupRepositoryTest : RoomDbTest() {
             assertNull(db.groupDao().findById("g"))
             assertFalse(messages.exists("m1"))
         }
+
+    /**
+     * The trap `observeGroupsWith` exists to avoid: its source, `GroupDao.observeAll`, has no `left = 0`
+     * clause — only the suspend `allActive()` does — so a group you walked out of would keep listing itself
+     * as one you have in common on the other person's profile.
+     */
+    @Test
+    fun `observeGroupsWith lists only groups the member shares and we have not left`() =
+        runTest {
+            seedGroup("shared", listOf("me", "them"))
+            seedGroup("left", listOf("me", "them"), left = true)
+            seedGroup("theirsOnly", listOf("me", "someone-else"))
+
+            val shared = repo().observeGroupsWith("them").first()
+
+            assertEquals(listOf("shared"), shared.map { it.groupId })
+        }
+
+    /** The suspend and flow forms answer the same question, so a caller can swap one for the other. */
+    @Test
+    fun `observeGroupsWith agrees with groupsWith`() =
+        runTest {
+            seedGroup("a", listOf("me", "them"))
+            seedGroup("b", listOf("me", "them"), left = true)
+            seedGroup("c", listOf("me", "them"))
+
+            val repo = repo()
+            assertEquals(
+                repo.groupsWith("them").map { it.groupId }.sorted(),
+                repo
+                    .observeGroupsWith("them")
+                    .first()
+                    .map { it.groupId }
+                    .sorted(),
+            )
+        }
 }

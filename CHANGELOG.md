@@ -56,6 +56,11 @@ document:
   with years of history gets to its chats as fast as a new one.
 - Your name, photo and status moved to their own screen. Settings still sits in the chat list's menu, and
   the first row on it opens your profile.
+- A contact's profile now opens with whether they're online, verified, blocked or open to chat, and Message
+  sits at the top rather than below the technical details. Under that it lists the groups you share and when
+  you first met.
+- Your own profile is now grouped under What people see and This device, and Save moved up to the top bar.
+  The Open to chat switch still takes effect the moment you flip it.
 - Menus, cards, dialogs and sheets now match the rest of the app. They had been drawing a grey-purple from
   Material's defaults that never sat right next to Knit's coral.
 - A file, link or location card in a message now carries its own colours instead of the bubble's. The same

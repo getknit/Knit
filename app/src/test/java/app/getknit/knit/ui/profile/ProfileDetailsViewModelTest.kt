@@ -2,7 +2,12 @@
 
 package app.getknit.knit.ui.profile
 
+import android.content.Context
+import app.getknit.knit.data.GroupRepository
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.group.GroupEntity
+import app.getknit.knit.data.peer.MetPeerEntity
+import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
@@ -14,6 +19,7 @@ import app.getknit.knit.mesh.spool.ScopeStatus
 import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.ui.Reach
 import app.getknit.knit.ui.directoryOf
+import app.getknit.knit.ui.group
 import app.getknit.knit.ui.peer
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -49,12 +55,21 @@ class ProfileDetailsViewModelTest {
     private val mesh = FakeMeshController()
     private val settings = mockk<SettingsStore>(relaxed = true)
     private val identity = mockk<Identity>(relaxed = true)
+    private val groups = mockk<GroupRepository>(relaxed = true)
+    private val context = mockk<Context>(relaxed = true)
+    private val metPeers = mockk<MetPeerRepository>(relaxed = true)
 
     private val peersFlow = MutableStateFlow(emptyList<PeerEntity>())
     private val blockedFlow = MutableStateFlow(emptySet<String>())
 
     // A finite stand-in for `RelayStatusRepository.statuses` (an infinite poller in production).
     private val spoolsFlow = MutableStateFlow(emptyList<SpoolStatus>())
+
+    // Both must be stubbed even though the mocks are relaxed: a relaxed `Flow` return never emits, and the
+    // "in common" pre-combine feeds the main `state` combine — leave either unstubbed and `state` stalls
+    // at its initial value with no failure that names the cause.
+    private val sharedGroupsFlow = MutableStateFlow(emptyList<GroupEntity>())
+    private val metFlow = MutableStateFlow<MetPeerEntity?>(null)
 
     @Before
     fun setUp() {
@@ -63,6 +78,9 @@ class ProfileDetailsViewModelTest {
         every { identity.publicKeyBundle() } returns "MYBUNDLE"
         every { peers.observeDirectory() } returns peersFlow.map { directoryOf(it) }
         every { settings.blockedNodeIds } returns blockedFlow
+        every { groups.observeGroupsWith(nodeId) } returns sharedGroupsFlow
+        every { metPeers.observe(nodeId) } returns metFlow
+        every { context.getString(any()) } returns UNNAMED_GROUP
     }
 
     @After
@@ -70,7 +88,19 @@ class ProfileDetailsViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = ProfileDetailsViewModel(nodeId, peers, mesh, settings, identity, spoolsFlow, clock = { NOW })
+    private fun vm() =
+        ProfileDetailsViewModel(
+            nodeId,
+            peers,
+            groups,
+            metPeers,
+            mesh,
+            settings,
+            identity,
+            spoolsFlow,
+            context,
+            clock = { NOW },
+        )
 
     @Test
     fun stateReflectsProfilePresenceBlockAndKeyState() =
@@ -272,8 +302,44 @@ class ProfileDetailsViewModelTest {
         peerSeenAt = peerSeenAt,
     )
 
+    /**
+     * Groups in common and the met stamps reach the state through their own pre-combine, so a change to
+     * either relights the screen without the peer's profile row moving.
+     */
+    @Test
+    fun sharedGroupsAndMetStampsReachTheState() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            sharedGroupsFlow.value = listOf(group("g1", members = listOf("me", nodeId), name = "Trail Crew"))
+            metFlow.value = MetPeerEntity(nodeId = nodeId, firstMetAt = 1_000L, lastMetAt = 2_000L)
+            advanceUntilIdle()
+
+            val shared = vm.state.value.inCommon
+            assertEquals(listOf("Trail Crew"), shared.groups.map { it.title })
+            assertEquals(listOf("g1"), shared.groups.map { it.groupId })
+            assertEquals(1_000L, shared.firstMetAt)
+            assertEquals(2_000L, shared.lastMetAt)
+        }
+
+    /** Never met, nothing shared: both halves come back empty, so both sections hide themselves. */
+    @Test
+    fun nothingInCommonIsEmptyRatherThanAbsent() =
+        runTest {
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            peersFlow.value = listOf(peer(nodeId, name = "Ada"))
+            advanceUntilIdle()
+
+            val shared = vm.state.value.inCommon
+            assertEquals(emptyList<Any>(), shared.groups)
+            assertNull(shared.firstMetAt)
+            assertNull(shared.lastMetAt)
+        }
+
     private companion object {
         /** Comfortably past every presence window, so an unset stamp can never read as recent. */
         const val NOW = 100L * 60 * 60_000L
+        const val UNNAMED_GROUP = "Unnamed group"
     }
 }

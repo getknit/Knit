@@ -219,12 +219,18 @@ as `resource-id="<tag>"` (the bare tag — some Android/uiautomator versions pre
 first two pages — tap it twice to reach the permissions page), `onboarding_avatar` (the name page's live
 preview), `onboarding_name`, `onboarding_grant` (the
 radio row's Allow; `onboarding_grant_settings` once Android stops asking, `onboarding_grant_granted` the
-check), `onboarding_notifications`, `onboarding_battery`, `onboarding_start`, `profile_name`, `profile_status`, `profile_save`, `settings_profile_row` (Settings'
+check), `onboarding_notifications`, `onboarding_battery`, `onboarding_start`, `profile_name`, `profile_status`, `profile_save`
+(in the top app bar since ADR 2026-09.hknx, so it is always on screen — a Compose test must not
+`performScrollTo()` it), `profile_node_id`, `settings_profile_row` (Settings'
 header row, which opens the profile editor), `settings_theme_mode` (the System/Light/Dark segmented
 control; API 31+ only, absent below), `settings_relays`, `settings_lora`, `chat_group_avatar`
 (opens group details), plus screen-root tags on the otherwise-untagged destinations — `screen_settings`,
 `screen_profile`, `screen_diagnostics`, `screen_blocked_users`, `screen_add_contact`, `screen_donate`,
-`screen_share_target`, `screen_profile_details`, plus the direct-transfer card's `transfer_card`,
+`screen_share_target`, `screen_profile_details` (whose badge strip is `profile_details_presence`,
+`profile_details_verified`, `profile_details_open_to_chat` and `profile_details_blocked`, each present
+only in its own state, over `profile_details_message` and the `profile_details_{first_met,
+last_met,alias,node_id,lora_node}` rows and a `profile_details_group_<groupId>` row per shared group;
+its top bar carries the contact's name, not a fixed title), plus the direct-transfer card's `transfer_card`,
 `transfer_accept`, `transfer_decline`, `transfer_cancel` and `transfer_open`.
 Use these when you must drive the real UI; add more with the same snake_case, screen-prefixed convention.
 

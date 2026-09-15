@@ -425,6 +425,9 @@ fun KnitApp(startRoute: String? = null) {
                         }
                     }
                 },
+                // A shared group opens its details, stacked on this profile — unlike Message, which
+                // replaces it: you came here about the person, and Back should return to them.
+                onOpenGroup = { groupId -> navController.navigate(Routes.groupDetails(groupId)) },
             )
         }
         composable(

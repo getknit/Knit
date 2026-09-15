@@ -1,8 +1,18 @@
 package app.getknit.knit.ui.profile
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.getknit.knit.R
+import app.getknit.knit.data.GroupRepository
+import app.getknit.knit.data.PeerDirectory
 import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.group.GroupEntity
+import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.message.GroupFace
+import app.getknit.knit.data.message.groupFaces
+import app.getknit.knit.data.message.groupTitle
+import app.getknit.knit.data.peer.MetPeerRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
@@ -37,6 +47,43 @@ private data class MyIdentity(
     val bundle: String,
 )
 
+/**
+ * What this phone knows about its history with the peer: the groups whose roster holds you both, and when
+ * a radio of ours first and last sighted a radio of theirs.
+ *
+ * The two halves are drawn by different sections — the groups under "In common", the stamps under
+ * "Details", because when you met is a fact about the contact rather than something you share — so this
+ * holder carries no "is it empty" of its own; each section asks about the half it draws.
+ *
+ * The two met stamps are historical and short-range only — `met_peers` is written from the *nearby* set,
+ * so a contact reached over LoRa or a relay may have none at all. [ProfileDetailsUiState.reach] stays the
+ * only claim about now (ADR 2026-09.2ajk), which is why these are worded "met", never "seen".
+ */
+data class InCommon(
+    val groups: List<SharedGroup> = emptyList(),
+    val firstMetAt: Long? = null,
+    val lastMetAt: Long? = null,
+) {
+    companion object {
+        val EMPTY = InCommon()
+    }
+}
+
+/**
+ * One group this phone and the peer are both in, resolved for a row that draws like the chat list's:
+ * the same avatar (photo, else the member cluster) and the same title.
+ *
+ * [title] comes from `groupTitle`, not `GroupEntity.name` — an unnamed group carries a blank name on the
+ * wire on purpose, and each device renders its own default from the members it can name. Reading the
+ * column raw prints the empty string, which is how three shared groups once rendered as ", , Sihaya".
+ */
+data class SharedGroup(
+    val groupId: String,
+    val title: String,
+    val photoHash: String?,
+    val faces: List<GroupFace>,
+)
+
 /** A remote peer's profile as shown on the read-only details screen. */
 data class ProfileDetailsUiState(
     val nodeId: String,
@@ -66,6 +113,8 @@ data class ProfileDetailsUiState(
     // radio client writes a node number in, or null when the profile named none. Self-asserted, like the
     // status: it says which radio to expect them on, never that a post from it was theirs.
     val loraNodeLabel: String? = null,
+    // Shared groups and the met stamps; the section is absent entirely when there is nothing to show.
+    val inCommon: InCommon = InCommon.EMPTY,
 )
 
 /**
@@ -78,6 +127,8 @@ data class ProfileDetailsUiState(
 class ProfileDetailsViewModel(
     private val nodeId: String,
     private val peers: PeerRepository,
+    groups: GroupRepository,
+    metPeers: MetPeerRepository,
     meshManager: MeshController,
     private val settings: SettingsStore,
     identity: Identity,
@@ -87,9 +138,16 @@ class ProfileDetailsViewModel(
     spoolStatuses: Flow<List<SpoolStatus>>,
     // Wall clock, for ageing the Internet plane's per-scope presence stamps. Injected so a test can drive
     // the linger; [spoolStatuses] re-emits on its poll, so an expiry lands within one.
+    // For the one localized string a shared group can need: the fallback title of a group nobody named.
+    // The same dependency, for the same reason, that `GroupDetailsViewModel` takes.
+    private val context: Context,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
     private val me = MutableStateFlow<MyIdentity?>(null)
+
+    // One directory flow for both combines below: the labels it carries name a group's members, and a
+    // second `observeDirectory()` would rebuild the whole label index on every peer write.
+    private val directory = peers.observeDirectory()
 
     private val _scanResult = MutableStateFlow<VerifyScanResult?>(null)
     val scanResult: StateFlow<VerifyScanResult?> = _scanResult.asStateFlow()
@@ -126,14 +184,55 @@ class ProfileDetailsViewModel(
             )
         }.distinctUntilChanged()
 
+    // Groups in common plus the met stamps, pre-combined for the same reason [reach] is: the main [state]
+    // combine is already at its five-source limit.
+    private val inCommon: Flow<InCommon> =
+        combine(
+            groups.observeGroupsWith(nodeId),
+            metPeers.observe(nodeId),
+            directory,
+            me,
+        ) { shared, met, dir, myId ->
+            InCommon(
+                groups = shared.map { sharedGroup(it, dir, myId?.nodeId) },
+                firstMetAt = met?.firstMetAt,
+                lastMetAt = met?.lastMetAt,
+            )
+        }.distinctUntilChanged()
+
+    /** The same two helpers the chat list titles and draws a group with (`ui/ConversationTitles.kt`). */
+    private fun sharedGroup(
+        group: GroupEntity,
+        dir: PeerDirectory,
+        myNodeId: String?,
+    ): SharedGroup {
+        val memberIds = GroupMembersStore.decode(group.members)
+        return SharedGroup(
+            groupId = group.groupId,
+            title =
+                groupTitle(
+                    storedName = group.name,
+                    memberIds = memberIds,
+                    selfId = myNodeId,
+                    fallback = context.getString(R.string.group_unnamed),
+                ) { id -> dir.label(id).text },
+            photoHash = group.photoHash,
+            faces = groupFaces(memberIds, myNodeId, dir),
+        )
+    }
+
+    // This device's identity and [inCommon] ride in as one source: the main combine below is at Kotlin's
+    // five-flow limit, and widening it would mean the untyped array overload.
+    private val identityAndCommon: Flow<Pair<MyIdentity?, InCommon>> = combine(me, inCommon, ::Pair)
+
     val state: StateFlow<ProfileDetailsUiState> =
         combine(
-            peers.observeDirectory(),
+            directory,
             reach,
             settings.blockedNodeIds,
-            me,
+            identityAndCommon,
             meshManager.introState(nodeId),
-        ) { directory, reach, blocked, myId, intro ->
+        ) { directory, reach, blocked, (myId, shared), intro ->
             val peer = directory.byNode[nodeId]
             val label = directory.label(nodeId)
             peerBundle = peer?.pubKey
@@ -160,6 +259,7 @@ class ProfileDetailsViewModel(
                 intro = intro,
                 openToChat = peer?.openToChat == true,
                 loraNodeLabel = peer?.loraNode?.let(::meshNodeLabel),
+                inCommon = shared,
             )
         }.stateIn(
             viewModelScope,

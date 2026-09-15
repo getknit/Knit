@@ -16,6 +16,12 @@ name: CI
 # deliberately kept at v5, the last MIT release: v6 moves caching into `gradle-actions-caching`, a
 # proprietary component governed by Gradle's Terms of Use rather than the MIT licence, and it loads
 # whenever caching is on (it is, by default). Don't "upgrade" that one.
+#
+# android-actions/setup-android is given an explicit `packages:` at every site, because its default
+# is `tools platform-tools` and Google stopped serving the obsolete `tools` package on 2026-09-15 —
+# sdkmanager then exits 1 and takes every job that uses the action with it
+# (android-actions/setup-android#537). Name what the job actually needs; the default is not a
+# fallback we can rely on again even if upstream fixes it.
 
 on:
   push:
@@ -41,6 +47,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools # NOT the default `tools platform-tools` — see ACTION PINS above
       - uses: gradle/actions/setup-gradle@v5
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --stacktrace --console=plain
@@ -71,6 +79,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools # NOT the default `tools platform-tools` — see ACTION PINS above
       - uses: gradle/actions/setup-gradle@v5
       - name: Run the mesh/lab scenarios three times
         run: |
@@ -98,6 +108,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools # NOT the default `tools platform-tools` — see ACTION PINS above
       - uses: gradle/actions/setup-gradle@v5
       - name: detekt
         run: ./gradlew detekt --stacktrace --console=plain

@@ -211,6 +211,22 @@ test:coverage:
       - app/build/reports/kover/reportDebug.xml
     expire_in: 1 week
 
+# --------------- verify (enforced) -------
+# The ADR router, `.agents/memory/decisions.md`, is generated from `.agents/memory/decisions/` and is
+# checked in. Enforced (not advisory, unlike the jobs below) because a stale router silently hides a
+# decision from every agent that reads it, and `.gitattributes` gives the file `merge=union` — the right
+# strategy for a file whose only real churn is appended table rows, but it means a bad merge lands as
+# duplicated lines rather than as a conflict, so nothing else in the repo would ever say so.
+#
+# No .android: this only reads the decisions directory with the standard library, so it wants neither a
+# JDK nor the Android SDK. It mirrors GitHub's `adr-index` job — a GitHub-only check is one the internal
+# pipeline cannot enforce, which is how the duplicate count lines reached main green on 2026-09-15.
+verify:adr-index:
+  image: python:3.13-alpine
+  stage: verify
+  script:
+    - python3 scripts/adr.py index --check
+
 # --------------- verify (advisory) -------
 # detekt/ktlint run as Gradle plugins now (was: a downloaded detekt-cli jar). Both are advisory
 # (allow_failure) to mirror the prior detekt job and keep the pass/fail test signal clean; locally they

@@ -20,7 +20,8 @@ name: Release
 #
 # ACTION PINS: majors chosen so every JS action runs on Node 24. gradle/actions stays at v5 on purpose —
 # v6's caching lives in the proprietary `gradle-actions-caching` component (Gradle Terms of Use, not MIT).
-# See ci.yml.
+# setup-android gets an explicit `packages:` for the reason ci.yml's banner gives (its default
+# names the `tools` package, which Google no longer serves). See ci.yml.
 #
 # Three jobs, split by who holds the signing key:
 #
@@ -228,6 +229,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools # NOT the default `tools platform-tools` — see ACTION PINS above
       - uses: gradle/actions/setup-gradle@v5
 
       - name: Decode distribution keystore

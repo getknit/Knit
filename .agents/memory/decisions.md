@@ -17,11 +17,6 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-131 decisions.
-130 decisions.
-129 decisions.
-133 decisions.
-
 | ADR | Decision | Topics |
 | --- | --- | --- |
 | [001](decisions/001-di-is-koin.md) | DI is Koin, not Hilt | build, toolchain, di |

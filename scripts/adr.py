@@ -307,11 +307,14 @@ def _row(adr: Adr) -> str:
 
 
 def render(adrs: list[Adr]) -> str:
+    # Preamble, then nothing but table rows. No decision COUNT, deliberately: `.gitattributes`
+    # gives this file `merge=union`, which is right for a file whose only churn is appended rows
+    # but wrong for any line that CHANGES — two branches each adding an ADR union into two count
+    # lines rather than conflicting, and the stale one never leaves. That happened four times
+    # before CI caught it (2026-09-15). Every line here is now append-only, as union assumes.
     return "\n".join(
         [
             PREAMBLE,
-            "",
-            f"{len(adrs)} decisions.",
             "",
             "| ADR | Decision | Topics |",
             "| --- | --- | --- |",

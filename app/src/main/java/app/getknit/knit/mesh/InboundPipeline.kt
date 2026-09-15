@@ -235,10 +235,17 @@ class InboundPipeline(
         // purges it right back out (see acknowledge's self-vaccinate). Group messages are carried for
         // members who may be offline whether or not we're a member; broadcast + cleartext metadata
         // frames back-fill ambient state. Runs before handleChat returns early and before the router
-        // schedules the relay, so the copy is durable pre-flood. Only flood frames (relay = true) are
-        // custodied — a point-to-point frame (relay = false, e.g. a broadcast/group delivery tick) is
-        // delivered to its addressee and stops.
-        if (env.isStorable() && wire.relay) {
+        // schedules the relay, so the copy is durable pre-flood. A point-to-point frame (relay = false) is
+        // otherwise delivered to its addressee and stops — it is *addressed*, so nobody else is meant to hold
+        // it (a broadcast/group delivery tick, a sealed ctl DM). A `profile` is the one custodial type that
+        // arrives in that wrapper without being addressed to anyone: it names no recipient and no group, it
+        // is ambient state every node is meant to hold, and it self-certifies on its own in-band key — so it
+        // is custodied wherever it is delivered from. Today that means `KeyExchange.serve`, which answers a
+        // keyreq point-to-point by design; without this the requester pinned the key but stored nothing, its
+        // router had marked the id seen, and the holder's custody re-serve was deduped for the rest of the
+        // SeenSet window — the three digests disagreed for up to eleven minutes after every key request, and
+        // the cue plane raised a reconcile with nothing to transfer (ADR 2026-09.7bu7, issue #49).
+        if (env.isStorable() && (wire.relay || env.type == FrameType.PROFILE)) {
             forwardSync.onSeen(wire, env, ForwardStore.ORIGIN_RELAY)
         }
         // Multi-hop coordination-plane fan-out: re-fan a small flood frame to our own neighbors so it spreads

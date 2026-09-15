@@ -15,9 +15,9 @@ import org.robolectric.RobolectricTestRunner
 /**
  * The clock tier: what the field waits minutes or days for, moved with [LabClock.advance] and then poked —
  * a re-link for the digest exchange, `heal()` for the heartbeat basket — because the jump moves decisions,
- * never schedulers. The router's 10-minute seen window (the self-pin loop, a key-request-served profile, a
- * DM received while its sender was blocked), the 24 h custody TTL, the 12 h profile republish, and the
- * ratchet's retention sweeps after a reset (ADR 027).
+ * never schedulers. The router's 10-minute seen window (the self-pin loop, a DM received while its sender
+ * was blocked), the 24 h custody TTL, the 12 h profile republish, and the ratchet's retention sweeps after
+ * a reset (ADR 027).
  */
 @RunWith(RobolectricTestRunner::class)
 class TimeLabTest {
@@ -60,34 +60,6 @@ class TimeLabTest {
             lab.assertConverged(listOf(alice, bob), atLeast = 1, carriers = listOf(carol)) { it.dmWith(if (it === alice) bob else alice) }
             assertTrue("alice re-carries her own profile", alice.custodyIds().any { it.startsWith("profile-${alice.nodeId}-") })
             assertNull("and never pinned herself", alice.peer(alice))
-        }
-
-    /**
-     * `KeyExchangeLabTest`'s transient gap, closed: the served profile was deduped against the custody
-     * re-serve for the seen window; once it lapses, the next digest exchange puts it into Carol's custody
-     * and the three stores agree.
-     */
-    @Test
-    fun aKeyRequestServedProfileIsCustodiedOnceTheSeenWindowLapses() =
-        runBlocking {
-            val alice = lab.node("alice").apply { setDisplayName("Alice") }
-            val bob = lab.node("bob").apply { setDisplayName("Bob") }
-            val carol = lab.node("carol").apply { setDisplayName("Carol") }
-            lab.link(bob, carol)
-            lab.awaitAcquainted(bob, carol)
-            bob.transport.hold(carol.transport)
-            lab.link(alice, bob)
-            lab.awaitAcquainted(alice, bob)
-            assertTrue(alice.sendRoom("from a stranger"))
-            assertTrue(lab.await(1) { bob.transport.held(carol.transport).count { it.isRoomPostFrom(alice.nodeId) } })
-            bob.transport.release(carol.transport) { batch -> batch.filter { it.isRoomPostFrom(alice.nodeId) } }
-            assertTrue(lab.await(1) { if (carol.knows(alice)) 1 else 0 })
-            assertEquals(1L, carol.metrics.snapshot().keyRequestsSent)
-
-            lab.clock.advance(SEEN_WINDOW_LAPSED_MS)
-            lab.unlink(bob, carol)
-            lab.link(bob, carol)
-            lab.assertConverged(listOf(bob, carol), atLeast = 1, carriers = listOf(alice)) { Conversations.NEARBY }
         }
 
     /**

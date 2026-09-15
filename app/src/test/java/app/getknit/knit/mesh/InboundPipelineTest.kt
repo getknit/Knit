@@ -767,6 +767,26 @@ class InboundPipelineTest {
             assertFalse(rig.msgMap.containsKey("dm2"))
         }
 
+    /**
+     * The one custodial type that is custodied out of a point-to-point wrapper (ADR 2026-09.7bu7): a
+     * `keyreq` answer is a `relay = false` profile, and it is not addressed to anyone — so it is carried
+     * exactly as a flooded copy would be. Without this the requester pinned the key and stored nothing,
+     * and its router's seen mark deduped the holder's custody re-serve for the rest of the window.
+     */
+    @Test
+    fun servedProfileIsCustodiedThoughItArrivedPointToPoint() =
+        runTest {
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val env = rig.profile(alice, name = "Alice")
+
+            // No pin first: a served profile authenticates on the key in its own payload, like a flooded one.
+            rig.pipeline.onDeliver(alice.sign(env, relay = false), env, party().nodeId)
+
+            assertTrue("the served profile should be custodied", rig.forwardStore.has(env.id))
+            assertEquals("Alice", rig.peerMap[alice.nodeId]?.name)
+        }
+
     @Test
     fun badSignatureIsDroppedWithoutThrowingAndNotDelivered() =
         runTest {

@@ -146,7 +146,11 @@ from the originator can permanently miss it and then drop every frame that peer 
 profile re-serves it verbatim (the response rides the existing self-certifying `profile` path — no new
 response type, no re-signing), and one that doesn't records the requester and recurses, so the profile
 walks hop-by-hop to the requester exactly like a `BlobExchange` blob pull — deliberately request/response,
-not another flood. The request is signed (not unsigned like `blobreq`) so a responder authenticates it
+not another flood. The requester **custodies** the served frame even though it arrived `relay = false`
+(`InboundPipeline.onDeliver`'s gate, ADR 2026-09.7bu7): a profile is the one custodial type that is not
+addressed to anyone, and without carrying it the requester's seen mark deduped the holder's next custody
+re-serve for the rest of the 10-minute window, so the digests disagreed for up to eleven minutes after every
+key request. The request is signed (not unsigned like `blobreq`) so a responder authenticates it
 against the requester's pinned key — always present, since direct neighbors exchange profiles on connect —
 and can ignore a blocked/unknown asker; signing is free precisely because the request never leaves the
 direct-neighbor hop. Throttled by a per-peer cooldown + a `missing` set re-asked of each newcomer

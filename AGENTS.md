@@ -109,11 +109,15 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   surfaces derive from `reachOf` so they cannot disagree. READ ADR 2026-09.2ajk before loosening any tier;
   the Contacts list still draws a binary dot from `neighbors` alone.
 - **When touching how a Nearby-room post's ✓✓ gets home** — `AckSync`'s ride hold / `RIDE_HOLD_MS`,
-  `MeshTransport.coveredByInternet`, `ScopeSync.pushDirect` / `presentPeers`, or `MeshManager.ownProfile`:
+  `MeshTransport.coveredByInternet`, `ScopeSync.pushDirect` / `presentPeers`, `MeshRouter.handOn`, or
+  `MeshManager.ownProfile`:
   READ ADR 2026-09.y5f3 (aa27's ride hold now has a 60 s deadline; the tick then goes to a spool the author
   was recently seen on — a signed `relay = false` frame pushed direct and accounted, never custodied on the
   acker — else over LoRa's targeted path; every DM-form frame to a spool-present peer stays off the board;
-  a node's own profile has one set of bytes per publish stamp). Then `docs/ENCRYPTED_RECEIPTS_REACTIONS.md`
+  a node's own profile has one set of bytes per publish stamp) and ADR 2026-09.wkbk (`MeshRouter.handOn` —
+  a point-to-point frame addressed to a peer we hold a **live link** to takes that one hop, DM-form chat
+  only, which is how a far pocket's tick reaches a board-less author behind the gateway; an acker with no
+  board and no spool is still stranded). Then `docs/ENCRYPTED_RECEIPTS_REACTIONS.md`
   §5, spec §9.4 C-9.4-3, and `RoomTickPlanesLabTest` in `mesh/lab/` for the end-to-end shape.
 - **When touching `ui/components/Avatar`, `ui/components/GroupAvatar`, `ui/theme/AvatarTint.kt`,
   `data/message/GroupFaces.kt`, `ui/util/ClusterGeometry.kt`, or the notification avatars in

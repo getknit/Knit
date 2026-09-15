@@ -22,6 +22,9 @@ import kotlin.random.Random
  * redundant traffic in dense meshes while still relaying reliably in sparse ones (where no duplicate
  * is overheard). Locally-originated frames bypass this and send immediately.
  *
+ * A point-to-point frame (`relay = false`) is never flooded, but it is not necessarily finished either: if it
+ * is addressed to a peer this node holds a live link to, [handOn] takes it that one hop.
+ *
  * Kept free of Android/Room/transport dependencies so it can be unit-tested with a fake transport.
  */
 class MeshRouter(
@@ -33,7 +36,8 @@ class MeshRouter(
     private val suppressThreshold: Int = DEFAULT_SUPPRESS_THRESHOLD,
     private val jitter: () -> Long = { Random.nextLong(jitterWindowMs) },
     private val budget: IngressBudget = IngressBudget(),
-    // A relay that fired and actually went somewhere: the frame and the neighbors it was sent to. The router
+    // A send on someone else's behalf that actually went somewhere: the frame and the peers it was sent to —
+    // the flood's relay fan-out, and [handOn]'s last hop to a point-to-point frame's addressee. The router
     // reports the fact and nothing else — whether it counts as this phone helping anyone is `ContributionLedger`'s
     // call. Not invoked for a relay that fired with no neighbor to send to. Defaulted to a no-op so the tests
     // that bind `onDeliver` as a trailing lambda are untouched; keep it before `onDeliver` for that reason.
@@ -145,7 +149,9 @@ class MeshRouter(
         fromNodeId: String,
     ) {
         val id = envelope.id
-        if (!wire.relay) return // point-to-point control frames propagate hop-by-hop, not flooded
+        // Point-to-point control frames are never flooded; they propagate hop-by-hop, and [handOn] is the
+        // one hop this node can take on their behalf.
+        if (!wire.relay) return handOn(wire, envelope, fromNodeId)
         // [ttl] is attacker-controlled; cap it to the local default so a forged oversized value can't
         // keep a frame alive past the dedup window and flood the mesh. Every relayer caps independently,
         // so the hop count alone bounds propagation regardless of what ttl a peer claims.
@@ -169,6 +175,52 @@ class MeshRouter(
                 metrics.onRelayed() // the diagnostic counts the relay decision, targets or not
                 if (targets.isNotEmpty()) onRelayed(live.envelope, targets.mapTo(HashSet()) { it.nodeId })
             }
+    }
+
+    /**
+     * Hands a **point-to-point** frame (`relay = false`) the last hop: if it is addressed to a peer we hold a
+     * live link to, send it over that link, once. The flood's counterpart for a frame the flood never carries.
+     *
+     * The case it exists for (issue #48): a far pocket's room tick leaves its acker as LoRa's targeted
+     * `send:chat` (ADR 2026-09.y5f3's second route), the near pocket's gateway hears it off the air, and it is
+     * addressed to a phone with no board sitting one link behind that gateway. Nothing else could carry it —
+     * the router does not flood a `relay = false` frame, `InboundPipeline.onDeliver` drops one that is not
+     * ours, and a room tick never escalates into custody (ADR 2026-09.aa27). So the gateway does for the tick
+     * exactly what it already does for the post that earned it.
+     *
+     * Five things bound it, and each is the same rule the flood path already follows:
+     *  - **DM-form chat only** ([shouldFastSend]): the sealed `CTL_RECEIPT` tick and any future sealed ctl DM.
+     *    A `typing` cue is worthless a moment later, and `blobreq`/`keyreq` name no recipient at all — they
+     *    propagate through their own handlers.
+     *  - **Split horizon**: never back at the hop that just handed it to us.
+     *  - **The hop count**, capped to the local [DEFAULT_TTL] exactly as [scheduleRelay] caps it, so an
+     *    attacker-controlled `ttl` cannot keep a frame alive past the dedup window.
+     *  - **A live link, never a sighting** — `neighbors`, not `reachable` (ADR 044: a sighting is not a data
+     *    path, and [app.getknit.knit.mesh.lora.LoraMeshTransport.fastSend] reads the link set for the same
+     *    reason).
+     *  - **Once per frame**, from the [SeenSet] gate in [handleInbound] that got us here.
+     *
+     * A frame addressed to *us* is never handed on, and that needs no identity here: our own node id is never
+     * in our own neighbor set. Sent immediately rather than jittered — overhear suppression says nothing about
+     * a unicast to one named peer.
+     *
+     * The frame may be one this node cannot verify (ADR 059's unsigned tick authenticates at its addressee and
+     * nowhere else). That is the flood path's position too: an unverifiable frame is relayed, never delivered,
+     * because a relay that drops what it cannot read is a propagation black hole.
+     */
+    private suspend fun handOn(
+        wire: WireEnvelope,
+        envelope: RelayEnvelope,
+        fromNodeId: String,
+    ) {
+        if (!shouldFastSend(envelope)) return
+        val to = envelope.recipientId ?: return
+        if (to == fromNodeId) return
+        if (wire.hops >= minOf(wire.ttl, DEFAULT_TTL)) return
+        val peer = transport.neighbors.value.firstOrNull { it.nodeId == to } ?: return
+        transport.send(wire.relayed(), peer) // only ttl/hops mutate; relay stays false, so it goes no further
+        metrics.onHandedOn()
+        onRelayed(envelope, setOf(to))
     }
 
     /**

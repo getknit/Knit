@@ -14,9 +14,10 @@ import kotlinx.coroutines.flow.update
  * Counts what this phone does for other people's messages — the lifetime numbers on the Your mesh screen.
  *
  * A credit happens at a **hand-off** and nowhere else: the moment this phone *sent* someone else's chat
- * frame to at least one peer. Two places do that — the router's flood fan-out (`MeshRouter.onRelayed`)
- * and a custody re-serve to a peer whose digest showed it lacked the frame (`ForwardSync.onServed`) — and
- * both report the fact through [onHandedOff]. Taking a frame into custody is not a credit (it may sit
+ * frame to at least one peer. Three places do that — the router's flood fan-out and its last hop for a
+ * point-to-point frame (`MeshRouter.onRelayed`, from `scheduleRelay` and `handOn`) and a custody re-serve
+ * to a peer whose digest showed it lacked the frame (`ForwardSync.onServed`) — and all report the fact
+ * through [onHandedOff]. Taking a frame into custody is not a credit (it may sit
  * there until it expires), and neither is a coordination-plane `fastSend` or a LoRa fan-out, which report
  * nothing about whether anything left the radio. Under-claiming is the right side to err on: every number
  * here is shown to the user as something their phone did.
@@ -76,8 +77,8 @@ class ContributionLedger(
         }.distinctUntilChanged()
 
     /**
-     * This phone just sent [envelope] to the peers in [to] — the router's relay fan-out or a custody
-     * re-serve. Credits under the rules above, or not at all.
+     * This phone just sent [envelope] to the peers in [to] — the router's relay fan-out, its last hop for a
+     * point-to-point frame, or a custody re-serve. Credits under the rules above, or not at all.
      */
     suspend fun onHandedOff(
         envelope: RelayEnvelope,

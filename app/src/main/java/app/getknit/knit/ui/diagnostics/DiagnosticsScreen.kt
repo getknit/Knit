@@ -342,6 +342,7 @@ private fun MetricsSection(metrics: MeshMetrics.Snapshot) {
         MetricRow(stringResource(R.string.diagnostics_metric_originated), metrics.framesOriginated.toString())
         MetricRow(stringResource(R.string.diagnostics_metric_delivered), metrics.framesDelivered.toString())
         MetricRow(stringResource(R.string.diagnostics_metric_relayed), metrics.framesRelayed.toString())
+        MetricRow(stringResource(R.string.diagnostics_metric_handed_on), metrics.framesHandedOn.toString())
         MetricRow(stringResource(R.string.diagnostics_metric_suppressed), metrics.framesSuppressed.toString())
         MetricRow(stringResource(R.string.diagnostics_metric_deduped), metrics.framesDeduped.toString())
         MetricRow(
@@ -878,6 +879,7 @@ fun MetricsSectionPopulatedPreview() =
                     framesOriginated = 128,
                     framesDelivered = 96,
                     framesRelayed = 1_024,
+                    framesHandedOn = 7,
                     framesSuppressed = 12,
                     framesDeduped = 340,
                     bytesSent = 2_500_000,
@@ -895,6 +897,7 @@ fun MetricsSectionEmptyPreview() =
                     framesOriginated = 0,
                     framesDelivered = 0,
                     framesRelayed = 0,
+                    framesHandedOn = 0,
                     framesSuppressed = 0,
                     framesDeduped = 0,
                     bytesSent = 0,
@@ -1043,6 +1046,7 @@ fun DiagnosticsScreenPopulatedPreview() =
                             framesOriginated = 128,
                             framesDelivered = 96,
                             framesRelayed = 1_024,
+                            framesHandedOn = 7,
                             framesSuppressed = 12,
                             framesDeduped = 340,
                             bytesSent = 2_500_000,

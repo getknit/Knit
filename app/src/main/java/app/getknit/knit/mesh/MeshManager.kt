@@ -2817,7 +2817,7 @@ class MeshManager(
                 Log.d(
                     TAG,
                     "metrics: originated=${s.framesOriginated} delivered=${s.framesDelivered} " +
-                        "relayed=${s.framesRelayed} suppressed=${s.framesSuppressed} " +
+                        "relayed=${s.framesRelayed} handedOn=${s.framesHandedOn} suppressed=${s.framesSuppressed} " +
                         "deduped=${s.framesDeduped} bytesSent=${s.bytesSent} " +
                         "dropped=${s.framesDropped} drops=${s.dropsByReason} " +
                         "keyReq=${s.keyRequestsSent} keyServed=${s.keysServed} keyRecovered=${s.keysRecovered} " +

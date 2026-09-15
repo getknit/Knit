@@ -8,7 +8,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -85,16 +84,16 @@ class LoraPocketLabTest {
         }
 
     /**
-     * FINDING #48 (2026-09-14, first run): Carol's ✓✓ for Bob's post leaves her board as the targeted
-     * `send:chat` (the ride hold runs out, ADR 2026-09.y5f3), Alice's board hears it — and it stops there:
-     * a targeted tick is a point-to-point `relay = false` frame, so Alice neither delivers it (not hers) nor
-     * relays it the one link to Bob, and a room tick never escalates into custody (ADR 2026-09.aa27). A
-     * board-less author one hop behind a gateway never sees a far pocket's ✓✓ at all. (Dave's tick is the
-     * other residual: an acker with no board and no spool has nowhere to send it.) Ignored until the design
-     * decides — the gateway forwarding a targeted tick addressed to a linked peer over that link is the
-     * obvious shape.
+     * Issue #48, closed by the gateway taking the tick's last hop. Carol's ✓✓ for Bob's post leaves her board
+     * as the targeted `send:chat` (the ride hold runs out, ADR 2026-09.y5f3) and Alice's board hears it. It is
+     * a point-to-point `relay = false` frame, so Alice neither delivers it (not hers) nor floods it, and a room
+     * tick never escalates into custody (ADR 2026-09.aa27) — but it is addressed to a peer Alice holds a live
+     * link to, so `MeshRouter.handOn` hands it over that link. The oracle is the plane Bob records it on: the
+     * last hop was the link, not the air.
+     *
+     * Dave's tick is the residual this does not close: an acker with no board and no spool has nowhere to send
+     * one at all.
      */
-    @Ignore("#48: a far pocket's room tick stops at the gateway's board and never reaches a board-less author behind it")
     @Test
     fun aFarPocketsTickReachesABoardLessAuthorBehindTheGateway() =
         runBlocking {

@@ -228,6 +228,17 @@ must never need an event to recover. Closes ADR 038's "one board per clique" res
 > those receipts stranded. `…debug.LORA` reports `role` with both its inputs plus `pocketSightings`, so the
 > gap between heard and linked is visible rather than inferred.
 
+**The bridge covers the targeted tick's last hop too** (ADR 2026-09.wkbk). A far pocket's room ✓✓ leaves its
+acker as the targeted `send:chat` — a `relay = false` frame addressed to one phone — and the near gateway
+hears it off the air like any other. If that phone is board-less and sits one link behind the gateway,
+nothing used to carry it the rest of the way: the router does not flood a `relay = false` frame,
+`InboundPipeline.onDeliver` drops one that is not ours, and a room tick never escalates into custody (ADR
+2026-09.aa27). `MeshRouter.handOn` now sends it over that link, once — DM-form chat only, split horizon,
+hop-capped, and keyed on `neighbors` rather than `reachable` for the reason the note above gives. It is not
+LoRa-specific machinery, but this plane is where it fires: the broadcast air is the only way a
+`relay = false` frame reaches a node that is not its addressee. **Dave's half is still open** — an acker
+with no board and no spool has nowhere to send a tick at all.
+
 **An airtime governor.** `LoraAirtime` (pure): time-on-air from the LoRa formula at the board's own preset
 (231 B at LongFast ≈ 2 s) **plus the signature 2.8 adds to anything under the cliff** — gated on the board's
 firmware (`LoraAirtime.signsPackets`, from the handshake's `DeviceMetadata`; unknown reads as signing, since

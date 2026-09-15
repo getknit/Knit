@@ -176,6 +176,7 @@ class MeshMetrics {
     private val framesOriginated = AtomicLong()
     private val framesDelivered = AtomicLong()
     private val framesRelayed = AtomicLong()
+    private val framesHandedOn = AtomicLong()
     private val framesSuppressed = AtomicLong()
     private val framesDeduped = AtomicLong()
     private val bytesSent = AtomicLong()
@@ -300,6 +301,15 @@ class MeshMetrics {
     /** A pending relay that fired (we forwarded the frame onward). */
     fun onRelayed() {
         framesRelayed.incrementAndGet()
+    }
+
+    /**
+     * A point-to-point frame handed its last hop to an addressee we hold a live link to (`MeshRouter.handOn`) —
+     * the flood's counterpart for a frame the flood never carries, and in practice a far pocket's ✓✓ reaching a
+     * board-less author behind this phone's board.
+     */
+    fun onHandedOn() {
+        framesHandedOn.incrementAndGet()
     }
 
     /** A pending relay we cancelled because a neighbor was overheard relaying the same frame. */
@@ -899,6 +909,7 @@ class MeshMetrics {
             framesOriginated = framesOriginated.get(),
             framesDelivered = framesDelivered.get(),
             framesRelayed = framesRelayed.get(),
+            framesHandedOn = framesHandedOn.get(),
             framesSuppressed = framesSuppressed.get(),
             framesDeduped = framesDeduped.get(),
             bytesSent = bytesSent.get(),
@@ -1108,5 +1119,6 @@ class MeshMetrics {
         val meshPostRefusedByReason: Map<String, Long> = emptyMap(),
         val publicPostSent: Long = 0,
         val publicPostRefusedByReason: Map<String, Long> = emptyMap(),
+        val framesHandedOn: Long = 0,
     )
 }

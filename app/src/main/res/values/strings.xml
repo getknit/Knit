@@ -624,6 +624,7 @@
     <string name="diagnostics_metric_originated">Originated</string>
     <string name="diagnostics_metric_delivered">Delivered</string>
     <string name="diagnostics_metric_relayed">Relayed</string>
+    <string name="diagnostics_metric_handed_on">Handed on</string>
     <string name="diagnostics_metric_suppressed">Suppressed</string>
     <string name="diagnostics_metric_deduped">Deduped</string>
     <string name="diagnostics_metric_bytes_sent">Bytes sent</string>

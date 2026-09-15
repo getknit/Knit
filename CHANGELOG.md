@@ -106,6 +106,8 @@ document:
 - The delivered tick on a Nearby post now reaches you over a paired LoRa radio or a relay, so you no longer
   wait for the other phone to be back on Bluetooth or Wi-Fi. Knit gives a reply a minute to carry it first,
   then sends it on its own.
+- A delivered tick from someone out of range now reaches you even if you have no LoRa radio of your own. A
+  phone beside you that has one passes it the last step, instead of dropping it as it used to.
 - If you use a relay, Knit no longer spends your LoRa radio's airtime on direct messages the relay is already
   carrying to that person. The radio still carries the Nearby room, and messages to anyone the relay can't
   reach.

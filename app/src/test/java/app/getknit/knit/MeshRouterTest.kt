@@ -14,6 +14,7 @@ import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.protocol.DEFAULT_TTL
 import app.getknit.knit.mesh.protocol.FrameType
+import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
@@ -70,21 +71,24 @@ class MeshRouterTest {
         ): Boolean = true
     }
 
-    /** Builds a (wrapper, envelope) pair for an addressed-or-broadcast chat frame. */
+    /** Builds a (wrapper, envelope) pair for an addressed-or-broadcast frame, chat by default. */
     private fun frame(
         id: String,
         ttl: Int = DEFAULT_TTL,
         hops: Int = 0,
         recipientId: String? = null,
         relay: Boolean = true,
+        type: String = FrameType.CHAT,
+        group: GroupInfo? = null,
     ): Pair<WireEnvelope, RelayEnvelope> {
         val env =
             RelayEnvelope(
-                type = FrameType.CHAT,
+                type = type,
                 id = id,
                 senderId = "a",
                 sentAt = 0L,
                 recipientId = recipientId,
+                group = group,
                 payload = ByteArray(0),
             )
         val wire = WireEnvelope(ttl = ttl, hops = hops, relay = relay, sig = ByteArray(0), signed = WireCodec.encodeEnvelope(env))
@@ -224,6 +228,113 @@ class MeshRouterTest {
 
             assertEquals(1, delivered.size) // handled locally
             assertEquals(0, transport.sent.size) // but never flooded onward
+        }
+
+    /**
+     * Issue #48: a point-to-point frame is never flooded, but it is not finished either. Addressed to a peer
+     * this node holds a **live link** to, it takes that one hop — which is how a far pocket's ✓✓ reaches a
+     * board-less author sitting behind the gateway that heard it off the air.
+     */
+    @Test
+    fun handsAPointToPointFrameTheLastHopToALinkedAddressee() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "z"))
+            val metrics = MeshMetrics()
+            val router = MeshRouter(transport, this, metrics = metrics, jitter = { 0L }) { _, _, _, _ -> }
+
+            val (wire, env) = frame("tick1", recipientId = "z", relay = false)
+            router.handleInbound(wire, env, fromNodeId = "b")
+            advanceUntilIdle()
+
+            assertEquals(1, transport.sent.size)
+            val (sent, to) = transport.sent.single()
+            assertEquals(Peer("z"), to)
+            assertEquals(1, sent.hops) // the hop is counted, exactly as a relay counts one
+            assertEquals(false, sent.relay) // …and it still goes no further at the addressee
+            assertEquals(1L, metrics.snapshot().framesHandedOn)
+        }
+
+    @Test
+    fun neverHandsAPointToPointFrameBackToTheHopItCameFrom() =
+        runTest {
+            val transport = RecordingTransport(setOf("b"))
+            val router = MeshRouter(transport, this, jitter = { 0L }) { _, _, _, _ -> }
+
+            val (wire, env) = frame("tick1", recipientId = "b", relay = false)
+            router.handleInbound(wire, env, fromNodeId = "b")
+            advanceUntilIdle()
+
+            assertEquals(0, transport.sent.size)
+        }
+
+    /** A link, never a sighting (ADR 044): a peer we are not linked to has no path we can hand anything over. */
+    @Test
+    fun doesNotHandOnToAnAddresseeWeHoldNoLinkTo() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "c"))
+            val router = MeshRouter(transport, this, jitter = { 0L }) { _, _, _, _ -> }
+
+            val (wire, env) = frame("tick1", recipientId = "z", relay = false)
+            router.handleInbound(wire, env, fromNodeId = "b")
+            advanceUntilIdle()
+
+            assertEquals(0, transport.sent.size)
+        }
+
+    /**
+     * DM-form chat only. A `typing` cue is worthless a moment later, a group-form frame is not this plane's
+     * business, and `blobreq`/`keyreq` name no recipient at all — they propagate through their own handlers.
+     */
+    @Test
+    fun doesNotHandOnAFrameThatIsNotDmFormChat() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "z"))
+            val router = MeshRouter(transport, this, jitter = { 0L }) { _, _, _, _ -> }
+
+            val typing = frame("t1", recipientId = "z", relay = false, type = FrameType.TYPING)
+            val keyReq = frame("k1", relay = false, type = FrameType.KEY_REQ)
+            val grouped =
+                frame(
+                    "g1",
+                    recipientId = "z",
+                    relay = false,
+                    group = GroupInfo(id = "g", members = listOf("a", "z"), createdBy = "a"),
+                )
+            listOf(typing, keyReq, grouped).forEach { (wire, env) -> router.handleInbound(wire, env, fromNodeId = "b") }
+            advanceUntilIdle()
+
+            assertEquals(0, transport.sent.size)
+        }
+
+    /** The same forged-ttl cap the flood path applies, so a hand-on chain is bounded by hop count too. */
+    @Test
+    fun doesNotHandOnOnceHopsReachLocalDefault() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "z"))
+            val router = MeshRouter(transport, this, jitter = { 0L }) { _, _, _, _ -> }
+
+            val (wire, env) = frame("tick1", ttl = Int.MAX_VALUE, hops = DEFAULT_TTL, recipientId = "z", relay = false)
+            router.handleInbound(wire, env, fromNodeId = "b")
+            advanceUntilIdle()
+
+            assertEquals(0, transport.sent.size)
+        }
+
+    /** The hand-on is a hand-off like any other: the Your mesh ledger hears about it (ADR 2026-09.2v2t). */
+    @Test
+    fun aHandedOnFrameReportsTheAddresseeToOnRelayed() =
+        runTest {
+            val transport = RecordingTransport(setOf("b", "z"))
+            val relayed = mutableListOf<Pair<String, Set<String>>>()
+            val router =
+                MeshRouter(transport, this, jitter = { 0L }, onRelayed = { env, to -> relayed += env.id to to }) { _, _, _, _ -> }
+
+            val (wire, env) = frame("tick1", recipientId = "z", relay = false)
+            router.handleInbound(wire, env, fromNodeId = "b")
+            router.handleInbound(wire, env, fromNodeId = "c") // a duplicate is never a second hand-on
+            advanceUntilIdle()
+
+            assertEquals(listOf("tick1" to setOf("z")), relayed)
         }
 
     @Test

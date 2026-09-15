@@ -405,9 +405,10 @@ class MeshManager(
     private var router = newRouter(scope)
 
     /**
-     * §9.5's push-half deferral: an attachment we authored and whose recipient acked stays off the
-     * Internet while that peer is still on the presence plane. Wired unconditionally (it is pure and
-     * cheap) but only ever consulted by [scopeSync].
+     * §9.5's push-half deferral: an attachment a short-range radio already carried between us and this
+     * DM's peer stays off the Internet while that peer is still on the presence plane — and, for
+     * [AttachmentDeferPolicy.ACK_GRACE_MS] after a send of ours, one whose ack simply hasn't had time to
+     * come back. Wired unconditionally (it is pure and cheap) but only ever consulted by [scopeSync].
      */
     private val attachmentDefer =
         AttachmentDeferPolicy(
@@ -415,10 +416,14 @@ class MeshManager(
             // not defer a spool upload (H5). [nearbyPeers] is the one definition of that set — a lambda, so
             // reading the property here is safe however late this field is initialized.
             reachable = { nearbyPeers.value.mapTo(mutableSetOf()) { peer -> peer.nodeId } },
-            // Same line drawn on the ack: only a receipt that arrived over a short-range radio proves a data
-            // path moved bytes. A spool ack would defer on the plane the push feeds, a LoRa one on a plane
-            // that carries no blob at all.
-            ackedOverRadio = { aHash -> messages.attachmentAckedOverRadio(aHash, identity.nodeId()) },
+            // Same line drawn on the evidence: only a hop that crossed a short-range radio proves a data path
+            // moved these bytes. A spool one would defer on the plane the push feeds, a LoRa one on a plane
+            // that carries no blob at all. Read from whichever end of the DM we are — our send that they
+            // acked, or their send that reached us — so a recipient stops re-uploading what BLE just gave it.
+            carriedByRadio = { aHash, peerId -> messages.attachmentCarriedByRadio(aHash, identity.nodeId(), peerId) },
+            // The grace's subject: for a minute after a send, a missing ack means the receipt is still in
+            // flight rather than that the radios failed. Only a message we authored is waiting on one.
+            authoredHere = { aHash -> messages.attachmentAuthoredHere(aHash, identity.nodeId()) },
             custodyTtlMs = ForwardRepository.DEFAULT_TTL_MS,
             clock = clock,
         )

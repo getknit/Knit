@@ -78,17 +78,17 @@ class MessageDaoTest : RoomDbTest() {
         }
 
     @Test
-    fun `attachmentAckedOverRadio counts only a short-range ack, and only on a row we authored`() =
+    fun `attachmentCarriedByRadio counts only a short-range hop, and only between this pair`() =
         runTest {
-            // The §9.5 defer gate's evidence half. A spool or LoRa receipt says the message got there, not
-            // that a radio moved the bytes, so only the Nearby family may hold an upload back.
-            suspend fun acked(hash: String) = dao.attachmentAckedOverRadio(hash, ME, DeliveryPlane.shortRangeCodes)
+            // The §9.5 defer gate's evidence half. A spool or LoRa hop says the message got there, not that
+            // a radio moved the bytes, so only the Nearby family may hold an upload back.
+            suspend fun carried(hash: String) = dao.attachmentCarriedByRadio(hash, ME, PEER, DeliveryPlane.shortRangeCodes)
 
             dao.upsert(
                 msg("radio", sender = ME, attachmentHash = "H-radio", received = true)
                     .copy(receivedVia = DeliveryPlane.Nearby.code),
             )
-            assertTrue("a radio ack is the one that defers", acked("H-radio"))
+            assertTrue("a radio ack is the one that defers", carried("H-radio"))
 
             // The two reserved radio codes belong to the same family, so a build that starts writing them
             // must not silently stop deferring.
@@ -96,41 +96,81 @@ class MessageDaoTest : RoomDbTest() {
                 msg("ble", sender = ME, attachmentHash = "H-ble", received = true)
                     .copy(receivedVia = DeliveryPlane.Bluetooth.code),
             )
-            assertTrue("Bluetooth is the Nearby family", acked("H-ble"))
+            assertTrue("Bluetooth is the Nearby family", carried("H-ble"))
             dao.upsert(
                 msg("nan", sender = ME, attachmentHash = "H-nan", received = true)
                     .copy(receivedVia = DeliveryPlane.WifiAware.code),
             )
-            assertTrue("Wi-Fi Aware is the Nearby family", acked("H-nan"))
+            assertTrue("Wi-Fi Aware is the Nearby family", carried("H-nan"))
 
             dao.upsert(
                 msg("spool", sender = ME, attachmentHash = "H-spool", received = true).copy(receivedVia = DeliveryPlane.Internet.code),
             )
-            assertFalse("the plane the push feeds is not evidence for deferring it", acked("H-spool"))
+            assertFalse("the plane the push feeds is not evidence for deferring it", carried("H-spool"))
 
             dao.upsert(
                 msg("board", sender = ME, attachmentHash = "H-board", received = true)
                     .copy(receivedVia = DeliveryPlane.LoRa.code),
             )
-            assertFalse("a board carries a frame and never a blob", acked("H-board"))
+            assertFalse("a board carries a frame and never a blob", carried("H-board"))
 
             // A row from a build older than the column: `Unknown` is in no plane set, so it pushes.
             dao.upsert(msg("legacy", sender = ME, attachmentHash = "H-legacy", received = true))
-            assertFalse("an unrecorded plane is not evidence", acked("H-legacy"))
+            assertFalse("an unrecorded plane is not evidence", carried("H-legacy"))
 
             dao.upsert(
                 msg("unacked", sender = ME, attachmentHash = "H-unacked")
                     .copy(receivedVia = DeliveryPlane.Nearby.code),
             )
-            assertFalse("the tick still has to be flipped", acked("H-unacked"))
+            assertFalse("the tick still has to be flipped", carried("H-unacked"))
 
-            // A carried attachment has no authored row, which is why a carrier never defers.
+            // The other reading of the same fact: the peer's own send, which reached us over a radio. No
+            // tick is required on it — `received` there is the peer's business — and a recipient that
+            // ignored this re-uploaded every photo BLE had just handed it.
             dao.upsert(
-                msg("theirs", sender = "bob", attachmentHash = "H-theirs", received = true).copy(receivedVia = DeliveryPlane.Nearby.code),
+                msg("theirs", sender = PEER, attachmentHash = "H-theirs").copy(receivedVia = DeliveryPlane.Nearby.code),
             )
-            assertFalse("someone else's send is not ours to defer", acked("H-theirs"))
+            assertTrue("a photo the peer sent us over a radio is carried too", carried("H-theirs"))
 
-            assertFalse("a hash we hold no row for at all", acked("H-absent"))
+            dao.upsert(
+                msg("theirs-spool", sender = PEER, attachmentHash = "H-theirs-spool")
+                    .copy(receivedVia = DeliveryPlane.Internet.code),
+            )
+            assertFalse("their send that only crossed the spool is not radio evidence", carried("H-theirs-spool"))
+
+            // A third party's frame is nobody's message between this pair, which is why a carrier never defers.
+            dao.upsert(
+                msg("carol", sender = "carol", attachmentHash = "H-carol").copy(receivedVia = DeliveryPlane.Nearby.code),
+            )
+            assertFalse("a carried frame is not this pair's message", carried("H-carol"))
+
+            assertFalse("a hash we hold no row for at all", carried("H-absent"))
+        }
+
+    @Test
+    fun `attachmentAuthoredHere separates an ack still in flight from one that is never coming`() =
+        runTest {
+            // The §9.5 grace's other half (issue #46). The gate is asked about a photo in the round the
+            // send itself woke, when no receipt could have come back yet — so it needs to know whether an
+            // ack is owed at all, which is a different question from whether one has arrived.
+            suspend fun ours(hash: String) = dao.attachmentAuthoredHere(hash, ME)
+
+            dao.upsert(msg("mine", sender = ME, attachmentHash = "H-mine"))
+            assertTrue("an ack for our own unacked send is merely late", ours("H-mine"))
+
+            // The tick is beside the point here: an acked row of ours is still ours.
+            dao.upsert(
+                msg("mine-acked", sender = ME, attachmentHash = "H-mine-acked", received = true)
+                    .copy(receivedVia = DeliveryPlane.Nearby.code),
+            )
+            assertTrue("the plane and the tick belong to the other half", ours("H-mine-acked"))
+
+            dao.upsert(msg("from-peer", sender = PEER, attachmentHash = "H-carried"))
+            assertFalse("a message the peer authored is not ours to be acked", ours("H-carried"))
+
+            // An avatar writes a `PeerEntity` and no message row, so it reads exactly like a hash we have
+            // never seen — and both must keep pushing rather than borrow the grace.
+            assertFalse("an avatar names no message row at all", ours("H-avatar"))
         }
 
     @Test
@@ -639,6 +679,7 @@ class MessageDaoTest : RoomDbTest() {
 
     private companion object {
         const val ME = "me"
+        const val PEER = "peer"
         const val THREAD = "thread"
     }
 }

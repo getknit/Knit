@@ -195,26 +195,49 @@ interface MessageDao {
     suspend fun hashesNeedingFetch(): List<String>
 
     /**
-     * Whether a message [me] authored names the ciphertext [hash] and was acked **over a short-range
-     * radio** — the delivery evidence `AttachmentDeferPolicy` needs before holding an upload back from the
-     * Internet plane. [planes] is [DeliveryPlane.shortRangeCodes]; Room's `@Query` can't name the enum, the
-     * way `sendersIn` can't name [MessageEntity.KIND_NORMAL].
+     * Whether the message naming ciphertext [hash] crossed a **short-range radio** between [me] and
+     * [peer] — the evidence `AttachmentDeferPolicy` needs before holding an upload back from the Internet
+     * plane. [planes] is [DeliveryPlane.shortRangeCodes]; Room's `@Query` can't name the enum, the way
+     * `sendersIn` can't name [MessageEntity.KIND_NORMAL].
+     *
+     * One fact, read from whichever end of the DM this node is. A row [me] authored needs its tick as well
+     * as its plane, because [receivedVia] there describes the *receipt* coming back. A row [peer] authored
+     * needs only the plane, because that column already names the plane the message itself arrived on and
+     * the tick on it is the peer's business, not ours. Without the second reading a recipient re-uploaded
+     * every photo it had just pulled off a BLE link.
      *
      * The plane is what makes this *radio* evidence rather than mere delivery. [receivedVia] is
-     * first-evidence-wins ([markReceived]), so it names the plane the message actually first arrived on: a
-     * receipt that rode a spool or a board leaves this false, and the attachment is pushed. Every other
-     * uncertain case reads false too and therefore pushes — a hash we hold no *authored* row for (a relayed
-     * attachment, or an avatar, which writes no message row at all), and a row written by a build older than
-     * the column, whose [DeliveryPlane.Unknown] is in no plane set.
+     * first-evidence-wins (see [markReceived] and the inbound persist), so it names the plane the message
+     * actually first crossed: a hop that rode a spool or a board leaves this false, and the attachment is
+     * pushed. Every other uncertain case reads false too and therefore pushes — a hash we hold no row for
+     * between this pair at all (a carried frame, whose bytes are nobody's message here, or an avatar, which
+     * writes no message row), and a row written by a build older than the column, whose
+     * [DeliveryPlane.Unknown] is in no plane set.
      */
     @Query(
-        "SELECT EXISTS(SELECT 1 FROM messages " +
-            "WHERE attachmentHash = :hash AND senderId = :me AND received = 1 AND receivedVia IN (:planes))",
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE attachmentHash = :hash AND (" +
+            "(senderId = :me AND received = 1 AND receivedVia IN (:planes)) OR " +
+            "(senderId = :peer AND receivedVia IN (:planes))))",
     )
-    suspend fun attachmentAckedOverRadio(
+    suspend fun attachmentCarriedByRadio(
         hash: String,
         me: String,
+        peer: String,
         planes: List<Int>,
+    ): Boolean
+
+    /**
+     * Whether [me] authored any message naming the ciphertext [hash] at all — acked or not. The subject
+     * of `AttachmentDeferPolicy`'s grace, and nothing else: for a short while after a send, a missing ack
+     * says only that the receipt has not come back yet, and this is what separates that from everything
+     * that is not waiting on an ack of ours — the peer's own send (its row names them), a **carried**
+     * frame (no message row here at all) and an **avatar** (a `PeerEntity` and no message row). The
+     * peer's send may still defer, but on [attachmentCarriedByRadio]'s evidence rather than on a grace.
+     */
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE attachmentHash = :hash AND senderId = :me)")
+    suspend fun attachmentAuthoredHere(
+        hash: String,
+        me: String,
     ): Boolean
 
     /**

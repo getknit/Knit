@@ -1587,7 +1587,8 @@ class ScopeSync(
 
         /**
          * Attachments *considered* per (spool, scope) per round. Larger than the round-trip budget
-         * because a deferred one spends none of that budget but still costs two local reads, so the
+         * because a deferred one spends none of that budget but still costs two local reads — three
+         * inside `AttachmentDeferPolicy.ACK_GRACE_MS`, where the grace asks a second question — so the
          * scan needs a bound of its own.
          */
         private const val ATTACHMENT_SCAN_PER_ROUND = 32

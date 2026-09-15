@@ -17,7 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-130 decisions.
+131 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -122,6 +122,7 @@ carries; never renumber an old one.
 | [2026-09.mhs5](decisions/2026-09-mhs5-a-lora-packet-is-padded-past-the-firmware-s-signature-cliff.md) | A LoRa packet is padded past the firmware's signature cliff | lora, airtime, link |
 | [2026-09.n752](decisions/2026-09-n752-a-link-preview-is-a-sender-fetched-card-riding-the-photo-path.md) | A link preview is a sender-fetched card riding the photo path | attachments, ui, wire, privacy, moderation, network |
 | [2026-09.nzpr](decisions/2026-09-nzpr-onboarding-gates-on-the-radio-permissions-only.md) | Onboarding gates on the radio permissions only | ui, onboarding, permissions |
+| [2026-09.p7j8](decisions/2026-09-p7j8-a-missing-ack-is-not-evidence-until-an-ack-could-have-arrived.md) | A missing ack is not evidence until an ack could have arrived, and it is read from both ends of the DM | spool, attachments |
 | [2026-09.qgk4](decisions/2026-09-qgk4-the-startup-profile-ships-beside-the-baseline-one.md) | The startup profile ships beside the baseline one, from the same journey | performance, build, distribution |
 | [2026-09.qq2r](decisions/2026-09-qq2r-a-file-is-an-ordinary-attachment-with-an-arbitrary-mime-and-a-sealed-name.md) | A file is an ordinary attachment with an arbitrary MIME and a sealed name | attachments, ui, wire, moderation |
 | [2026-09.qsj6](decisions/2026-09-qsj6-a-heard-inconsistent-offer-is-news.md) | A heard inconsistent OFFER is news | lora, airtime, reliability |

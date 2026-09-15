@@ -1212,8 +1212,8 @@ a relay.
 > sealed delivery tick flips on the first receipt from *any* member, so "acked" never means "every
 > member
 > holds it", and deferring on it would silently strand whoever was not reached. The reference client
-> therefore defers on DM scopes only, and pushes unconditionally for carried frames (nothing we
-> authored)
+> therefore defers on DM scopes only, and pushes unconditionally for carried frames (not this pair's
+> message at all)
 > and for avatars and group photos (no message row, so no per-recipient signal exists).
 >
 > **Why C-9.5-9.** Gating frames would make the scope digest a function of local mesh state, and it
@@ -1222,13 +1222,27 @@ a relay.
 >
 > **Reference-client policy, non-normative.** Defer while the peer was on the presence plane within
 > the
-> last 15 minutes **and** the recipient's receipt for that message arrived over a short-range radio,
-> and stop 2 h before the frame leaves custody. The plane is part of the rule, not a detail of it: a
-> receipt can reach the sender end-to-end across a spool, and reading the ack plane-agnostically would
-> defer the upload on the strength of the very plane it feeds. A receipt carried by a long-range,
-> frame-only plane does not qualify either, since no such plane moves the bytes. Under-deferring costs
-> relay bytes; over-deferring strands an image, so every uncertain case must resolve to push, including
-> a fresh process, which has seen nobody yet and therefore defers nothing.
+> last 15 minutes **and** that message crossed a short-range radio between the two members, and stop
+> 2 h before the frame leaves custody. The plane is part of the rule, not a detail of it: a receipt can
+> reach the sender end-to-end across a spool, and reading delivery plane-agnostically would defer the
+> upload on the strength of the very plane it feeds. A long-range, frame-only plane does not qualify
+> either, since no such plane moves the bytes. Under-deferring costs relay bytes; over-deferring strands
+> an image, so every uncertain case must resolve to push, including a fresh process, which has seen
+> nobody yet and therefore defers nothing.
+>
+> The second half is read from **whichever end of the DM the member is**: the author looks for the
+> recipient's receipt over a radio, and the recipient looks at the plane its own copy arrived on. A
+> recipient that had no such reading pushed the photo a radio had just handed it, which is the second
+> copy the option exists to avoid. A third party is unaffected: a carrier holds sealed bytes and no
+> message of this pair at all, so it finds nothing either way and pushes, as do avatars and group
+> photos.
+>
+> The author's half also needs a floor on **when the question can first be asked**. A client that wakes
+> its worker on a local custody change evaluates this on the send itself, before any receipt could have
+> come back, and a missing ack then says nothing about the radios. The reference client therefore holds
+> on the sighting alone for 60 s from the frame's `sentAt`, and only for a message it authored. Both
+> terms still expire on their own, so C-9.5-6 holds and the hold is seconds rather than the whole
+> sighting window.
 >
 > **Observability.** Nothing here is visible at a spool beyond a later `aput`, so a deferring member
 > and
@@ -1652,4 +1666,5 @@ the plane itself was unaffected either time, since a spool never decodes a frame
 | 2026-09-14 | **The deferral's evidence names a plane (ADR 2026-09.xmte).** §9.5's non-normative reference-client paragraph: the ack half of the push-half deferral counts only a receipt that arrived over a short-range radio. Read plane-agnostically it deferred an upload on the strength of a receipt that had itself crossed the spool, so a peer already out of radio range waited out the sighting window. C-9.5-5…9 are unchanged — they never named a plane | None for spools. Clients: a member that defers less, which no spool can tell apart; no record, derivation or vector moved |
 | 2026-09-12 | **Send-side moderation (§7.5).** One optional HELLO bool, `moderation`, by which an operator asks clients to run their on-device content screen before sending and to withhold what it flags, with no sender override; strictest wins across a multi-homed scope; receive-side behaviour untouched; no data-path change at the spool. §10.2 bullet, one §13 record vector appended | **Spools:** optional; a spool that does not set it omits the field and is unaffected. **Clients:** tolerate-and-ignore until the client half lands; no existing record, derivation or vector moved |
 | 2026-09-13 | **The direct push (§9.4 C-9.4-3, ADR 2026-09.y5f3).** A member may push a frame it does not custody — today one class, a room post's `relay = false` delivery tick at its ride deadline — under the ordinary §4.4 rule, C-9.2-1 and the size bounds, and must account it per §9.6 (C-9.6-1 gains the second writer). Appendix A row for `ScopeSync.pushDirect`. All client-side | None for spools: a pushed blob is a pushed blob. Clients: none of it is observable on the wire — no record, derivation or vector moved |
+| 2026-09-15 | **The deferral reads both ends, and not before an ack could exist (ADR 2026-09.p7j8).** §9.5's non-normative reference-client paragraph again: the evidence half is one fact read from whichever end of the DM the member is — the author's receipt over a radio, or the recipient's own arrival plane — and a missing ack counts for nothing until 60 s after the frame's `sentAt`, because a client that wakes on a local custody change asks first on the send itself. Without the first, a recipient re-uploaded every photo a radio had just handed it; without the second, the gate never fired at all. C-9.5-5…9 are unchanged | None for spools. Clients: a member that defers more, which no spool can tell apart; no record, derivation or vector moved |
 | 2026-09-14 | **The relay invite link (§7.4 note, `docs/RELAY_INVITE.md`).** A non-normative pointer: the reference client mints and accepts the relay, its token and its commons secret as one `https://getknit.app/r#…` link, applied on one confirmation. Client-side only; the link never reaches a spool | None for spools. Daemons SHOULD print the link beside `knit-commons:v1:…`; no record, derivation or vector moved |

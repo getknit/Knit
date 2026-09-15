@@ -351,20 +351,22 @@ doc). **Don't start a deferred item without explicit direction.**
   design decision.
 
 - **Attachment uploads are deferred while the radios carry them, SHIPPED 2026-08-17** (ADR 021,
-  `mesh/spool/AttachmentDeferPolicy`, spec §9.5's MAY + §10): an attachment we authored, whose
-  recipient acked it, waits while that peer is still on `MeshTransport.reachable`, so a photo that
-  already crossed a radio link is not copied to a relay as well. Deliberately **attachments only** —
-  gating frames would make the scope digest a function of local mesh state and it would never converge
-  again — and deliberately a **delay, not a veto**: it re-opens on the sighting expiring and ends 2 h
-  before the frame leaves custody. Groups never defer (the sealed group tick flips on the first
-  member's receipt). Counted as `spoolAttachDeferred` in Diagnostics and the `SPOOL` bridge. Still
-  owed: the same two-island trial — send a photo co-located (expect the deferred counter climbing and
-  no `aput`), separate the devices, expect the upload within one 60 s heal round. **The lab says this trial
-  would fail (2026-09-14):** `onCustodyChanged` wakes the worker the moment the frame is custodied, and that
-  round's attachment pass asks `AttachmentDeferPolicy.defer`, which needs the recipient's ack — a round trip
-  that cannot have completed. The chunk goes up, the counter stays at zero. `InternetPlaneLabTest`'s ignored
-  deferral scenario is the acceptance test for whatever fix is chosen (defer the attachment pass to the next
-  tick, or judge reachability alone inside the window).
+  `mesh/spool/AttachmentDeferPolicy`, spec §9.5's MAY + §10): an attachment a short-range radio already
+  carried between this DM's two members waits while that peer is still on `MeshTransport.reachable`, so
+  a photo that already crossed a radio link is not copied to a relay as well. Deliberately **attachments
+  only** — gating frames would make the scope digest a function of local mesh state and it would never
+  converge again — and deliberately a **delay, not a veto**: it re-opens on the sighting expiring and
+  ends 2 h before the frame leaves custody. Groups never defer (the sealed group tick flips on the first
+  member's receipt). Counted as `spoolAttachDeferred` in Diagnostics and the `SPOOL` bridge.
+  **The lab ran the owed trial on 2026-09-14 and it failed, twice over; both halves fixed 2026-09-15**
+  (issue #46, ADR 2026-09.p7j8). The *sender* was judged in the round `onCustodyChanged` woke — the send
+  itself — when the recipient's ack could not yet exist, so the chunk went up and the counter stayed at
+  zero; `ACK_GRACE_MS` (60 s, on the frame's own age) now separates "not yet" from "never". The
+  *recipient* then re-uploaded the photo BLE had just handed it, because the evidence was sender-shaped
+  only; `attachmentCarriedByRadio` now reads the one fact from either end. `InternetPlaneLabTest`'s
+  deferral scenario is un-ignored and is the acceptance test. Still owed: the same two-island trial on
+  hardware — send a photo co-located (expect the deferred counter climbing and no `aput`), separate the
+  devices, expect the upload within one 60 s heal round of the sighting lapsing.
 
 - **Sealed profile updates SHIPPED 2026-08-16** (ADR 020, was never a roadmap item — the gap surfaced in
   field testing after M5): `CTL_PROFILE = 8` carries name/status/avatar to established contacts inside v2

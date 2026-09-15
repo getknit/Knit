@@ -74,3 +74,15 @@ range, and its bytes waited out the rest of the sighting window. The second sign
 its plane**: `MessageDao.attachmentAckedOverRadio` requires `receivedVia` to name a short-range radio, so
 a receipt that crossed a spool or a board is not evidence. LoRa is excluded for the same reason the
 sighting set is narrowed to `nearbyPeers` — a board carries a frame and never a blob.
+
+*Amendment (2026-09-15, ADR 2026-09.p7j8, issue #46).* The gate above never fired for the case it was
+written for, and the owed device trial is why we know: the mesh-in-a-box lab ran it and the chunk went up
+while the peers were still in range. Two causes, one per end. The **sender** was judged in the round the
+send itself woke (`ScopeSync.onCustodyChanged`), when the recipient's receipt was still a round trip away
+and could not exist — so "the radios have not finished carrying this" was read as "the radios never
+carried this". `AttachmentDeferPolicy.ACK_GRACE_MS` (60 s, bounded by the frame's own age) now separates
+them. The **recipient** re-uploaded: the evidence was sender-shaped only, so a member who had just pulled
+a photo off a BLE link pushed those same bytes to the relay. `MessageDao.attachmentCarriedByRadio` now
+reads the one fact from either end — our send they acked over a radio, or their send that arrived over
+one — which narrows "a carrier never defers" to the true carrier it always meant. A carrier holds sealed
+bytes and no message row at all, so it still pushes, and so do avatars and group photos.

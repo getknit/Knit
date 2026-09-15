@@ -5,7 +5,7 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * When an attachment's bytes may be held back from a spool because the radios are still carrying them
  * (`docs/SPOOL_PROTOCOL.md` §9.5's push half). Pure like [ScopeFrames]/[GroupRootPolicy] — reachability,
- * the delivery tick and the clock are all injected — so the whole rule set is unit-testable with
+ * the radio evidence and the clock are all injected — so the whole rule set is unit-testable with
  * fixtures and this class stays free of Room, Android and [app.getknit.knit.mesh.MeshTransport].
  *
  * **The gate is a deferral, never a veto, and it must be self-reversing.** It holds bytes back only
@@ -23,30 +23,57 @@ import java.util.concurrent.ConcurrentHashMap
  * - **[reachable] is the presence plane** ([app.getknit.knit.mesh.MeshTransport.reachable]), which is
  *   cue-driven and includes peers we hold no data path to at all. On its own it would defer into a
  *   black hole.
- * - **[ackedOverRadio] is proof a short-range data path actually worked** for this attachment's own
- *   conversation. The *plane* is load-bearing, not the tick: since the Internet plane carries receipts,
- *   a peer can ack us end-to-end across a spool from anywhere, and counting that would make the gate
- *   defer on the very plane the push feeds. A LoRa ack is excluded too — a board carries a frame and
- *   never a blob — which is the same reason [reachable] is narrowed to the short-range set upstream.
+ * - **[carriedByRadio] is proof a short-range data path actually worked** for this attachment's own
+ *   conversation. The *plane* is load-bearing, not the delivery: since the Internet plane carries both
+ *   frames and receipts, a pair can reach each other end-to-end across a spool from anywhere, and
+ *   counting that would make the gate defer on the very plane the push feeds. LoRa is excluded too — a
+ *   board carries a frame and never a blob — which is the same reason [reachable] is narrowed to the
+ *   short-range set upstream.
+ *
+ * [carriedByRadio] asks one question from whichever end of the DM this node is. **We authored it:** did
+ * the recipient's receipt come back over a short-range radio. **They authored it:** did their message
+ * arrive here over one. The two readings are the same fact — these bytes already crossed a radio
+ * between this scope's only two members — and both are per-recipient and paired with the expiring
+ * sighting, so either way the gate stays a delay. Without the second reading a recipient re-uploaded
+ * every photo it had just pulled off a BLE link, which is precisely the second copy this class exists
+ * to prevent.
+ *
+ * A *missing* answer means two different things on the authoring end, and reading them as one is what
+ * made this gate never fire for the case it exists for. `ScopeSync.onCustodyChanged` runs a round on
+ * the *send itself*, so the first time [defer] is asked about a fresh photo the recipient's receipt is
+ * still a round trip away and cannot exist — "the radios have not finished carrying this" arriving as
+ * "the radios never carried this". [ackGraceMs] separates them: for that long after the frame was sent,
+ * an attachment on a message we authored ([authoredHere]) holds on the sighting alone, and after it the
+ * ordinary rule resumes. The receiving end needs no grace, since its row's plane is known the instant
+ * the row exists. Both halves still expire by themselves — the sighting lapses, the frame ages — so the
+ * deferral stays self-reversing, and reachability never holds bytes for the whole window, which is the
+ * black hole this class's [reachable] note warns about.
  *
  * Two exclusions fall out of the rules rather than being spelled out, and both are the safe direction:
- * a **carried** frame has no message row we authored, so a carrier always pushes; and an **avatar**
- * (a sealed `CTL_PROFILE` frame, which writes `PeerEntity` and no message row) always pushes too.
- * Neither should be "fixed" into a deferral without a delivery signal to justify it.
+ * a **carried** frame is nobody's message here — a carrier holds the sealed bytes and no message row at
+ * all — and an **avatar** (a sealed `CTL_PROFILE` frame) writes `PeerEntity` and no message row either,
+ * so [carriedByRadio] reads false for both and they always push. Neither should be "fixed" into a
+ * deferral without a delivery signal to justify it.
  */
 class AttachmentDeferPolicy(
     // Node ids on the presence plane right now, sampled per call — the smoothed `reachable` set, not the
     // ≤1 live data-path link, so an ephemeral sync rotation doesn't read as a peer leaving.
     private val reachable: () -> Set<String>,
-    // Whether a message WE authored names this attachment and was acked over a short-range radio
-    // (`MessageEntity.received` plus `receivedVia`, first-evidence-wins).
-    private val ackedOverRadio: suspend (aHash: String) -> Boolean,
+    // Whether this attachment's message crossed a short-range radio between us and the scope's peer —
+    // our own send acked over one, or their send that arrived over one (`MessageEntity.receivedVia`,
+    // first-evidence-wins in both readings).
+    private val carriedByRadio: suspend (aHash: String, peerId: String) -> Boolean,
+    // Whether WE authored any message naming this attachment, acked or not — the grace's subject, and
+    // nothing else. Only consulted inside [ackGraceMs], and only after [carriedByRadio] said no, so the
+    // settled case still costs one read.
+    private val authoredHere: suspend (aHash: String) -> Boolean,
     // The mesh custody TTL (`ForwardRepository.DEFAULT_TTL_MS`), injected rather than imported so this
     // layer keeps no dependency on the data layer. Bounds [lastCallMs] below.
     private val custodyTtlMs: Long,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val windowMs: Long = RADIO_WINDOW_MS,
     private val lastCallMs: Long = LAST_CALL_MS,
+    private val ackGraceMs: Long = ACK_GRACE_MS,
 ) {
     // nodeId -> when we last saw it on the presence plane. In memory by design: the plane persists
     // nothing (ADR 019), and losing this on restart only means deferring less. Bounded by construction —
@@ -75,7 +102,12 @@ class AttachmentDeferPolicy(
         if (ref.sentAt + custodyTtlMs - now <= lastCallMs) return false
         val seen = lastSeen[peerId] ?: return false
         if (now - seen > windowMs) return false
-        return ackedOverRadio(ref.aHash)
+        if (carriedByRadio(ref.aHash, peerId)) return true
+        // Too early to tell. A frame this young cannot have been acked yet — the receipt is a round trip
+        // away, and the round asking us here is the one the send itself woke — so a missing ack is not
+        // evidence the radios failed. Bounded by the frame's own age, so it re-opens with no new local
+        // activity, and it covers only a send of ours: nothing else is waiting on an ack at all.
+        return now - ref.sentAt < ackGraceMs && authoredHere(ref.aHash)
     }
 
     /** Stamps everyone currently reachable and forgets whoever can no longer justify a deferral. */
@@ -95,5 +127,14 @@ class AttachmentDeferPolicy(
 
         /** How long before a frame leaves custody we stop deferring its attachment and push regardless. */
         const val LAST_CALL_MS = 2 * 60 * 60_000L
+
+        /**
+         * How long after a frame was sent its missing ack still reads as "not yet" rather than "never".
+         * One `ScopeSync.TICK_INTERVAL_MS`, which is comfortably more than a co-located deliver-and-ack
+         * round trip over BLE or NAN and the same order as ADR 2026-09.y5f3's ride deadline. It is also
+         * the whole of the new cost: an attachment whose peer is in sight but whose radios never
+         * delivered reaches a relay one grace plus one tick later than it used to.
+         */
+        const val ACK_GRACE_MS = 60_000L
     }
 }

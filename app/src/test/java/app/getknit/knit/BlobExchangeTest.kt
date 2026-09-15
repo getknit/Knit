@@ -199,6 +199,43 @@ class BlobExchangeTest {
         }
 
     @Test
+    fun aBlobObtainedOffTheMeshIsNotReRequestedOnALinkUp() =
+        runTest(UnconfinedTestDispatcher()) {
+            // onReceived clears its own mark, but it is not the only way a want is satisfied: the spool saves
+            // an attachment in ScopeSync.fetchAttachment and a direct avatar push is ingested by
+            // InboundPipeline.onAvatarReceived, neither of which routes through it. A neighbor joining after
+            // one of those must not be asked to re-serve bytes we already hold.
+            val r = FakeLoopTransport("r")
+            val n = FakeLoopTransport("n")
+            val store = FakeBlobStore(Files.createTempDirectory("blob-offmesh").toFile())
+            val exchange =
+                BlobExchange(
+                    transport = r,
+                    store = store,
+                    selfId = { "r" },
+                    onObtained = { _, _ -> },
+                    now = { 0L },
+                )
+            val asked = CopyOnWriteArrayList<String>() // hashes n was asked for
+            backgroundScope.launch {
+                n.inbound.collect { f ->
+                    if (f.envelope.type == FrameType.BLOB_REQ) {
+                        WireCodec.decodePayload<BlobReqContent>(f.envelope.payload)?.let { asked += it.hash }
+                    }
+                }
+            }
+
+            exchange.want("spooled") // no neighbors yet — both recorded as fetching, nothing broadcast
+            exchange.want("stillMissing")
+            store.seed("spooled", "image/jpeg", "bytes".toByteArray()) // obtained over the Internet plane
+
+            r.connect(n)
+            exchange.onNeighborAdded(Peer("n"))
+
+            assertEquals("only the blob we still lack is asked for", listOf("stillMissing"), asked)
+        }
+
+    @Test
     fun fetchingGlobalCapEvictsOldestFirst() =
         runTest(UnconfinedTestDispatcher()) {
             val r = FakeLoopTransport("r")

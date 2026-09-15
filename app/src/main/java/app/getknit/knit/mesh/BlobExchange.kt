@@ -74,10 +74,16 @@ class BlobExchange(
 
     /** A new neighbor appeared: re-ask it for everything we're still missing (handles late-joining holders). */
     suspend fun onNeighborAdded(peer: Peer) {
-        val hashes = snapshotFetching()
-        if (hashes.isEmpty()) return
+        // Drop the marks whose bytes we have since obtained, then ask for the rest. [onReceived] clears its
+        // own, but the mesh is not the only plane that can satisfy a want: the spool saves an attachment and
+        // fires `onAttachmentObtained` (`ScopeSync.fetchAttachment`), and a direct avatar push is ingested by
+        // `InboundPipeline.onAvatarReceived` — neither routes through [onReceived], so without this the blob
+        // is re-requested on every link-up for the whole [FETCH_TTL_MS] window and the neighbor re-serves
+        // bytes we already hold. Asking the store here is the same guard [want] applies before it broadcasts.
+        val missing = snapshotFetching().filterNot { hash -> store.has(hash).also { if (it) clearFetching(hash) } }
+        if (missing.isEmpty()) return
         val me = selfId()
-        hashes.forEach { hash -> transport.send(blobRequest(me, hash), peer) }
+        missing.forEach { hash -> transport.send(blobRequest(me, hash), peer) }
     }
 
     /**

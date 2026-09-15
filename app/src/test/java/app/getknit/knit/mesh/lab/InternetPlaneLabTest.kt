@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.lab
 
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
+import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.spool.AttachmentDeferPolicy
 import app.getknit.knit.mesh.spool.FakeSpool
 import app.getknit.knit.mesh.spool.SpoolCommonsInfo
@@ -204,6 +205,48 @@ class InternetPlaneLabTest {
             assertTrue(
                 "the upload never happened after they parted",
                 lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
+            )
+        }
+
+    /**
+     * Issue #51: `BlobExchange` marks a want the moment a frame names an attachment it lacks, and only
+     * [app.getknit.knit.mesh.BlobExchange.onReceived] — the radio arrival — ever cleared it. When the spool
+     * delivers the bytes instead (`ScopeSync.fetchAttachment` → `onAttachmentObtained`), the mark survived,
+     * and `onNeighborAdded` asked the next neighbour to join for a picture this node already holds — a whole
+     * attachment re-served over the radio, for the rest of the 30-minute fetch TTL.
+     *
+     * The pair are parted for the whole transfer, so the relay is the only path the bytes can take. The clock
+     * jump is the deferral lapsing (ADR 021, and the shape [aPhotoTheRadioCarriedIsNotUploadedUntilThePeersPart]
+     * pins): Alice saw Bob on the radios during the acquaintance phase, so her push waits out that sighting
+     * before it uploads. The link that follows must produce no `blobreq` at all.
+     */
+    @Test
+    fun aPhotoTheRelayDeliveredIsNotAskedForAgainWhenTheRadiosComeBack() =
+        runBlocking {
+            val spool = FakeSpool()
+            val alice = lab.node("alice", spool = spool).apply { setDisplayName("Alice") }
+            val bob = lab.node("bob", spool = spool).apply { setDisplayName("Bob") }
+            // Derives both DM scopes, and leaves the pair unlinked.
+            lab.meetOnTheRelay(alice, bob)
+
+            val picture = Random(51).nextBytes(4_096)
+            assertTrue(alice.sendImage(picture, "off the relay", to = bob))
+            val id = alice.ownMessageId(alice.dmWith(bob), "off the relay")
+            val hash = checkNotNull(alice.attachmentHash(alice.dmWith(bob), id))
+            lab.clock.advance(AttachmentDeferPolicy.RADIO_WINDOW_MS + 60_000L)
+            assertTrue(
+                "bob never got the bytes over the relay",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.blobs.exists(hash)) 1 else 0 },
+            )
+
+            // Everything so far crossed the spool; from here only the link-up's own frames are on the radio.
+            bob.transport.sent.clear()
+            lab.link(alice, bob)
+            lab.assertConverged(listOf(alice, bob), atLeast = 3) { alice.dmThreadWith(bob)(it) }
+
+            assertTrue(
+                "bob re-asked for a picture the relay already gave him: ${bob.transport.sent}",
+                bob.transport.sent.none { it.contains(" ${FrameType.BLOB_REQ} ") },
             )
         }
 

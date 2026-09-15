@@ -1,6 +1,7 @@
 package app.getknit.knit.mesh.lab
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room3.Room
 import androidx.room3.withWriteTransaction
@@ -92,6 +93,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.robolectric.shadows.ShadowLog
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
@@ -159,17 +161,21 @@ class MeshLab {
     }
 
     /**
-     * Takes a link down (out of range). Frames parked on it are lost, as a torn-down link loses them. Settles
-     * for [SETTLE_MS] afterwards so every peer's neighbor collector observes the departure: `neighbors` is a
-     * conflating `StateFlow`, and a link that comes back inside the collector's wake-up is a link that never
-     * went down — no newcomer, so no profile push, no digest exchange, no re-send of an owed group seed. No
-     * radio flaps that fast; the lab can.
+     * Takes a link down (out of range). Frames parked on it are lost, as a torn-down link loses them. Returns
+     * only once both sides' neighbor collectors have been handed the departure ([LabTransport.awaitNeighborsObserved]):
+     * `neighbors` is a conflating `StateFlow`, and a link that comes back inside a collector's wake-up is a
+     * link that never went down to it — no newcomer, so no profile push, no digest exchange, no re-send of an
+     * owed group seed. No radio flaps that fast; the lab can, and on one slow core a collector's wake-up is
+     * long. A node with a board reads the composite's own `StateFlow` on top, which the lab cannot watch, so
+     * the [SETTLE_MS] pause stays as well.
      */
     suspend fun unlink(
         a: LabNode,
         b: LabNode,
     ) {
         a.transport.disconnect(b.transport)
+        a.transport.awaitNeighborsObserved()
+        b.transport.awaitNeighborsObserved()
         settle()
     }
 
@@ -209,6 +215,22 @@ class MeshLab {
                 true
             } == true
         }
+
+    /**
+     * What a failed wait reads next: every node's router and pipeline counters, every frame each transport
+     * handed a peer, and the warnings the stacks logged — the inbound path never throws out of `onDeliver`
+     * (`InboundPipeline`'s no-throw contract), it logs `Log.w` and drops, so a frame that vanished into a
+     * swallowed exception is visible nowhere else. Robolectric records every `Log` call per test.
+     */
+    fun report(nodes: List<LabNode>): String =
+        nodes.joinToString("\n") { it.metricsLine() } + "\n" +
+            nodes.joinToString("\n") { n -> "  ${n.name} sent: ${n.transport.sent}" } + "\n" +
+            "  warnings:\n" +
+            ShadowLog
+                .getLogs()
+                .filter { it.type >= Log.WARN }
+                .takeLast(WARNINGS_KEPT)
+                .joinToString("\n") { "    ${it.tag}: ${it.msg}${it.throwable?.let { t -> " ($t)" } ?: ""}" }
 
     /**
      * The universal oracle, in four parts, each awaited (the thing under test is exactly whether it happens)
@@ -252,8 +274,7 @@ class MeshLab {
                 if (sets.all { it.size >= atLeast } && sets.distinct().size == 1) 1 else 0
             }
         assertTrue(
-            "messages did not converge across $names within ${timeoutMs}ms:\n${listing(nodes, conversation)}\n" +
-                nodes.joinToString("\n") { it.metricsLine() },
+            "messages did not converge across $names within ${timeoutMs}ms:\n${listing(nodes, conversation)}\n${report(nodes)}",
             landed,
         )
         nodes.forEach { n ->
@@ -279,15 +300,14 @@ class MeshLab {
         val ticked = await(1, timeoutMs) { if (nodes.all { n -> n.missingAcks(conversation(n), nodes).isEmpty() }) 1 else 0 }
         val owed = nodes.map { n -> "  ${n.name}: ${n.missingAcks(conversation(n), nodes)}" }.joinToString("\n")
         assertTrue(
-            "delivery ticks did not converge across $names within ${timeoutMs}ms (message → who never acked):\n$owed\n" +
-                nodes.joinToString("\n") { it.metricsLine() },
+            "delivery ticks did not converge across $names within ${timeoutMs}ms (message → who never acked):\n$owed\n${report(nodes)}",
             ticked,
         )
 
         val stores = nodes + carriers
         val custodied = await(1, timeoutMs) { if (stores.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
         val rows = stores.map { n -> "  ${n.name}: ${n.custodyIds().sorted()}" }.joinToString("\n")
-        assertTrue("custody did not converge across ${stores.map { it.name }} within ${timeoutMs}ms:\n$rows", custodied)
+        assertTrue("custody did not converge across ${stores.map { it.name }} within ${timeoutMs}ms:\n$rows\n${report(stores)}", custodied)
 
         assertProfilesAgree(nodes, timeoutMs)
         assertSessionsAgree(nodes, timeoutMs)
@@ -511,34 +531,42 @@ class MeshLab {
 
     /**
      * Waits until the custody stores of [nodes] agree — what a link's digest exchange settles a moment after
-     * the profiles cross. A scenario that takes a link down right after [awaitAcquainted] can otherwise
-     * strand the later profile stamps on one side, and no plane fans an old stamp again.
+     * the profiles cross. [awaitAcquainted] folds this in, so a scenario that takes a link down the moment
+     * the nodes have met cannot strand the later profile stamps on one side (no plane fans an old stamp
+     * again); this stays for the fixtures that settle the stores at other points.
      */
     suspend fun awaitCustodyParity(vararg nodes: LabNode) {
         val ok = await(1) { if (nodes.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
         assertTrue(
-            "custody never settled among ${nodes.map {
-                it.name
-            }}:\n${nodes.map { "  ${it.name}: ${it.custodyIds().sorted()}" }.joinToString(
-                "\n",
-            )}",
+            "custody never settled among ${nodes.map { it.name }}:\n" +
+                nodes.map { "  ${it.name}: ${it.custodyIds().sorted()}" }.joinToString("\n") + "\n${report(nodes.toList())}",
             ok,
         )
     }
 
-    /** Waits until every pair in [nodes] has pinned the other's key — the profile exchange a link-up starts. */
+    /**
+     * Waits until every pair in [nodes] has pinned the other's key and the custody stores of [nodes] agree —
+     * the two halves of the handshake a link-up starts (the profile push, then the digest exchange). Met means
+     * both: a scenario may cut a link the moment this returns, and a node with a board and no link then has
+     * nothing to fan an old profile stamp with (`RoomTickPlanesLabTest` found the stores still settling on
+     * one slow core).
+     */
     suspend fun awaitAcquainted(vararg nodes: LabNode) {
         val pairs = nodes.flatMap { a -> nodes.filter { it !== a }.map { b -> a to b } }
         val ok = await(1) { if (pairs.all { (a, b) -> a.knows(b) }) 1 else 0 }
         val missing = pairs.filterNot { (a, b) -> a.knows(b) }.map { (a, b) -> "${a.name}→${b.name}" }
-        assertTrue(
-            "profiles never exchanged among ${nodes.map { it.name }}; missing $missing\n${nodes.joinToString("\n") { it.metricsLine() }}",
-            ok,
-        )
+        assertTrue("profiles never exchanged among ${nodes.map { it.name }}; missing $missing\n${report(nodes.toList())}", ok)
+        awaitCustodyParity(*nodes)
     }
 
     companion object {
-        const val AWAIT_MS = 15_000L
+        /**
+         * How long a scenario waits for anything it expects. A convergence takes a few hundred ms on a
+         * workstation and a few seconds on one core, so this is headroom for the CI runner — one shared
+         * vCPU with 2 GB and swap, where a GC or a page-in can stall the whole JVM for seconds — not a
+         * budget any scenario is meant to spend. A real failure costs one of these per unmet await.
+         */
+        const val AWAIT_MS = 30_000L
         const val POLL_MS = 25L
         const val WINDOW = 500
 
@@ -566,6 +594,9 @@ class MeshLab {
 
         /** How long a departure is left visible before the next topology change ([unlink], [LabNode.restart]). */
         const val SETTLE_MS = 100L
+
+        /** The newest warnings a failure report quotes ([report]); the stacks log a lot at boot. */
+        const val WARNINGS_KEPT = 40
     }
 }
 
@@ -830,10 +861,12 @@ class LabNode internal constructor(
 
     /**
      * Process death and relaunch: the live stack goes, the identity, database and settings stay. The links
-     * go too, and the peers get [MeshLab.SETTLE_MS] to notice before the node is back (see [MeshLab.unlink]).
+     * go too, and every peer's neighbor collector is handed the departure before the node is back (see
+     * [MeshLab.unlink]).
      */
     suspend fun restart() {
-        shutdownLive()
+        val peers = shutdownLive()
+        peers.forEach { it.awaitNeighborsObserved() }
         withContext(Dispatchers.Default) { delay(MeshLab.SETTLE_MS) }
         boot()
     }
@@ -847,8 +880,9 @@ class LabNode internal constructor(
     /** A stable board number per name, so two nodes on one air are never the same board. */
     private fun loraNodeNum(): UInt = (name.hashCode().toUInt() and 0x7FFF_FFFFu) + 1u
 
-    private fun shutdownLive() {
-        transport.disconnectAll()
+    /** Tears the live stack down and returns the transports it was linked to. */
+    private fun shutdownLive(): List<LabTransport> {
+        val peers = transport.disconnectAll()
         loraLog.clear()
         // stop() banks the ledger on the app scope, which the next line cancels; in the lab the "app" scope is
         // this session's, so bank it here first — the process-death the restart models is the orderly kind.
@@ -856,6 +890,7 @@ class LabNode internal constructor(
         manager.stop()
         scope?.cancel()
         scope = null
+        return peers
     }
 
     // --- what a user does ---

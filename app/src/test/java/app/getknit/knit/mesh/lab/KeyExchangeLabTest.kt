@@ -1,10 +1,6 @@
 package app.getknit.knit.mesh.lab
 
-import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.mesh.DropReason
-import app.getknit.knit.mesh.protocol.FrameType
-import app.getknit.knit.mesh.protocol.WireCodec
-import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -41,6 +37,14 @@ class KeyExchangeLabTest {
      * Carol, but only the post gets through. Carol cannot verify a stranger, so she parks the post and asks
      * Bob for the key; Bob serves Alice's profile; Carol pins it, replays the post, and the three custodies
      * agree — the served profile is a frame like any other.
+     *
+     * "Only the post" takes two knobs, because Alice sends Bob a second chat frame the scenario never asked
+     * for: Bob's tick for her post is his first sealed frame to her, it carries the X3DH init, and she answers
+     * it with a sealed profile (`IntroSync`) that Bob relays toward Carol some jitter after the post. The hold
+     * is released on the post alone, and from that moment until the re-link the pipe *loses* every flood
+     * relay — the answer, whenever Bob's jitter puts it — and passes only the point-to-point frames, which is
+     * what the served key is. Otherwise the answer reaches Carol before the key does and parks beside the
+     * post, and "one frame parked" reads two (a 1-in-8 flake on one core).
      */
     @Test
     fun aFrameFromAStrangerIsParkedAndReplayedWhenTheKeyIsFetched() =
@@ -57,9 +61,10 @@ class KeyExchangeLabTest {
             assertTrue(alice.sendRoom("from a stranger"))
             assertTrue(
                 "bob never relayed alice's post",
-                lab.await(1) { bob.transport.held(carol.transport).count { it.isChatFrom(alice.nodeId) } },
+                lab.await(1) { bob.transport.held(carol.transport).count { it.isRoomPostFrom(alice.nodeId) } },
             )
-            val released = bob.transport.release(carol.transport) { batch -> batch.filter { it.isChatFrom(alice.nodeId) } }
+            bob.transport.lossy(carol.transport) { it.relay } // the flood relays from here on are the air's to lose
+            val released = bob.transport.release(carol.transport) { batch -> batch.filter { it.isRoomPostFrom(alice.nodeId) } }
             assertEquals(1, released.size)
 
             assertTrue("carol never refused the stranger's frame", lab.await(1) { carol.drops(DropReason.NO_SENDER_KEY).toInt() })
@@ -90,6 +95,7 @@ class KeyExchangeLabTest {
             // relayed copies the hold ate are the digest exchange's to repair (a re-link does that part).
             // The full oracle therefore waits for the clock tier (TimeLabTest); here the delivery half and
             // the exact shape of the transient gap are pinned.
+            bob.transport.lossy(carol.transport) // a clean link again: the re-link's digest exchange repairs what the hold and the air ate
             lab.unlink(bob, carol)
             lab.link(bob, carol)
             assertTrue(lab.await(1) { if (carol.roomPosts()[alice.nodeId]?.contains("from a stranger") == true) 1 else 0 })
@@ -131,7 +137,4 @@ class KeyExchangeLabTest {
             lab.assertConverged(listOf(alice, carol), atLeast = 1) { it.dmWith(if (it === alice) carol else alice) }
             assertEquals(early, carol.decrypted(carol.dmWith(alice)).single().first)
         }
-
-    private fun WireEnvelope.isChatFrom(nodeId: String): Boolean =
-        WireCodec.decodeEnvelope(signed)?.let { it.type == FrameType.CHAT && it.senderId == nodeId } == true
 }

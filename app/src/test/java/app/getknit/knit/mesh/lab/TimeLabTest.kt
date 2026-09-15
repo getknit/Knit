@@ -2,9 +2,6 @@ package app.getknit.knit.mesh.lab
 
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.mesh.DropReason
-import app.getknit.knit.mesh.protocol.FrameType
-import app.getknit.knit.mesh.protocol.WireCodec
-import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -82,8 +79,8 @@ class TimeLabTest {
             lab.link(alice, bob)
             lab.awaitAcquainted(alice, bob)
             assertTrue(alice.sendRoom("from a stranger"))
-            assertTrue(lab.await(1) { bob.transport.held(carol.transport).count { it.isChatFrom(alice.nodeId) } })
-            bob.transport.release(carol.transport) { batch -> batch.filter { it.isChatFrom(alice.nodeId) } }
+            assertTrue(lab.await(1) { bob.transport.held(carol.transport).count { it.isRoomPostFrom(alice.nodeId) } })
+            bob.transport.release(carol.transport) { batch -> batch.filter { it.isRoomPostFrom(alice.nodeId) } }
             assertTrue(lab.await(1) { if (carol.knows(alice)) 1 else 0 })
             assertEquals(1L, carol.metrics.snapshot().keyRequestsSent)
 
@@ -237,9 +234,6 @@ class TimeLabTest {
                 assertEquals("${n.name} failed to open a frame", 0L, n.drops(DropReason.DECRYPT_FAILED))
             }
         }
-
-    private fun WireEnvelope.isChatFrom(nodeId: String): Boolean =
-        WireCodec.decodeEnvelope(signed)?.let { it.type == FrameType.CHAT && it.senderId == nodeId } == true
 
     private companion object {
         /** Past the router's 10-minute seen window. */

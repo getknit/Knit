@@ -153,7 +153,12 @@ class SessionLabTest {
                         .toInt()
                 },
             )
-            assertTrue("the three never opened", lab.await(3) { bob.decrypted(groupId).size })
+            val opened = lab.await(3) { bob.decrypted(groupId).size }
+            assertTrue(
+                "the three never opened: bob holds ${bob.decrypted(groupId).map { it.second }}\n" +
+                    "  alice↔bob sessions: ${alice.session(bob)} / ${bob.session(alice)}\n${lab.report(listOf(alice, bob))}",
+                opened,
+            )
             assertEquals(1L, bob.metrics.snapshot().groupKeyRequestsSent)
             // The seed the hold ate is still in Alice's custody and nowhere in Bob's; the digest exchange on
             // the next link-up (or the 60 s re-offer) is what serves it. Re-link, then the oracle.

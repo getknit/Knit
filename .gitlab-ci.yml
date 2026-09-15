@@ -162,9 +162,10 @@ test:unit:
 # 1-in-N flake here is a bug, either in the lab or in the mesh (the router overhear-suppression bug and the
 # lost-parked-seed gap both surfaced as flakes). Three consecutive green runs are the bar; `--rerun` forces
 # the Test task past Gradle's up-to-date check. Same compile/run split as test:unit, and each run forks its
-# own test JVM in turn, so the memory profile is test:unit's, three times over. Enforced, not advisory — but
-# the awaits are sized for a multi-core box (15 s per convergence, ~1 s per node to boot); if this runner's
-# single core turns out to miss them, widen MeshLab.AWAIT_MS before reaching for allow_failure.
+# own test JVM in turn, so the memory profile is test:unit's, three times over. Enforced, not advisory. The
+# awaits (MeshLab.AWAIT_MS, 30 s per convergence) are headroom for this single shared vCPU, not a budget: a
+# scenario converges in seconds even on one core, so a flake here is a fixture racing the mesh, not a slow
+# runner — reproduce it with the throttled loop in .agents/context/testing.md before touching a timeout.
 test:mesh-lab:
   extends: .android
   stage: test

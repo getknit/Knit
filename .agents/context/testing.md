@@ -113,6 +113,14 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
 - **A held frame that is filtered out at `release` is lost, like a dropped packet** — and the digest exchange
   repairs it only on the next link-up or the 60 s re-offer. A scenario that drops held frames re-links before
   the oracle (`KeyExchangeLabTest`, `SessionLabTest`'s key request), as `RoomTickPlanesLabTest` already did.
+- **A first sealed frame provokes a second one.** The tick a node sends for a stranger's post is its first
+  sealed frame to that author, so it carries the X3DH init, and the author answers it with a sealed profile
+  (`IntroSync.onPeerFrameOpened`) — a second chat frame from the same sender that a relay carries some jitter
+  after the post. Name the frame a hold waits for (`WireEnvelope.isRoomPostFrom`, not "a chat frame from
+  alice"), and where the scenario pins *how many* frames parked, make the pipe `lossy { it.relay }` from the
+  release to the re-link: the flood relays (the answer) are the air's to lose, the point-to-point served key
+  still crosses. `KeyExchangeLabTest` flaked 1-in-8 on one core before that (job 4354: two frames released;
+  locally: two parked).
 - **`LabLimits` carries the custody bounds** (`custodyTtlMs`, `custodyMaxRows`, `custodyMaxPerSender`, …,
   `ForwardRepository`'s constructor) and the LoRa Trickle interval (`loraGossipMinMs` / `loraGossipMaxMs`).
   Give every node in a scenario the same custody numbers — the digest is folded over what they keep.
@@ -188,6 +196,21 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
 - **Restart is real.** `node.restart()` tears the live stack down and rebuilds it over the same identity, DB
   and settings — every in-memory structure (`PendingInbound`, `PendingGroupKeys`, ratchet caches, seen set)
   starts empty.
+- **A departure is observed, not timed.** `neighbors` is a conflating `StateFlow`, so a link taken down and
+  brought back while `MeshManager.watchNeighbors` is still inside its body is a link that never went down to
+  it — no newcomer, no profile push, no digest exchange. `LabTransport` records the generation each collector
+  was last handed, and `unlink` / `restart` return only once every collector has been handed the departure
+  (`awaitNeighborsObserved`); the 100 ms `SETTLE_MS` stays only for a node with a board, whose manager reads
+  the composite's own `StateFlow` on top. Don't reintroduce a bare `delay` for this.
+- **`awaitAcquainted` means the whole handshake.** Pinned keys *and* custody parity among the nodes — a
+  scenario may cut a link the moment it returns. `RoomTickPlanesLabTest` cut the link on the pins alone and,
+  on one throttled core, stranded two of Alice's profile stamps on her side with only the air left to carry
+  them (the LoRa gossip is minutes); the oracle then waited on custody forever.
+- **The CI runner is one slow vCPU**, and every relay jitter, tick and seal ordering a scenario assumed on a
+  24-core box is randomized there. Reproduce a CI-only flake with the throttled loop, not on all cores:
+  `systemd-run --user --scope -q -p CPUQuota=50% taskset -c 0 ./gradlew :app:testDebugUnitTest --tests '…' --rerun --no-daemon`
+  in a loop, tallying the per-class XMLs; isolated classes flake less than the whole package, so validate
+  with `app.getknit.knit.mesh.lab.*` three or four times over.
 - **Time is real.** `MeshManager.start` builds its session on `Dispatchers.Default`, so scenarios run under
   `runBlocking` and poll (`MeshLab.await`), never virtual time. `node()` returns only once the router is
   collecting `inbound` — a `SharedFlow` with no replay drops what is emitted before that, and a link brought

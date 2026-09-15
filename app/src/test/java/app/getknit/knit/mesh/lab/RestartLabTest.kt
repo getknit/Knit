@@ -91,8 +91,8 @@ class RestartLabTest {
             lab.link(alice, bob)
             lab.awaitAcquainted(alice, bob)
             assertTrue(alice.sendRoom("parked on carol"))
-            assertTrue(lab.await(1) { bob.transport.held(carol.transport).count { it.isChatFrom(alice.nodeId) } })
-            bob.transport.release(carol.transport) { batch -> batch.filter { it.isChatFrom(alice.nodeId) } }
+            assertTrue(lab.await(1) { bob.transport.held(carol.transport).count { it.isRoomPostFrom(alice.nodeId) } })
+            bob.transport.release(carol.transport) { batch -> batch.filter { it.isRoomPostFrom(alice.nodeId) } }
             bob.transport.hold(carol.transport) // the served key is held too: carol dies still waiting
             assertTrue(
                 "carol never parked the frame",

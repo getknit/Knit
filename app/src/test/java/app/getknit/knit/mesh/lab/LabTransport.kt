@@ -7,15 +7,23 @@ import app.getknit.knit.mesh.Peer
 import app.getknit.knit.mesh.ReceivedDigest
 import app.getknit.knit.mesh.ReceivedFile
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The in-process radio behind a [LabNode]: a [MeshTransport] whose links are other [LabTransport]s in the same
@@ -35,8 +43,51 @@ class LabTransport(
      */
     private val stagingDir: File,
 ) : MeshTransport {
-    private val _neighbors = MutableStateFlow<Set<Peer>>(emptySet())
-    override val neighbors = _neighbors.asStateFlow()
+    /** One publish of the link set, stamped so a collector's hand-offs can be told apart from each other. */
+    private class Links(
+        val peers: Set<Peer>,
+        val generation: Long,
+    )
+
+    private val links = MutableStateFlow(Links(emptySet(), 0L))
+    private val generation = AtomicLong()
+
+    /**
+     * Per live collector of [neighbors], the generation it was last handed. A `StateFlow` conflates: a
+     * collector busy inside its body is handed only the newest value once it returns, so a link taken down
+     * and brought back while `MeshManager.watchNeighbors` is still processing the previous value is a link
+     * that never went down to it — no newcomer, no profile push, no digest exchange. On one slow core that
+     * window is real; [awaitNeighborsObserved] is how [MeshLab.unlink] and [LabNode.restart] wait for every
+     * collector to have been handed the departure before the link comes back.
+     */
+    private val handed = ConcurrentHashMap<Any, Long>()
+
+    /**
+     * The link set, with the `StateFlow` contract kept (the current value on subscribe, distinct-until-changed,
+     * conflated) — only the hand-off to each collector is recorded on the way through.
+     */
+    @OptIn(ExperimentalForInheritanceCoroutinesApi::class) // value, replayCache and collect are the whole contract
+    override val neighbors: StateFlow<Set<Peer>> =
+        object : StateFlow<Set<Peer>> {
+            override val value: Set<Peer> get() = links.value.peers
+            override val replayCache: List<Set<Peer>> get() = listOf(value)
+
+            override suspend fun collect(collector: FlowCollector<Set<Peer>>): Nothing {
+                val token = Any()
+                var last: Set<Peer>? = null
+                try {
+                    links.collect { published ->
+                        handed[token] = published.generation
+                        if (published.peers != last) {
+                            last = published.peers
+                            collector.emit(published.peers)
+                        }
+                    }
+                } finally {
+                    handed.remove(token)
+                }
+            }
+        }
 
     override val health = MutableStateFlow(TransportHealth.Healthy).asStateFlow()
 
@@ -102,8 +153,18 @@ class LabTransport(
         other.refreshNeighbors()
     }
 
-    fun disconnectAll() {
-        pipes.values.map { it.target }.forEach { disconnect(it) }
+    /** Unlinks from every peer and returns them, so a caller can wait for each to observe the departure. */
+    fun disconnectAll(): List<LabTransport> = pipes.values.map { it.target }.onEach { disconnect(it) }
+
+    /**
+     * Suspends until every live collector of [neighbors] has been handed the link set as last published — so
+     * a departure just published cannot be conflated away by a link the caller brings up next. Fails, rather
+     * than waits forever, on a collector that never wakes.
+     */
+    suspend fun awaitNeighborsObserved() {
+        val target = links.value.generation
+        val seen = withTimeoutOrNull(MeshLab.AWAIT_MS) { while (handed.values.any { it < target }) delay(1) } != null
+        check(seen) { "$nodeId: a neighbor collector never observed link publish #$target (${handed.values.sorted()})" }
     }
 
     /** From now on, frames this node sends [to] are parked instead of delivered — until [release]. */
@@ -204,7 +265,7 @@ class LabTransport(
     }
 
     private fun refreshNeighbors() {
-        _neighbors.value = pipes.keys.map { Peer(it) }.toSet()
+        links.value = Links(pipes.keys.map { Peer(it) }.toSet(), generation.incrementAndGet())
     }
 
     private companion object {
@@ -216,3 +277,15 @@ class LabTransport(
                 .AtomicLong()
     }
 }
+
+/**
+ * A Nearby-room post [nodeId] wrote — a chat frame with no recipient and no group. The distinction matters
+ * on a held pipe: a node's *first* sealed frame to a peer carries the X3DH init, and the peer answers it with a
+ * sealed profile (`IntroSync.onPeerFrameOpened`) — a second chat frame from the same author that a relay
+ * carries some jitter later. A scenario that waits for "a chat frame from alice" and releases by that test
+ * sometimes holds two (`KeyExchangeLabTest` flaked exactly so); this names the one it means.
+ */
+internal fun WireEnvelope.isRoomPostFrom(nodeId: String): Boolean =
+    WireCodec.decodeEnvelope(signed)?.let {
+        it.type == FrameType.CHAT && it.senderId == nodeId && it.recipientId == null && it.group == null
+    } == true

@@ -47,6 +47,13 @@ interface ScopeBlobs {
 interface SpoolDialer {
     /** Connects to [url], or null when the socket could not be opened. */
     suspend fun dial(url: String): SpoolSocket?
+
+    /**
+     * Reads what the spool at [url] is running from its `GET /source` document (see [SpoolSoftware]), or
+     * null when it serves none. Diagnostics only — nothing about the plane depends on the answer, which is
+     * why the default is "we did not ask" and a fake spool need not serve it.
+     */
+    suspend fun fetchSoftware(url: String): SpoolSoftware? = null
 }
 
 /** An open spool socket: a [SpoolLink] to write to plus its inbound stream, closed when the socket dies. */
@@ -128,6 +135,9 @@ class SpoolStatus(
     // The commons this spool advertised in its HELLO (§7.4), null while disconnected or when it runs none —
     // what the relay row's Join reads.
     val commons: SpoolCommonsInfo? = null,
+    // What this spool answered at `/source`, null until that lands and while disconnected: a build is a fact
+    // about the live connection like every other field here, not a remembered one.
+    val software: SpoolSoftware? = null,
 )
 
 /**
@@ -417,6 +427,12 @@ class ScopeSync(
         @Volatile
         private var lastError: String? = null
 
+        // What this spool answered at `/source` during the current session (§13 offer, [SpoolSoftware]).
+        // Fetched once per handshake rather than remembered across them, because a redeploy is exactly what
+        // drops the connection — so a build shown beside "connected" is the build that is connected.
+        @Volatile
+        private var software: SpoolSoftware? = null
+
         // A `Retry-After` the last dial came back with, in ms, consumed by the next backoff. Written and
         // read only by session()/runLoop(), which are the same coroutine.
         private var retryFloorMs = 0L
@@ -475,6 +491,7 @@ class ScopeSync(
                 // together or not at all, and a partial set means we must send no attachment record.
                 maxAttachBytes = connection?.limits?.takeIf { it.attachments }?.maxAttachBytes,
                 commons = connection?.commons,
+                software = connection?.let { software },
                 scopes =
                     mine(all, connection).map { scope ->
                         ScopeStatus(
@@ -490,6 +507,16 @@ class ScopeSync(
                         )
                     },
             )
+
+        /**
+         * Asks this spool what it is running (spec-external, [SpoolSoftware]) and files the answer against
+         * the session that asked. The identity check is what keeps a straggling answer — a slow route, a
+         * session that ended while the GET was in flight — off the *next* connection's row.
+         */
+        private suspend fun readSoftware(conn: SpoolConnection) {
+            val answer = dialer.fetchSoftware(url)
+            if (connection === conn) software = answer
+        }
 
         private suspend fun runLoop() {
             var backoff = MIN_BACKOFF_MS
@@ -515,6 +542,7 @@ class ScopeSync(
                 return false
             }
             val conn = connect(socket)
+            software = null
             connection = conn
             val pump = host.launch { for (bytes in socket.incoming) conn.onMessage(bytes) }
             // The socket dying before (or instead of) the spool's hello must resolve the handshake rather
@@ -530,6 +558,9 @@ class ScopeSync(
                 // A fresh handshake clears a stale refusal — unless the refusal is still in force: a fault
                 // of our own carried from the last session, or a scope the spool refused and we parked.
                 if (carriedFault == null && refusedUntil.values.none { it > clock() }) lastError = null
+                // Off the session's own path: this is one diagnostics row, and a spool that is slow to serve
+                // an HTTP route must not hold up the heal loop it answers records on.
+                host.launch { readSoftware(conn) }
                 subscribe(conn, mine(scopes, conn))
                 republishPresence() // a connected spool is what makes a stamped peer count
                 while (pump.isActive && currentCoroutineContext().isActive) {

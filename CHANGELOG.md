@@ -44,6 +44,8 @@ document:
   met. Every number is counted on your phone and stays there.
 - Tap a relay invite link and Knit adds that relay and turns relays on for you, once you have read what the
   relay will see. A contact card that names a relay you don't use now offers to add it the same way.
+- Diagnostics now shows which version a connected relay is running. A relay that publishes nothing about
+  itself, including one that is not Knit's own relay software, shows no version.
 
 ### Changed
 

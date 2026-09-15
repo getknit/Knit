@@ -717,6 +717,9 @@ private fun SpoolSection(spool: SpoolStatus) {
     MetricRow(SpoolUrl.host(spool.url), spool.connected.let { if (it) "connected" else "offline" })
     spool.lastError?.let { MetricRow("   last error", it) }
     if (spool.connected) {
+        // The relay's own build, when it publishes one. Absent for a spool implementation that serves no
+        // `/source`, so the row appears rather than reading "unknown" for a perfectly healthy relay.
+        spool.software?.label?.let { MetricRow("   software", it) }
         MetricRow("   photos", if (spool.maxAttachBytes != null) "yes" else "frames only")
         if (spool.powBits > 0) MetricRow("   proof-of-work", "${spool.powBits} bits")
     }

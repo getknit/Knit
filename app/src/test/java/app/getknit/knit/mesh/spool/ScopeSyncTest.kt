@@ -298,6 +298,66 @@ class ScopeSyncTest {
         }
 
     @Test
+    fun `a connected spool reports the build it published, and stops claiming one when the session ends`() =
+        runTest {
+            // The row is a fact about the live connection, like the attachment budget and the PoW cost
+            // beside it: a redeploy is exactly what drops the session, so a build left standing under
+            // "offline" would name the version of a process that is no longer there.
+            val spool = FakeSpool()
+            val publishing =
+                object : SpoolDialer by spool {
+                    override suspend fun fetchSoftware(url: String) =
+                        parseSpoolSoftware("""{"name":"knit-spool","version":"0.3.0","commit":"e8a7790"}""")
+                }
+            val member = member(spool, alice, bob, dialer = publishing)
+            member.sync.start(backgroundScope)
+            pump()
+
+            assertEquals(
+                "knit-spool 0.3.0 (e8a7790)",
+                member.sync
+                    .status()
+                    .single()
+                    .software
+                    ?.label,
+            )
+
+            // The spool goes away; read the row before the reconnect backoff expires and re-fetches.
+            spool.dropSockets()
+            runCurrent()
+            val offline = member.sync.status().single()
+            assertFalse(offline.connected)
+            assertNull("no connection, nothing to claim about it", offline.software)
+            member.sync.stop()
+        }
+
+    @Test
+    fun `a spool that publishes no build is reported without one`() =
+        runTest {
+            // A third-party spool implementation, or ours behind a proxy that swallows the route. Nothing
+            // about the plane depends on the answer, so the whole row is simply absent.
+            val spool = FakeSpool()
+            val member = member(spool, alice, bob)
+            member.sync.start(backgroundScope)
+            pump()
+
+            assertTrue(
+                "still a working connection",
+                member.sync
+                    .status()
+                    .single()
+                    .connected,
+            )
+            assertNull(
+                member.sync
+                    .status()
+                    .single()
+                    .software,
+            )
+            member.sync.stop()
+        }
+
+    @Test
     fun `a backlog pull does not make its author present`() =
         runTest {
             val spool = FakeSpool()

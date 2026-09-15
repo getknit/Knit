@@ -1,8 +1,10 @@
 package app.getknit.knit.mesh.spool
 
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -42,6 +44,33 @@ class OkHttpSpoolDialer(
         val socket = OkHttpSpoolSocket(channel)
         socket.attach(client.newWebSocket(request, socket.listener))
         return socket
+    }
+
+    /**
+     * One plain GET of the spool's `/source` document, on the same client as the socket.
+     *
+     * The token is stripped by [SpoolUrl.sourceUrl] before the request is built: the route is
+     * unauthenticated by design (a private spool's users are still owed the offer), so sending the
+     * credential would put it in a reverse proxy's access log for nothing. Every failure — an unreachable
+     * host, a proxy answering 404, a body that is not ours — is the same null, because a missing build
+     * string is a missing diagnostics row and never a reason to treat the relay as unhealthy.
+     */
+    override suspend fun fetchSoftware(url: String): SpoolSoftware? {
+        val request =
+            SpoolUrl
+                .sourceUrl(url, allowCleartext)
+                ?.let { source -> runCatching { Request.Builder().url(source).build() }.getOrNull() }
+                ?: return null
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                client.newCall(request).execute().use { response ->
+                    // Bounded like every other read from a spool: this body is written by a machine we do
+                    // not run, and `peekBody` is what stops an endless one being materialized to render a
+                    // single row.
+                    response.takeIf { it.isSuccessful }?.peekBody(MAX_SOURCE_BYTES)?.string()
+                }
+            }.getOrNull()?.let(::parseSpoolSoftware)
+        }
     }
 
     private class OkHttpSpoolSocket(
@@ -147,6 +176,9 @@ class OkHttpSpoolDialer(
 
         const val CONNECT_TIMEOUT_S = 15L
         const val PING_INTERVAL_S = 25L
+
+        /** Room for the five short strings `/source` answers with, and nothing like room for a page. */
+        const val MAX_SOURCE_BYTES = 4L * 1024
     }
 }
 

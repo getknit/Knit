@@ -66,3 +66,11 @@ exactly like a broken upload.
 Scheme: this file plus `docs/SPOOL_PROTOCOL.md` §9.5 (a MAY with two obligations) and §10. The spec's
 §13 vectors and the `knit-spool` conformance suite are untouched: a deferring member and an eager one are
 the same client to the same server.
+
+*Amendment (2026-09-14, ADR 2026-09.xmte, issue #52).* "The delivery tick — proof a data path actually
+worked" held only while the radios were the only thing that carried a receipt. Once the Internet plane
+began carrying them, a spool ack satisfied that half of the AND for a peer that had already left radio
+range, and its bytes waited out the rest of the sighting window. The second signal is now the tick **plus
+its plane**: `MessageDao.attachmentAckedOverRadio` requires `receivedVia` to name a short-range radio, so
+a receipt that crossed a spool or a board is not evidence. LoRa is excluded for the same reason the
+sighting set is narrowed to `nearbyPeers` — a board carries a frame and never a blob.

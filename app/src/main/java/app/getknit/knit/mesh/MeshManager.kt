@@ -415,7 +415,10 @@ class MeshManager(
             // not defer a spool upload (H5). [nearbyPeers] is the one definition of that set — a lambda, so
             // reading the property here is safe however late this field is initialized.
             reachable = { nearbyPeers.value.mapTo(mutableSetOf()) { peer -> peer.nodeId } },
-            ackedBySender = { aHash -> messages.attachmentAcked(aHash, identity.nodeId()) },
+            // Same line drawn on the ack: only a receipt that arrived over a short-range radio proves a data
+            // path moved bytes. A spool ack would defer on the plane the push feeds, a LoRa one on a plane
+            // that carries no blob at all.
+            ackedOverRadio = { aHash -> messages.attachmentAckedOverRadio(aHash, identity.nodeId()) },
             custodyTtlMs = ForwardRepository.DEFAULT_TTL_MS,
             clock = clock,
         )

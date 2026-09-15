@@ -42,8 +42,9 @@ class FakeSpool(
     // Version the server advertises; a value below SPOOL_RECORD_VERSION exercises the no-overlap close.
     private val version: Int = SPOOL_RECORD_VERSION,
     // false = a v1 spool: no attachment limits in HELLO, and any attachment record is silently skipped
-    // (never answered), which is exactly the stall a conforming client must avoid provoking.
-    private val attachments: Boolean = true,
+    // (never answered), which is exactly the stall a conforming client must avoid provoking. Mutable so a
+    // scenario can grow the support mid-run: the limits are read per dial, so [dropSockets] re-advertises.
+    var attachments: Boolean = true,
     private val maxAget: Int = 32,
     private val maxAChunk: Int = 49_221,
     private val maxAttachBytes: Int = 16_777_216,

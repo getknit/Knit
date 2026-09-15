@@ -17,8 +17,7 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-128 decisions.
-127 decisions.
+130 decisions.
 
 | ADR | Decision | Topics |
 | --- | --- | --- |
@@ -145,6 +144,7 @@ carries; never renumber an old one.
 | [2026-09.wx8e](decisions/2026-09-wx8e-the-commons-is-a-private-spool-s-group-chat.md) | The commons is a private spool's group chat | spool, commons |
 | [2026-09.x52a](decisions/2026-09-x52a-the-meshtastic-room-is-a-switch.md) | The Meshtastic room is a switch, and off means unread | lora, ui, settings |
 | [2026-09.xdm2](decisions/2026-09-xdm2-a-queued-snapshot-is-replaced-by-its-own-newer-copy.md) | A queued snapshot is replaced by its own newer copy | lora, airtime, mesh |
+| [2026-09.xmte](decisions/2026-09-xmte-radio-evidence-for-an-attachment-deferral-must-name-a-short-range-plane.md) | Radio evidence for an attachment deferral must name a short-range plane | spool, attachments, receipts |
 | [2026-09.y5f3](decisions/2026-09-y5f3-a-ride-hold-has-a-deadline.md) | A ride hold has a deadline, and the spool is the room tick's first way home | receipts, mesh, lora, spool |
 | [2026-09.y8pu](decisions/2026-09-y8pu-a-lora-fan-out-nobody-heard-does-not-suppress-its-own-backfill.md) | A LoRa fan-out nobody heard does not suppress its own backfill | lora, custody, reliability |
 | [2026-09.z58t](decisions/2026-09-z58t-the-chat-list-reads-per-thread-summaries.md) | The chat list reads per-thread summaries, and an accepted thread has no retention cap | data, ui, perf |

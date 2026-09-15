@@ -139,11 +139,15 @@ class MessageRepository(
 
     suspend fun hashesNeedingFetch(): List<String> = dao.hashesNeedingFetch()
 
-    /** Whether [me] authored a message naming attachment [hash] and it has been acked (spec §9.5's defer gate). */
-    suspend fun attachmentAcked(
+    /**
+     * Whether [me] authored a message naming attachment [hash] that was acked over a **short-range radio**
+     * (spec §9.5's defer gate). The plane set lives here so the mesh layer's call site names no
+     * [DeliveryPlane] at all.
+     */
+    suspend fun attachmentAckedOverRadio(
         hash: String,
         me: String,
-    ): Boolean = dao.attachmentAcked(hash, me)
+    ): Boolean = dao.attachmentAckedOverRadio(hash, me, DeliveryPlane.shortRangeCodes)
 
     /** Distinct conversations the local user ([me]) has authored in — the "threads I started" accepted signal. */
     suspend fun conversationsIAuthoredIn(me: String): List<String> = dao.conversationsIAuthoredIn(me)

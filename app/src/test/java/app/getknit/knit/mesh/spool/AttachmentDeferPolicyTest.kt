@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.spool
 
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertFalse
@@ -22,12 +23,15 @@ class AttachmentDeferPolicyTest {
 
     private var clock = start
     private var reachable = setOf(bob)
-    private var acked = true
+
+    // The plane the recipient's receipt arrived on, or null for a frame nobody has acked. The production
+    // lambda is `MessageDao.attachmentAckedOverRadio`, whose SQL is covered in `MessageDaoTest`.
+    private var ackPlane: DeliveryPlane? = DeliveryPlane.Nearby
 
     private fun policy() =
         AttachmentDeferPolicy(
             reachable = { reachable },
-            ackedBySender = { acked },
+            ackedOverRadio = { ackPlane?.shortRange == true },
             custodyTtlMs = custodyTtlMs,
             clock = { clock },
         )
@@ -52,8 +56,10 @@ class AttachmentDeferPolicyTest {
     private fun ref(sentAt: Long = start) = ScopeAttachments.Ref(aHash = aHash, mime = "image/jpeg", sentAt = sentAt)
 
     @Test
-    fun `an acked attachment whose peer is on the presence plane waits for the radios`() =
+    fun `an attachment acked over a radio whose peer is on the presence plane waits for the radios`() =
         runTest {
+            // Both halves satisfied: a short-range receipt proves a data path worked for this pair, and the
+            // peer is still in sight. This is the only shape that defers.
             assertTrue(policy().defer(dmScope(), ref()))
         }
 
@@ -86,7 +92,35 @@ class AttachmentDeferPolicyTest {
         runTest {
             // Presence is the cue plane — a peer can be reachable with no data path at all, so an
             // un-ticked frame is exactly the case the Internet plane exists for.
-            acked = false
+            ackPlane = null
+            assertFalse(policy().defer(dmScope(), ref()))
+        }
+
+    @Test
+    fun `an attachment acked over the spool is uploaded even with the peer in sight`() =
+        runTest {
+            // The evidence has to name a plane that could have carried the *bytes*. A receipt that came
+            // back across a spool says the peer read us from anywhere at all, and deferring on it would
+            // hold the upload back on the strength of the very plane the upload feeds.
+            ackPlane = DeliveryPlane.Internet
+            assertFalse(policy().defer(dmScope(), ref()))
+        }
+
+    @Test
+    fun `an attachment acked over LoRa is uploaded even with the peer in sight`() =
+        runTest {
+            // A board carries a frame and never a blob, which is the same reason the reachable set is
+            // narrowed to the short-range radios upstream.
+            ackPlane = DeliveryPlane.LoRa
+            assertFalse(policy().defer(dmScope(), ref()))
+        }
+
+    @Test
+    fun `an attachment acked by a build too old to record a plane is uploaded`() =
+        runTest {
+            // `DeliveryPlane.Unknown` is what a row written before the column reads back as, and an
+            // unknown plane is not evidence — the uncertain case resolves to push like every other.
+            ackPlane = DeliveryPlane.Unknown
             assertFalse(policy().defer(dmScope(), ref()))
         }
 

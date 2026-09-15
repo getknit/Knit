@@ -195,18 +195,26 @@ interface MessageDao {
     suspend fun hashesNeedingFetch(): List<String>
 
     /**
-     * Whether a message [me] authored names the ciphertext [hash] and has been acked — the delivery
-     * evidence `AttachmentDeferPolicy` needs before holding an upload back from the Internet plane. A
-     * hash we hold no *authored* row for (a relayed attachment, or an avatar, which writes no message
-     * row at all) reads false, which is the safe answer: it pushes.
+     * Whether a message [me] authored names the ciphertext [hash] and was acked **over a short-range
+     * radio** — the delivery evidence `AttachmentDeferPolicy` needs before holding an upload back from the
+     * Internet plane. [planes] is [DeliveryPlane.shortRangeCodes]; Room's `@Query` can't name the enum, the
+     * way `sendersIn` can't name [MessageEntity.KIND_NORMAL].
+     *
+     * The plane is what makes this *radio* evidence rather than mere delivery. [receivedVia] is
+     * first-evidence-wins ([markReceived]), so it names the plane the message actually first arrived on: a
+     * receipt that rode a spool or a board leaves this false, and the attachment is pushed. Every other
+     * uncertain case reads false too and therefore pushes — a hash we hold no *authored* row for (a relayed
+     * attachment, or an avatar, which writes no message row at all), and a row written by a build older than
+     * the column, whose [DeliveryPlane.Unknown] is in no plane set.
      */
     @Query(
         "SELECT EXISTS(SELECT 1 FROM messages " +
-            "WHERE attachmentHash = :hash AND senderId = :me AND received = 1)",
+            "WHERE attachmentHash = :hash AND senderId = :me AND received = 1 AND receivedVia IN (:planes))",
     )
-    suspend fun attachmentAcked(
+    suspend fun attachmentAckedOverRadio(
         hash: String,
         me: String,
+        planes: List<Int>,
     ): Boolean
 
     /**

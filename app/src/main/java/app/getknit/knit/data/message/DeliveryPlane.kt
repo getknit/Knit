@@ -41,8 +41,23 @@ enum class DeliveryPlane(
     LoRa(5),
     ;
 
+    /**
+     * Whether this plane is a **short-range radio** — a phone-to-phone data path, so bytes can ride it.
+     * The [Nearby] family and nothing else, which is the "treat all three as arrived nearby" rule above
+     * turned into a question a caller can ask; it is the [app.getknit.knit.mesh.MeshTransport.shortRange]
+     * distinction, read off a stored receipt instead of a live transport.
+     *
+     * [LoRa] and [Internet] are false for different reasons and both matter. A board carries a frame but
+     * never a blob, so a LoRa ack proves nothing about bytes; and the Internet plane is the one an
+     * attachment push *feeds*, so an ack that rode it is the opposite of evidence the radios coped.
+     */
+    val shortRange: Boolean get() = this == Nearby || this == Bluetooth || this == WifiAware
+
     companion object {
         /** The plane for a stored [code], falling back to [Unknown] rather than throwing on an unknown one. */
         fun fromCode(code: Int): DeliveryPlane = entries.firstOrNull { it.code == code } ?: Unknown
+
+        /** The [shortRange] planes' stored codes — a Room `IN (:planes)` predicate can't name the enum. */
+        val shortRangeCodes: List<Int> = entries.filter { it.shortRange }.map { it.code }
     }
 }

@@ -23,7 +23,11 @@ import java.util.concurrent.ConcurrentHashMap
  * - **[reachable] is the presence plane** ([app.getknit.knit.mesh.MeshTransport.reachable]), which is
  *   cue-driven and includes peers we hold no data path to at all. On its own it would defer into a
  *   black hole.
- * - **[ackedBySender] is proof a data path actually worked** for this attachment's own conversation.
+ * - **[ackedOverRadio] is proof a short-range data path actually worked** for this attachment's own
+ *   conversation. The *plane* is load-bearing, not the tick: since the Internet plane carries receipts,
+ *   a peer can ack us end-to-end across a spool from anywhere, and counting that would make the gate
+ *   defer on the very plane the push feeds. A LoRa ack is excluded too — a board carries a frame and
+ *   never a blob — which is the same reason [reachable] is narrowed to the short-range set upstream.
  *
  * Two exclusions fall out of the rules rather than being spelled out, and both are the safe direction:
  * a **carried** frame has no message row we authored, so a carrier always pushes; and an **avatar**
@@ -34,8 +38,9 @@ class AttachmentDeferPolicy(
     // Node ids on the presence plane right now, sampled per call — the smoothed `reachable` set, not the
     // ≤1 live data-path link, so an ephemeral sync rotation doesn't read as a peer leaving.
     private val reachable: () -> Set<String>,
-    // Whether a message WE authored names this attachment and has been acked (`MessageEntity.received`).
-    private val ackedBySender: suspend (aHash: String) -> Boolean,
+    // Whether a message WE authored names this attachment and was acked over a short-range radio
+    // (`MessageEntity.received` plus `receivedVia`, first-evidence-wins).
+    private val ackedOverRadio: suspend (aHash: String) -> Boolean,
     // The mesh custody TTL (`ForwardRepository.DEFAULT_TTL_MS`), injected rather than imported so this
     // layer keeps no dependency on the data layer. Bounds [lastCallMs] below.
     private val custodyTtlMs: Long,
@@ -70,7 +75,7 @@ class AttachmentDeferPolicy(
         if (ref.sentAt + custodyTtlMs - now <= lastCallMs) return false
         val seen = lastSeen[peerId] ?: return false
         if (now - seen > windowMs) return false
-        return ackedBySender(ref.aHash)
+        return ackedOverRadio(ref.aHash)
     }
 
     /** Stamps everyone currently reachable and forgets whoever can no longer justify a deferral. */

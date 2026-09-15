@@ -78,6 +78,62 @@ class MessageDaoTest : RoomDbTest() {
         }
 
     @Test
+    fun `attachmentAckedOverRadio counts only a short-range ack, and only on a row we authored`() =
+        runTest {
+            // The §9.5 defer gate's evidence half. A spool or LoRa receipt says the message got there, not
+            // that a radio moved the bytes, so only the Nearby family may hold an upload back.
+            suspend fun acked(hash: String) = dao.attachmentAckedOverRadio(hash, ME, DeliveryPlane.shortRangeCodes)
+
+            dao.upsert(
+                msg("radio", sender = ME, attachmentHash = "H-radio", received = true)
+                    .copy(receivedVia = DeliveryPlane.Nearby.code),
+            )
+            assertTrue("a radio ack is the one that defers", acked("H-radio"))
+
+            // The two reserved radio codes belong to the same family, so a build that starts writing them
+            // must not silently stop deferring.
+            dao.upsert(
+                msg("ble", sender = ME, attachmentHash = "H-ble", received = true)
+                    .copy(receivedVia = DeliveryPlane.Bluetooth.code),
+            )
+            assertTrue("Bluetooth is the Nearby family", acked("H-ble"))
+            dao.upsert(
+                msg("nan", sender = ME, attachmentHash = "H-nan", received = true)
+                    .copy(receivedVia = DeliveryPlane.WifiAware.code),
+            )
+            assertTrue("Wi-Fi Aware is the Nearby family", acked("H-nan"))
+
+            dao.upsert(
+                msg("spool", sender = ME, attachmentHash = "H-spool", received = true).copy(receivedVia = DeliveryPlane.Internet.code),
+            )
+            assertFalse("the plane the push feeds is not evidence for deferring it", acked("H-spool"))
+
+            dao.upsert(
+                msg("board", sender = ME, attachmentHash = "H-board", received = true)
+                    .copy(receivedVia = DeliveryPlane.LoRa.code),
+            )
+            assertFalse("a board carries a frame and never a blob", acked("H-board"))
+
+            // A row from a build older than the column: `Unknown` is in no plane set, so it pushes.
+            dao.upsert(msg("legacy", sender = ME, attachmentHash = "H-legacy", received = true))
+            assertFalse("an unrecorded plane is not evidence", acked("H-legacy"))
+
+            dao.upsert(
+                msg("unacked", sender = ME, attachmentHash = "H-unacked")
+                    .copy(receivedVia = DeliveryPlane.Nearby.code),
+            )
+            assertFalse("the tick still has to be flipped", acked("H-unacked"))
+
+            // A carried attachment has no authored row, which is why a carrier never defers.
+            dao.upsert(
+                msg("theirs", sender = "bob", attachmentHash = "H-theirs", received = true).copy(receivedVia = DeliveryPlane.Nearby.code),
+            )
+            assertFalse("someone else's send is not ours to defer", acked("H-theirs"))
+
+            assertFalse("a hash we hold no row for at all", acked("H-absent"))
+        }
+
+    @Test
     fun `insertIfAbsent leaves an existing row untouched`() =
         runTest {
             // The inbound write: a re-served frame is the same signed bytes, so the first row for an id is

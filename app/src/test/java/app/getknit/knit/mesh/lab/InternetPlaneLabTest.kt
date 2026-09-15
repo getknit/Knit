@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.lab
 
+import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.spool.FakeSpool
 import app.getknit.knit.mesh.spool.SpoolCommonsInfo
@@ -156,7 +157,7 @@ class InternetPlaneLabTest {
      * ADR 021's owed trial, and FINDING #46 (2026-09-14, first run): the chunk went up while Bob was in range.
      * `ScopeSync.onCustodyChanged` wakes the worker the moment the frame is custodied, and that round's
      * `healAttachments` runs `AttachmentDeferPolicy.defer`, whose rule needs the recipient's ack
-     * (`ackedBySender`) — which cannot exist yet: the ack is a round trip over the link and the round is
+     * (`ackedOverRadio`) — which cannot exist yet: the ack is a round trip over the link and the round is
      * already pushing. So the deferral holds only for a send whose ack beat the relay, which a fast relay
      * never allows, and the counter the trial expects to climb stays at zero. Ignored until the design
      * decides (defer the attachment pass to the next tick, or judge reachability alone within the window).
@@ -190,6 +191,70 @@ class InternetPlaneLabTest {
             assertTrue(
                 "the upload never happened after they parted",
                 lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
+            )
+        }
+
+    /**
+     * Issue #52: the deferral's evidence half must name a plane that could have carried the *bytes*. Alice saw
+     * Bob on the radios minutes ago (well inside `RADIO_WINDOW_MS`), but the receipt for this image came back
+     * across the spool — so the radios never had these bytes and nothing may hold them back. Before the fix
+     * the ack was read plane-agnostically, the spool receipt satisfied the gate, and every round from then to
+     * the end of the sighting window deferred.
+     *
+     * Two lab-specific obstacles shape the staging, and both are why the metric rather than `chunksPut` is the
+     * oracle. `AttachmentDeferPolicy` samples the presence plane **lazily**, from inside `defer` — correct in
+     * production, where a round runs constantly, but it means a scenario must have an attachment pending
+     * while the peers are linked or no sighting is ever recorded. An **avatar** is the one reference that can
+     * stamp it without polluting the count: it writes no message row, so it can never defer whatever its
+     * plane. And finding #46 stands — the subject image's first round beats any ack — so its chunks go up
+     * either way, and what the fix changes is whether the rounds *after* the ack defer.
+     */
+    @Test
+    fun aPhotoAckedOnlyAcrossTheSpoolIsNeverDeferredOnThatAck() =
+        runBlocking {
+            val spool = FakeSpool()
+            val alice = lab.node("alice", spool = spool).apply { setDisplayName("Alice") }
+            val bob = lab.node("bob", spool = spool).apply { setDisplayName("Bob") }
+            // Derives both DM scopes, and leaves the pair unlinked.
+            lab.meetOnTheRelay(alice, bob)
+
+            // Linked, with an avatar pending, so a round runs `defer` and stamps its sighting of bob.
+            lab.link(alice, bob)
+            alice.setAvatar(Random(520).nextBytes(2_048))
+            assertTrue(
+                "the avatar never reached the spool, so no round sighted bob",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
+            )
+            lab.unlink(alice, bob)
+            spool.chunksPut.clear()
+
+            val picture = Random(52).nextBytes(4_096)
+            assertTrue(alice.sendImage(picture, "only the relay carried this", to = bob))
+            lab.assertConverged(listOf(alice, bob), atLeast = 3, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                alice.dmThreadWith(bob)(it)
+            }
+            val thread = alice.dmWith(bob)
+            val sent = alice.ownMessageId(thread, "only the relay carried this")
+            assertTrue(
+                "bob's receipt has to land before the attachment pass can weigh it",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                    if (alice.receivedVia(thread, sent) == DeliveryPlane.Internet) 1 else 0
+                },
+            )
+
+            // A second image is the witness that a round ran *after* the ack: its own chunks can only go up
+            // from a pass that weighed every reference this scope carries, the acked one included. A deferral
+            // spends no round-trip budget, so nothing crowds it out.
+            val chunksBefore = spool.chunksPut.size
+            assertTrue(alice.sendImage(Random(53).nextBytes(4_096), "and one more", to = bob))
+            assertTrue(
+                "no round ran after the ack landed",
+                lab.await(chunksBefore + 1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
+            )
+            assertEquals(
+                "an ack that only crossed the spool is not evidence the radios carried the bytes",
+                0L,
+                alice.metrics.snapshot().spoolAttachDeferred,
             )
         }
 

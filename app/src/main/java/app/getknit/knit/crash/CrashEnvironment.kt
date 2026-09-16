@@ -28,7 +28,16 @@ data class CrashEnvironment(
     val release: String,
     val abis: String,
     val fingerprint: String,
-)
+) {
+    /** `2.5.1 (21) release` — the crash header's `app:` value, shared with the About screen's Copy build info. */
+    fun appLine(): String = "$versionName ($versionCode) $buildType"
+
+    /** `Google Pixel 8 (shiba)` — the `device:` value `.github/workflows/needs-info.yml` looks for. */
+    fun deviceLine(): String = "$manufacturer $model ($device)"
+
+    /** `16 (SDK 36)` — the `android:` value. */
+    fun androidLine(): String = "$release (SDK $sdkInt)"
+}
 
 /**
  * Reads this build and device's facts. Deliberately branch-free field copying with no logic beyond the

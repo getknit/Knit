@@ -116,6 +116,16 @@ class AccessibilityInstrumentedTest : SeededUiTest() {
     // poison-pill row and its error-tinted copy too, not just the metrics list.
     @Test fun diagnostics() = audit(route = "diagnostics") { awaitText("Maya Okonkwo") }
 
+    // About is synchronous — BuildConfig, Build and one PackageManager read — so any tag would do; the last
+    // Build row keeps the anchor honest if a row ever turns async. The licenses list is a lazy column, so its
+    // first row is the one that is on screen; the GPL text is the only screen here with an IO read, and its
+    // body tag appears only once the paragraphs are in.
+    @Test fun about() = audit(route = "about") { awaitTag("about_build_device") }
+
+    @Test fun licenses() = audit(route = "licenses") { awaitTag("licenses_row_knit") }
+
+    @Test fun licenseText() = audit(route = "license/gpl-3.0-or-later") { awaitTag("license_text_body") }
+
     @Test fun internetRelays() = audit(route = "relays") { awaitTag("relays_switch") }
 
     // The seeded build banks lifetime numbers, met peers and a few custodied frames (DemoWriter.seedYourMesh),

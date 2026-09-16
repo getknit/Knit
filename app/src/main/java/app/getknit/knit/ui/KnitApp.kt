@@ -31,10 +31,14 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.legal.License
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshService
 import app.getknit.knit.mesh.MeshStartGate
 import app.getknit.knit.review.ReviewPrompter
+import app.getknit.knit.ui.about.AboutScreen
+import app.getknit.knit.ui.about.LicenseTextScreen
+import app.getknit.knit.ui.about.LicensesScreen
 import app.getknit.knit.ui.addcontact.AddContactScreen
 import app.getknit.knit.ui.addcontact.ContactCardInbox
 import app.getknit.knit.ui.blocked.BlockedUsersScreen
@@ -85,6 +89,8 @@ private object Routes {
     const val LORA_RADIO = "lora"
     const val SHARE = "share"
     const val SEARCH = "search"
+    const val ABOUT = "about"
+    const val LICENSES = "licenses"
 
     // The optional `messageId` is how a search hit opens a thread ON a message; everywhere else — the
     // notification route, the pickers, `demo_route` — the path alone still matches, and the thread opens
@@ -107,6 +113,11 @@ private object Routes {
     const val GROUP_DETAILS = "groupDetails/{groupId}"
 
     fun groupDetails(groupId: String) = "groupDetails/$groupId"
+
+    // A License's routeId is its lower-cased SPDX id (`gpl-3.0-or-later`), so it needs no escaping.
+    const val LICENSE = "license/{licenseId}"
+
+    fun license(license: License) = "license/${license.routeId}"
 
     const val MESSAGE_DETAILS = "messageDetails/{messageId}"
 
@@ -449,10 +460,33 @@ fun KnitApp(startRoute: String? = null) {
                 onOpenProfile = { navController.navigate(Routes.PROFILE) },
                 onOpenRelays = { navController.navigate(Routes.INTERNET_RELAYS) },
                 onOpenLora = { navController.navigate(Routes.LORA_RADIO) },
+                onOpenAbout = { navController.navigate(Routes.ABOUT) },
+                onOpenLicenses = { navController.navigate(Routes.LICENSES) },
             )
         }
         composable(Routes.PROFILE) {
             ProfileScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.ABOUT) {
+            AboutScreen(
+                onBack = { navController.popBackStack() },
+                onOpenLicenses = { navController.navigate(Routes.LICENSES) },
+                onOpenLicense = { navController.navigate(Routes.license(it)) },
+            )
+        }
+        composable(Routes.LICENSES) {
+            LicensesScreen(
+                onBack = { navController.popBackStack() },
+                onOpenLicense = { navController.navigate(Routes.license(it)) },
+            )
+        }
+        composable(
+            route = Routes.LICENSE,
+            arguments = listOf(navArgument("licenseId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val license =
+                backStackEntry.arguments?.getString("licenseId")?.let(License::fromRouteId) ?: return@composable
+            LicenseTextScreen(license = license, onBack = { navController.popBackStack() })
         }
         // The Internet-relay plane's editor exists only in builds that introduce the feature — the route
         // is not registered at all when it is dark, so nothing (a restored back stack, a future deep

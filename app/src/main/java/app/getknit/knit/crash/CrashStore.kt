@@ -115,7 +115,7 @@ class CrashStore(
         buildString {
             appendLine("FATAL EXCEPTION: $threadName")
             appendLine("Knit crash report - redacted on device. Nothing was uploaded.")
-            appendLine("app: ${environment.versionName} (${environment.versionCode}) ${environment.buildType}")
+            appendLine("app: ${environment.appLine()}")
             if (environment.obfuscated) {
                 appendLine(
                     "obfuscated: yes - frames are R8-mangled; deobfuscate with " +
@@ -123,9 +123,9 @@ class CrashStore(
                 )
             }
             appendLine("time: ${Instant.ofEpochMilli(stamp)} ($stamp)")
-            appendLine("device: ${environment.manufacturer} ${environment.model} (${environment.device})")
+            appendLine("device: ${environment.deviceLine()}")
             appendLine("board: ${environment.board}  hardware: ${environment.hardware}  soc: ${environment.soc}")
-            appendLine("android: ${environment.release} (SDK ${environment.sdkInt})")
+            appendLine("android: ${environment.androidLine()}")
             appendLine("abis: ${environment.abis}")
             appendLine("fingerprint: ${environment.fingerprint}")
             appendLine("redaction: structural (ids, urls, paths, non-ascii); names applied when this is read")

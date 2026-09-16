@@ -6,6 +6,7 @@ package app.getknit.knit.ui.settings
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +22,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -88,6 +94,8 @@ fun SettingsScreen(
     onOpenProfile: () -> Unit = {},
     onOpenRelays: () -> Unit = {},
     onOpenLora: () -> Unit = {},
+    onOpenAbout: () -> Unit = {},
+    onOpenLicenses: () -> Unit = {},
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val header by viewModel.header.collectAsStateWithLifecycle()
@@ -119,6 +127,8 @@ fun SettingsScreen(
         onToggleDynamicColor = viewModel::setDynamicColor,
         onOpenRelays = onOpenRelays,
         onOpenLora = onOpenLora,
+        onOpenAbout = onOpenAbout,
+        onOpenLicenses = onOpenLicenses,
         onAllowBattery = { requestIgnoreBatteryOptimizations(context) },
         onOpenBatterySettings = { openAppSettings(context) },
     )
@@ -137,6 +147,8 @@ internal fun SettingsScreenContent(
     onToggleDynamicColor: (Boolean) -> Unit = {},
     onOpenRelays: () -> Unit,
     onOpenLora: () -> Unit = {},
+    onOpenAbout: () -> Unit = {},
+    onOpenLicenses: () -> Unit = {},
     // Whether the Internet-relay plane is introduced at all in this build. A parameter rather than a
     // bare BuildConfig read so the hidden case is previewable and testable; see app/build.gradle.kts.
     showInternetRelays: Boolean = BuildConfig.INTERNET_PLANE,
@@ -151,6 +163,7 @@ internal fun SettingsScreenContent(
     onAllowBattery: () -> Unit,
     onOpenBatterySettings: () -> Unit = {},
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     Scaffold(
         modifier = Modifier.testTag("screen_settings"),
         topBar = {
@@ -159,6 +172,38 @@ internal fun SettingsScreenContent(
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                    }
+                },
+                // About and the licenses list live behind the overflow rather than as rows: neither is a
+                // setting, and the column below is for things that change how Knit behaves.
+                actions = {
+                    Box {
+                        IconButton(
+                            onClick = { menuOpen = true },
+                            modifier = Modifier.size(48.dp).testTag("settings_menu"),
+                        ) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.chat_more_options))
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.settings_menu_about)) },
+                                leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onOpenAbout()
+                                },
+                                modifier = Modifier.testTag("settings_menu_about"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.settings_menu_licenses)) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Article, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onOpenLicenses()
+                                },
+                                modifier = Modifier.testTag("settings_menu_licenses"),
+                            )
+                        }
                     }
                 },
             )

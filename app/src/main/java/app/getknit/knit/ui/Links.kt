@@ -17,6 +17,9 @@ const val REPO_URL = "https://github.com/getknit/knit"
 /** The issue tracker — where the review prompt's "not really" branch sends private feedback. */
 const val ISSUES_URL = "https://github.com/getknit/knit/issues"
 
+/** The project site — the About screen's Website row. */
+const val WEBSITE_URL = "https://getknit.app"
+
 /** Opens [url] in the user's browser. Swallows ActivityNotFoundException if nothing can handle it. */
 fun openUrl(
     context: Context,

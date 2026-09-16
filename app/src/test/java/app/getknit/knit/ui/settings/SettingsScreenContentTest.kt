@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -60,6 +61,8 @@ class SettingsScreenContentTest {
         battery: BackgroundBattery = BackgroundBattery.Unrestricted,
         onAllowBattery: () -> Unit = {},
         onOpenBatterySettings: () -> Unit = {},
+        onOpenAbout: () -> Unit = {},
+        onOpenLicenses: () -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
@@ -88,6 +91,8 @@ class SettingsScreenContentTest {
                     showInternetRelays = showInternetRelays,
                     onAllowBattery = onAllowBattery,
                     onOpenBatterySettings = onOpenBatterySettings,
+                    onOpenAbout = onOpenAbout,
+                    onOpenLicenses = onOpenLicenses,
                 )
             }
         }
@@ -270,5 +275,22 @@ class SettingsScreenContentTest {
         compose.onNodeWithTag("settings_battery_settings").performScrollTo().performClick()
         assertEquals(1, opened)
         assertEquals(0, allowed)
+    }
+
+    /** About and the licenses list sit behind the overflow: neither is a setting, so neither is a row. */
+    @Test
+    fun theOverflowMenuOpensAboutAndTheLicenses() {
+        var about = 0
+        var licenses = 0
+        render(onOpenAbout = { about++ }, onOpenLicenses = { licenses++ })
+
+        compose.onNodeWithContentDescription(context.getString(R.string.chat_more_options)).performClick()
+        compose.onNodeWithText(context.getString(R.string.settings_menu_about)).performClick()
+        assertEquals(1, about)
+
+        compose.onNodeWithContentDescription(context.getString(R.string.chat_more_options)).performClick()
+        compose.onNodeWithText(context.getString(R.string.settings_menu_licenses)).performClick()
+        assertEquals(1, licenses)
+        assertEquals(1, about)
     }
 }

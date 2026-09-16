@@ -94,6 +94,7 @@ carries; never renumber an old one.
 | [2026-09.5bqu](decisions/2026-09-5bqu-the-lora-plane-is-fully-quiescent-until-a-board-is-configured.md) | The LoRa plane is fully quiescent until a board is configured | lora, mesh, performance |
 | [2026-09.5dt2](decisions/2026-09-5dt2-a-queued-lora-frame-is-re-asked-the-gates-it-passed-at-enqueue.md) | A queued LoRa frame is re-asked the gates it passed at enqueue | lora, airtime |
 | [2026-09.66cw](decisions/2026-09-66cw-a-spool-bearer-token-is-stored-in-the-clear.md) | A spool bearer token is stored in the clear, and one canonical URL is what gets stored | spool, privacy, settings, data |
+| [2026-09.6eb6](decisions/2026-09-6eb6-in-app-about-and-licenses.md) | In-app About and licenses: a hand-kept list pinned to the notices file and the release classpath | ui, build, release, settings |
 | [2026-09.6gtm](decisions/2026-09-6gtm-the-lora-plane-is-introduced-at-2-5-0.md) | The LoRa plane is introduced at 2.5.0 | lora, release, mesh |
 | [2026-09.6ww7](decisions/2026-09-6ww7-a-group-chat-says-lora-will-not-carry-it.md) | A group chat says LoRa will not carry it | lora, ui |
 | [2026-09.7463](decisions/2026-09-7463-sealed-dm-form-chat-rides-the-targeted-coordination-plane-arm.md) | Sealed DM-form chat rides the targeted coordination-plane arm | mesh, nan, fanout |

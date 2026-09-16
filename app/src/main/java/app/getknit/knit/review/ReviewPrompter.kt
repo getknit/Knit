@@ -1,12 +1,13 @@
 package app.getknit.knit.review
 
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.legal.InstallSource
+import app.getknit.knit.legal.installSourceOf
+import app.getknit.knit.legal.installerPackage
 import app.getknit.knit.ui.ISSUES_URL
 import app.getknit.knit.ui.PLAY_LISTING_URL
 import app.getknit.knit.ui.REPO_URL
@@ -50,21 +51,8 @@ class ReviewPrompter(
     /** Where the "not really" branch goes: private feedback on the issue tracker, not a public review. */
     val feedbackUrl: String = ISSUES_URL
 
-    /** True when Google Play installed this package. */
-    fun installedFromPlay(): Boolean =
-        try {
-            // getInstallSourceInfo is API 30; on 29 the deprecated getInstallerPackageName gives the installer.
-            @Suppress("DEPRECATION")
-            val installer =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
-                } else {
-                    context.packageManager.getInstallerPackageName(context.packageName)
-                }
-            installer == PLAY_STORE_PACKAGE
-        } catch (_: PackageManager.NameNotFoundException) {
-            false
-        }
+    /** True when Google Play installed this package — the one installer read lives in `legal/InstallSource.kt`. */
+    fun installedFromPlay(): Boolean = installSourceOf(installerPackage(context)) == InstallSource.PLAY
 
     /** The policy inputs as they stand right now — read-only, shared with the debug bridge dump. */
     suspend fun gateInputs(now: Long): ReviewPromptPolicy.Inputs {
@@ -99,9 +87,5 @@ class ReviewPrompter(
         // Record before showing (attempt = shown); which button the user taps doesn't change the cooldown.
         settings.recordReviewAttempt(System.currentTimeMillis())
         inbox.offer()
-    }
-
-    private companion object {
-        const val PLAY_STORE_PACKAGE = "com.android.vending"
     }
 }

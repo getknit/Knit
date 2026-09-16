@@ -30,8 +30,11 @@ If that works for you, read on.
   GPL.
 - **Third-party assets:** do not add dependencies or bundled models/data whose license is
   GPL-incompatible or unverified. The shipped dependency graph is intentionally GMS-free and
-  Apache/BSD/MIT-only; keep it that way, and update
-  [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) when you add or remove a shipped dependency.
+  Apache/BSD/MIT-only; keep it that way, and when you add or remove a shipped dependency update both
+  [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) and the matching row in
+  `app/src/main/java/app/getknit/knit/legal/ThirdPartyNotices.kt` (the in-app Open-source licenses list).
+  `ThirdPartyNoticesSyncTest` and `ReleaseClasspathNoticesTest` fail until the table, the list and
+  `app/gradle.lockfile` agree, and name the coordinate that is missing.
 
 ## Development
 

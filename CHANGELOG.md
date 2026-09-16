@@ -46,6 +46,9 @@ document:
   relay will see. A contact card that names a relay you don't use now offers to add it the same way.
 - Diagnostics now shows which version a connected relay is running. A relay that publishes nothing about
   itself, including one that is not Knit's own relay software, shows no version.
+- Settings has a new menu with an About screen and the open-source libraries Knit is built from; tap one to
+  read its license, even offline. About also shows the version, the build and where Knit was installed from,
+  with a Copy button for bug reports.
 
 ### Changed
 

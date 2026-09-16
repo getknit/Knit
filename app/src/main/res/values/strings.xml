@@ -395,7 +395,7 @@
     <!-- Install offline (offline APK share) -->
     <string name="share_app_menu">Install offline</string>
     <string name="share_app_dialog_title">Install offline</string>
-    <string name="share_app_dialog_body">Send Knit to a nearby phone, even with no internet. Pick Quick Share or Bluetooth next. On the other phone, open the received file and allow installing it to finish.</string>
+    <string name="share_app_dialog_body">Send Knit to a nearby phone, even with no internet. Pick Quick Share or Bluetooth next. On the other phone, open the received file and allow installing it to finish. Knit is free software under the GPL-3.0-or-later; the source is at github.com/getknit/knit.</string>
     <string name="share_app_dialog_confirm">Share</string>
     <string name="share_app_chooser_title">Install offline</string>
     <!-- Shown while a Play (App Bundle / split) install is merged into one shareable APK — several seconds. -->
@@ -736,6 +736,45 @@
     <string name="your_mesh_encouragement">Every phone running Knit carries messages for the phones around it. Leaving Knit on is how a message gets across a campsite or a crowd, including to people you never meet.</string>
     <string name="your_mesh_encouragement_fresh">Every phone running Knit carries messages for the phones around it. Leave Knit on, and these numbers start to move the first time someone comes within range.</string>
     <string name="your_mesh_technical_details">Technical details</string>
+
+    <!-- About (ui/about): the app's own license notice, the links out, the build facts a bug report asks
+         for, and the open-source licenses list behind it (legal/ThirdPartyNotices.kt), each row opening its
+         bundled license text. Reached from Settings' overflow menu. The SPDX ids and license names come from
+         the `License` enum, not from here — they are identifiers, not prose. -->
+    <string name="settings_menu_about">About Knit</string>
+    <string name="settings_menu_licenses">Open-source licenses</string>
+    <string name="about_title">About Knit</string>
+    <string name="about_version">Version %1$s (%2$d)</string>
+    <string name="about_author">Jeffrey Walter Mixon</string>
+    <string name="about_copyright">Copyright © 2026 %1$s</string>
+    <string name="about_license_notice">Knit is free software. You can redistribute it and change it under the GNU General Public License, version 3 or any later version, and it comes with no warranty. The License row below has the full text.</string>
+    <string name="about_source_code">Source code</string>
+    <string name="about_source_code_subtitle">github.com/getknit/knit</string>
+    <string name="about_report_problem">Report a problem</string>
+    <string name="about_report_problem_subtitle">Open an issue on GitHub</string>
+    <string name="about_website">Website</string>
+    <string name="about_website_subtitle">getknit.app</string>
+    <string name="about_license">License</string>
+    <string name="about_licenses">Open-source licenses</string>
+    <string name="about_licenses_subtitle">The libraries and models Knit is built from</string>
+    <string name="about_section_build">Build</string>
+    <string name="about_build_version">Version</string>
+    <string name="about_build_type">Build</string>
+    <string name="about_build_type_minified">%1$s · minified</string>
+    <string name="about_build_installed_from">Installed from</string>
+    <string name="about_install_source_play">Google Play</string>
+    <string name="about_install_source_fdroid">F-Droid</string>
+    <string name="about_install_source_sideloaded">Sideloaded (GitHub, a shared APK or another store)</string>
+    <string name="about_build_android">Android</string>
+    <string name="about_build_android_value">%1$s (SDK %2$d)</string>
+    <string name="about_build_device">Device</string>
+    <string name="about_copy_build_info">Copy build info</string>
+    <string name="licenses_title">Open-source licenses</string>
+    <string name="licenses_intro">Knit is built from these open-source components. Tap one to read its license.</string>
+    <string name="licenses_section_runtime">Libraries</string>
+    <string name="licenses_section_data">Bundled models and data</string>
+    <string name="licenses_row_subtitle">%1$s · %2$s</string>
+    <string name="license_text_error">Couldn\'t load the license text.</string>
 
     <!-- Crash log — a manual, opt-in report the user reads and hands over themselves. Reached from
          Diagnostics; nothing here is ever uploaded. See ui/diagnostics/CrashLogScreen.kt. -->

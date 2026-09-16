@@ -46,6 +46,14 @@ class BlobExchangeTest {
             mimes[hash] = mime
         }
 
+        /** Bytes held with no row naming their type — a blob whose message row went before it did. */
+        fun seedWithoutMime(
+            hash: String,
+            bytes: ByteArray,
+        ) {
+            File(dir, hash).writeBytes(bytes)
+        }
+
         override suspend fun has(hash: String): Boolean = File(dir, hash).exists()
 
         override suspend fun fileFor(hash: String): File? = File(dir, hash).takeIf { it.exists() }
@@ -233,6 +241,96 @@ class BlobExchangeTest {
             exchange.onNeighborAdded(Peer("n"))
 
             assertEquals("only the blob we still lack is asked for", listOf("stillMissing"), asked)
+        }
+
+    @Test
+    fun aBlobObtainedOffTheMeshIsServedToTheNeighborThatAskedForIt() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The other half of the same asymmetry: onReceived is the only path that drained wanters, so a
+            // neighbor that asked while we were still pulling was never served once the spool (or a direct
+            // avatar push) handed us the bytes — it waited for its own re-ask, up to the 30 min fetch TTL.
+            val server = FakeLoopTransport("a")
+            val requester = FakeLoopTransport("b")
+            server.connect(requester)
+            val store = FakeBlobStore(Files.createTempDirectory("blob-drain").toFile())
+            var now = 0L
+            val exchange =
+                BlobExchange(
+                    transport = server,
+                    store = store,
+                    selfId = { "a" },
+                    onObtained = { _, _ -> },
+                    now = { now },
+                )
+            val received = CopyOnWriteArrayList<String>()
+            backgroundScope.launch { requester.incomingFiles.collect { received += it.key } }
+
+            exchange.onRequest("H", "b") // we lack it: b is recorded as a wanter, and we pull it ourselves
+            assertTrue("nothing to serve yet", received.isEmpty())
+
+            store.seed("H", "image/jpeg", "img".toByteArray()) // arrived over the Internet plane
+            exchange.onObtainedOffMesh("H")
+            assertEquals(listOf("H"), received)
+
+            // Past the serve memo, so only an emptied wanters entry can keep a second copy off the wire.
+            now = BlobExchange.SERVE_MEMO_MS
+            exchange.onObtainedOffMesh("H")
+            assertEquals("the entry was drained, not just memoized", listOf("H"), received)
+        }
+
+    @Test
+    fun theServeMemoStillBoundsAnOffMeshDrain() =
+        runTest(UnconfinedTestDispatcher()) {
+            // The requester's periodic re-ask can land in the window between the bytes arriving and the drain
+            // running. It is served from the store there; the drain must not queue a second full copy.
+            val server = FakeLoopTransport("a")
+            val requester = FakeLoopTransport("b")
+            server.connect(requester)
+            val store = FakeBlobStore(Files.createTempDirectory("blob-drain-memo").toFile())
+            val exchange =
+                BlobExchange(
+                    transport = server,
+                    store = store,
+                    selfId = { "a" },
+                    onObtained = { _, _ -> },
+                    now = { 0L },
+                )
+            val received = CopyOnWriteArrayList<String>()
+            backgroundScope.launch { requester.incomingFiles.collect { received += it.key } }
+
+            exchange.onRequest("H", "b") // recorded as a wanter while we lack the bytes
+            store.seed("H", "image/jpeg", "img".toByteArray())
+            exchange.onRequest("H", "b") // re-asked after they landed → served from the store, memo stamped
+            assertEquals(listOf("H"), received)
+
+            exchange.onObtainedOffMesh("H")
+            assertEquals("the in-flight copy is enough", listOf("H"), received)
+        }
+
+    @Test
+    fun aHeldBlobWithNoStoredMimeIsStillServed() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Gating the serve on the mime as well as the bytes stranded the wanter it then recorded: want()
+            // returns at once for a hash the store has, so nothing was in flight and nothing would drain it.
+            val server = FakeLoopTransport("a")
+            val requester = FakeLoopTransport("b")
+            server.connect(requester)
+            val store = FakeBlobStore(Files.createTempDirectory("blob-nomime").toFile())
+            store.seedWithoutMime("H", "img".toByteArray())
+            val exchange =
+                BlobExchange(
+                    transport = server,
+                    store = store,
+                    selfId = { "a" },
+                    onObtained = { _, _ -> },
+                    now = { 0L },
+                )
+            val received = CopyOnWriteArrayList<Pair<String, String>>()
+            backgroundScope.launch { requester.incomingFiles.collect { received += it.key to it.mime } }
+
+            exchange.onRequest("H", "b")
+
+            assertEquals("served under the fallback type", listOf("H" to "image/jpeg"), received)
         }
 
     @Test

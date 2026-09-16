@@ -150,6 +150,13 @@ free). Two invariants that are easy to break:
   source now — the custodied row for the current stamp when there is one, a fresh signing that is
   custodied at once otherwise — and every plane, reflood and first-contact push reads it. Don't sign a
   profile anywhere else.
+- **A blob obtained off the radios still serves the neighbors that asked for it** (`BlobExchange`, ADR
+  2026-09.ywzn). `wanters` is the set of peers that asked us for bytes we lacked, and `onReceived` — the
+  radio arrival — is not the only way we come by them: the spool saves an attachment and a neighbor pushes
+  its avatar directly. Both call `onObtainedOffMesh`, which drains the set exactly as `onReceived` does.
+  The trap is the tidier-looking seam: `InboundPipeline.onObtained` is the hook **both** planes share, and
+  `onReceived` awaits it *before* its own `removeWanters` — drain from there and the radio path finds an
+  empty set and bounces the blob back at whoever just served it.
 - **Group-root minting is damped; group-root adoption is not** (`GroupRootPolicy`, spec §3.2). Several
   members minting version 1 at once is normal and self-healing — `(version, minter)` collapses the
   lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping

@@ -112,8 +112,11 @@ class BlobExchange(
     ) {
         val peer = Peer(fromNodeId)
         val file = store.fileFor(hash)
-        val mime = store.mimeFor(hash)
-        if (file != null && mime != null) {
+        if (file != null) {
+            // Holding the bytes is what decides a serve; a missing mime row only costs us the type. Gating on
+            // both stranded the wanter it then recorded: [want] returns at once for a hash the store has, so
+            // nothing was in flight and no arrival path would ever drain the entry.
+            val mime = store.mimeFor(hash) ?: FALLBACK_MIME
             if (servedRecently(hash, fromNodeId)) return // its copy is (still) in flight — don't ship a second
             if (!transport.sendFile(file, peer, FileMeta(FileKind.ATTACHMENT, hash, mime))) {
                 forgetServed(hash, fromNodeId) // nothing went out — let the next ask retry at once
@@ -147,6 +150,30 @@ class BlobExchange(
                     transport.sendFile(stored, it, FileMeta(FileKind.ATTACHMENT, hash, servedMime))
                 }
             }
+    }
+
+    /**
+     * Bytes for [hash] landed **off the radios** — the spool (`ScopeSync.fetchAttachment`) or a direct avatar
+     * push (`InboundPipeline.onAvatarReceived`) — so serve anyone still waiting on us for them, exactly as
+     * [onReceived] does for a radio arrival. There is no `fromNodeId` to filter out here: no neighbor handed
+     * us these bytes. Without this the entry sat in [wanters] until the requester happened to ask again — a
+     * *new* link, its own restart, or its [FETCH_TTL_MS] sweep, so ~30–40 minutes for a pair that stays
+     * linked — while occupying a slot in a cap that evicts oldest-first.
+     *
+     * Deliberately **not** called from `InboundPipeline.onObtained`, the hook both planes share: re-entering
+     * from there would drain [wanters] before [onReceived] reaches its own [removeWanters], losing the filter
+     * that keeps the blob from bouncing straight back at whoever just served it.
+     */
+    suspend fun onObtainedOffMesh(hash: String) {
+        val file = store.fileFor(hash) ?: return
+        val mime = store.mimeFor(hash) ?: FALLBACK_MIME
+        clearFetching(hash)
+        val targets = removeWanters(hash) ?: return // detached set — safe to iterate outside the lock
+        targets.forEach {
+            if (!servedRecently(hash, it.nodeId)) {
+                transport.sendFile(file, it, FileMeta(FileKind.ATTACHMENT, hash, mime))
+            }
+        }
     }
 
     /** Drops fetches whose last-want time has aged past the TTL — a never-arriving blob is reclaimed and
@@ -235,5 +262,9 @@ class BlobExchange(
         // A never-arriving fetch ages out of [fetching] after this (hygiene; the cap is the bound). Generous
         // so a slow-but-live transfer isn't reclaimed, since blobs can be large.
         private const val FETCH_TTL_MS = 30 * 60_000L
+
+        // What a served blob is called when our own store names no type for it. Matches MeshBlobStore.fileFor,
+        // which materializes the temp file under the same fallback.
+        private const val FALLBACK_MIME = "image/jpeg"
     }
 }

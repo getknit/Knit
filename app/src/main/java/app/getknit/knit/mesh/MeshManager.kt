@@ -462,8 +462,12 @@ class MeshManager(
                 onPresenceChanged = ::onSpoolPresenceChanged,
                 blobs = scopeBlobs(),
                 // The same hook a radio pull fires, so NSFW screening, the message rows, and the UI all
-                // run unchanged for a spool-delivered image (§9.5).
-                onAttachmentObtained = pipeline::onObtained,
+                // run unchanged for a spool-delivered image (§9.5) — then serve the neighbors that asked us
+                // for these bytes while we lacked them, which only the radio arrival used to do.
+                onAttachmentObtained = { hash ->
+                    pipeline.onObtained(hash)
+                    blobExchange.onObtainedOffMesh(hash)
+                },
                 deferAttachment = attachmentDefer::defer,
                 deliver = { wire, env, from -> router.handleInbound(wire, env, from) },
                 metrics = metrics,

@@ -17,8 +17,6 @@ minted at random, because the sequence number was itself the merge conflict: par
 worktrees all read the same "next number" and all took it. Cite whichever form an ADR
 carries; never renumber an old one.
 
-127 decisions.
-
 | ADR | Decision | Topics |
 | --- | --- | --- |
 | [001](decisions/001-di-is-koin.md) | DI is Koin, not Hilt | build, toolchain, di |
@@ -153,6 +151,7 @@ carries; never renumber an old one.
 | [2026-09.xmte](decisions/2026-09-xmte-radio-evidence-for-an-attachment-deferral-must-name-a-short-range-plane.md) | Radio evidence for an attachment deferral must name a short-range plane | spool, attachments, receipts |
 | [2026-09.y5f3](decisions/2026-09-y5f3-a-ride-hold-has-a-deadline.md) | A ride hold has a deadline, and the spool is the room tick's first way home | receipts, mesh, lora, spool |
 | [2026-09.y8pu](decisions/2026-09-y8pu-a-lora-fan-out-nobody-heard-does-not-suppress-its-own-backfill.md) | A LoRa fan-out nobody heard does not suppress its own backfill | lora, custody, reliability |
+| [2026-09.ywzn](decisions/2026-09-ywzn-a-blob-obtained-off-the-radios-serves-the-neighbours-that-asked-for-it.md) | A blob obtained off the radios serves the neighbours that asked for it | mesh, attachments, spool |
 | [2026-09.z58t](decisions/2026-09-z58t-the-chat-list-reads-per-thread-summaries.md) | The chat list reads per-thread summaries, and an accepted thread has no retention cap | data, ui, perf |
 | [2026-09.zapp](decisions/2026-09-zapp-a-photo-less-group-avatar-is-its-members-faces.md) | A photo-less group avatar is its members' faces, drawn the same in the shade | ui, identity, notifications |
 | [2026-09.zkma](decisions/2026-09-zkma-the-bridge-offer-and-its-backfill-draw-from-one-ranked-list.md) | The bridge offer and its backfill draw from one ranked list | lora, bridge, custody |

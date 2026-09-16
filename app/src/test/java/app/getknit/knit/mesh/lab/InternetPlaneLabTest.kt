@@ -9,7 +9,9 @@ import app.getknit.knit.mesh.spool.SpoolCommonsInfo
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Ignore
@@ -248,6 +250,76 @@ class InternetPlaneLabTest {
                 "bob re-asked for a picture the relay already gave him: ${bob.transport.sent}",
                 bob.transport.sent.none { it.contains(" ${FrameType.BLOB_REQ} ") },
             )
+        }
+
+    /**
+     * Issue #53, the other half of #51's asymmetry: `BlobExchange.wanters` is drained in exactly one place,
+     * [app.getknit.knit.mesh.BlobExchange.onReceived], so a neighbour that asked us for bytes we lacked was
+     * never served once a plane other than the radio handed them over. It waited for its own next ask — a
+     * *new* link, its own restart, or the 30-minute fetch TTL — which for a pair that stays linked is half an
+     * hour, not seconds.
+     *
+     * Carol is the asker and holds the frame only as a carrier: she is linked to Bob alone, has no relay, and
+     * Alice is off the radios entirely, so Bob is the one node that can ever hand her these bytes. The relay
+     * starts out as a frames-only one (no attachment limits in its HELLO, so a conforming client sends it no
+     * attachment record at all), which is what makes the order the case needs a fact rather than a race:
+     * Carol necessarily asks while the picture exists nowhere but on Alice. Growing the support mid-run —
+     * the spool re-advertises on the next dial — is then the only thing that moves.
+     */
+    @Test
+    fun aPhotoTheRelayDeliveredIsServedToTheNeighbourWhoAskedWhileWeLackedIt() =
+        runBlocking {
+            val spool = FakeSpool(attachments = false) // frames only, until the picture has been asked for
+            val alice = lab.node("alice", spool = spool).apply { setDisplayName("Alice") }
+            val bob = lab.node("bob", spool = spool).apply { setDisplayName("Bob") }
+            val carol = lab.node("carol").apply { setDisplayName("Carol") } // no relay: Bob is her only source
+            lab.linkAll(alice to bob, bob to carol)
+            lab.awaitAcquainted(alice, bob, carol)
+            // A reply, not a both-initiate race, so both sides confirm the session and the scope derives.
+            assertTrue(alice.sendDm(bob, "hello"))
+            lab.await(1) { bob.decrypted(bob.dmWith(alice)).size }
+            assertTrue(bob.sendDm(alice, "hi"))
+            lab.assertConverged(listOf(alice, bob), atLeast = 2, carriers = listOf(carol)) { alice.dmThreadWith(bob)(it) }
+            lab.unlink(alice, bob)
+            lab.awaitDmScope(alice, bob)
+
+            val picture = Random(53).nextBytes(4_096)
+            assertTrue(alice.sendImage(picture, "off the relay", to = bob))
+            val id = alice.ownMessageId(alice.dmWith(bob), "off the relay")
+            val hash = checkNotNull(alice.attachmentHash(alice.dmWith(bob), id))
+            assertTrue(
+                "bob never got the frame over the relay",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                    bob.decrypted(bob.dmWith(alice)).count { it.second == "off the relay" }
+                },
+            )
+            // Bob relays the frame on; Carol carries it, wants the picture it names, and asks the one
+            // neighbour she has — who cannot serve her, because the bytes are still Alice's alone.
+            assertTrue(
+                "carol never asked bob for the picture: ${carol.transport.sent}",
+                lab.await(1) { carol.transport.sent.count { it.contains(" ${FrameType.BLOB_REQ} ") } },
+            )
+            assertTrue("the bytes reached the relay after all: ${spool.chunksPut}", spool.chunksPut.isEmpty())
+            assertFalse("bob held the picture before carol asked for it", bob.blobs.exists(hash))
+
+            spool.attachments = true // the relay grows attachment support; the limits are read per dial
+            spool.dropSockets()
+            alice.heal()
+            bob.heal()
+            assertTrue(
+                "bob never got the bytes over the relay",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.blobs.exists(hash)) 1 else 0 },
+            )
+
+            // No new link and no restart, so nothing can make Carol ask again inside the wait: the only way
+            // she holds the picture is Bob serving the wanter he recorded when the bytes were not his yet.
+            assertTrue(
+                "carol was never served the picture bob pulled off the relay",
+                lab.await(1) { if (carol.blobs.exists(hash)) 1 else 0 },
+            )
+            // Carol carries the sealed blob and cannot read it; Bob, the addressee, is who the picture is for.
+            assertArrayEquals(bob.blobs.bytes(hash), carol.blobs.bytes(hash))
+            assertArrayEquals(picture, bob.attachmentPlain(bob.dmWith(alice), id))
         }
 
     /**

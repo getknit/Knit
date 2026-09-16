@@ -197,7 +197,13 @@ class InternetPlaneLabTest {
             )
             // Neither end, not just the sender: Bob holds these bytes because a radio handed them to him, so
             // his own push would be the second copy this gate exists to prevent.
-            assertTrue("chunks went up while bob was in range: ${spool.chunksPut}", spool.chunksPut.isEmpty())
+            val sentId = alice.ownMessageId(alice.dmWith(bob), "in range")
+            assertTrue(
+                "chunks went up while bob was in range: ${spool.chunksPut}; " +
+                    "alice pushed=${alice.metrics.snapshot().spoolAttachPushed} bob pushed=${bob.metrics.snapshot().spoolAttachPushed} " +
+                    "bob's row came via ${bob.receivedVia(bob.dmWith(alice), sentId)}\n${lab.report(listOf(alice, bob))}",
+                spool.chunksPut.isEmpty(),
+            )
 
             // `lastSeen` is a stamp, not a live read, so unlinking alone leaves Bob deferrable for the rest
             // of the sighting window — the lapse is the reversing half and it is measured on the calendar.
@@ -207,6 +213,54 @@ class InternetPlaneLabTest {
             assertTrue(
                 "the upload never happened after they parted",
                 lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
+            )
+        }
+
+    /**
+     * The same photo with the relay winning the race to Bob. Both phones hold a live socket and the radio
+     * link is slow — a BLE connect takes seconds where a spool round trip takes milliseconds — so Alice's
+     * frame comes off the relay before the radio delivers it, and Bob's row records `Internet`. The bytes
+     * still arrive over the radio, because Alice deferred her upload; that arrival is the evidence, and
+     * Bob must not push the second copy the row's plane alone would let him. The sibling ordering — the
+     * bytes landing before Bob's row is even committed — is the one CI hit in
+     * [aPhotoTheRadioCarriedIsNotUploadedUntilThePeersPart] (2026-09-16) and cannot be forced from
+     * outside; this one can, and the same evidence covers both (ADR 2026-09.e8yw).
+     */
+    @Test
+    fun aPhotoWhoseFrameBeatTheRadioAcrossTheRelayIsStillNotReUploaded() =
+        runBlocking {
+            val spool = FakeSpool()
+            val alice = lab.node("alice", spool = spool).apply { setDisplayName("Alice") }
+            val bob = lab.node("bob", spool = spool).apply { setDisplayName("Bob") }
+            lab.meetOnTheRelay(alice, bob)
+            lab.link(alice, bob)
+            lab.awaitAcquainted(alice, bob)
+
+            // The slow radio: Alice's frames to Bob are parked, so the relay is the first to hand him this one.
+            alice.transport.hold(bob.transport)
+            val picture = Random(46).nextBytes(4_096)
+            assertTrue(alice.sendImage(picture, "relay first", to = bob))
+            val id = alice.ownMessageId(alice.dmWith(bob), "relay first")
+            assertTrue(
+                "bob never got the frame off the relay\n${lab.report(listOf(alice, bob))}",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { bob.decrypted(bob.dmWith(alice)).count { it.first == id } },
+            )
+            assertEquals(DeliveryPlane.Internet, bob.receivedVia(bob.dmWith(alice), id))
+            // The radio catches up: its copy of the frame is a duplicate, and the bytes Bob asks for cross it.
+            alice.transport.release(bob.transport)
+            lab.assertConverged(listOf(alice, bob), atLeast = 3) { alice.dmThreadWith(bob)(it) }
+
+            // A send of Bob's own wakes his worker; that round finds the bytes in hand and has to judge them.
+            assertTrue(bob.sendDm(alice, "got it"))
+            assertTrue(
+                "bob never judged the bytes\n${lab.report(listOf(alice, bob))}",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                    bob.metrics.snapshot().let { (it.spoolAttachDeferred + it.spoolAttachPushed).toInt() }
+                },
+            )
+            assertTrue(
+                "bob re-uploaded a photo the radio handed him: ${spool.chunksPut}\n${lab.report(listOf(alice, bob))}",
+                spool.chunksPut.isEmpty(),
             )
         }
 

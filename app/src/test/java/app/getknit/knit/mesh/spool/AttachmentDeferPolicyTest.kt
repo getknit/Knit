@@ -210,6 +210,76 @@ class AttachmentDeferPolicyTest {
         }
 
     @Test
+    fun `an attachment whose bytes came off a radio waits before its row exists`() =
+        runTest {
+            // Custody asks for the blob before the sealed content is opened and persisted, so a neighbour's
+            // serve can land while the row is still being written. The arrival itself is the evidence the
+            // row's plane stands in for, and it is on record before the bytes are — so the round that finds
+            // them in hand defers rather than pushing what a radio just handed us.
+            ackPlane = null
+            authored = false
+            val subject = policy()
+            subject.noteRadioArrival(aHash)
+            assertTrue(subject.defer(dmScope(), settled()))
+        }
+
+    @Test
+    fun `an attachment whose frame took the relay but whose bytes came off a radio waits`() =
+        runTest {
+            // A live socket beats a BLE connect, so the frame can come off the spool first and the row says
+            // Internet; the sender deferred, so the bytes still crossed the radio. That crossing decides.
+            ackPlane = DeliveryPlane.Internet
+            authored = false
+            val subject = policy()
+            subject.noteRadioArrival(aHash)
+            assertTrue(subject.defer(dmScope(), settled()))
+        }
+
+    @Test
+    fun `a radio arrival is evidence for its own bytes only`() =
+        runTest {
+            ackPlane = null
+            authored = false
+            val subject = policy()
+            subject.noteRadioArrival("b".repeat(64))
+            assertFalse(subject.defer(dmScope(), settled()))
+        }
+
+    @Test
+    fun `a radio arrival does not rescue a peer that was never sighted`() =
+        runTest {
+            // The arrival softens the evidence half only; presence still expires and still gates.
+            ackPlane = null
+            authored = false
+            reachable = emptySet()
+            val subject = policy()
+            subject.noteRadioArrival(aHash)
+            assertFalse(subject.defer(dmScope(), settled()))
+        }
+
+    @Test
+    fun `the oldest radio arrival is forgotten past the cap`() =
+        runTest {
+            ackPlane = null
+            authored = false
+            val subject =
+                AttachmentDeferPolicy(
+                    reachable = { reachable },
+                    carriedByRadio = { _, _ -> false },
+                    authoredHere = { authored },
+                    custodyTtlMs = custodyTtlMs,
+                    clock = { clock },
+                    maxRadioArrivals = 2,
+                )
+            subject.noteRadioArrival(aHash)
+            subject.noteRadioArrival("b".repeat(64))
+            assertTrue(subject.defer(dmScope(), settled()))
+            // A third arrival evicts the first, whose bytes then push — deferring less, never more.
+            subject.noteRadioArrival("c".repeat(64))
+            assertFalse(subject.defer(dmScope(), settled()))
+        }
+
+    @Test
     fun `a carried attachment is uploaded inside the grace`() =
         runTest {
             // A carrier holds sealed bytes and no message row, and an avatar writes none either, so the

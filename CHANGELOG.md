@@ -18,6 +18,14 @@ document:
 
 # Knit changelog
 
+## Unreleased
+
+### Fixed
+
+- Your phone could still upload a photo to your relay right after the phone next to you passed it over
+  Bluetooth or Wi-Fi, depending on which arrived first, the message or the photo. It now holds that upload
+  until you are apart.
+
 ## [2.6.0](https://github.com/getknit/knit/releases/tag/v2.6.0) — 2026-09-16T07:24:35Z
 
 > Search every chat, send big files phone to phone, and see what your mesh carried.

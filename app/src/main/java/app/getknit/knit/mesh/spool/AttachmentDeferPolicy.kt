@@ -38,6 +38,18 @@ import java.util.concurrent.ConcurrentHashMap
  * every photo it had just pulled off a BLE link, which is precisely the second copy this class exists
  * to prevent.
  *
+ * The receiving end has a third reading, and it is the direct one: **the bytes themselves came off a
+ * radio** ([noteRadioArrival], from the transport's file channel — `BlobExchange`'s only source). The
+ * row's plane is a proxy for that, and it fails in two orderings the recipient really sees. The frame
+ * can come off a spool before the radio delivers it — a BLE connect takes seconds where a live socket
+ * takes milliseconds — so the row says `Internet` while the bytes still cross the radio, because the
+ * sender deferred. And the bytes can land *before the row exists*: custody captures the frame and asks
+ * for its blob before the sealed content is opened and persisted, so a neighbour's serve, a spool
+ * digest and the row's commit are three racing writers, and the round that finds the bytes in hand may
+ * find no row yet. In both, the radio arrival is the evidence the row was standing in for; it is noted
+ * before the bytes are stored, so there is no round in which they are held and unexplained. In memory
+ * like [lastSeen], for the same reason: losing it only means deferring less.
+ *
  * A *missing* answer means two different things on the authoring end, and reading them as one is what
  * made this gate never fire for the case it exists for. `ScopeSync.onCustodyChanged` runs a round on
  * the *send itself*, so the first time [defer] is asked about a fresh photo the recipient's receipt is
@@ -52,8 +64,10 @@ import java.util.concurrent.ConcurrentHashMap
  * Two exclusions fall out of the rules rather than being spelled out, and both are the safe direction:
  * a **carried** frame is nobody's message here — a carrier holds the sealed bytes and no message row at
  * all — and an **avatar** (a sealed `CTL_PROFILE` frame) writes `PeerEntity` and no message row either,
- * so [carriedByRadio] reads false for both and they always push. Neither should be "fixed" into a
- * deferral without a delivery signal to justify it.
+ * so [carriedByRadio] reads false for both and, absent a radio arrival, they push. Neither should be
+ * "fixed" into a deferral without a data-path signal to justify it. A peer's avatar *pulled* over a radio
+ * is the one case the arrival memo reaches, and it is harmless: the owner's own copy never arrived
+ * anywhere, so the owner pushes it regardless, and in a DM scope there is nobody else to serve.
  */
 class AttachmentDeferPolicy(
     // Node ids on the presence plane right now, sampled per call — the smoothed `reachable` set, not the
@@ -74,11 +88,30 @@ class AttachmentDeferPolicy(
     private val windowMs: Long = RADIO_WINDOW_MS,
     private val lastCallMs: Long = LAST_CALL_MS,
     private val ackGraceMs: Long = ACK_GRACE_MS,
+    private val maxRadioArrivals: Int = MAX_RADIO_ARRIVALS,
 ) {
     // nodeId -> when we last saw it on the presence plane. In memory by design: the plane persists
     // nothing (ADR 019), and losing this on restart only means deferring less. Bounded by construction —
     // [noteReachable] drops anything past the window, so it holds at most the recent neighbour set.
     private val lastSeen = ConcurrentHashMap<String, Long>()
+
+    // Ciphertext hashes whose bytes reached this node over a short-range radio, newest-noted last. A fact,
+    // not a stamp, so nothing here expires: the sighting half is what lapses. Capped oldest-first so a
+    // blob flood cannot grow it; an entry evicted early only means deferring less. Guarded by itself.
+    private val radioArrivals =
+        object : LinkedHashMap<String, Unit>(INITIAL_CAPACITY, LOAD_FACTOR, false) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>): Boolean = size > maxRadioArrivals
+        }
+
+    /**
+     * The bytes for [aHash] arrived over a short-range radio. Called from the transport's file channel
+     * *before* the bytes are stored, so a heal round can never find them held without this on record.
+     */
+    fun noteRadioArrival(aHash: String) {
+        synchronized(radioArrivals) { radioArrivals[aHash] = Unit }
+    }
+
+    private fun arrivedOverRadio(aHash: String): Boolean = synchronized(radioArrivals) { aHash in radioArrivals }
 
     /**
      * Whether [ref]'s bytes should be held back from this round's push for [scope]. False — push, today's
@@ -102,7 +135,8 @@ class AttachmentDeferPolicy(
         if (ref.sentAt + custodyTtlMs - now <= lastCallMs) return false
         val seen = lastSeen[peerId] ?: return false
         if (now - seen > windowMs) return false
-        if (carriedByRadio(ref.aHash, peerId)) return true
+        // The direct evidence first: no read, and it is what the row's plane stands in for.
+        if (arrivedOverRadio(ref.aHash) || carriedByRadio(ref.aHash, peerId)) return true
         // Too early to tell. A frame this young cannot have been acked yet — the receipt is a round trip
         // away, and the round asking us here is the one the send itself woke — so a missing ack is not
         // evidence the radios failed. Bounded by the frame's own age, so it re-opens with no new local
@@ -136,5 +170,14 @@ class AttachmentDeferPolicy(
          * delivered reaches a relay one grace plus one tick later than it used to.
          */
         const val ACK_GRACE_MS = 60_000L
+
+        /**
+         * How many radio arrivals are remembered. A deferral only matters while the frame is in custody
+         * (24 h) and the peer in sight (15 min), and a phone pulls a few dozen photos over the radios in
+         * that time at the very most; past the cap the oldest is forgotten and its bytes simply push.
+         */
+        const val MAX_RADIO_ARRIVALS = 256
+        private const val INITIAL_CAPACITY = 64
+        private const val LOAD_FACTOR = 0.75f
     }
 }

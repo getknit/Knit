@@ -1231,11 +1231,14 @@ a relay.
 > nobody yet and therefore defers nothing.
 >
 > The second half is read from **whichever end of the DM the member is**: the author looks for the
-> recipient's receipt over a radio, and the recipient looks at the plane its own copy arrived on. A
-> recipient that had no such reading pushed the photo a radio had just handed it, which is the second
-> copy the option exists to avoid. A third party is unaffected: a carrier holds sealed bytes and no
-> message of this pair at all, so it finds nothing either way and pushes, as do avatars and group
-> photos.
+> recipient's receipt over a radio, and the recipient looks first at how the **bytes themselves** reached
+> it and only then at the plane its copy of the message arrived on. The message's plane is a proxy, and
+> the recipient sees it fail two ways: the bytes can land before the message is even stored (custody asks
+> for them first), and the message can come off the spool before a slow radio delivers it while the bytes
+> still cross that radio because the author deferred. A recipient that had no such reading pushed the
+> photo a radio had just handed it, which is the second copy the option exists to avoid. A third party is
+> unaffected: a carrier holds sealed bytes and no message of this pair at all, so it finds nothing either
+> way and pushes, as do avatars and group photos.
 >
 > The author's half also needs a floor on **when the question can first be asked**. A client that wakes
 > its worker on a local custody change evaluates this on the send itself, before any receipt could have

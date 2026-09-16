@@ -86,3 +86,10 @@ a photo off a BLE link pushed those same bytes to the relay. `MessageDao.attachm
 reads the one fact from either end — our send they acked over a radio, or their send that arrived over
 one — which narrows "a carrier never defers" to the true carrier it always meant. A carrier holds sealed
 bytes and no message row at all, so it still pushes, and so do avatars and group photos.
+
+*Amendment (2026-09-16, ADR 2026-09.e8yw).* The recipient's row is a proxy for the fact that matters, and
+CI showed the two orderings where the proxy is wrong: the bytes land before the row is committed (custody
+asks for the blob before the sealed content is opened), and the frame comes off the spool before the radio
+delivers it (the row then says `Internet`). The evidence is now read where it occurs —
+`AttachmentDeferPolicy.noteRadioArrival`, from the transport's file channel, *before* the bytes are stored —
+and the row's plane is consulted after it.

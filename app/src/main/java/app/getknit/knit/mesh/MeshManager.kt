@@ -2211,6 +2211,11 @@ class MeshManager(
                     }
 
                     FileKind.ATTACHMENT -> {
+                        // Noted before the bytes are stored: this channel is the radios' (a board carries no
+                        // file, the spool is not a transport), and the §9.5 deferral reads the arrival as
+                        // the evidence the row's plane only stands in for — a heal round that finds these
+                        // bytes in hand must never find them unexplained, whatever order the row lands in.
+                        attachmentDefer.noteRadioArrival(file.key)
                         blobExchange.onReceived(file.key, file.mime, file.path, file.fromNodeId)
                     }
                 }

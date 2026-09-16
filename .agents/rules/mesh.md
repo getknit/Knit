@@ -149,7 +149,18 @@ free). Two invariants that are easy to break:
   mesh-in-a-box lab caught the LoRa beacon doing exactly that. `MeshManager.ownProfile()` is the one
   source now — the custodied row for the current stamp when there is one, a fresh signing that is
   custodied at once otherwise — and every plane, reflood and first-contact push reads it. Don't sign a
-  profile anywhere else.
+  profile anywhere else. The signing and every write of the stamp or the version sit under one
+  `profileLock` (ADR 2026-09.qztx): the settings are read one key at a time, so a signer that overlaps an
+  edit reads the new stamp with the old version and custodies *that* — the edit's own bytes then lose the
+  `INSERT … IGNORE` while the flood has already carried them (both CI runners hit it, 2026-09-16). A new
+  caller that wants the bytes reads `ownProfile()`; one that wants a fresh stamp goes through
+  `broadcastProfile()` / `republishProfile()`; nothing writes `profilePublishedAt` or `profileVersion`
+  outside them, and the stamp is `nextPublishStamp()` — strictly past the last, so two edits in one tick
+  are two frames. The watcher that mints on an edit (`watchProfileChanges`) is `distinctUntilChanged` with
+  **no** `drop(1)`: every settings flow is a projection of one DataStore that re-emits on a write to any key,
+  and a drop ahead of distinct made the second identical emission look like an edit — a fresh stamp on every
+  launch. Its first value is compared against the custodied frame instead (`custodyPresentsOtherThan`, after
+  the seed), which is also what publishes an edit made while the mesh was stopped.
 - **A blob obtained off the radios still serves the neighbors that asked for it** (`BlobExchange`, ADR
   2026-09.ywzn). `wanters` is the set of peers that asked us for bytes we lacked, and `onReceived` — the
   radio arrival — is not the only way we come by them: the spool saves an attachment and a neighbor pushes

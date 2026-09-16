@@ -896,7 +896,33 @@ class LabNode internal constructor(
     // --- what a user does ---
 
     suspend fun setDisplayName(value: String) {
-        settings.setDisplayName(value)
+        if (settings.displayName.first() == value) return
+        published { settings.setDisplayName(value) }
+    }
+
+    /**
+     * Runs one profile edit and returns once the manager has published it — the version moved and the frame
+     * left the router. The settings write returns before the profile watcher runs; a scenario that linked or
+     * unlinked in that gap found the edit's frame originated to nobody and stranded in this node's custody
+     * (`RoomTickPlanesLabTest` under the throttled loop, 2026-09-16). The caller has already checked the
+     * edit is a real change — a no-op write publishes nothing and this would wait on it forever.
+     */
+    private suspend fun published(edit: suspend () -> Unit) {
+        val version = settings.profileVersion.first()
+        val originated = metrics.snapshot().framesOriginated
+        edit()
+        val done =
+            withContext(Dispatchers.Default) {
+                withTimeoutOrNull(MeshLab.AWAIT_MS) {
+                    while (settings.profileVersion.first() <= version || metrics.snapshot().framesOriginated <= originated) {
+                        delay(MeshLab.POLL_MS)
+                    }
+                }
+            } != null
+        check(done) {
+            "$name's profile edit was never published: version ${settings.profileVersion.first()} (was $version), " +
+                "originated ${metrics.snapshot().framesOriginated} (was $originated)"
+        }
     }
 
     /** Posts in the Nearby room; the frame the app's composer would send. */
@@ -985,9 +1011,15 @@ class LabNode internal constructor(
         spaced { manager.sendGroupUpdate(updated.toGroupInfo()) }
     }
 
-    suspend fun setStatus(value: String) = settings.setStatus(value)
+    suspend fun setStatus(value: String) {
+        if (settings.status.first() == value) return
+        published { settings.setStatus(value) }
+    }
 
-    suspend fun setOpenToChat(value: Boolean) = settings.setOpenToChat(value)
+    suspend fun setOpenToChat(value: Boolean) {
+        if (settings.openToChat.first() == value) return
+        published { settings.setOpenToChat(value) }
+    }
 
     /** Blocks [peer] as every Block button does (the device tag rides along so a re-keyed peer stays blocked). */
     suspend fun block(peer: LabNode) = settings.block(peer.nodeId, peers.find(peer.nodeId)?.deviceTag)
@@ -1032,7 +1064,7 @@ class LabNode internal constructor(
         val old = settings.ownAvatarHash.first()
         blobs.insert(hash, IMAGE_MIME, bytes)
         settings.setOwnAvatarHash(hash)
-        settings.setAvatarUpdatedAt(now())
+        published { settings.setAvatarUpdatedAt(now()) }
         if (old != null && old != hash) blobs.deleteIfUnreferenced(old)
     }
 

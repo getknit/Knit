@@ -62,6 +62,21 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Still deferred (by design)
 
+- **A custodied frame whose delivery was cut short is never delivered here** (lab finding, 2026-09-16, GitLab
+  job 4494; work item knit/knit-next#56). `InboundPipeline.onDeliver` custodies before it dispatches, on purpose (a decrypt failure still
+  leaves the frame carried, the copy is durable before the flood), and `runCatching { dispatchByType }`
+  swallows the cancellation too — so a session scope cancelled, or a process killed, between the custody
+  insert and the message insert leaves the frame in *our own* store with no row: every peer's digest reads
+  us as holding it, nobody re-serves it, and our custody never replays to our own delivery path. The lab hit
+  it in `RestartLabTest.aRecipientThatRestartsWithAFrameParkedForAKeyRecoversIt` (a re-hold applied late let
+  the served key through, and the restart landed mid-replay: `handler error on chat …: Job was cancelled`,
+  then `carol: []` with the post in her custody). The fixture now holds through the release; the mesh gap
+  stands. `replayCustodiedGroupFrames` / `replayCustodiedSeedDms` already do the recovery for group frames and
+  seed DMs at heal and startup; the fix direction is the same startup sweep over every custodied chat frame
+  addressed to this node or to the room that has no message row — deciding first what a *deleted* message's
+  absent row should mean to it (a tombstone, or dropping the custody row on delete), since today the sweep
+  would resurrect it.
+
 - **Onboarding's follow-ons** (ADR 2026-09.nzpr, 2026-09-13 — three pages, the radio grants as the only gate,
   notifications and battery as optional rows, `onboardingSeen` for the returning phone). Named and left: a
   **Notifications row in Settings** beside `BatteryOptimizationRow` (hidden below 33, "Open settings" once

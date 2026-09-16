@@ -92,8 +92,9 @@ class RestartLabTest {
             lab.awaitAcquainted(alice, bob)
             assertTrue(alice.sendRoom("parked on carol"))
             assertTrue(lab.await(1) { bob.transport.held(carol.transport).count { it.isRoomPostFrom(alice.nodeId) } })
-            bob.transport.release(carol.transport) { batch -> batch.filter { it.isRoomPostFrom(alice.nodeId) } }
-            bob.transport.hold(carol.transport) // the served key is held too: carol dies still waiting
+            // The pipe stays held through the release: the served key carol asks for is parked too, so she dies
+            // still waiting for it (a hold re-applied after the release leaves a gap the whole key round trip fits).
+            bob.transport.release(carol.transport, keepHolding = true) { batch -> batch.filter { it.isRoomPostFrom(alice.nodeId) } }
             assertTrue(
                 "carol never parked the frame",
                 lab.await(1) {

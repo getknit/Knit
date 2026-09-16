@@ -2,6 +2,7 @@ package app.getknit.knit.mesh.lab
 
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.mesh.protocol.WireCodec
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -82,6 +83,23 @@ class ProfileUpdateLabTest {
         }
 
     /**
+     * Waits until [from]'s held pipe to [to] parks [count] of [from]'s profile frames. The version moves
+     * *before* the edit's frame reaches the transport (`broadcastProfile` stamps, signs, then floods), so
+     * a scenario that releases the pipe on the version alone releases one frame short on a slow core.
+     */
+    private suspend fun awaitHeldProfiles(
+        from: LabNode,
+        to: LabNode,
+        count: Int,
+    ) {
+        assertTrue(
+            "$count profile frames were never parked on ${from.name}→${to.name}; held " +
+                from.transport.held(to.transport).map { WireCodec.decodeEnvelope(it.signed)?.let { e -> "${e.type} ${e.id}" } },
+            lab.await(count) { from.transport.held(to.transport).count { it.isProfileFrom(from.nodeId) } },
+        )
+    }
+
+    /**
      * Two renames in a row while the link holds, released oldest-last: the stale profile lands after the
      * newer one and must not revert it — `handleProfile` orders on the profile version, not on arrival.
      */
@@ -97,9 +115,11 @@ class ProfileUpdateLabTest {
             val v0 = alice.settings.profileVersion.first()
             alice.setDisplayName("Alice Two")
             awaitRepublish(alice, v0)
+            awaitHeldProfiles(alice, bob, 1)
             val v1 = alice.settings.profileVersion.first()
             alice.setDisplayName("Alice Three")
             awaitRepublish(alice, v1)
+            awaitHeldProfiles(alice, bob, 2)
             val released = alice.transport.release(bob.transport) { it.reversed() }
             assertTrue("two profile frames were held, got ${released.size}", released.size >= 2)
 

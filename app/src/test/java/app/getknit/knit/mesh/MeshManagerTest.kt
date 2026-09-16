@@ -327,6 +327,14 @@ class MeshManagerTest {
         val openToChat = MutableStateFlow(false)
 
         /**
+         * The status line, the second input — a replaying shared flow rather than a state flow, so a test
+         * can re-emit an *equal* value: every [SettingsStore] projection is a `map` over the one DataStore,
+         * which re-emits on a write to any key, and a `MutableStateFlow` dedupes exactly the case that
+         * matters.
+         */
+        val status = MutableSharedFlow<String>(replay = 1).apply { tryEmit("") }
+
+        /**
          * The bound LoRa board, the fifth input — null until one reports in. One [SettingsStore.loraBoard]
          * value per edit, as on a phone: a bind or an unbind reaches the watcher as exactly one emission of
          * one collector, so a test that saw the bind's flood knows the watcher holds the board before it
@@ -418,7 +426,7 @@ class MeshManagerTest {
          */
         fun stubProfileState(publishedAt: MutableStateFlow<Long>): MutableStateFlow<String> {
             coEvery { settings.displayName } returns displayName
-            coEvery { settings.status } returns MutableStateFlow("")
+            coEvery { settings.status } returns status
             coEvery { settings.avatarUpdatedAt } returns avatarUpdatedAt
             coEvery { settings.openToChat } returns openToChat
             coEvery { settings.loraBoard } returns loraBoard
@@ -2021,6 +2029,57 @@ class MeshManagerTest {
                 "Alex",
                 WireCodec.decodePayload<ProfileContent>(custodied.last().payload)?.name,
             )
+        }
+
+    @Test
+    fun aSettingsWriteThatChangesNothingNeverRepublishesTheProfile() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            val publishedAt = MutableStateFlow(0L)
+            rig.stubProfileState(publishedAt)
+
+            rig.manager.start()
+            rig.await(1) { rig.custodiedProfiles().size } // the startup custody seed
+            rig.awaitProfileWatcher()
+
+            // What a write to ANY DataStore key looks like to the watcher: every projection re-emits its
+            // unchanged value. With `drop(1)` ahead of `distinctUntilChanged` this was the first value distinct
+            // ever saw, and every launch published a "changed" profile on the first settings write after start.
+            rig.status.emit("")
+            withContext(Dispatchers.Default) { delay(300) }
+            assertEquals("nothing changed, so nothing floods", 0, rig.floodedProfiles().size)
+            assertEquals("and custody keeps the one seeded row", 1, rig.custodiedProfiles().size)
+
+            // A real edit still publishes, once.
+            rig.clockNow = rig.now + 26_000
+            rig.status.emit("out walking")
+            rig.await(1) { rig.floodedProfiles().size }
+            assertEquals("out walking", WireCodec.decodePayload<ProfileContent>(rig.floodedProfiles().single().payload)?.status)
+        }
+
+    @Test
+    fun anEditMadeWhileTheMeshWasStoppedIsPublishedWhenItStarts() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            val publishedAt = MutableStateFlow(0L)
+            val displayName = rig.stubProfileState(publishedAt)
+
+            rig.manager.start()
+            rig.await(1) { rig.custodiedProfiles().size } // the startup custody seed, still nameless
+            rig.awaitProfileWatcher()
+            val seeded = rig.custodiedProfiles().single()
+            rig.manager.stop()
+
+            // The name is set while the mesh is off: no watcher runs, and the next start finds a stamp that
+            // is not stale, so the seed reuses the custodied — nameless — bytes. The watcher's first value
+            // is what catches it: custody presents something other than the settings, so it publishes once.
+            displayName.value = "Alex"
+            rig.clockNow = rig.now + 26_000
+            rig.manager.start()
+            rig.await(1) { rig.floodedProfiles().size }
+            val flooded = rig.floodedProfiles().single()
+            assertEquals("Alex", WireCodec.decodePayload<ProfileContent>(flooded.payload)?.name)
+            assertNotEquals("under a fresh id, so nobody dedupes it as the seed", seeded.id, flooded.id)
         }
 
     @Test

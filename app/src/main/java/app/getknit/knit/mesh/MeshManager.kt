@@ -97,13 +97,14 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
 
 /** What one inline ack costs inside a DM's ciphertext (a 22-char frame id plus its CBOR header), ADR 054. */
@@ -486,6 +487,18 @@ class MeshManager(
     private val sentProfileVersions = ConcurrentHashMap<String, Long>()
 
     /**
+     * Serializes every signer of our own profile against every writer of its publish stamp ([broadcastProfile],
+     * [republishProfile], [ownProfile]). The frame id keys on the stamp and the bytes are signed from live
+     * settings, read one key at a time — so a signing that overlaps an edit reads a mix of before and after
+     * (the new stamp with the old version, say): same id, different `signed`. Custody keeps whichever landed
+     * first while the flood carried the other, and the two byte-variants never fold at the spool
+     * (`rules/mesh.md`, "one frame id, one set of bytes"; the lab's `meetOnTheRelay` caught it on a slow
+     * runner). Under the lock a stamp is signed exactly once, by whoever wrote it, and every later caller
+     * reads that row.
+     */
+    private val profileLock = Mutex()
+
+    /**
      * Nearby peers — the smoothed [MeshTransport.reachable] set (seen over the coordination plane), not the
      * ≤1 live data-path link, so the UI doesn't blink as the cue-driven transport rotates through ephemeral
      * syncs. Restricted to the **short-range** children
@@ -581,8 +594,7 @@ class MeshManager(
         watchReachable(session)
         watchMetPeers(session)
         openToChatWatch.start(session)
-        seedOwnProfileCustody(session)
-        watchProfileChanges(session)
+        watchProfileChanges(session, seeded = seedOwnProfileCustody(session))
         watchIncomingFiles(session)
         watchIncomingDigests(session)
         resumePendingFetches(session)
@@ -759,7 +771,6 @@ class MeshManager(
      */
     private suspend fun rotatePrekeyIfDue() {
         if (!identity.rotatePrekeyIfDue(clock())) return
-        settings.setProfileVersion(maxOf(clock(), settings.profileVersion.first() + 1))
         broadcastProfile()
     }
 
@@ -2087,7 +2098,7 @@ class MeshManager(
      * differs per node, so first contact diverges the digests, a link forms, profiles/keys exchange, and
      * parked DMs flush.
      */
-    private fun seedOwnProfileCustody(session: CoroutineScope) {
+    private fun seedOwnProfileCustody(session: CoroutineScope): Job =
         session.launch {
             // Hygiene for a device whose own profile once pinned a `peers` row for itself (the self-addressed
             // seed loop, fixed in InboundPipeline.handleProfile): the row is what made us a sealable "peer".
@@ -2108,7 +2119,6 @@ class MeshManager(
             republishProfileIfStale()
             ownProfile() // seeds the row when the stamp is new; reuses it when custody already holds it
         }
-    }
 
     /**
      * Flood our profile once per peer-epoch on **first coordination-plane contact** ([MeshTransport.reachable]
@@ -2176,8 +2186,12 @@ class MeshManager(
         notifier.notifyOpenToChat(names, avatar)
     }
 
-    private fun watchProfileChanges(session: CoroutineScope) {
+    private fun watchProfileChanges(
+        session: CoroutineScope,
+        seeded: Job,
+    ) {
         session.launch {
+            var first = true
             // Five flows, each one settings edit: the board's number and key arrive as one value
             // (SettingsStore.loraBoard), so a bind or an unbind is one emission here, never two.
             combine(
@@ -2188,18 +2202,46 @@ class MeshManager(
                 settings.loraBoard,
             ) { name, status, avatarAt, openToChat, board ->
                 OwnPresentation(name, status, avatarAt, openToChat, board)
-            }.drop(1) // skip the initial stored value; only react to real edits
-                // A Save writes name+status in one transaction; without this the duplicate flow
-                // re-emits would broadcast more than once. Also drops no-op saves.
+            }
+                // Distinct BEFORE the first value is set aside, never after: every one of the five flows is a
+                // projection of the one DataStore, which re-emits on a write to ANY key — so the seed's own
+                // stamp write, the ledger flush, a read-state stamp, each re-emits the unchanged presentation.
+                // With the drop first, the second of those identical values was the first thing distinct saw,
+                // and every launch published a "changed" profile on the first settings write after start —
+                // a fresh version, a fresh custody row, a sealed update to every contact, at a moment nothing
+                // chose (the lab saw it as a third stamp per node, stranded behind an unlink).
                 .distinctUntilChanged()
-                .collect {
-                    // Monotonic bump, persisted: a version that's stable across restarts is what keeps a
-                    // custodied profile from minting a new frame every launch (see SettingsStore.profileVersion).
-                    settings.setProfileVersion(maxOf(clock(), settings.profileVersion.first() + 1))
+                .collect { live ->
+                    if (first) {
+                        first = false
+                        // The stored state, not an edit — unless custody presents something else: an edit made
+                        // while the mesh was stopped (a stamp not yet stale reuses the custodied bytes) or one
+                        // written before this collector subscribed (its combine's initial value already carries
+                        // it). Either is published once, here; the common launch publishes nothing. Judged
+                        // against the row the startup seed leaves, never ahead of it: before the seed has
+                        // refreshed a stale stamp, the row for the current one is the stale frame or nothing.
+                        seeded.join()
+                        if (!custodyPresentsOtherThan(live)) return@collect
+                    }
                     broadcastProfile()
                     broadcastSealedProfile()
                 }
         }
+    }
+
+    /**
+     * Whether the profile frame custody holds for the current stamp ([ownProfile], seeded here if absent)
+     * presents anything other than [live] — the fields the frame carries, compared as the frame carries
+     * them (the avatar by its hash, the name and status normalized and capped).
+     */
+    private suspend fun custodyPresentsOtherThan(live: OwnPresentation): Boolean {
+        val held = WireCodec.decodePayload<ProfileContent>(ownProfile().second.payload) ?: return true
+        return held.name != normalizeSingleLine(live.name).take(TextLimits.DISPLAY_NAME) ||
+            held.status != normalizeSingleLine(live.status).take(TextLimits.STATUS) ||
+            held.avatarHash != settings.ownAvatarHash.first() ||
+            held.openToChat != live.openToChat ||
+            held.loraNode != live.board?.node ||
+            held.loraKey != live.board?.key
     }
 
     private fun watchIncomingFiles(session: CoroutineScope) {
@@ -2257,16 +2299,31 @@ class MeshManager(
      * key, and a frame that never reaches [InboundPipeline.handleProfile] never gets to present it.
      *
      * Callers that re-send **unchanged** content deliberately do NOT come through here — [watchReachable]'s
-     * per-epoch reflood and [pushProfileTo]'s first-contact push both build the envelope directly, because
-     * reusing the id is precisely what lets a receiver dedupe a copy it already holds. Only a content
-     * change earns a new stamp.
+     * per-epoch reflood and [pushProfileTo]'s first-contact push both read [ownProfile], because reusing the
+     * id is precisely what lets a receiver dedupe a copy it already holds. Only a content change earns a
+     * new stamp — and the version bump, the stamp and the signing happen under [profileLock] as one step,
+     * so nothing reads the new stamp with the old version (or the old stamp with the new one) and signs that.
      */
     private suspend fun broadcastProfile() {
-        // Ahead of building the envelope: the stamp IS the frame id (and the custody `sentAt`) it reads.
-        settings.setProfilePublishedAt(clock())
-        originateSigned(currentProfileEnvelope())
+        val (wire, env) =
+            profileLock.withLock {
+                // Monotonic bump, persisted: a version that's stable across restarts is what keeps a
+                // custodied profile from minting a new frame every launch (see SettingsStore.profileVersion).
+                settings.setProfileVersion(maxOf(clock(), settings.profileVersion.first() + 1))
+                // Ahead of building the envelope: the stamp IS the frame id (and the custody `sentAt`) it reads.
+                settings.setProfilePublishedAt(nextPublishStamp())
+                signOwnProfileLocked()
+            }
+        originateWire(wire, env)
         transport.neighbors.value.forEach { sendAvatarIfNeeded(it) }
     }
+
+    /**
+     * A publish stamp strictly past the last one. The stamp is the frame id, so two edits inside one clock
+     * tick would otherwise share an id — the second a `SeenSet` duplicate on every peer and a `store.has`
+     * no-op in custody, invisible until the next republish. Caller holds [profileLock].
+     */
+    private suspend fun nextPublishStamp(): Long = maxOf(clock(), settings.profilePublishedAt.first() + 1)
 
     /**
      * Sends our avatar file to [peer] only if we haven't already sent them this exact avatar. Profile
@@ -2474,15 +2531,18 @@ class MeshManager(
      * only a fresh stamp — a fresh frame id — can put us back in front of its members (§7.4).
      */
     private suspend fun republishProfile(force: Boolean) {
-        val now = clock()
-        if (!force && now - settings.profilePublishedAt.first() < PROFILE_REPUBLISH_MS) return
-        settings.setProfilePublishedAt(now)
-        // Seed the refreshed frame into custody rather than flooding it: it carries no new information, so
-        // the custody digest divergence is enough to move it to neighbors on the next contact. The previous
-        // stamp's frame lingers until its own TTL — same version, so a receiver re-applies it idempotently.
-        val env = currentProfileEnvelope()
-        forwardSync.onSeen(sign(env), env, ForwardStore.ORIGIN_SELF)
-        scopeSync?.onCustodyChanged()
+        val seeded =
+            profileLock.withLock {
+                if (!force && clock() - settings.profilePublishedAt.first() < PROFILE_REPUBLISH_MS) return@withLock false
+                settings.setProfilePublishedAt(nextPublishStamp())
+                // Seed the refreshed frame into custody rather than flooding it: it carries no new information,
+                // so the custody digest divergence is enough to move it to neighbors on the next contact. The
+                // previous stamp's frame lingers until its own TTL — same version, so a receiver re-applies it
+                // idempotently.
+                signOwnProfileLocked()
+                true
+            }
+        if (seeded) scopeSync?.onCustodyChanged()
     }
 
     // --- Signed origination ---
@@ -2553,9 +2613,13 @@ class MeshManager(
      * there is one, else a fresh signing that is custodied here and now. One id, one set of bytes
      * (ADR 2026-09.y5f3): the mesh-in-a-box lab caught a LoRa beacon signing `profile-me-<stamp>` while a
      * settings write was still landing, so the peer custodied the beacon's bytes and this device its seed's —
-     * two blobs under one id at the spool, and a scope digest that could never converge.
+     * two blobs under one id at the spool, and a scope digest that could never converge. Taken under
+     * [profileLock], so it can never overlap the edit that writes the stamp it reads.
      */
-    private suspend fun ownProfile(): Pair<WireEnvelope, RelayEnvelope> {
+    private suspend fun ownProfile(): Pair<WireEnvelope, RelayEnvelope> = profileLock.withLock { signOwnProfileLocked() }
+
+    /** [ownProfile]'s body — the one place a profile frame is signed. Caller holds [profileLock]. */
+    private suspend fun signOwnProfileLocked(): Pair<WireEnvelope, RelayEnvelope> {
         val env = currentProfileEnvelope()
         forwardStore.frame(env.id, clock())?.let { held -> return WireEnvelope(sig = held.sig, signed = held.signed) to held.envelope }
         val wire = sign(env)

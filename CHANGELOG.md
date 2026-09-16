@@ -25,6 +25,8 @@ document:
 - Your phone could still upload a photo to your relay right after the phone next to you passed it over
   Bluetooth or Wi-Fi, depending on which arrived first, the message or the photo. It now holds that upload
   until you are apart.
+- A name or status you set moments after meeting someone could show up blank, or as the old one, on their
+  phone until the next day. It reaches them right away now, and a relay no longer gets stuck syncing on it.
 
 ## [2.6.0](https://github.com/getknit/knit/releases/tag/v2.6.0) — 2026-09-16T07:24:35Z
 

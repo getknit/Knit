@@ -112,6 +112,30 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   emitting it: `MeshBlobStore.saveIncoming` deletes what it reads, and two receivers of one blob handed the
   sender's single temp path raced for it, the loser dropping the blob silently. It also has a per-pipe loss
   knob (`lossy(to) { drop }`) and a `held(to)` peek so a scenario can wait for a relayed frame before releasing.
+- **Wait for the frame, not for the state that precedes it.** A settings or DB write the scenario can see
+  lands *before* the frame it triggers reaches the transport (`broadcastProfile` bumps the version, then
+  stamps, signs and floods), so "the version moved" is not "the frame is parked": `ProfileUpdateLabTest`
+  released one profile short on GitHub (2026-09-16). Poll `held(to).count { it.isProfileFrom(…) }` (or
+  `isRoomPostFrom` / `isChatFrom`) before a `release` whose batch the scenario asserts on. The user-level
+  sends (`sendDm`, `sendGroup`, `react`, `createGroup`) hand their frames to the transport before they
+  return — `MeshRouter.sendOwn` awaits `transport.send` — so those need no wait; the profile edits
+  (`setDisplayName`, `setStatus`, `setOpenToChat`, `setAvatar`) go through the manager's watcher, so
+  `LabNode` waits for the publish itself (version moved, `framesOriginated` moved) before returning, and
+  a no-op edit returns at once. A `RoomTickPlanesLabTest` node once minted its rename's frame after the
+  scenario had already cut the link.
+- **A link is presented on both ends before either end is woken.** `LabTransport.connect` publishes the two
+  ends one after the other, and on one slow core the first end's reaction — its profile push, its custody
+  digest — reached the second end before the second publish; the second end's manager answered through the
+  composite, which asked `neighbors.value` for a child holding the link, found none and dropped the serve on
+  the floor (the throttled whole-package loop failed `RoomTickPlanesLabTest`'s custody parity three runs in
+  three, 2026-09-16; only the 60 s re-offer would have repeated it). `neighbors.value` now reads a `current`
+  set written on both ends at pipe creation; collectors still see every publish, in order, through the
+  `links` flow. The pipe map is a `ConcurrentHashMap` for the same reason — the scenario thread links and
+  unlinks while the workers are inside `send`.
+- **A hold re-applied after a `release` leaves a gap.** Between `release` returning and the next `hold`, a
+  delivered frame's whole answer can cross on one slow core (a key request and the served key:
+  `RestartLabTest` meant to strand the key and found it delivered, GitLab job 4494). `release(to,
+  keepHolding = true) { … }` delivers the batch and keeps parking what follows.
 - **A held frame that is filtered out at `release` is lost, like a dropped packet** — and the digest exchange
   repairs it only on the next link-up or the 60 s re-offer. A scenario that drops held frames re-links before
   the oracle (`KeyExchangeLabTest`, `SessionLabTest`'s key request), as `RoomTickPlanesLabTest` already did.

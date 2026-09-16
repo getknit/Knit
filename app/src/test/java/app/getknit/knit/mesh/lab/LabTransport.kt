@@ -53,6 +53,18 @@ class LabTransport(
     private val generation = AtomicLong()
 
     /**
+     * What `neighbors.value` answers right now — the link set as the pipes have it, set on **both** ends of
+     * a link before either end's collectors are woken. The two ends publish one after the other, and the
+     * first end's reaction (its profile push, its custody digest) reaches the second end before the second
+     * publish on one slow core; the second end's manager then answers through the composite, which asks
+     * `neighbors.value` for a child holding the link, finds none and drops the answer on the floor — a serve
+     * that only the 60 s re-offer would repeat (`RoomTickPlanesLabTest` under the throttled loop, custody
+     * parity never reached inside the await). Collectors still see every publish in order, through [links].
+     */
+    @Volatile
+    private var current: Set<Peer> = emptySet()
+
+    /**
      * Per live collector of [neighbors], the generation it was last handed. A `StateFlow` conflates: a
      * collector busy inside its body is handed only the newest value once it returns, so a link taken down
      * and brought back while `MeshManager.watchNeighbors` is still processing the previous value is a link
@@ -69,7 +81,7 @@ class LabTransport(
     @OptIn(ExperimentalForInheritanceCoroutinesApi::class) // value, replayCache and collect are the whole contract
     override val neighbors: StateFlow<Set<Peer>> =
         object : StateFlow<Set<Peer>> {
-            override val value: Set<Peer> get() = links.value.peers
+            override val value: Set<Peer> get() = current
             override val replayCache: List<Set<Peer>> get() = listOf(value)
 
             override suspend fun collect(collector: FlowCollector<Set<Peer>>): Nothing {
@@ -100,8 +112,12 @@ class LabTransport(
     private val _incomingDigests = MutableSharedFlow<ReceivedDigest>(extraBufferCapacity = BUFFER)
     override val incomingDigests = _incomingDigests.asSharedFlow()
 
-    /** Outbound pipes, keyed by the far node id. */
-    private val pipes = linkedMapOf<String, Pipe>()
+    /**
+     * Outbound pipes, keyed by the far node id. Concurrent on purpose: the scenario thread links and unlinks
+     * while the stacks' `Dispatchers.Default` workers are inside [send] — a plain map iterated on one thread
+     * and written on another throws, or hands the sender a stale view of the links.
+     */
+    private val pipes = ConcurrentHashMap<String, Pipe>()
 
     /**
      * One direction of a link: frames from this transport toward [target], held while [holding], and dropped
@@ -136,6 +152,9 @@ class LabTransport(
         if (other.nodeId == nodeId) return
         pipes[other.nodeId] = Pipe(other)
         other.pipes[nodeId] = Pipe(this)
+        // Both ends answer `neighbors.value` with the new link before either end's collectors run (see [current]).
+        presentNeighbors()
+        other.presentNeighbors()
         if (publish) {
             publishNeighbors()
             other.publishNeighbors()
@@ -149,6 +168,8 @@ class LabTransport(
     fun disconnect(other: LabTransport) {
         pipes.remove(other.nodeId)
         other.pipes.remove(nodeId)
+        presentNeighbors()
+        other.presentNeighbors()
         refreshNeighbors()
         other.refreshNeighbors()
     }
@@ -188,16 +209,21 @@ class LabTransport(
     fun held(to: LabTransport): List<WireEnvelope> = pipe(to).let { synchronized(it.held) { it.held.toList() } }
 
     /**
-     * Delivers everything parked for [to], in the order [reorder] returns (default: as sent), and stops holding.
-     * Returns what was released, for a scenario that wants to assert on the frames themselves.
+     * Delivers everything parked for [to], in the order [reorder] returns (default: as sent), and stops holding
+     * — unless [keepHolding], which parks what the far side sends back in answer to the batch as well. A
+     * scenario that calls `release` and then `hold` again has a gap between the two in which a delivered frame's
+     * whole answer can cross (a key request and the served key, on one slow core: `RestartLabTest` found the
+     * key it meant to strand already delivered). Returns what was released, for a scenario that wants to
+     * assert on the frames themselves.
      */
     suspend fun release(
         to: LabTransport,
+        keepHolding: Boolean = false,
         reorder: (List<WireEnvelope>) -> List<WireEnvelope> = { it },
     ): List<WireEnvelope> {
         val pipe = pipe(to)
         val batch = synchronized(pipe.held) { pipe.held.toList().also { pipe.held.clear() } }
-        pipe.holding = false
+        pipe.holding = keepHolding
         val ordered = reorder(batch)
         ordered.forEach { pipe.target.deliver(it, nodeId) }
         return ordered
@@ -264,8 +290,14 @@ class LabTransport(
         _inbound.emit(InboundFrame(wire, envelope, fromNodeId))
     }
 
+    /** Makes `neighbors.value` answer with the pipes as they are now, without waking a collector. */
+    private fun presentNeighbors() {
+        current = pipes.keys.map { Peer(it) }.toSet()
+    }
+
     private fun refreshNeighbors() {
-        links.value = Links(pipes.keys.map { Peer(it) }.toSet(), generation.incrementAndGet())
+        presentNeighbors()
+        links.value = Links(current, generation.incrementAndGet())
     }
 
     private companion object {
@@ -289,3 +321,7 @@ internal fun WireEnvelope.isRoomPostFrom(nodeId: String): Boolean =
     WireCodec.decodeEnvelope(signed)?.let {
         it.type == FrameType.CHAT && it.senderId == nodeId && it.recipientId == null && it.group == null
     } == true
+
+/** The cleartext `profile` frame [nodeId] signed — what a rename floods, and what a first contact pushes. */
+internal fun WireEnvelope.isProfileFrom(nodeId: String): Boolean =
+    WireCodec.decodeEnvelope(signed)?.let { it.type == FrameType.PROFILE && it.senderId == nodeId } == true

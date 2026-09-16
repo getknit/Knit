@@ -102,7 +102,9 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   `setAvatar` (`ProfileViewModel`), `block` / `unblock` / `accept`, `sendImage` (bytes straight into the
   blob store under their hash — `AttachmentStore.ingest` collapses every picture into one placeholder hash
   under Robolectric's legacy graphics), `mintCard` / `importCard` (`ContactCards` + `ContactImporter`),
-  `resetSession`, `heal()` (fire-and-forget; await the effect), `wipeCustody`. Readers beside them:
+  `resetSession`, `heal()` (fire-and-forget; await the effect), `sweepExpired()` (the TTL sweep the prune
+  loop and the heartbeat run — custody, parked frames, key and blob wants — awaited, for after a clock jump),
+  `wipeCustody`. Readers beside them:
   `reactions`, `group` / `groupShape`, `attachmentHash` / `attachmentHeld` / `attachmentScreened` /
   `attachmentPlain`, `peer` / `presentationOf`, `session`, `selfAddressedCustody`, `notices`, `rowsIn`,
   `custodiedChatsFrom`, `scopeStatus`, `loraLine`. If a ViewModel's write sequence changes, change the mirror.

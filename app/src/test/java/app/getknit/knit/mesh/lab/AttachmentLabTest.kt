@@ -1,9 +1,12 @@
 package app.getknit.knit.mesh.lab
 
 import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
+import app.getknit.knit.mesh.lora.FakeMeshtasticAir
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -127,4 +130,49 @@ class AttachmentLabTest {
                 assertTrue(photo.contentEquals(n.blobs.bytes(hash)))
             }
         }
+
+    /**
+     * The 2026-09-15 field trial (ADR 2026-09.ptv8): a picture posted in the room reaches a phone that only
+     * the board can hear, so its row arrives with a hash and no bytes, and the want it parks has nobody to
+     * go to. The phone stays alone past `BlobExchange`'s 30-min fetch TTL — a real walk — and the sweep the
+     * prune loop and the heartbeat run reclaims the want. When a neighbour finally links, the re-ask must
+     * still name the picture: the database, not the in-memory memo, is what says it is missing. Before the
+     * fix the row spun until the app was restarted; here Bob's re-link is the whole cure.
+     */
+    @Test
+    fun aPictureHeardOverTheBoardWhileAloneIsStillFetchedAfterALongIsolation() =
+        runBlocking {
+            val air = FakeMeshtasticAir()
+            val alice = lab.node("alice", air = air).apply { setDisplayName("Alice") }
+            val bob = lab.node("bob", air = air).apply { setDisplayName("Bob") }
+            lab.link(alice, bob)
+            lab.awaitAcquainted(alice, bob)
+            lab.awaitCustodyParity(alice, bob)
+            lab.unlink(alice, bob)
+
+            val picture = Random(5).nextBytes(4_096)
+            assertTrue(alice.sendImage(picture, "from the trail"))
+            val id = alice.ownMessageId(Conversations.NEARBY, "from the trail")
+            assertTrue("bob never heard the post", lab.await(1) { bob.roomPosts()[alice.nodeId].orEmpty().size })
+            assertEquals(DeliveryPlane.LoRa, bob.receivedVia(Conversations.NEARBY, id))
+            assertFalse("a board carries a frame, never its bytes", bob.attachmentHeld(Conversations.NEARBY, id))
+
+            // Half an hour alone, then the sweep that reclaims a want nobody could be asked for.
+            lab.clock.advance(WANT_TTL_LAPSED_MS)
+            bob.sweepExpired()
+            assertFalse(bob.attachmentHeld(Conversations.NEARBY, id))
+
+            lab.link(alice, bob)
+            assertTrue(
+                "the picture was never fetched once a holder linked",
+                lab.await(1) { if (bob.attachmentHeld(Conversations.NEARBY, id)) 1 else 0 },
+            )
+            assertTrue(picture.contentEquals(bob.attachmentPlain(Conversations.NEARBY, id)))
+            lab.assertConverged(listOf(alice, bob), atLeast = 1) { Conversations.NEARBY }
+        }
+
+    private companion object {
+        /** Past `BlobExchange.FETCH_TTL_MS` (30 min), well inside the 48 h a lab clock jump may span. */
+        const val WANT_TTL_LAPSED_MS = 31 * 60_000L
+    }
 }

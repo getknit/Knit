@@ -905,6 +905,9 @@ class LabNode internal constructor(
     /** Runs the local-storage sweep the 10-minute prune loop runs, now. */
     suspend fun sweepLocalStorage() = manager.sweepLocalStorage()
 
+    /** Runs the TTL sweep the 10-minute prune loop and the heartbeat run (custody, parked frames, wants), now. */
+    suspend fun sweepExpired() = manager.sweepExpired()
+
     /** Sends a DM; the frame the app's composer would send. */
     suspend fun sendDm(
         to: LabNode,

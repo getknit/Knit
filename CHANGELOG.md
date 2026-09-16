@@ -131,6 +131,8 @@ document:
 - Blocking someone no longer makes your phone keep re-syncing with the phones around it for as long as the
   block stands, which was costing radio time and battery. Anything they sent while blocked stays hidden
   after you unblock them.
+- A photo from the Nearby room that reached you over a LoRa radio while no other phone was near now loads
+  once one comes back into range. It used to sit loading until you restarted Knit.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

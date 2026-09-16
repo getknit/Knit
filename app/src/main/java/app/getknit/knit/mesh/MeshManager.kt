@@ -735,11 +735,7 @@ class MeshManager(
         // never arrived as a fresh neighbor (so onNeighborAdded didn't fire) — belt-and-suspenders for the
         // ongoing-drops retry already driven by want()'s cooldown.
         sessionScope?.launch {
-            forwardSync.sweepExpired()
-            pendingInbound.sweepExpired()
-            pendingGroupKeys.sweepExpired()
-            keyExchange.sweepExpired() // age out stale (unauthenticated) key-wants; blob fetches that never arrived
-            blobExchange.sweepExpired()
+            sweepExpired()
             keyExchange.retryMissing()
             ackSync.retryPending() // re-send broadcast/group ticks we still owe absent authors (+ age out old ones)
             dmAcks.flushDue() // tick the LoRa-held DM receipts whose hold has run out (ADR 054)
@@ -1934,22 +1930,46 @@ class MeshManager(
             blobs.deleteOrphans() // reclaim blobs left by attachments staged but never sent (keeps carried ones)
             reactions.deleteOrphans(clock()) // reclaim reactions left by deleted messages
             receipts.deleteOrphans() // ...and per-recipient delivery rows left by a deleted thread or a retention trim
-            forwardSync.sweepExpired() // drop carried DMs whose TTL elapsed while we were down
-            pendingInbound.sweepExpired() // and any key-wait frames whose TTL lapsed (in-memory, so usually a no-op)
-            pendingGroupKeys.sweepExpired()
-            keyExchange.sweepExpired() // stale unauthenticated key-wants
-            blobExchange.sweepExpired() // never-arriving blob fetches
+            sweepExpired() // carried DMs whose TTL elapsed while we were down (the in-memory sets are usually empty)
             sweepLocalStorage() // bound the local messages/peers tables against a Sybil flood (Message Requests hardening)
-            // Own/received message attachments: always re-pull (uncapped, kept alive by their message row).
-            val ownHashes = messages.hashesNeedingFetch()
-            ownHashes.forEach { blobExchange.want(it) }
-            // Carrier-only custody blobs backfill only while under the byte budget (the same pull-time soft cap
-            // onCarriedFrame applies), so a restart re-attempts pulls that a live-session over-budget skip left
-            // missing; skip ones already re-requested above as our own/received attachments.
-            if (blobs.carrierOnlyBlobBytes() < CARRIER_BLOB_BUDGET_BYTES) {
-                val own = ownHashes.toHashSet()
-                forwardStore.attachmentHashesNeedingFetch().forEach { if (it !in own) blobExchange.want(it) }
-            }
+            rewantMissingBlobs()
+        }
+    }
+
+    /**
+     * Ages out what has outlived its TTL: carried DMs, key-wait frames, parked group seeds, stale
+     * (unauthenticated) key-wants and blob fetches that never arrived. Startup, the 10-min prune loop and the
+     * 15-min heartbeat all run it. `internal` so `mesh/lab` can run the sweep inside a scenario, where a
+     * clock jump moves the expiry but the loops that would notice are `delay()`-based and blind to it.
+     */
+    internal suspend fun sweepExpired() {
+        forwardSync.sweepExpired()
+        pendingInbound.sweepExpired()
+        pendingGroupKeys.sweepExpired()
+        keyExchange.sweepExpired()
+        blobExchange.sweepExpired()
+    }
+
+    /**
+     * Re-arms a want for every attachment blob the database still names but the store does not hold. The
+     * database is the durable truth; `BlobExchange`'s in-memory fetching set is a bounded, TTL-swept memo of
+     * it, and the two drift apart in exactly the shape the LoRa field trial hit (ADR 2026-09.ptv8): a frame
+     * heard over the board while the phone had no neighbor parks a want that nobody was asked for, the 30-min
+     * sweep reclaims it, and the link-up re-ask ([BlobExchange.onNeighborAdded]) then finds nothing to ask
+     * for — the row spins forever, until a restart ran this. So it runs at every point a holder may have just
+     * appeared: startup, a neighbor joining, and the 60 s re-offer tick. [BlobExchange.want] is idempotent for
+     * a hash already in flight and returns at once for one the store has, so the repeat costs one bounded query.
+     */
+    private suspend fun rewantMissingBlobs() {
+        // Own/received message attachments: always re-pull (uncapped, kept alive by their message row).
+        val ownHashes = messages.hashesNeedingFetch()
+        ownHashes.forEach { blobExchange.want(it) }
+        // Carrier-only custody blobs backfill only while under the byte budget (the same pull-time soft cap
+        // onCarriedFrame applies), so a restart re-attempts pulls that a live-session over-budget skip left
+        // missing; skip ones already re-requested above as our own/received attachments.
+        if (blobs.carrierOnlyBlobBytes() < CARRIER_BLOB_BUDGET_BYTES) {
+            val own = ownHashes.toHashSet()
+            forwardStore.attachmentHashesNeedingFetch().forEach { if (it !in own) blobExchange.want(it) }
         }
     }
 
@@ -1958,11 +1978,7 @@ class MeshManager(
         session.launch {
             while (true) {
                 delay(FORWARD_SWEEP_INTERVAL_MS)
-                forwardSync.sweepExpired()
-                pendingInbound.sweepExpired()
-                pendingGroupKeys.sweepExpired()
-                keyExchange.sweepExpired()
-                blobExchange.sweepExpired()
+                sweepExpired()
                 commons?.sweepOutbox(clock() - ScopeRegistry.COMMONS_DEFAULT_TTL_MS) // the room has long expired them
                 sweepLocalStorage()
             }
@@ -2015,7 +2031,11 @@ class MeshManager(
         session.launch {
             while (true) {
                 delay(NEIGHBOR_REOFFER_INTERVAL_MS)
-                transport.neighbors.value.forEach { peer ->
+                val neighbors = transport.neighbors.value
+                // Before the per-neighbor re-ask, so a want the 30-min sweep reclaimed is back in the memo it
+                // reads from; skipped with nobody linked, where a want has nowhere to go anyway.
+                if (neighbors.isNotEmpty()) rewantMissingBlobs()
+                neighbors.forEach { peer ->
                     forwardSync.onNeighborAdded(peer) // re-advertise our custody digest → pull anything we lack
                     blobExchange.onNeighborAdded(peer) // re-ask for blobs we still need
                     keyExchange.onNeighborAdded(peer) // re-ask for keys we still need
@@ -2043,6 +2063,9 @@ class MeshManager(
                 // link (Bluetooth) only joins once, so reofferToNeighborsPeriodically re-runs these hooks on a
                 // timer for currently-linked neighbors — the anti-entropy a non-flapping link needs.)
                 known = currentIds
+                // A newcomer may be the holder of bytes whose want the sweep already reclaimed — re-arm from
+                // the database first, so the re-ask below has the full missing set to ask it for.
+                if (newcomers.isNotEmpty()) rewantMissingBlobs()
                 newcomers.forEach {
                     pushProfileTo(it)
                     blobExchange.onNeighborAdded(it) // re-ask the new neighbor for blobs we still need

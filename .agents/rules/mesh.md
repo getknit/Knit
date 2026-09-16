@@ -157,6 +157,12 @@ free). Two invariants that are easy to break:
   The trap is the tidier-looking seam: `InboundPipeline.onObtained` is the hook **both** planes share, and
   `onReceived` awaits it *before* its own `removeWanters` — drain from there and the radio path finds an
   empty set and bounces the blob back at whoever just served it.
+- **The database says which attachments are missing; `BlobExchange`'s `fetching` set is a swept memo of it**
+  (ADR 2026-09.ptv8). A `want` parked with no neighbor (a frame heard over the board alone) is reclaimed by
+  the 30-min `FETCH_TTL_MS` sweep, and `onNeighborAdded` re-asks only from the memo — so
+  `MeshManager.rewantMissingBlobs()` re-reads `messages.hashesNeedingFetch()` (+ the carrier-only custody
+  hashes under budget) on every neighbor join and 60 s re-offer tick, not only at startup. Any new "what do
+  we still need" path reads the database the same way; never make the memo the source.
 - **Group-root minting is damped; group-root adoption is not** (`GroupRootPolicy`, spec §3.2). Several
   members minting version 1 at once is normal and self-healing — `(version, minter)` collapses the
   lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping

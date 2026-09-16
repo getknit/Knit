@@ -21,7 +21,7 @@ ABOUT THE PERMISSIONS
 Knit asks for nearby-devices (location before Android 13) as Android needs it to find peers over Wi-Fi Aware and Bluetooth LE and reach a paired radio. Location is read only when you tap Send location. INTERNET is declared because Android counts the local Wi-Fi Aware socket as network access, and because relays and link previews use it once switched on. No account, no backend: a fresh install makes no network calls.
 
 FREE SOFTWARE
-Knit is released under the GNU General Public License v3 or later; the full source is at github.com/getknit/knit. Read the code that runs on your phone, or build it yourself.
+Knit is released under the GNU General Public License v3 or later; the full source is at github.com/getknit/knit.
 
 FEATURES
 • Public "Nearby" room to broadcast to everyone in range
@@ -29,13 +29,14 @@ FEATURES
 • Multi-member groups (end-to-end encrypted)
 • Quoted replies, emoji reactions, and @-mentions
 • Image sharing, including GIFs
-• Voice notes and files of any type in direct and group chats
+• Voice notes, files of any type, and big files phone to phone over Wi-Fi
+• Search every chat, contact, and message
 • Store-and-forward — messages wait and deliver when someone returns to range
 • Add a contact from a link when you're too far apart to scan
 • Optional Meshtastic LoRa radio for far longer range (see below)
 • Optional Internet relays, off until you turn them on (see below)
 • Share the app itself to a nearby phone, offline, with no app store
-• Material 3 interface with full dark mode
+• Material 3, dark mode, and Material You dynamic colors
 
 SAFER SPACES
 On-device filtering screens out abusive text and explicit images, offline, nothing sent anywhere. Sensitive content is blurred behind a tap to reveal, and any sender is one tap from blocked.

@@ -1,0 +1,17 @@
+Search every chat, send big files phone to phone, and see what your mesh carried.
+
+Tap the magnifier above the chat list to find a chat, a contact, or a message by what it said, and open a
+result right on that message. A file too big to attach now goes to a nearby contact straight over Wi-Fi,
+phone to phone, and lands in their Downloads folder. The nearby count above the chat list opens Your mesh:
+what your phone passed along for others, what it is carrying right now, and how many people it has met,
+all counted on your phone and never sent anywhere.
+
+Also new: Material You dynamic colors and a light or dark setting of your own on Android 12 or newer, a
+message you didn't finish still there when you come back, sending where you are from a chat's menu, relay
+invite links, an About screen with the licenses, and a three-page setup. Direct and group chats now keep
+every message, people without a photo get their own colour, a group without one shows its members' faces,
+and Enter starts a new line.
+
+Fixed: a LoRa radio repeating what other radios had delivered, a relay that stalled Knit or kept a photo
+from arriving, a Nearby post's delivered tick that waited for Bluetooth or Wi-Fi, crashes around a backup
+and under Restricted battery use, and blocking someone costing radio time.

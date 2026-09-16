@@ -9,7 +9,7 @@ product:
   platforms: [android]
   category: Communication
 document:
-  updated: 2026-09-11T07:59:17Z
+  updated: 2026-09-16T07:24:35Z
   coverage: partial
   canonical: https://github.com/getknit/knit/blob/main/CHANGELOG.md
   locale: en
@@ -18,13 +18,15 @@ document:
 
 # Knit changelog
 
-## Unreleased
+## [2.6.0](https://github.com/getknit/knit/releases/tag/v2.6.0) — 2026-09-16T07:24:35Z
+
+> Search every chat, send big files phone to phone, and see what your mesh carried.
 
 ### Added
 
-- Knit can take its colours from your wallpaper, the way Android does for its own apps. It stays off until
-  you turn it on in Settings on Android 12 or newer, and the online dot and verified shield stay green
-  either way.
+- Knit now supports Material You dynamic colors, taking its palette from your wallpaper the way Android's
+  own apps do. The Dynamic colors switch in Settings stays off until you turn it on, on Android 12 or
+  newer, and the online dot and verified shield stay green either way.
 - You can send where you are from the menu at the top of a chat. Knit reads your position only between
   that tap and the send, and the other phone gets a card that opens in any maps app. Android asks for the
   permission the first time you use it, never before.
@@ -138,6 +140,13 @@ document:
   capitalised one the same way it rejects an address it cannot use, with nothing to tell the two apart.
 - A photo from the Nearby room that reached you over a LoRa radio while no other phone was near now loads
   once one comes back into range. It used to sit loading until you restarted Knit.
+- A photo that reached you through a relay now goes on to the phone next to you that asked for it. That
+  phone used to wait until it thought to ask again, which could be half an hour.
+- A photo sent through a relay now goes up as soon as it's clear the radios didn't deliver it, instead of
+  up to fifteen minutes later. One the two phones already passed over Bluetooth or Wi-Fi is no longer
+  uploaded to the relay as well.
+- Unpairing a LoRa board now always reaches your contacts. It sometimes didn't, so their phones could go
+  on treating that radio's posts as yours and sending you messages through it.
 
 ## [2.5.1](https://github.com/getknit/knit/releases/tag/v2.5.1) — 2026-09-11T07:59:17Z
 

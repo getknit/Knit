@@ -260,7 +260,9 @@ class InternetRelayViewModel(
         val trimmed = url.trim()
         if (!isValidUrl(trimmed)) return
         viewModelScope.launch {
-            settings.addSpoolUrl(trimmed)
+            // Stored in the one canonical form, so a hand-typed `WSS://` row and the same host arriving
+            // later as an invite link are one relay rather than two.
+            settings.addSpoolUrl(SpoolUrl.canonical(trimmed))
             // Dial now rather than at the next reconcile tick, so the row the user just added goes green
             // while they are still looking at it.
             mesh?.refreshRelays()

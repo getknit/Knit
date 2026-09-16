@@ -156,6 +156,23 @@ class RelayInviteApplierTest {
         }
 
     @Test
+    fun anInviteWithAnUppercaseSchemeIsTheSameRelayAsTheStoredRow() =
+        runTest {
+            // Matching is by exact string, so the link is folded to the stored form before it is compared:
+            // otherwise `WSS://` would add a second row for one host and the untokened one would sit
+            // refused `4001` forever — the case this matching rule exists to prevent.
+            spoolUrls.value = setOf(UNTOKENED)
+            val shouty = applier().preview(invite(TOKENED.replaceFirst("wss://", "WSS://")))
+            assertEquals(TOKENED, shouty.url)
+            assertEquals(UNTOKENED, shouty.replaces)
+            applier().apply(shouty)
+            coVerifyOrder {
+                settings.removeSpoolUrl(UNTOKENED)
+                settings.addSpoolUrl(TOKENED)
+            }
+        }
+
+    @Test
     fun aRoomJoinedUnderTheReplacedEntryMovesWithTheRelay() =
         runTest {
             spoolUrls.value = setOf(UNTOKENED)

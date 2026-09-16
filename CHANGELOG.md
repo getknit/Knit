@@ -131,6 +131,8 @@ document:
 - Blocking someone no longer makes your phone keep re-syncing with the phones around it for as long as the
   block stands, which was costing radio time and battery. Anything they sent while blocked stays hidden
   after you unblock them.
+- Adding a relay now works whether you type its address as wss:// or WSS://. Knit used to reject the
+  capitalised one the same way it rejects an address it cannot use, with nothing to tell the two apart.
 - A photo from the Nearby room that reached you over a LoRa radio while no other phone was near now loads
   once one comes back into range. It used to sit loading until you restarted Knit.
 

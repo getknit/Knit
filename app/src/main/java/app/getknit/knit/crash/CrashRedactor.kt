@@ -136,7 +136,9 @@ object CrashRedactor {
             Regex("""\beng\.[A-Za-z0-9_.-]+\.\d+\b""") to { _: MatchResult -> "eng.[user].[ts]" },
             Regex("""\b(content|file)://\S*""") to { m: MatchResult -> "${m.groupValues[1]}://[uri]" },
             // Keep scheme and host (SpoolUrl.host semantics), drop the path and the ?k= bearer with it.
-            Regex("""\b(wss?|https?)://([A-Za-z0-9.\-:\[\]]+)(\S*)""") to { m: MatchResult ->
+            // The scheme is matched case-insensitively because SpoolUrl accepts one: a `WSS://` relay that
+            // read as "no scheme here" would carry its bearer token into a crash report intact.
+            Regex("""\b((?i:wss?|https?))://([A-Za-z0-9.\-:\[\]]+)(\S*)""") to { m: MatchResult ->
                 val authority = "${m.groupValues[1]}://${m.groupValues[2]}"
                 if (m.groupValues[3].isEmpty()) authority else "$authority/[path]"
             },

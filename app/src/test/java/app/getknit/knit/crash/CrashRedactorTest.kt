@@ -63,6 +63,15 @@ class CrashRedactorTest {
     }
 
     @Test
+    fun `drops the bearer token whatever case the scheme is written in`() {
+        // SpoolUrl accepts an uppercase scheme, so this rule must recognise one: a `WSS://` URL that fell
+        // through to the generic rules would keep a short or `-`/`_`-bearing token intact in the report.
+        val out = message("dial failed WSS://relay.example.net/spool?k=SUPERSECRETTOKEN")
+        assertFalse(out.contains("SUPERSECRETTOKEN"))
+        assertFalse(out.contains("/spool"))
+    }
+
+    @Test
     fun `redacts content uris and on-device paths`() {
         assertFalse(message("null output stream for content://media/external/images/media/1234").contains("1234"))
         val out = message("cannot read /data/user/0/app.getknit.knit/files/identity.key")

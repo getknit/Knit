@@ -81,11 +81,14 @@ class RelayInviteApplier(
     ): Preview {
         val stored = settings.spoolUrls.first()
         val parked = settings.disabledSpoolUrls.first()
-        val redacted = SpoolUrl.redact(invite.url)
+        // Matching is by exact string, so the link's URL is folded to the stored form first: a link that
+        // spells its scheme `WSS://` names the relay a lowercase row already holds.
+        val inviteUrl = SpoolUrl.canonical(invite.url)
+        val redacted = SpoolUrl.redact(inviteUrl)
         val sameHost = stored.firstOrNull { SpoolUrl.redact(it) == redacted }
-        val inviteTokened = invite.url != redacted
+        val inviteTokened = inviteUrl != redacted
         val storedTokened = sameHost != null && sameHost != SpoolUrl.redact(sameHost)
-        val url = if (sameHost != null && (storedTokened || !inviteTokened)) sameHost else invite.url
+        val url = if (sameHost != null && (storedTokened || !inviteTokened)) sameHost else inviteUrl
         val replaces = sameHost?.takeIf { it != url }
         val room =
             invite.secret?.let { secret ->

@@ -9,6 +9,10 @@ package app.getknit.knit.mesh.spool
  * *store* one so the user is told at the point of entry instead of watching a row sit unreachable
  * forever. Two copies of that rule would eventually disagree, and the copy that drifts is the one that
  * lets a `ws://` URL into a release build.
+ *
+ * A scheme is read through [schemeOf] or not at all — never a bare `startsWith(WSS_SCHEME)`. It is
+ * case-insensitive (RFC 3986 §3.1), and [sourceUrl] picks https-or-http off the same read, so a
+ * case-sensitive test there would GET a `WSS://` relay's build document in the clear. ADR 2026-09.66cw.
  */
 object SpoolUrl {
     private const val WSS_SCHEME = "wss://"
@@ -17,11 +21,44 @@ object SpoolUrl {
     /** The record layer's own path (spec B-7.1-1), which a URL carries and the HTTP routes beside it do not. */
     private const val SPOOL_PATH = "/spool/v1"
 
+    /**
+     * Which of our two schemes [url] carries, in lowercase, or null for any other. The single place that
+     * reads a scheme: a scheme is case-insensitive (RFC 3986 §3.1) and OkHttp normalises one before it
+     * dials, so a rule of ours that read `WSS://` as "not wss" would be a rule that disagrees with the
+     * socket — which is the whole reason [isAcceptable] lives here rather than in the dialer.
+     */
+    private fun schemeOf(url: String): String? =
+        when {
+            url.startsWith(WSS_SCHEME, ignoreCase = true) -> WSS_SCHEME
+            url.startsWith(WS_SCHEME, ignoreCase = true) -> WS_SCHEME
+            else -> null
+        }
+
     /** Whether this URL's scheme is usable in this build. `wss://` always; `ws://` only when [allowCleartext]. */
     fun isAcceptable(
         url: String,
         allowCleartext: Boolean,
-    ): Boolean = url.startsWith(WSS_SCHEME) || (allowCleartext && url.startsWith(WS_SCHEME))
+    ): Boolean =
+        when (schemeOf(url)) {
+            WSS_SCHEME -> true
+            WS_SCHEME -> allowCleartext
+            else -> false
+        }
+
+    /**
+     * The one *stored* form of [url]: the scheme lowercased, and nothing else touched. Every door that
+     * writes a relay into settings puts it through this, because relays are matched downstream by exact
+     * string (`RelayInviteApplier` compares [redact]ed URLs, `SettingsStore` holds a `Set<String>`) — so
+     * without it a hand-typed `WSS://relay/spool/v1` and an invite's `wss://relay/spool/v1?k=…` would be
+     * two rows for one host, and the untokened one would be refused `4001` forever.
+     *
+     * Only the scheme. The authority is case-insensitive too, but lowercasing it would rewrite what the
+     * user typed for no gain here, and a path and a bearer token are both case-*sensitive*.
+     */
+    fun canonical(url: String): String {
+        val scheme = schemeOf(url) ?: return url
+        return scheme + url.substring(scheme.length)
+    }
 
     /**
      * Strips any `?k=` bearer token. Every rendering of a spool URL — a log line, a settings row, a
@@ -57,7 +94,7 @@ object SpoolUrl {
     ): String? {
         if (!isAcceptable(url, allowCleartext)) return null
         val withoutToken = redact(url)
-        val scheme = if (withoutToken.startsWith(WSS_SCHEME)) "https://" else "http://"
+        val scheme = if (schemeOf(withoutToken) == WSS_SCHEME) "https://" else "http://"
         val afterScheme = withoutToken.substringAfter("://", missingDelimiterValue = "")
         val authority = afterScheme.substringBefore('/').ifEmpty { return null }
         val path = afterScheme.removePrefix(authority).trimEnd('/')

@@ -108,7 +108,7 @@ Builds:
 
   - versionName: 2.6.0
     versionCode: 22
-    commit: v2.6.0
+    commit: 38e59053c2945f815c3944333eb2555df0d39b34
     subdir: app
     gradle:
       - yes

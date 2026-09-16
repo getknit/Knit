@@ -52,12 +52,12 @@ profile:
   name: qodana.recommended
 
 # The linter image ships only `platforms;android-33` and no build-tools, but this project builds
-# against compileSdk 37.1 — without the matching platform the Gradle sync fails and every Android API
+# against compileSdk 37.0 — without the matching platform the Gradle sync fails and every Android API
 # resolves to nothing, so the run reports garbage rather than nothing. Install what the build needs
 # before analysis, into $ANDROID_SDK_ROOT, which the runner points at the mounted cache: /opt is owned
 # by root and Qodana runs as the calling user, and a cached SDK is downloaded once rather than per run.
 # Keep these two versions in lockstep with .gitlab-ci.yml's ANDROID_COMPILE_SDK / ANDROID_BUILD_TOOLS
-# and with app/build.gradle.kts `compileSdk` — `android-37` and `android-37.1` are different packages.
+# and with app/build.gradle.kts `compileSdk` — `android-37` and `android-37.0` are different packages.
 #
 # It also installs a **JDK 21**, because the image ships 11, 17 and 25 and this project's toolchain is
 # pinned to 21. Gradle would normally fetch one itself; settings.gradle.kts deliberately omits the
@@ -73,7 +73,7 @@ bootstrap: >-
   mkdir -p "$SDK" &&
   cp -rn /opt/android-sdk/cmdline-tools /opt/android-sdk/licenses "$SDK"/ 2>/dev/null || true;
   yes | "$SDK"/cmdline-tools/tools/bin/sdkmanager --sdk_root="$SDK"
-  "platforms;android-37.1" "build-tools;36.0.0" > /dev/null;
+  "platforms;android-37.0" "build-tools;36.0.0" > /dev/null;
   JDK="${QODANA_JDK21:-/data/cache/jdk21}";
   if [ ! -x "$JDK/bin/java" ]; then mkdir -p "$JDK" &&
   curl -sSL "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"

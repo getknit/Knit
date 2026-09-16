@@ -153,7 +153,7 @@ jobs:
           # AGP forward-compat property leaves behind — see qodana.yaml's banner).
           args: --save-report --baseline qodana.sarif.json
         env:
-          # qodana.yaml's bootstrap installs compileSdk 37.1 + build-tools here — the linter image
+          # qodana.yaml's bootstrap installs compileSdk 37.0 + build-tools here — the linter image
           # ships only android-33, and without the matching platform every Android API resolves to
           # nothing, so the run reports garbage rather than reporting nothing.
           ANDROID_SDK_ROOT: ${{ runner.temp }}/qodana/caches/android-sdk

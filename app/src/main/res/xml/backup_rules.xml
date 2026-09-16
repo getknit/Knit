@@ -4,7 +4,8 @@
    Exclude every secret and the encrypted database from cloud backup. The AndroidKeyStore wrapping
    key is non-exportable and never leaves the device, so backing up db.key / identity.key only ships
    blobs that are undecryptable off-device — and the encrypted knit.db likewise has no value off the
-   originating device. DataStore (settings, block list) is excluded as mildly private. This matches
+   originating device. DataStore (settings, block list, and a private relay's bearer token) is excluded:
+   the token is in the clear there, and this is what keeps it on the device. This matches
    the "excluded from cloud backup" contract documented in DatabaseKey / KeystoreSecret.
 -->
 <full-backup-content>

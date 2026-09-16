@@ -2,7 +2,8 @@
    Data-extraction rules for API 31+. Exclude every secret and the encrypted database from BOTH cloud
    backup and device-to-device transfer: the AndroidKeyStore wrapping key is non-exportable, so db.key
    / identity.key are useless once copied off-device, and the encrypted knit.db has no value elsewhere.
-   DataStore (settings, block list) is excluded as mildly private. allowBackup stays true so the rules
+   DataStore (settings, block list, and a private relay's bearer token) is excluded: the token is in the
+   clear there, and this is what keeps it on the device. allowBackup stays true so the rules
    apply; this realises the "excluded from backup" contract documented in DatabaseKey / KeystoreSecret.
 -->
 <data-extraction-rules>

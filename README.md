@@ -176,6 +176,18 @@ Knit is built for situations where there's **no reliable network but people are 
   notification. Attachment bytes are content-addressed and pulled on demand instead of riding the
   flood (encrypted ones by ciphertext hash, so dedup and pull are unchanged), and reactions converge
   across the mesh (last-writer-wins), sealed alongside delivery receipts in DMs and groups.
+- **Big files, phone to phone** — a file too large to attach goes to one nearby contact from the menu
+  in a direct message: the two phones raise a Wi-Fi Direct link between themselves for the transfer
+  (up to 8 GB, measured at ~70 MB/s between two Pixels) and tear it down after. The bytes never ride
+  the mesh and are never held in custody; the chat keeps a record of the hand-off, and the file lands
+  in the other phone's Downloads.
+- **Search everything you have** — the magnifier at the top of the chat list finds a chat, a contact,
+  or a message by what it said, from an on-device full-text index. Open a hit and its chat lands on
+  that message. A stranger's message request stays out of the results until you accept it.
+- **See what your phone did for the mesh** — tap the nearby count above the chat list for **Your
+  mesh**: messages your phone passed along or handed straight to the person they were for, what it is
+  carrying right now, and how many people it has met. Every number is counted on the phone and stays
+  there.
 - **Kilometres of range from a Meshtastic radio, if you want them** — pair a LoRa board over Bluetooth
   and the **Nearby room and your 1:1 messages** get a hop measured in kilometres instead of metres,
   shared by every phone meshed with yours: one board extends the whole group. LoRa spends speed to buy
@@ -229,11 +241,12 @@ Knit is built for situations where there's **no reliable network but people are 
 | Language / UI | Kotlin 2.4.20 · Jetpack Compose (Material 3) + Navigation Compose |
 | Build | AGP 9.4.0 / Gradle 9.7.1 · JDK 21 · minSdk 29 / targetSdk 36 / compileSdk 37.0 |
 | DI | Koin (pure-Kotlin, no Gradle plugin) |
-| Storage | Room + SQLCipher (encrypted at rest) · DataStore |
+| Storage | Room 3 + SQLCipher (encrypted at rest) · DataStore |
 | Wire format | kotlinx.serialization **CBOR** (layered `WireEnvelope`) |
 | Crypto | **Google Tink** — HPKE/X25519 key-wrap, AES-256-GCM, Ed25519 signatures |
 | Radios | **Wi-Fi Aware + Bluetooth LE** (framework APIs — no external transport dependency) |
 | On-device ML | LiteRT / TFLite (NSFW image + toxicity text classifiers) |
+| Networking (opt-in planes only) | OkHttp — WebSocket to relays you configure, and the sender-side link-preview fetch; confined to two files |
 | Images | Coil 3 |
 | Verification | ZXing (safety-number QR) |
 | App sharing | ARSCLib + apksig (on-device split-APK merge & re-sign) |
@@ -276,13 +289,20 @@ The mesh drives the Wi-Fi Aware and Bluetooth LE radios directly, so it needs **
 
 The app launches and the UI works on an emulator, but an emulator cannot form a real mesh (it has no
 Wi-Fi Aware or BLE peer radio), so use real devices for connectivity testing. Debug builds carry a
-headless `am broadcast` bridge (`…debug.SEND` / `SENDIMG` / `STATE` / `STORE` / `REACT` / `HEAL`) so the
-send→verify loop can be driven over `adb` without screenshots — see [`AGENTS.md`](AGENTS.md).
+headless `am broadcast` bridge (`…debug.SEND` / `SENDIMG` / `STATE` / `STORE` / `REACT` / `XFER` / `LORA` /
+`SPOOL` and more) so the send→verify loop can be driven over `adb` without screenshots — see
+[`AGENTS.md`](AGENTS.md).
 
 ## 🧪 Testing
 
 - **JVM unit tests** — `./gradlew :app:testDebugUnitTest` (mesh/protocol/data logic, plus Robolectric +
   in-memory Room DAO/migration and Compose-`*ScreenContent` tests). No device.
+- **Mesh in a box** — `app/src/test/…/mesh/lab/` runs several complete, real Knit stacks in one JVM (the
+  real router, custody, key exchange and both ratchets over Robolectric's in-memory SQLite), linked by an
+  in-process transport with no radio — plus real LoRa and relay planes when a scenario asks for them. It
+  is where the bugs that live *between* two nodes get caught, so a change to what two phones exchange gets
+  a scenario here that ends in a convergence check, not only a single-node test against mocks. Part of
+  the same `testDebugUnitTest` run.
 - **Seeded UI instrumentation tests** — a Compose/Espresso suite (`app/src/androidTest/…/ui/`) that renders
   every screen fully populated with **no radios**, to hunt device/API-specific UI quirks. It runs the
   demo-seeded build (`-PseedDemo=true`: a no-op transport + a seeded conversation history), so it works on an
@@ -316,6 +336,12 @@ send→verify loop can be driven over `adb` without screenshots — see [`AGENTS
   Test Lab for the isolated physical-device pass. (Run a single class with
   `…arguments.class=app.getknit.knit.uiauto.OverflowNavigationUiAutomatorTest`.)
 
+- **Accessibility (ATF) suite** — `app/src/androidTest/…/a11y/` runs Google's Accessibility Test Framework,
+  the same checks behind the Play Console pre-launch report, over every seeded screen: missing labels,
+  small touch targets, and (on a physical device) text and image contrast. Errors fail the run; every
+  finding is written out per screen. It needs API 34+, so run it with the `pixel8api34` managed device or
+  on Firebase Test Lab (`…arguments.package=app.getknit.knit.a11y`).
+
 ## ❓ FAQ
 
 **Does Knit need the internet or a cell signal?**
@@ -327,17 +353,18 @@ No. There is no Google Nearby / GMS dependency — the radios are driven through
 there are no accounts, sign-ups, phone numbers, or servers.
 
 **If it's offline, why does the app declare the `INTERNET` permission?**
-For three reasons. Wi-Fi Aware forms a direct radio link between two phones and runs a TCP socket *over
-that local link* (link-local IPv6, no router or gateway), which Android gates behind the `INTERNET`
-permission even though no traffic leaves the mesh — that alone would require it. The optional
-[Internet relay plane](#-roadmap) also uses it, once you switch it on. And so do link previews, once
-you switch *those* on: your own phone fetches a page's title and picture for a link you type and sends
-them with the message, so the people you send to never contact the site. Both are off on a fresh
-install, which therefore makes no network calls at all. (`ACCESS_NETWORK_STATE` is declared for the
-preview fetch alone — it is how the app checks that the default network actually reaches the Internet
-before opening a socket, so a phone that is only on the mesh never tries.) Knit bundles no analytics,
-telemetry, or crash reporting either way — you can confirm all of it from the source and the
-deliberately GMS-free dependency list.
+Because Android gates local sockets behind it. Wi-Fi Aware forms a direct radio link between two phones
+and runs a TCP socket *over that local link* (link-local IPv6, no router or gateway), and a big-file
+transfer does the same over a Wi-Fi Direct link the two phones raise between themselves — neither sends a
+byte off the mesh, and either alone would require the permission. Two opt-in features use it for real:
+the [Internet relay plane](#-roadmap), once you switch it on, and link previews, once you switch *those*
+on — your own phone fetches a page's title and picture for a link you type and sends them with the
+message, so the people you send to never contact the site. Both are off on a fresh install, which
+therefore makes no network calls at all. (`ACCESS_NETWORK_STATE` is declared for the preview fetch alone —
+it is how the app checks that the default network actually reaches the Internet before opening a socket,
+so a phone that is only on the mesh never tries.) Knit bundles no analytics or telemetry, and a crash is
+kept on the phone for you to copy into a bug report, never uploaded — you can confirm all of it from the
+source and the deliberately GMS-free dependency list.
 
 **Why does the app declare the location permission?**
 For two things, and it only ever asks for the permission when it needs one of them. On Android 10–12,
@@ -398,6 +425,8 @@ stay on the phone mesh or an optional relay, and the radio sits idle until you p
   relay plane ("spools"): scope derivation, sealing, the relay protocol, and test vectors.
 - [`docs/CONTACT_CARD.md`](docs/CONTACT_CARD.md) — the contact card behind QR codes and share links:
   layout, golden vectors, and what importing one does and does not establish.
+- [`docs/RELAY_INVITE.md`](docs/RELAY_INVITE.md) — the relay invite link (`getknit.app/r`): what one
+  carries, why it is a bearer link, and the consent sheet it is only ever applied through.
 - [`docs/CONTENT_MODERATION.md`](docs/CONTENT_MODERATION.md) — on-device abusive-text / explicit-image
   moderation: design, hook points, the bundled models, and Git LFS.
 
@@ -409,7 +438,9 @@ identity verification** for DMs and groups · **forward secrecy** for both (an e
 sender-key ratchet for groups) · **encrypted delivery receipts and reactions** · dual **Wi-Fi Aware +
 Bluetooth LE** transports behind `MeshTransport` (no GMS) · **store-and-forward** delay-tolerant
 delivery · **key-request / retransmit** for messages received before a sender's key is known · contacts
-by QR **or** shared link · on-device toxicity + NSFW moderation · offline app sharing.
+by QR **or** shared link · on-device toxicity + NSFW moderation · offline app sharing · **big files phone
+to phone** over Wi-Fi Direct · **search** across chats, contacts and messages · the **Your mesh** screen ·
+drafts.
 
 **Shipped, and off until you turn it on:** a **Meshtastic LoRa bridge** carrying the Nearby room and 1:1
 DMs kilometres past phone range, **Internet relays**, **link previews**, and **sending your location**.
@@ -419,7 +450,9 @@ have when no radio path exists, keeping the mesh's delay-tolerant behaviour and 
 relays ("spools") that hold sealed frames without learning whose they are or what is in them. Turning it
 on takes an explicit consent sheet in the relay settings screen that spells out what a spool can see —
 your IP address, when you send, and roughly how much — and what it cannot: your messages, who you are
-talking to, or who else is in a group. Until you do, a fresh install makes no network calls at all. The
+talking to, or who else is in a group. A relay's operator can hand you their relay as one invite link
+(`getknit.app/r`); it opens the same sheet before anything is added. Until you say yes, a fresh install
+makes no network calls at all. The
 protocol is specified in [`docs/SPOOL_PROTOCOL.md`](docs/SPOOL_PROTOCOL.md) with executable test
 vectors; the client implements it, and the reference spool daemon lives in
 [`getknit/knit-spool`](https://github.com/getknit/knit-spool). Knit is built around proximity meshing
@@ -428,7 +461,8 @@ either way.
 **Explicitly deferred (don't start without direction):**
 
 - **True DM routing** — DMs currently flood the whole mesh and only the addressed recipient delivers/
-  acks; targeted multi-hop routing is future work.
+  acks (a DM addressed to a peer we hold a live link to takes that one hop directly); targeted multi-hop
+  routing is future work.
 - **Encrypting the broadcast room** — the last cleartext plane, and as much a product question as a
   crypto one: a room with no fixed recipient set has nobody in particular to encrypt to.
 
@@ -506,7 +540,9 @@ also sets out the (deliberately modest) **support expectations**.
 
 Knit redistributes third-party open-source libraries, all under GPL-compatible licenses (Apache-2.0,
 BSD, MIT) and with no Google Play services; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for
-the full component list and their licenses.
+the full component list and their licenses. The same list ships in the app (**Open-source licenses**, from
+the menu on the Settings screen) with every license text readable offline, and a test pins it to both
+that file and the release classpath so the two cannot drift.
 
 ### Bundled model & data attribution
 

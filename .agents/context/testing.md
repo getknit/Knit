@@ -277,7 +277,7 @@ before "simplifying":
 - **`robolectric.properties` forces `application=android.app.Application`.** The real `KnitApplication.onCreate`
   starts Koin, whose static `GlobalContext` isn't reset between tests → `KoinApplicationAlreadyStartedException`
   on the 2nd test. DAO tests bypass Koin, so a plain Application is correct. `sdk=36` deliberately trails
-  compileSdk 37.0. Robolectric 4.17 *does* ship a 37 runtime, but **`sdk=37` still fails**: API 37 drops
+  compileSdk 37.1. Robolectric 4.17 *does* ship a 37 runtime, but **`sdk=37` still fails**: API 37 drops
   `android.hardware.input.InputManager.getInstance()`, which Espresso calls from `onIdle`, so every
   Compose-UI Robolectric test throws (233 of them, measured). Re-test when compose-ui-test/Espresso
   catch up.

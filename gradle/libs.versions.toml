@@ -8,16 +8,16 @@ junitVersion = "1.3.0"
 mockk = "1.14.11"
 espressoCore = "3.7.0"
 # 2.11.0's lifecycle-viewmodel-compose AAR requires minCompileSdk=37 (lifecycle-runtime itself is only 34 —
-# when re-testing this group, check the *compose* artifacts, not the base one). compileSdk is 37.0, so it
+# when re-testing this group, check the *compose* artifacts, not the base one). compileSdk is 37.1, so it
 # fits; 2.12.0 is alpha.
 lifecycle = "2.11.0"
 activityCompose = "1.13.0"
 # The 2.10.x line is stable (2.9.8 was the hold-point before it). Its Android artifact is the KMP
-# `navigation-compose-android` AAR, minCompileSdk=37 / minAGP 9.1.0 — cleared by compileSdk 37.0 and
+# `navigation-compose-android` AAR, minCompileSdk=37 / minAGP 9.1.0 — cleared by compileSdk 37.1 and
 # AGP 9.4.0. It declares androidx.compose.* 1.10.5 floors, well under the Compose BOM's 1.12.1.
 navigationCompose = "2.10.1"
 kotlin = "2.4.20"
-# Compose UI 1.12.1 / Material3 1.4.0. UI 1.12.1's AAR sets minCompileSdk=37, which compileSdk 37.0 clears.
+# Compose UI 1.12.1 / Material3 1.4.0. UI 1.12.1's AAR sets minCompileSdk=37, which compileSdk 37.1 clears.
 # 2026.09.00 is a pure Compose 1.12.0 → 1.12.1 patch — material3 and material-icons-extended are unmoved.
 composeBom = "2026.09.00"
 # KSP adopted independent (KSP2) versioning at 2.3.0 — no longer the old <kotlin>-<ksp> scheme. It is
@@ -38,7 +38,7 @@ room3 = "3.0.3"
 # 16 KB-page-aligned on all four ABIs (`readelf -lW` → LOAD align 0x4000), the same requirement that pins
 # litert to 1.4.x. 4.18.0 is also what supplies SQLCipherDriver, so Room 3 and SQLCipher move together.
 # 4.19.0 keeps both deps and the alignment identical, but raises its OWN aar-metadata minCompileSdk to 37
-# (4.18.0 was lower) — cleared by compileSdk 37.0, and the one thing to re-check if compileSdk ever drops.
+# (4.18.0 was lower) — cleared by compileSdk 37.1, and the one thing to re-check if compileSdk ever drops.
 sqlcipher = "4.19.0"
 coroutines = "1.11.0"
 kotlinxSerializationJson = "1.11.0"
@@ -52,7 +52,7 @@ datastore = "1.2.1"
 # else in the app may import okhttp3.
 # NOTE the `okhttp` coordinate looks like a plain JVM jar but its Gradle module redirects an Android
 # consumer (`available-at`) to the okhttp-android AAR, so it is subject to that AAR's minCompileSdk —
-# 37 as of 5.5.0, which compileSdk 37.0 clears. Check okhttp-android, not okhttp, when bumping.
+# 37 as of 5.5.0, which compileSdk 37.1 clears. Check okhttp-android, not okhttp, when bumping.
 okhttp = "5.5.0"
 koin = "4.2.2"
 # Coil 3.4.0+ is built with Kotlin 2.4.x. We now compile :app with Kotlin 2.4.20 (built-in Kotlin is
@@ -91,7 +91,7 @@ tink = "1.23.0"
 # the one it reported makes RawImageData.cropAndScale throw ArrayIndexOutOfBoundsException off the main
 # thread and kills the process. It has no seam to patch (BarcodeView.startDecoderThread is private).
 # See ADR 015. Constraints that pin CameraX to the 1.6.x line — check ALL of these before bumping:
-#   - minCompileSdk=36 (1.5.x is 35), comfortably under our compileSdk 37.0. 1.6.2 is the newest stable —
+#   - minCompileSdk=36 (1.5.x is 35), comfortably under our compileSdk 37.1. 1.6.2 is the newest stable —
 #     1.7.x is alpha, which is what holds it here, not the SDK gate.
 #   - Its transitive floors are far below ours (lifecycle-livedata 2.3.1, core 1.3.2), so it applies no
 #     upgrade pressure to the pinned androidx graph.

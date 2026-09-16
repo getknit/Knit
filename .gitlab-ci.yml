@@ -1,5 +1,5 @@
 # Knit — GitLab CI. Stages: build -> test -> verify.
-# Bleeding-edge toolchain (AGP 9.4.0 / Kotlin 2.4.20 / JDK 21 / compileSdk 37.0).
+# Bleeding-edge toolchain (AGP 9.4.0 / Kotlin 2.4.20 / JDK 21 / compileSdk 37.1).
 # Static analysis (detekt/ktlint) and coverage (Kover) run as Gradle plugins via `./gradlew` tasks.
 
 stages:
@@ -23,11 +23,12 @@ variables:
   ANDROID_SDK_ROOT: "${CI_PROJECT_DIR}/.android-sdk"
   # Pinned tool versions — bump deliberately (see .gitlab-ci notes in the repo plan).
   CMDLINE_TOOLS_VERSION: "11076708"   # commandlinetools-linux revision
-  # Keep in lockstep with app/build.gradle.kts `compileSdk` — the minor matters, `android-37` is a
-  # different package from `android-37.0`. Build-tools tracks AGP's default revision, NOT compileSdk
-  # (AGP 9.4.0 defaults to 36.0.0), so the two move independently.
-  ANDROID_COMPILE_SDK: "37.0"
-  ANDROID_BUILD_TOOLS: "36.0.0"
+  # Keep in lockstep with app/build.gradle.kts `compileSdk` and `buildToolsVersion` — the minor matters,
+  # `android-37` is a different package from `android-37.1`, and build-tools is pinned there (above AGP
+  # 9.4.0's 36.0.0 default), so the two move independently of each other but never of the build file.
+  # Both must resolve in F-Droid's buildserver image first: .agents/context/distribution.md.
+  ANDROID_COMPILE_SDK: "37.1"
+  ANDROID_BUILD_TOOLS: "37.0.0"
 
 workflow:
   rules:                              # avoid duplicate branch+MR pipelines
@@ -302,7 +303,7 @@ verify:qodana:
   # cloud report and hosted baselines. If the engine ever needs more heap than it sizes for itself,
   # the supported knob is `--property` on the command below, not an env var.
   variables:
-    # qodana.yaml's bootstrap installs compileSdk 37.0 + build-tools here (the image ships only
+    # qodana.yaml's bootstrap installs compileSdk 37.1 + build-tools here (the image ships only
     # android-33). Inside .qodana/cache so the `cache:` below carries it between runs instead of
     # re-downloading ~160 MB every time.
     ANDROID_SDK_ROOT: "${CI_PROJECT_DIR}/.qodana/cache/android-sdk"

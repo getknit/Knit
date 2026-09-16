@@ -121,25 +121,33 @@ val debugAbis =
 
 android {
     namespace = "app.getknit.knit"
-    // API 37.0. Bumped off 36.1 to clear the `minCompileSdk=37` gate that androidx started shipping
+    // API 37.1. Bumped off 36.1 to clear the `minCompileSdk=37` gate that androidx started shipping
     // (core-ktx 1.19.0, lifecycle 2.11.0, Compose UI 1.12.0, okhttp-android 5.5.0 all declare it), which
-    // 37.0 satisfies. compileSdk only sets which APIs are *visible* to the compiler — runtime behavior is
-    // `targetSdk`, deliberately left at 36, so this carries no behavior-change or Play-policy consequence.
-    // Lint's NewApi still guards every call against minSdk 29.
+    // any 37.x satisfies. compileSdk only sets which APIs are *visible* to the compiler — runtime behavior
+    // is `targetSdk`, deliberately left at 36, so this carries no behavior-change or Play-policy
+    // consequence. Lint's NewApi still guards every call against minSdk 29.
     //
-    // DO NOT raise the minor to 37.1 without checking F-Droid first. Their buildserver installs SDK
-    // packages through f-droid/android-sdk-transparency-log, which currently publishes
-    // `platforms;android-37.0` and no 37.1 — so 37.1 makes the app unbuildable on F-Droid
-    // (`Failed to find package 'platforms;android-37.1'`), which is a release blocker, not a warning.
-    // It shipped that way briefly and the release workflow's reproducibility job caught it. Any
-    // compileSdk bump must be matched in .github/workflows/release.yml's sdkmanager line, and the
-    // package must exist in that log. See .agents/context/distribution.md.
+    // DO NOT bump the minor (or buildToolsVersion below) without checking F-Droid first. Their buildserver
+    // installs SDK packages through f-droid/android-sdk-transparency-log, and a package Google publishes
+    // but that log does not carry does not exist there — a release blocker, not a warning. 37.1 shipped
+    // that way in 2026-08 (`Failed to find package 'platforms;android-37.1'`; 6407e7d reverted it, and
+    // the release workflow's reproducibility job is what caught it) and came back on 2026-09-15 once the
+    // image resolved it. Test in the image itself, not the log's JSON, which the image lags:
+    //   docker run --rm registry.gitlab.com/fdroid/fdroidserver:buildserver \
+    //     sdkmanager --install "platforms;android-37.1" "build-tools;37.0.0"
+    // then mirror the bump into .gitlab-ci.yml, qodana.yaml and .github/workflows/release.yml.
+    // See .agents/context/distribution.md.
     compileSdk {
         version =
             release(37) {
-                minorApiLevel = 0
+                minorApiLevel = 1
             }
     }
+    // Build-tools 37.0.0, above AGP 9.4.0's 36.0.0 default. AGP takes aapt2, d8/r8 and apksig from Maven,
+    // so this revision decides no packaged byte (verified: the unsigned release APK is identical under
+    // 36.0.0 and 37.0.0); it is pinned so every builder — both CIs, Qodana and F-Droid's image — installs
+    // the one package the build will use instead of whatever AGP would auto-download.
+    buildToolsVersion = "37.0.0"
 
     // Pinned ONLY to run llvm-objcopy for release native-symbol extraction (see debugSymbolLevel in
     // buildTypes) — this app compiles no native code, so the exact version is not correctness-sensitive;

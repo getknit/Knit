@@ -13,12 +13,14 @@ plugins {
 // is committed and consumed by AGP with no plugin on :app at all. See .agents/context/baseline-profile.md.
 android {
     namespace = "app.getknit.knit.baselineprofile"
+    // Lockstep with :app (see the compileSdk / buildToolsVersion comments there).
     compileSdk {
         version =
             release(37) {
-                minorApiLevel = 0
+                minorApiLevel = 1
             }
     }
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         // Baseline profiles are collected through ART's profile dump, which needs API 28+. That is above

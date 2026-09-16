@@ -1,12 +1,13 @@
 # Toolchain (bleeding-edge — do not "fix" these without reading why)
 
 This project intentionally runs on very new tooling (AGP 9.4.0, Gradle 9.7.1, Kotlin 2.4.20,
-Compose BOM 2026.09.00, compileSdk 37.0). That forces several non-obvious choices. **Read this before
+Compose BOM 2026.09.00, compileSdk 37.1). That forces several non-obvious choices. **Read this before
 changing build config, dependencies, or the DI graph.**
 
 ## compileSdk is what gates AAR upgrades — check `minCompileSdk`, not the version number
 
-`compileSdk` is `release(37) { minorApiLevel = 1 }` (37.2 is beta). An AAR whose
+`compileSdk` is `release(37) { minorApiLevel = 1 }` (37.2 is in the transparency log but not yet in
+F-Droid's buildserver image — see below). An AAR whose
 `aar-metadata.properties` declares a *higher* `minCompileSdk` **cannot** be consumed at all — the build
 fails in `checkDebugAarMetadata`, not at compile. androidx now moves this gate aggressively (the whole
 API-37 wave — core-ktx 1.19.0, lifecycle 2.11.0, Compose UI 1.12.0, okhttp-android 5.5.0 — is exactly
@@ -31,13 +32,17 @@ separate decision from taking a dependency. Lint's `NewApi` keeps guarding every
 minSdk 29 regardless.
 
 Bumping `compileSdk` means installing that exact platform everywhere the build runs. The minor is part
-of the package name (`platforms;android-37.0` ≠ `platforms;android-37`), and three files name it
+of the package name (`platforms;android-37.1` ≠ `platforms;android-37`), and three files name it
 literally: `.gitlab-ci.yml`'s `ANDROID_COMPILE_SDK`, `qodana.yaml`'s bootstrap `sdkmanager` line, and the
-F-Droid-image reproducibility job in `.github/workflows/release.yml`. Build-tools is *not* coupled to it —
-that tracks AGP's default revision (36.0.0 for AGP 9.4.0).
+F-Droid-image reproducibility job in `.github/workflows/release.yml`. Build-tools is pinned next to it
+(`buildToolsVersion = "37.0.0"` in `app/build.gradle.kts`, above AGP 9.4.0's 36.0.0 default — it decides
+no packaged byte, it is pinned so every builder installs the package the build uses) and the same three
+files carry that pin. Both packages must resolve in F-Droid's buildserver image before either moves;
+`context/distribution.md` has the check.
 
-The 37.1 → 37.0 revert (`6407e7d`, an F-Droid release blocker) left every one of those stale for a while;
-the catalog notes, the two linter/CI pins and the READMEs are the places to re-grep after any bump.
+The 37.1 → 37.0 revert (`6407e7d`, an F-Droid release blocker while their SDK log lacked 37.1) left every
+one of those stale for a while; 37.1 came back on 2026-09-15 once the image resolved it. The catalog
+notes, the two linter/CI pins and the READMEs are the places to re-grep after any bump.
 
 ## Why these choices
 
@@ -98,7 +103,7 @@ Two rules that follow from this, when a warning has no clean fix:
 - **Suppress at the narrowest scope, with the reason.** `MainActivity.disableContentCapture()` exists only
   so `@Suppress("DEPRECATION")` covers one platform call instead of all of `onCreate`; `MeshtasticGatt`
   carries one on `connectAndConfigure` because every `connectGatt(Context, …)` overload is deprecated in
-  compileSdk 37.0 in favour of an API-37-only replacement, eight releases above minSdk 29.
+  compileSdk 37 in favour of an API-37-only replacement, eight releases above minSdk 29.
 - **A no-op `when` branch is `-> {}`, never `-> { Unit }`.** The lone `Unit` inside a block is an unused
   expression; the braces themselves are required by ktlint whenever a sibling entry is braced.
 

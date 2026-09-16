@@ -528,12 +528,10 @@
     <string name="profile_details_offline">Offline</string>
     <string name="profile_details_open_to_chat">Open to chat</string>
     <string name="profile_details_view_photo">View photo</string>
-    <string name="profile_details_lora_node">LoRa radio: %1$s</string>
     <string name="profile_details_lora_label">LoRa radio</string>
     <string name="profile_details_blocked">Blocked</string>
     <string name="profile_details_section_in_common">In common</string>
     <string name="profile_details_section_details">Details</string>
-    <string name="profile_details_groups">Groups</string>
     <!-- Historical, and short-range only: `met_peers` records a sighting of the peer\'s own radio, so a
          contact reachable over LoRa or a relay may never have been met. Never word these "last seen" —
          the presence badge is the only claim about now. -->
@@ -590,7 +588,6 @@
     <string name="add_contact_relays_off">Internet relays are off, so you\'ll connect when you\'re nearby or over LoRa. Turn relays on in Settings to connect over the Internet.</string>
     <string name="add_contact_relay_hint">%1$s uses a relay you don\'t. Add it to stay in touch over the Internet when neither of you is in radio range.</string>
     <string name="add_contact_relay_add">Add</string>
-    <string name="add_contact_relay_add_desc">Add relay %1$s</string>
     <string name="add_contact_mismatch">This link\'s key doesn\'t match the one you already have for %1$s. Ask them to confirm their safety number.</string>
     <string name="add_contact_invalid">That\'s not a Knit contact link.</string>
     <string name="intro_status_awaiting_key">Waiting to reach %1$s — connects once their device is heard nearby, over LoRa, or through a relay. If you added them from a link, they need to add yours too.</string>

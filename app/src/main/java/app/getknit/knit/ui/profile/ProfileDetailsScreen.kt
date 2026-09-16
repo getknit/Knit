@@ -8,8 +8,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -298,7 +296,6 @@ internal fun ProfileDetailsScreenContent(
  * The avatar, the name, the badge row and their status — everything a reader checks before deciding
  * whether to write. Centred, because it is a portrait; everything below it is a list.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PeerHeader(
     state: ProfileDetailsUiState,
@@ -547,7 +544,7 @@ private fun GroupRow(
  * badge stays the only claim about now (ADR 2026-09.2ajk).
  */
 @Composable
-private fun ColumnScope.MetRows(inCommon: InCommon) {
+private fun MetRows(inCommon: InCommon) {
     val context = LocalContext.current
     val first = inCommon.firstMetAt ?: return
     val firstText = formatMetDate(context, first)

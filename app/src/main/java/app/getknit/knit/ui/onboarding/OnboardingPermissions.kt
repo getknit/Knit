@@ -46,10 +46,24 @@ data class PermissionRows(
 ) {
     companion object {
         /** A fresh install: nothing asked, nothing held. */
-        val FRESH = PermissionRows(false, false, false, false, false)
+        val FRESH =
+            PermissionRows(
+                radioGranted = false,
+                radioNeedsSettings = false,
+                notificationsGranted = false,
+                notificationsNeedSettings = false,
+                batteryExempt = false,
+            )
 
         /** Everything held. */
-        val ALL = PermissionRows(true, false, true, false, true)
+        val ALL =
+            PermissionRows(
+                radioGranted = true,
+                radioNeedsSettings = false,
+                notificationsGranted = true,
+                notificationsNeedSettings = false,
+                batteryExempt = true,
+            )
     }
 }
 

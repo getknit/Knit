@@ -227,4 +227,7 @@ only while the controller passed its extended-advertising probe), tracked by `Si
 10-min linger *or* a live link, since presence prunes at 90 s. A page carries no hop id and is never
 presence (each set has its own RPA; `fromNodeId` is the author, ADR 038's rule); fragments reassemble by
 fragment id, seeded at random per process. Grep `ble-side` (bring-up probe, `offer`, `heard`, `rx →`);
-counters `bleSide*` on `…debug.STATE`. Device trial owed before the release flag flips — the ADR lists it.
+counters `bleSide*` on `…debug.STATE`. In the JVM, `mesh/lab/LabPages` is the pages' air and
+`SideChannelLabTest` runs the author-as-hop, linkless-listener and never-DM shapes through the real
+`BleFastRoutePolicy` and codec against the full oracle (`context/testing.md`). Device trial owed before the
+release flag flips — the ADR lists it.

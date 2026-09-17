@@ -145,8 +145,11 @@ class MeshLab {
         // A commons store (§7.4) behind the manager, so the node can join and post to a spool's room. Off by
         // default: every other scenario runs the manager exactly as it did before the commons existed.
         commons: Boolean = false,
+        // The BLE side channel's air (ADR 2026-09.sjaa): the node's radio grows the fast plane the shipped
+        // Bluetooth plane has — the link copy plus a page every member in range hears. Null keeps the radio bare.
+        pages: LabPages? = null,
     ): LabNode {
-        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits, air, spool, spoolOptIn, commons, clock)
+        val node = LabNode(name, context, File(dir, name).apply { mkdirs() }, limits, air, spool, spoolOptIn, commons, clock, pages)
         nodes += node
         node.boot()
         return node
@@ -654,6 +657,7 @@ class LabNode internal constructor(
     private val spoolOptIn: Boolean,
     private val withCommons: Boolean,
     clock: LabClock,
+    private val pages: LabPages? = null,
 ) {
     /** This node's clock: the lab's shared calendar, plus its own skew if a scenario gave it one. */
     val now: () -> Long = clock.forNode(name)
@@ -683,7 +687,10 @@ class LabNode internal constructor(
 
     // --- the live stack, rebuilt by boot() ---
 
-    /** The short-range radio — links, holds and releases. The LoRa child, when there is one, sits beside it. */
+    /**
+     * The short-range radio — links, holds, releases and, on a node with pages, the side channel. The LoRa
+     * child, when there is one, sits beside it.
+     */
     lateinit var transport: LabTransport
         private set
 
@@ -723,7 +730,7 @@ class LabNode internal constructor(
     @Suppress("LongMethod") // the DI module's wiring, mirrored in one place on purpose
     internal suspend fun boot() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { this.scope = it }
-        transport = LabTransport(nodeId, File(dir, "rx"))
+        transport = LabTransport(nodeId, File(dir, "rx"), pages)
         metrics = MeshMetrics()
         // The Internet plane is opted into through the same two settings the relay editor writes; the
         // settings file persists, so a restart() dials the same spool again.
@@ -884,6 +891,7 @@ class LabNode internal constructor(
     /** Tears the live stack down and returns the transports it was linked to. */
     private fun shutdownLive(): List<LabTransport> {
         val peers = transport.disconnectAll()
+        transport.detach()
         loraLog.clear()
         // stop() banks the ledger on the app scope, which the next line cancels; in the lab the "app" scope is
         // this session's, so bank it here first — the process-death the restart models is the orderly kind.

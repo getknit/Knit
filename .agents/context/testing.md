@@ -27,6 +27,9 @@
 `InboundPipeline`, `MeshRouter`, `ForwardSync`, `KeyExchange`, `AckSync`, both ratchets), the Room-backed
 repositories over Robolectric's in-memory SQLite, a real `IdentityKeyStore` over an in-memory secret, a
 DataStore-backed `SettingsStore` — linked through `LabTransport`, an in-process `MeshTransport` with no radio.
+Bare, it is a link plane with no fast plane (one flood copy per link — production Bluetooth has always also
+sent the fast path's link copy, so a `shouldFastFanout` frame crosses a real L2CAP link twice and a lab pipe
+once); with `pages = LabPages()` it is the Bluetooth plane as shipped, side channel included (below).
 The only doubles are the leaves with a hardware or UI side (notifier, tflite text moderators, image moderator).
 The wiring mirrors `di/AppModule` + `di/MeshModule` by hand, so a constructor change is a compile error here
 rather than a silently narrower rig.
@@ -64,9 +67,10 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   `INGRESS_REFUSED` counter reads fifteen, Bob's own post still crosses). `LabLimits` shrinks the policy numbers
   per node — same rules, same paths. Two traps: a **room** tick toward an author who is not a live neighbor
   never escalates into custody (ADR 2026-09.aa27) and, over links alone, has nowhere else to go — its ride
-  deadline (ADR 2026-09.y5f3) sends it over a spool or a fast plane, and a `LabTransport` line has neither —
-  so a link-only room scenario that ends in the full oracle still needs a triangle, not a line, or its tick
-  check waits forever; and the sweep runs at boot and on the 10-min loop, so a scenario calls
+  deadline (ADR 2026-09.y5f3) sends it over a spool or a fast plane, and a `LabTransport` line has neither
+  (the side channel's pages do not change this: a tick is DM-form and `BleFastRoutePolicy.send` never pages
+  one) — so a link-only room scenario that ends in the full oracle still needs a triangle, not a line, or its
+  tick check waits forever; and the sweep runs at boot and on the 10-min loop, so a scenario calls
   `node.sweepLocalStorage()` itself.
 - **`RoomTickPlanesLabTest` is the long-range set** (ADR 2026-09.y5f3): a node can boot with a board on a
   shared `FakeMeshtasticAir` (`lab.node(name, air = air)` — the **real** `LoraMeshTransport`, composed with
@@ -87,6 +91,26 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   divergence — the LoRa beacon re-signing the node's own profile under the same id while a settings write
   was landing (two blobs, one id, a scope that never converges; `MeshManager.ownProfile()` is the fix).
   `awaitDmScope`'s failure message lists both custodies row by row for the next one of those.
+- **`SideChannelLabTest` is the BLE side-channel set** (ADR 2026-09.sjaa, 2026-09-17): `lab.node(name, pages =
+  pages)` puts the node's radio on a shared `LabPages` — one radio range, joined the way a board joins a
+  `FakeMeshtasticAir` — and `LabTransport` then declares `hasFastPlane` and routes `fastFanout`/`fastSend`
+  through the **real** `BleFastRoutePolicy`: the link copy to every linked peer over the same held/lossy pipe
+  as the flood, plus a page every other member hears, run through the real `FastFrameCodec` (size-gated at
+  three `PAGE_BYTES` pages, `pages.tooBig` for the rest) and delivered with `fromNodeId` = the **author**;
+  `fastSend` is the pipe only. Four scenarios: a line where a node two hops out hears the author's page and
+  the neighbour's link copy as two hop ids (so `countOverheard` can cancel its relay, and the fast path's
+  link copy — asserted `via=fast` in `sent` — is what still reaches a deaf far end; the relay race itself is
+  the router's jitter and not asserted); an acquainted node with no link at all hearing the room from the
+  page alone; a stranger on the pages parking the post for a key and replaying it when its first link brings
+  one; and the negative space — a DM never pages, an oversized post rides the links. Three things the pages
+  taught: **a page bypasses `hold`** (the point of the channel — a scenario that wants a frame stranded on a
+  paged node makes `pages.lossy` eat it too); **pages do not converge custody** — DM-form frames (a room
+  tick among them) ride links only, so a linkless listener holds one row fewer than the clique until a link's
+  digest exchange heals it, and a page scenario re-links before the full oracle exactly as
+  `RoomTickPlanesLabTest` does; and **a page-first hearing turns the relay around** — the hop is unknown, so
+  the router relays to every link but the author's, back over the link the copy would have come by (SeenSet
+  absorbs it; an airtime cost on a paged clique, not a divergence). `heardOnPages` per transport,
+  `pages.aired` / `tooBig` / `missed` are the diagnostics.
 - **The oracle has seven parts now** (2026-09-14): messages, then reactions parity (the same (reactor, emoji)
   set under every converged message), attachment parity (the bytes held, content-equal, unflagged, on every
   node), group parity for a group thread (roster, departed, name, photo — never `nameUpdatedAt`, which the

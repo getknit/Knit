@@ -7,7 +7,9 @@ import app.getknit.knit.mesh.Peer
 import app.getknit.knit.mesh.ReceivedDigest
 import app.getknit.knit.mesh.ReceivedFile
 import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.bluetooth.BleFastRoutePolicy
 import app.getknit.knit.mesh.protocol.FrameType
+import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
@@ -27,11 +29,22 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The in-process radio behind a [LabNode]: a [MeshTransport] whose links are other [LabTransport]s in the same
- * JVM. Like `FakeLoopTransport` (which the single-SUT rigs use) it has no fast plane, so every originated frame
- * floods over `send(wire, null)` and every custody re-serve unicasts over `send(wire, peer)` — the routes the
- * BLE plane takes. What it adds is a **directed, holdable pipe per link**: a scenario can [hold] what one side
- * sends the other and [release] it in an order of its choosing, which is how "custody serves the two in either
- * order" becomes a deterministic case rather than a lucky one.
+ * JVM. What it adds over `FakeLoopTransport` (which the single-SUT rigs use) is a **directed, holdable pipe per
+ * link**: a scenario can [hold] what one side sends the other and [release] it in an order of its choosing,
+ * which is how "custody serves the two in either order" becomes a deterministic case rather than a lucky one.
+ *
+ * **Bare, it is a link plane with no fast plane** — the Bluetooth plane before its side channel: every
+ * originated frame floods once over `send(wire, null)`, every custody re-serve unicasts over
+ * `send(wire, peer)`, and `fastFanout`/`fastSend` are the interface's no-ops. One divergence from the phone
+ * to keep in mind when counting held frames: production Bluetooth has always *also* carried the fast path's
+ * link copy — the composite's `send` fallback before ADR 2026-09.sjaa, `BleFastRoutePolicy` since — so every
+ * `shouldFastFanout` frame reaches a linked peer twice over one stream there, and once here.
+ *
+ * **With [pages] it is the Bluetooth plane as shipped** (ADR 2026-09.sjaa): [hasFastPlane], and the fast path
+ * routes through the real `BleFastRoutePolicy` — [fastFanout] is the link copy to every linked peer (through
+ * the same pipe as the flood, held and lost with it: one L2CAP stream) plus a page on the [LabPages] every
+ * member in range hears, arriving from the frame's *author*; [fastSend] is the linked addressee over its
+ * pipe and never a page. A node joins the pages the way it takes a board (`MeshLab.node(pages = …)`).
  */
 class LabTransport(
     val nodeId: String,
@@ -42,7 +55,19 @@ class LabTransport(
      * sender's single path would race each other for it (the loser drops the blob silently).
      */
     private val stagingDir: File,
+    /** The side channel's air this node advertises on and listens to, or null for a node without one. */
+    private val pages: LabPages? = null,
 ) : MeshTransport {
+    init {
+        pages?.join(this)
+    }
+
+    /** The side channel is the fast plane, exactly as `BluetoothMeshTransport` declares it. */
+    override val hasFastPlane: Boolean get() = pages != null
+
+    /** Every frame this node heard off a page, as `type id from` in arrival order (own echoes excluded). */
+    val heardOnPages = CopyOnWriteArrayList<String>()
+
     /** One publish of the link set, stamped so a collector's hand-offs can be told apart from each other. */
     private class Links(
         val peers: Set<Peer>,
@@ -225,7 +250,7 @@ class LabTransport(
         val batch = synchronized(pipe.held) { pipe.held.toList().also { pipe.held.clear() } }
         pipe.holding = keepHolding
         val ordered = reorder(batch)
-        ordered.forEach { pipe.target.deliver(it, nodeId) }
+        ordered.forEach { pipe.target.deliver(it, nodeId, VIA_LINK) }
         return ordered
     }
 
@@ -251,9 +276,58 @@ class LabTransport(
             when {
                 pipe.lossy(wire) -> lost += wire
                 pipe.holding -> synchronized(pipe.held) { pipe.held += wire }
-                else -> pipe.target.deliver(wire, nodeId)
+                else -> pipe.target.deliver(wire, nodeId, VIA_LINK)
             }
         }
+    }
+
+    /**
+     * The fan-out arm of the fast path, routed here only while [pages] makes this a fast plane: the real
+     * `BleFastRoutePolicy.fanout` — the link copy to every linked peer over its pipe (held and lost as the
+     * flood is, one stream), plus a page when another member is in range. Non-suspending like
+     * `FramedLink.send`; the pipe's buffer is the phone's socket buffer, so a full one is a lab bug, not a drop.
+     */
+    override fun fastFanout(wire: WireEnvelope) {
+        val pages = pages ?: return
+        val env = WireCodec.decodeEnvelope(wire.signed) ?: return
+        val route = BleFastRoutePolicy.fanout(env, pipes.keys.toSet(), sideAvailable = pages.others(this).isNotEmpty())
+        route.linkTargets.forEach { pipes[it]?.let { pipe -> offer(pipe, wire) } }
+        if (route.side != null) pages.air(this, wire, env)
+    }
+
+    /** The targeted arm: the linked addressee over its pipe, never a page (`BleFastRoutePolicy.send`). */
+    override fun fastSend(
+        wire: WireEnvelope,
+        to: Peer,
+    ) {
+        if (pages == null) return
+        BleFastRoutePolicy.send(to.nodeId, pipes.keys.toSet()).linkTargets.forEach { pipes[it]?.let { pipe -> offer(pipe, wire) } }
+    }
+
+    /** [send]'s pipe discipline for a non-suspending caller — the fast path's link copy. */
+    private fun offer(
+        pipe: Pipe,
+        wire: WireEnvelope,
+    ) {
+        when {
+            pipe.lossy(wire) -> lost += wire
+            pipe.holding -> synchronized(pipe.held) { pipe.held += wire }
+            else -> pipe.target.deliverNow(wire, nodeId, VIA_FAST)
+        }
+    }
+
+    /**
+     * A page from [LabPages] landed on this node's scanner: it enters where a link frame does, from the
+     * frame's author (a page carries no hop identity), and our own frame paged back by a neighbor is
+     * dropped — `BluetoothMeshTransport`'s side listener, line for line.
+     */
+    internal fun hearPage(
+        wire: WireEnvelope,
+        env: RelayEnvelope,
+    ) {
+        if (env.senderId == nodeId) return // OWN_ECHO
+        heardOnPages += "${env.type} ${env.id} ${env.senderId.take(NODE_ID_CHARS)}"
+        emitNow(InboundFrame(wire, env, env.senderId))
     }
 
     override suspend fun sendFile(
@@ -281,13 +355,41 @@ class LabTransport(
     private suspend fun deliver(
         wire: WireEnvelope,
         fromNodeId: String,
+        via: String,
     ) {
-        // Mirror the real transport: decode the routing envelope on receipt (drop undecodable bytes).
-        val envelope = WireCodec.decodeEnvelope(wire.signed) ?: return
+        val frame = received(wire, fromNodeId, via) ?: return
+        _inbound.emit(frame)
+    }
+
+    private fun deliverNow(
+        wire: WireEnvelope,
+        fromNodeId: String,
+        via: String,
+    ) {
+        val frame = received(wire, fromNodeId, via) ?: return
+        emitNow(frame)
+    }
+
+    /** Mirror the real transport: decode the routing envelope on receipt (drop undecodable bytes), and log it on the sender. */
+    private fun received(
+        wire: WireEnvelope,
+        fromNodeId: String,
+        via: String,
+    ): InboundFrame? {
+        val envelope = WireCodec.decodeEnvelope(wire.signed) ?: return null
         pipes[fromNodeId]?.target?.sent?.add(
-            "#${SEQ.incrementAndGet()} ${nodeId.take(6)} ${envelope.type} ${envelope.id} relay=${wire.relay}",
+            "#${SEQ.incrementAndGet()} ${nodeId.take(NODE_ID_CHARS)} ${envelope.type} ${envelope.id} relay=${wire.relay} via=$via",
         )
-        _inbound.emit(InboundFrame(wire, envelope, fromNodeId))
+        return InboundFrame(wire, envelope, fromNodeId)
+    }
+
+    private fun emitNow(frame: InboundFrame) {
+        check(_inbound.tryEmit(frame)) { "$nodeId: inbound buffer full ($BUFFER) — a fast-path frame was dropped" }
+    }
+
+    /** Leaves the pages, for a node whose live stack is going down ([LabNode.restart] boots a new transport). */
+    fun detach() {
+        pages?.leave(this)
     }
 
     /** Makes `neighbors.value` answer with the pipes as they are now, without waking a collector. */
@@ -302,6 +404,11 @@ class LabTransport(
 
     private companion object {
         const val BUFFER = 1024
+        const val NODE_ID_CHARS = 6
+
+        /** How a frame crossed a pipe, in [sent]: the router's flood / unicast, or the fast path's link copy. */
+        const val VIA_LINK = "link"
+        const val VIA_FAST = "fast"
 
         /** One counter across every transport in the JVM, so two nodes' send logs interleave by time. */
         val SEQ =

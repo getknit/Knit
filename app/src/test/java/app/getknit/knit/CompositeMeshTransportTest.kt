@@ -530,53 +530,56 @@ class CompositeMeshTransportTest {
             assertEquals("refused fast enqueue is not a silent loss", 1, bt.sentFiles.size)
         }
 
+    // The link-only child in the three tests below is a child with no fast plane — since ADR 2026-09.sjaa no
+    // production plane is one (Bluetooth declares its side channel), but the fallback is still the route a bare
+    // test transport (`FakeLoopTransport`, the lab's `LabTransport` without pages) takes.
     @Test
     fun fastFanoutBlastsFastPlaneAndFansOverLinkChild() =
         runTest(UnconfinedTestDispatcher()) {
-            val bt = FakeChild(hasFastPlane = false)
+            val linkOnly = FakeChild(hasFastPlane = false)
             val nan = FakeChild(hasFastPlane = true)
-            val composite = CompositeMeshTransport(listOf(bt, nan), backgroundScope)
-            bt.setNeighbors(Peer("p"))
+            val composite = CompositeMeshTransport(listOf(linkOnly, nan), backgroundScope)
+            linkOnly.setNeighbors(Peer("p"))
             advanceUntilIdle()
             composite.fastFanout(wire())
             advanceUntilIdle()
             assertEquals("NAN gets the coordination-plane blast", 1, nan.fastFanouts.size)
-            assertEquals("BT gets a normal flood instead", listOf<Peer?>(null), bt.sends.map { it.second })
+            assertEquals("a child with no fast plane gets a normal flood instead", listOf<Peer?>(null), linkOnly.sends.map { it.second })
         }
 
     @Test
     fun longRangeFanoutReachesEveryChildAndNeverFallsBackToSend() =
         runTest(UnconfinedTestDispatcher()) {
-            val bt = FakeChild(hasFastPlane = false)
+            val linkOnly = FakeChild(hasFastPlane = false)
             val nan = FakeChild(hasFastPlane = true)
-            val composite = CompositeMeshTransport(listOf(bt, nan), backgroundScope)
-            bt.setNeighbors(Peer("p"))
+            val composite = CompositeMeshTransport(listOf(linkOnly, nan), backgroundScope)
+            linkOnly.setNeighbors(Peer("p"))
             advanceUntilIdle()
             composite.longRangeFanout(wire())
             composite.longRangeFanout(wire(), FanoutHint.TICK)
             advanceUntilIdle()
             // Every child is offered the frame and decides for itself (only a no-data-path plane acts on it) —
             // there is no send() fallback: the router's flood already carries a DM over a link child's links.
-            assertEquals(2, bt.longRangeFanouts.size)
+            assertEquals(2, linkOnly.longRangeFanouts.size)
             assertEquals(2, nan.longRangeFanouts.size)
             // The originator's hint reaches every child unchanged (ADR 054).
             assertEquals(listOf(FanoutHint.CONTENT, FanoutHint.TICK), nan.longRangeHints)
-            assertTrue("no flood duplicate over the link child", bt.sends.isEmpty())
+            assertTrue("no flood duplicate over the link child", linkOnly.sends.isEmpty())
             assertTrue("the coordination-plane blast is a different path", nan.fastFanouts.isEmpty())
         }
 
     @Test
     fun fastSendUsesFastPlaneOrTheLinkChild() =
         runTest(UnconfinedTestDispatcher()) {
-            val bt = FakeChild(hasFastPlane = false)
+            val linkOnly = FakeChild(hasFastPlane = false)
             val nan = FakeChild(hasFastPlane = true)
-            val composite = CompositeMeshTransport(listOf(bt, nan), backgroundScope)
-            bt.setNeighbors(Peer("p"))
+            val composite = CompositeMeshTransport(listOf(linkOnly, nan), backgroundScope)
+            linkOnly.setNeighbors(Peer("p"))
             advanceUntilIdle()
             composite.fastSend(wire(), Peer("p"))
             advanceUntilIdle()
             assertEquals(listOf("p"), nan.fastSends.map { it.nodeId })
-            assertEquals("BT sends over its live link to p", listOf("p"), bt.sends.map { it.second!!.nodeId })
+            assertEquals("a child with no fast plane sends over its live link to p", listOf("p"), linkOnly.sends.map { it.second!!.nodeId })
         }
 
     @Test

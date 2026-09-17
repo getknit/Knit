@@ -30,4 +30,12 @@ object ChatWindow {
      * Growing before they get there means there is never a row at the top to lose.
      */
     const val LOAD_AHEAD = 10
+
+    /**
+     * Offer the way back to the newest message once the reader's bottom row is this far above it. Large
+     * enough that a message or typing peer landing beneath a reader one row up (the `<= 1` gate in
+     * `ChatScreenContent`) cannot flash it; counted in list items, so a typing indicator or a prepend
+     * shifts it by one, which is right: either is something new at the bottom.
+     */
+    const val AWAY_FROM_NEWEST = 8
 }

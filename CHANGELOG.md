@@ -25,6 +25,8 @@ document:
 - On a phone a parent or an organisation manages, Settings and Diagnostics now say so, and a permission they
   turned off names who can allow it instead of sending you to a switch you can't flip. Voice notes get the
   same Open settings dialog as the location pin.
+- Scroll up through a chat and a small arrow now sits in the bottom corner to take you straight back to the
+  newest message. It shows once you are a few messages up and goes away when you reach the bottom.
 
 ### Fixed
 

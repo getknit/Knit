@@ -86,6 +86,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -110,6 +111,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -836,6 +838,21 @@ internal fun ChatScreenContent(
         if (typing && listState.firstVisibleItemIndex <= 1) listState.animateScrollToItem(0)
     }
 
+    // Whether the reader is far enough up the thread to be offered a way back down. A latch rather than a
+    // derived comparison: it opens past AWAY_FROM_NEWEST rows and closes only at the same `<= 1` gate the
+    // auto-follow effects use, so scrolling back down does not drop the button with a screenful still to
+    // go. snapshotFlow, like the paging effect above, because a latch needs its previous value and a
+    // derivedStateOf cannot keep one. Saveable so a rotation restores it beside the list's restored index.
+    var showScrollToNewest by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }.collect { index ->
+            when {
+                index > ChatWindow.AWAY_FROM_NEWEST -> showScrollToNewest = true
+                index <= 1 -> showScrollToNewest = false
+            }
+        }
+    }
+
     // A tapped quote scrolls to and briefly highlights its original (see MessageBubble); fade it after a
     // beat so the flash is transient.
     LaunchedEffect(highlightedMessageId) {
@@ -1235,154 +1252,173 @@ internal fun ChatScreenContent(
                 } else if (state.rows.isEmpty() && state.typingPeers.isEmpty()) {
                     EmptyState(modifier = Modifier.fillMaxSize(), isBridged = state.isBridged)
                 } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize().testTag("chat_thread"),
-                        contentPadding = PaddingValues(12.dp),
-                        // Bottom-anchored so the thread opens on the newest message with no scroll; the data is
-                        // reversed to match, making index 0 the newest row, drawn at the bottom. Arrangement.Bottom
-                        // keeps a short thread (fewer rows than fit on screen) resting just above the input rather
-                        // than floating at the top with a gap beneath the newest bubble.
-                        verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
-                        reverseLayout = true,
-                    ) {
-                        // Reverse layout: the first item is drawn at the visual bottom, so the typing indicator sits
-                        // directly above the input and below the newest message (Signal-style, scrolls with content).
-                        if (state.typingPeers.isNotEmpty()) {
-                            item(key = "typing_indicator") {
-                                // Fades with the same spec as a message bubble: the indicator arriving and
-                                // leaving is a state change like any other, and it used to blink.
-                                TypingIndicatorRow(
-                                    peers = state.typingPeers,
-                                    modifier =
-                                        Modifier.animateItem(
-                                            placementSpec = null,
-                                            fadeInSpec = KnitMotion.fastEffects(),
-                                            fadeOutSpec = KnitMotion.fastEffects(),
-                                        ),
-                                )
-                            }
-                        }
-                        items(
-                            state.rows.asReversed(),
-                            key = { it.id },
-                            // A centred status notice and a chat bubble are different enough shapes that
-                            // sharing one subcomposition slot costs more than it saves. Keyed on plain
-                            // data — statusNoticeText is @Composable and cannot be called from here.
-                            contentType = { row ->
-                                when {
-                                    row.transfer != null -> "transfer"
-                                    row.kind == MessageEntity.KIND_NORMAL -> "bubble"
-                                    else -> "notice"
-                                }
-                            },
-                        ) { row ->
-                            // Fade only, no placement animation (`placementSpec = null`): the three
-                            // LaunchedEffects above already drive animateScrollToItem(0) when a message or a
-                            // typing peer arrives, and a placement animation would be sliding rows in one
-                            // direction while the scroll slides the viewport in the other. A new bubble
-                            // appears; nothing travels.
-                            val itemMotion =
-                                Modifier.animateItem(
-                                    placementSpec = null,
-                                    fadeInSpec = KnitMotion.fastEffects(),
-                                    fadeOutSpec = KnitMotion.fastEffects(),
-                                )
-                            val notice = statusNoticeText(row)
-                            val transfer = row.transfer
-                            if (transfer != null) {
-                                TransferCard(
-                                    view = transfer,
-                                    mine = row.mine,
-                                    onAccept = { onAcceptTransfer(transfer.id) },
-                                    onDecline = { onDeclineTransfer(transfer.id) },
-                                    onCancel = { onCancelTransfer(transfer.id) },
-                                    modifier = itemMotion,
-                                )
-                            } else if (notice != null) {
-                                SystemNotice(text = notice, modifier = itemMotion)
-                            } else {
-                                MessageBubble(
-                                    row,
-                                    modifier = itemMotion,
-                                    now = now,
-                                    // In a 1:1 DM the peer's name is in the top bar, so don't repeat it on every
-                                    // received bubble; show it only where multiple people can speak.
-                                    // Every room and group names its authors; a DM does not (the header already
-                                    // does). The bridged room needs it most of all — its posts come from
-                                    // strangers, and an unattributed one would read as if Knit knew who sent it.
-                                    showSenderName = state.isRoom || state.isBridged || state.isCommons || state.isGroup,
-                                    myNodeId = state.myNodeId,
-                                    imageRatios = imageRatios,
-                                    highlighted = row.id == highlightedMessageId,
-                                    onImageClick = { fullscreenImage = it },
-                                    onSaveFile = onSaveFile,
-                                    onOpenProfile = onOpenProfile,
-                                    onReact = onReact,
-                                    quickReactions = quickReactions,
-                                    onMoreReactions = { emojiSheetFor = it },
-                                    onReply = { msg ->
-                                        onStartReply(
-                                            ReplyRef(
-                                                messageId = msg.id,
-                                                authorId = msg.senderNodeId,
-                                                author = msg.senderPlainName,
-                                                snippet =
-                                                    buildReplySnippet(
-                                                        // A quoted position reads as its label, not as a `geo:` line.
-                                                        GeoUri.describe(msg.body, locationQuoteLabel),
-                                                        msg.moderationFlagged,
-                                                        attachmentLabel =
-                                                            when {
-                                                                msg.attachmentName != null -> {
-                                                                    fileQuoteLabel.format(msg.attachmentName)
-                                                                }
-
-                                                                VoiceAudio.isVoice(msg.attachmentMime) -> {
-                                                                    voiceQuoteLabel
-                                                                }
-
-                                                                else -> {
-                                                                    null
-                                                                }
-                                                            },
-                                                    ),
-                                                // A quoted card message shows its link text, not an attachment glyph.
-                                                hasAttachment = msg.attachmentHash != null && msg.attachmentMime != LinkPreviewBlob.MIME,
+                    // A Box around the thread alone, not the AnimatedContent: the button belongs to the
+                    // loaded thread, cross-fades with it, and can never be composed over the skeleton or the
+                    // empty state — listState outlives the list, so its stale index would otherwise show it.
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().testTag("chat_thread"),
+                            contentPadding = PaddingValues(12.dp),
+                            // Bottom-anchored so the thread opens on the newest message with no scroll; the data is
+                            // reversed to match, making index 0 the newest row, drawn at the bottom. Arrangement.Bottom
+                            // keeps a short thread (fewer rows than fit on screen) resting just above the input rather
+                            // than floating at the top with a gap beneath the newest bubble.
+                            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
+                            reverseLayout = true,
+                        ) {
+                            // Reverse layout: the first item is drawn at the visual bottom, so the typing indicator sits
+                            // directly above the input and below the newest message (Signal-style, scrolls with content).
+                            if (state.typingPeers.isNotEmpty()) {
+                                item(key = "typing_indicator") {
+                                    // Fades with the same spec as a message bubble: the indicator arriving and
+                                    // leaving is a state change like any other, and it used to blink.
+                                    TypingIndicatorRow(
+                                        peers = state.typingPeers,
+                                        modifier =
+                                            Modifier.animateItem(
+                                                placementSpec = null,
+                                                fadeInSpec = KnitMotion.fastEffects(),
+                                                fadeOutSpec = KnitMotion.fastEffects(),
                                             ),
-                                        )
-                                    },
-                                    onQuoteClick = { targetId ->
-                                        val idx = state.rows.asReversed().indexOfFirst { it.id == targetId }
-                                        if (idx >= 0) {
-                                            highlightedMessageId = targetId
-                                            scrollScope.launch { listState.animateScrollToItem(idx) }
-                                        } else {
-                                            // Older than the loaded window: grow it far enough to reach the
-                                            // original, and let the effect above scroll once it arrives.
-                                            onRevealMessage(targetId)
-                                            pendingQuoteTarget = targetId
-                                        }
-                                    },
-                                    onDelete = onDeleteMessage,
-                                    onBlock = onBlock,
-                                    onCopy = onCopy,
-                                    onOpenMessageDetails = onOpenMessageDetails,
-                                    onExplainRelay = { relayMarkerExplained = it },
-                                    onExplainHeardAuthor = { peerId, name ->
-                                        heardAuthorExplained = HeardAuthor(peerId, name)
-                                    },
-                                    voicePlayback = voicePlayback,
-                                    onVoicePlay = onVoicePlay,
-                                    onVoiceSeek = onVoiceSeek,
-                                )
+                                    )
+                                }
+                            }
+                            items(
+                                state.rows.asReversed(),
+                                key = { it.id },
+                                // A centred status notice and a chat bubble are different enough shapes that
+                                // sharing one subcomposition slot costs more than it saves. Keyed on plain
+                                // data — statusNoticeText is @Composable and cannot be called from here.
+                                contentType = { row ->
+                                    when {
+                                        row.transfer != null -> "transfer"
+                                        row.kind == MessageEntity.KIND_NORMAL -> "bubble"
+                                        else -> "notice"
+                                    }
+                                },
+                            ) { row ->
+                                // Fade only, no placement animation (`placementSpec = null`): the three
+                                // LaunchedEffects above already drive animateScrollToItem(0) when a message or a
+                                // typing peer arrives, and a placement animation would be sliding rows in one
+                                // direction while the scroll slides the viewport in the other. A new bubble
+                                // appears; nothing travels.
+                                val itemMotion =
+                                    Modifier.animateItem(
+                                        placementSpec = null,
+                                        fadeInSpec = KnitMotion.fastEffects(),
+                                        fadeOutSpec = KnitMotion.fastEffects(),
+                                    )
+                                val notice = statusNoticeText(row)
+                                val transfer = row.transfer
+                                if (transfer != null) {
+                                    TransferCard(
+                                        view = transfer,
+                                        mine = row.mine,
+                                        onAccept = { onAcceptTransfer(transfer.id) },
+                                        onDecline = { onDeclineTransfer(transfer.id) },
+                                        onCancel = { onCancelTransfer(transfer.id) },
+                                        modifier = itemMotion,
+                                    )
+                                } else if (notice != null) {
+                                    SystemNotice(text = notice, modifier = itemMotion)
+                                } else {
+                                    MessageBubble(
+                                        row,
+                                        modifier = itemMotion,
+                                        now = now,
+                                        // In a 1:1 DM the peer's name is in the top bar, so don't repeat it on every
+                                        // received bubble; show it only where multiple people can speak.
+                                        // Every room and group names its authors; a DM does not (the header already
+                                        // does). The bridged room needs it most of all — its posts come from
+                                        // strangers, and an unattributed one would read as if Knit knew who sent it.
+                                        showSenderName = state.isRoom || state.isBridged || state.isCommons || state.isGroup,
+                                        myNodeId = state.myNodeId,
+                                        imageRatios = imageRatios,
+                                        highlighted = row.id == highlightedMessageId,
+                                        onImageClick = { fullscreenImage = it },
+                                        onSaveFile = onSaveFile,
+                                        onOpenProfile = onOpenProfile,
+                                        onReact = onReact,
+                                        quickReactions = quickReactions,
+                                        onMoreReactions = { emojiSheetFor = it },
+                                        onReply = { msg ->
+                                            onStartReply(
+                                                ReplyRef(
+                                                    messageId = msg.id,
+                                                    authorId = msg.senderNodeId,
+                                                    author = msg.senderPlainName,
+                                                    snippet =
+                                                        buildReplySnippet(
+                                                            // A quoted position reads as its label, not as a `geo:` line.
+                                                            GeoUri.describe(msg.body, locationQuoteLabel),
+                                                            msg.moderationFlagged,
+                                                            attachmentLabel =
+                                                                when {
+                                                                    msg.attachmentName != null -> {
+                                                                        fileQuoteLabel.format(msg.attachmentName)
+                                                                    }
+
+                                                                    VoiceAudio.isVoice(msg.attachmentMime) -> {
+                                                                        voiceQuoteLabel
+                                                                    }
+
+                                                                    else -> {
+                                                                        null
+                                                                    }
+                                                                },
+                                                        ),
+                                                    // A quoted card message shows its link text, not an attachment glyph.
+                                                    hasAttachment =
+                                                        msg.attachmentHash != null &&
+                                                            msg.attachmentMime != LinkPreviewBlob.MIME,
+                                                ),
+                                            )
+                                        },
+                                        onQuoteClick = { targetId ->
+                                            val idx = state.rows.asReversed().indexOfFirst { it.id == targetId }
+                                            if (idx >= 0) {
+                                                highlightedMessageId = targetId
+                                                scrollScope.launch { listState.animateScrollToItem(idx) }
+                                            } else {
+                                                // Older than the loaded window: grow it far enough to reach the
+                                                // original, and let the effect above scroll once it arrives.
+                                                onRevealMessage(targetId)
+                                                pendingQuoteTarget = targetId
+                                            }
+                                        },
+                                        onDelete = onDeleteMessage,
+                                        onBlock = onBlock,
+                                        onCopy = onCopy,
+                                        onOpenMessageDetails = onOpenMessageDetails,
+                                        onExplainRelay = { relayMarkerExplained = it },
+                                        onExplainHeardAuthor = { peerId, name ->
+                                            heardAuthorExplained = HeardAuthor(peerId, name)
+                                        },
+                                        voicePlayback = voicePlayback,
+                                        onVoicePlay = onVoicePlay,
+                                        onVoiceSeek = onVoiceSeek,
+                                    )
+                                }
+                            }
+                            if (state.hasOlder) {
+                                item(key = "older_loading", contentType = "older_loading") {
+                                    OlderHistoryRow()
+                                }
                             }
                         }
-                        if (state.hasOlder) {
-                            item(key = "older_loading", contentType = "older_loading") {
-                                OlderHistoryRow()
-                            }
-                        }
+                        ScrollToNewestButton(
+                            visible = showScrollToNewest,
+                            onClick = {
+                                // The reader's newest intent wins over a quote still waiting for its rows.
+                                // A jump, not an animation: animateScrollToItem glides through the last few
+                                // screens of history, composing every bubble it passes, and on a thread of
+                                // hundreds that glide drops frames. Signal jumps for the same reason.
+                                pendingQuoteTarget = null
+                                scrollScope.launch { listState.scrollToItem(0) }
+                            },
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                        )
                     }
                 }
             }
@@ -3185,6 +3221,42 @@ private fun OlderHistoryRow() {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/**
+ * The way back to the newest message for a reader scrolled up into history: a small disc floated over the
+ * thread's bottom-end corner. `secondaryContainer` on purpose — both bubble fills are warm (primaryContainer
+ * / surfaceVariant) and the send button is `primary`, so slate is the one tone nothing beneath or beside it
+ * uses. A small FAB rather than a tonal icon button for its shadow; a flat disc over scrolling bubbles has
+ * no edge. Sized to 48dp outright so the ATF audit's touch target is the container itself.
+ * `KeyboardArrowDown` is not auto-mirrored: down has no direction, and `BottomEnd` already swaps corners
+ * under RTL.
+ */
+@Composable
+private fun ScrollToNewestButton(
+    visible: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = KnitMotion.enterPop(),
+        exit = KnitMotion.exitPop(),
+        modifier = modifier,
+    ) {
+        SmallFloatingActionButton(
+            onClick = onClick,
+            shape = CircleShape,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.size(48.dp).testTag("chat_scroll_to_bottom"),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = stringResource(R.string.chat_scroll_to_bottom),
+            )
+        }
     }
 }
 

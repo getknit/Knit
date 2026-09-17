@@ -761,6 +761,7 @@ class MeshManager(
             bootstrapCommonsSessions() // a session with every commons member, eight intros at a time (§7.4)
             introSync.retry() // re-send stale contact-card intros, settle confirmed ones, expire pair-scope grace
             mintGroupRootsIfDue() // mint a group's spool root when it is our turn (spec §3.2)
+            metrics.onHealCompleted() // the lab's "the basket ran" signal; nothing above may be observed from outside
         }
     }
 

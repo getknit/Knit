@@ -126,7 +126,7 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   `setAvatar` (`ProfileViewModel`), `block` / `unblock` / `accept`, `sendImage` (bytes straight into the
   blob store under their hash — `AttachmentStore.ingest` collapses every picture into one placeholder hash
   under Robolectric's legacy graphics), `mintCard` / `importCard` (`ContactCards` + `ContactImporter`),
-  `resetSession`, `heal()` (fire-and-forget; await the effect), `sweepExpired()` (the TTL sweep the prune
+  `resetSession`, `heal()` (runs the heartbeat basket and returns once it has run to its end — `healsCompleted`), `sweepExpired()` (the TTL sweep the prune
   loop and the heartbeat run — custody, parked frames, key and blob wants — awaited, for after a clock jump),
   `wipeCustody`. Readers beside them:
   `reactions`, `group` / `groupShape`, `attachmentHash` / `attachmentHeld` / `attachmentScreened` /
@@ -160,6 +160,39 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   delivered frame's whole answer can cross on one slow core (a key request and the served key:
   `RestartLabTest` meant to strand the key and found it delivered, GitLab job 4494). `release(to,
   keepHolding = true) { … }` delivers the batch and keeps parking what follows.
+- **The state a scenario can read is not the event it needs** — the 2026-09-16 audit's catalogue, after the
+  three fixture races above and ADR 2026-09.qztx all had that one shape. Every `*LabTest` was read against
+  one question: what does the thread observe, and what does it then assume has happened? Five more sites
+  bypassed the helpers and now wait for the event itself. None of them reproduced in ten throttled
+  whole-package runs (five on the unfixed tree, at 50 % and 25 % of one core): each is a single descheduling
+  between a `send` or a PUT returning and the counter or row written after it, so they are fixed by
+  reasoning, and a green loop is not evidence such a window is closed.
+  - `heal()` returned the moment the basket was *launched*, and `TimeLabTest` re-linked in the same breath.
+    The republished profile is seeded into custody, never flooded (`republishProfile`), so a link-up whose
+    digest exchange ran before that row existed left it to the 60 s re-offer, past every await. `LabNode.heal`
+    now waits for `healsCompleted` (`MeshMetrics.onHealCompleted`, the basket's last line — the one seam this
+    needed in `mesh/`).
+  - The contribution credit is booked *after* the serve's `send` returns (`ForwardSync.onDigest` →
+    `onServed`), so Carol's row — and the oracle over it — is readable before Bob's ledger moves; the met set
+    is written by its own `neighbors` collector. `ContributionLabTest` awaits both.
+  - The avatar bytes are a `blobreq` round trip that starts when the profile row lands; `ProfileUpdateLabTest`
+    read `blobs.exists` straight after profile parity.
+  - `receiptsSpooled`, `spoolAccounted` and `receiptsRidden` are bumped after the push or seal whose result
+    Alice has already pulled off the relay (`RoomTickPlanesLabTest`).
+  - `await(1) { decrypted(…).size }` on a thread that already holds messages passes on its first poll:
+    `TimeLabTest`'s post-reset reply could seal before Bob had applied the reset. Await the message by text.
+  Read as safe, with the reason, so the next audit need not re-derive them: a DM's row and its ratchet
+  commit share one transaction (`commitOpen` inside `withWriteTransaction`), so "the row is readable" does
+  mean "the session is confirmed" and `await decrypted → reply` is a reply, not a both-initiate; the block
+  list is a fresh `first()` per frame; every user-level send hands its frames — group seeds included,
+  `distributeGroupSeed` is inline — to the transport before returning; the fake air decides loss inside the
+  board's `send`, before the `lora tx` line a scenario polls; `skipCovered` runs at enqueue, so `loraSkipped*`
+  moves before `sendChat` returns; `onFrameReplayed` and `onKeyRecovered` precede the replayed delivery; a
+  `groupleave` envelope carries no `group`, so `sortedBy { isGroupFrame() }` does put the leave first. And
+  `published`'s "originated moved" is durable: `broadcastProfile` custodies the new stamp under the lock
+  before `sendOwn` counts it, so a link cut in the microseconds before `transport.send` strands nothing the
+  next exchange cannot serve (a transport-level dispatch counter would not do — the composite fans a flood
+  per neighbour and never hands a board node's flood to the child at all).
 - **A held frame that is filtered out at `release` is lost, like a dropped packet** — and the digest exchange
   repairs it only on the next link-up or the 60 s re-offer. A scenario that drops held frames re-links before
   the oracle (`KeyExchangeLabTest`, `SessionLabTest`'s key request), as `RoomTickPlanesLabTest` already did.

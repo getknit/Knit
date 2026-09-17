@@ -217,6 +217,7 @@ class MeshMetrics {
     private val keysRecovered = AtomicLong()
     private val framesHeld = AtomicLong()
     private val framesReplayed = AtomicLong()
+    private val healsCompleted = AtomicLong()
     private val receiptsResent = AtomicLong()
     private val dmSealedV2 = AtomicLong()
     private val dmSealedV3 = AtomicLong()
@@ -402,6 +403,17 @@ class MeshMetrics {
     /** A parked frame we replayed through the deliver path after its sender's key was pinned. */
     fun onFrameReplayed() {
         framesReplayed.incrementAndGet()
+    }
+
+    /**
+     * The heartbeat basket ([app.getknit.knit.mesh.MeshManager.heal]) ran to its end: the sweeps, the retries,
+     * the profile republish and the sealed profile updates. `heal()` itself returns the moment the basket is
+     * launched, so this is the one signal that it finished — what the mesh-in-a-box lab waits on before it
+     * re-links a node, because a profile the basket republishes is seeded into custody, never flooded, and a
+     * link-up whose digest exchange runs before that row exists serves it only on the 60 s re-offer.
+     */
+    fun onHealCompleted() {
+        healsCompleted.incrementAndGet()
     }
 
     /** A broadcast/group delivery receipt we re-sent to its author because the first best-effort tick may not
@@ -994,6 +1006,7 @@ class MeshMetrics {
             keysRecovered = keysRecovered.get(),
             framesHeld = framesHeld.get(),
             framesReplayed = framesReplayed.get(),
+            healsCompleted = healsCompleted.get(),
             receiptsResent = receiptsResent.get(),
             dmSealedV2 = dmSealedV2.get(),
             dmSealedV3 = dmSealedV3.get(),
@@ -1109,6 +1122,7 @@ class MeshMetrics {
         val keysRecovered: Long = 0,
         val framesHeld: Long = 0,
         val framesReplayed: Long = 0,
+        val healsCompleted: Long = 0,
         val receiptsResent: Long = 0,
         val dmSealedV2: Long = 0,
         val dmSealedV3: Long = 0,

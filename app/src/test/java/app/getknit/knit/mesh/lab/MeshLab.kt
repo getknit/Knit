@@ -1146,8 +1146,25 @@ class LabNode internal constructor(
     /** Forces a DM session reset toward [peer] (Diagnostics' button): null once it went out, else the refusal. */
     suspend fun resetSession(peer: LabNode): String? = manager.forceRatchetReset(peer.nodeId)
 
-    /** Runs the 15-minute heartbeat basket now. Fire-and-forget on the session scope: await the effect. */
-    fun heal() = manager.heal()
+    /**
+     * Runs the 15-minute heartbeat basket now and returns once it has run to its end (`healsCompleted`).
+     * `MeshManager.heal` only launches the basket; a scenario that re-linked the node the moment it returned
+     * raced the basket's tail — the republished profile is *seeded into custody, never flooded*, and a link-up
+     * whose digest exchange ran before that row existed left it for the 60 s re-offer, past every await
+     * (`TimeLabTest`, three scenarios, on one slow core). The sealed `CTL_PROFILE` the basket sends after it
+     * is custodied at origination, so once the basket is done a re-link's exchange carries both.
+     */
+    suspend fun heal() {
+        val before = metrics.snapshot().healsCompleted
+        manager.heal()
+        val done =
+            withContext(Dispatchers.Default) {
+                withTimeoutOrNull(MeshLab.AWAIT_MS) {
+                    while (metrics.snapshot().healsCompleted <= before) delay(MeshLab.POLL_MS)
+                }
+            } != null
+        check(done) { "$name's heal basket never finished (healsCompleted stayed at $before)" }
+    }
 
     /** Drops every custody row, as a wiped database would; the digest is rebuilt over nothing. */
     suspend fun wipeCustody() {

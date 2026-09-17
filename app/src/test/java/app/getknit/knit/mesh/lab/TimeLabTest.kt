@@ -196,7 +196,9 @@ class TimeLabTest {
             lab.assertConverged(listOf(alice, bob), atLeast = 2) { it.dmWith(if (it === alice) bob else alice) }
             assertNull(alice.resetSession(bob))
             assertTrue(alice.sendDm(bob, "after the reset"))
-            lab.await(1) { bob.decrypted(bob.dmWith(alice)).size }
+            // Bob already holds two, so a count is a stale read here: wait for *this* DM, which is also Bob
+            // having applied the reset ahead of it — his reply must seal under the fresh era, not the retired one.
+            assertTrue(lab.await(1) { bob.decrypted(bob.dmWith(alice)).count { it.second == "after the reset" } })
             assertTrue(bob.sendDm(alice, "read you"))
             lab.assertConverged(listOf(alice, bob), atLeast = 4) { it.dmWith(if (it === alice) bob else alice) }
 
@@ -206,7 +208,7 @@ class TimeLabTest {
             lab.unlink(alice, bob)
             lab.link(alice, bob)
             assertTrue(alice.sendDm(bob, "a day later"))
-            lab.await(1) { bob.decrypted(bob.dmWith(alice)).size }
+            assertTrue(lab.await(1) { bob.decrypted(bob.dmWith(alice)).count { it.second == "a day later" } })
             assertTrue(bob.sendDm(alice, "still here"))
             lab.assertConverged(listOf(alice, bob), atLeast = 6) { it.dmWith(if (it === alice) bob else alice) }
             listOf(alice, bob).forEach { n ->

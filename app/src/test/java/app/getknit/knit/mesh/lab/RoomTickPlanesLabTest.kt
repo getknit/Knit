@@ -89,8 +89,17 @@ class RoomTickPlanesLabTest {
             assertEquals(DeliveryPlane.Internet, lab.awaitReceipt(alice, dm, bob))
             assertEquals("nothing went on the air for it", 0, bob.loraTx("send:chat"))
             assertEquals(bobFarBefore, bob.loraTx("far:chat"))
-            assertEquals(1L, bob.metrics.snapshot().receiptsRidden)
-            assertEquals(0, bob.manager.ackSync.ridingFor(alice.nodeId))
+            // Alice reads the tick off the relay a moment before Bob's own bookkeeping of the ride lands.
+            assertTrue(
+                "the ride was never counted",
+                lab.await(1) {
+                    bob.metrics
+                        .snapshot()
+                        .receiptsRidden
+                        .toInt()
+                },
+            )
+            assertTrue("the ride hold never cleared", lab.await(1) { if (bob.manager.ackSync.ridingFor(alice.nodeId) == 0) 1 else 0 })
 
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { Conversations.NEARBY }
             lab.assertConverged(listOf(alice, bob), atLeast = 5) { it.dmWith(if (it === alice) bob else alice) }
@@ -113,12 +122,23 @@ class RoomTickPlanesLabTest {
             // No DM follows, so the deadline runs out; the author is on the relay, so the tick goes there —
             // signed, point-to-point, and never a custody row on the acker.
             assertEquals(DeliveryPlane.Internet, lab.awaitReceipt(alice, post, bob))
+            // Both counters move after the push returns (`if (pushed) onReceiptSpooled()`, the account after
+            // the PUT), and Alice pulls the frame off the relay the moment the PUT lands — so her row can be
+            // readable a beat before Bob's counters are.
+            assertTrue(
+                "the spooled tick was never counted",
+                lab.await(1) {
+                    bob.metrics
+                        .snapshot()
+                        .receiptsSpooled
+                        .toInt()
+                },
+            )
             assertEquals(1L, bob.metrics.snapshot().receiptsSpooled)
             assertEquals("no custody row for it", custodiedBefore, bob.custodiedChatsTo(alice))
-            assertEquals(
+            assertTrue(
                 "accounted instead, so bob's own heal loop never pulls it back",
-                accountedBefore + 1,
-                bob.metrics.snapshot().spoolAccounted,
+                lab.await(1) { if (bob.metrics.snapshot().spoolAccounted == accountedBefore + 1) 1 else 0 },
             )
             assertEquals("and nothing on the air", 0, bob.loraTx("send:chat"))
             val settled =

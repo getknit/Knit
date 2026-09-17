@@ -179,7 +179,9 @@ class ProfileUpdateLabTest {
             assertTrue(alice.sendRoom("new face"))
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { Conversations.NEARBY }
             val hash = checkNotNull(bob.peer(alice)?.avatarHash)
-            assertTrue("bob holds the avatar bytes", bob.blobs.exists(hash))
+            // The oracle's profile check is the row (name, version, hash); the bytes are a `blobreq` round
+            // trip Bob starts when the row lands, still in flight when the row is first readable.
+            assertTrue("bob never pulled the avatar bytes", lab.await(1) { if (bob.blobs.exists(hash)) 1 else 0 })
             assertTrue(picture.contentEquals(bob.blobs.bytes(hash)))
         }
 }

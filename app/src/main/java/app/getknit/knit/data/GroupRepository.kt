@@ -40,6 +40,23 @@ class GroupRepository(
     suspend fun groupsWith(memberId: String): List<GroupEntity> = active().filter { memberId in GroupMembersStore.decode(it.members) }
 
     /**
+     * Drops the seed-outbox rows a device once kept for *itself* — [nodeId] is our own — in every group we
+     * still hold, and returns how many there were. A member never seals a seed to itself, but builds before
+     * 2026-09-13 did (`flushGroupKeys(me)` off a self-pinned `peers` row), and a row outlives the loop that
+     * wrote it: it dies only with the member's departure or the group's leave, and we never depart our own
+     * groups. Rows for a left group are already gone (leave drops them all). Run once at mesh start; a
+     * no-op on a clean device.
+     */
+    suspend fun forgetSelf(nodeId: String): Int =
+        db.withWriteTransaction {
+            groupsWith(nodeId).count { group ->
+                val had = groupRatchet.keySend(group.groupId, nodeId) != null
+                if (had) groupRatchet.deleteKeySend(group.groupId, nodeId)
+                had
+            }
+        }
+
+    /**
      * [groupsWith] as a live flow, for surfaces that show "groups in common" beside a peer.
      *
      * The `left` filter is explicit here because [GroupDao.observeAll] has none — only `allActive()`

@@ -244,4 +244,29 @@ class GroupRepositoryTest : RoomDbTest() {
                     .sorted(),
             )
         }
+
+    /**
+     * The seed-outbox rows a pre-2.6.0 device wrote toward *itself* (the self-pin loop) outlive the fix,
+     * because only a departure or a leave removes one and we never depart our own groups. The start-up
+     * sweep takes exactly those: every other member's row, in every group, is untouched.
+     */
+    @Test
+    fun `forgetSelf drops only our own seed-outbox rows and counts them`() =
+        runTest {
+            seedGroup("g1", listOf("me", "a", "b"))
+            seedGroup("g2", listOf("me", "a"))
+            seedGroup("g3", listOf("me", "b"))
+            groupRatchet.markKeySent("g1", "me", epoch = 1, at = 1L)
+            groupRatchet.markKeySent("g1", "a", epoch = 1, at = 1L)
+            groupRatchet.markKeySent("g2", "me", epoch = 2, at = 1L)
+            groupRatchet.markKeySent("g2", "a", epoch = 2, at = 1L)
+
+            assertEquals(2, repo().forgetSelf("me"))
+
+            assertNull(groupRatchet.keySend("g1", "me"))
+            assertNull(groupRatchet.keySend("g2", "me"))
+            assertEquals(1, groupRatchet.keySend("g1", "a")?.sentEpoch)
+            assertEquals(2, groupRatchet.keySend("g2", "a")?.sentEpoch)
+            assertEquals("a second sweep is a no-op", 0, repo().forgetSelf("me"))
+        }
 }

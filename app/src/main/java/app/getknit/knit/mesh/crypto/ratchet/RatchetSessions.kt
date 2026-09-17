@@ -316,6 +316,20 @@ class RatchetSessions(
     suspend fun sweep(now: Long) = locked { store.sweep(now) }
 
     /**
+     * Drops every ratchet row held for [peerId] — the session and our epoch privs, their recv epochs and
+     * skipped keys — and says whether there was a session to drop. Not a reset: nothing is sent, and the
+     * next frame either way starts from nothing. Exists for the one peer id that can never be a peer, our
+     * own: builds before 2026-09-13 opened a session with themselves off a self-pinned `peers` row, and
+     * `PeerRepository.forgetSelf` takes the row but not the session behind it.
+     */
+    suspend fun forget(peerId: String): Boolean =
+        locked {
+            val had = store.session(peerId) != null
+            if (had) store.deletePeer(peerId)
+            had
+        }
+
+    /**
      * The spool plane's key material for every confirmed session: `pairwiseRoot` exports, never raw
      * session roots. Deliberately exported here rather than letting the plane read [RatchetStore], so
      * session secrets stay behind this facade and its mutex — the plane only ever sees the one-way

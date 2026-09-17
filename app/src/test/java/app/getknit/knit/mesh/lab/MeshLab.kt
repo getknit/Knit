@@ -320,6 +320,7 @@ class MeshLab {
             // self row turns every seal-to-a-pinned-peer path on ourselves (the hourly self-addressed frames
             // found in the lab fleet's custody, 2026-09-13). The custody rows are the same bug seen from a carrier.
             assertTrue("${n.name} pinned a peer row for itself", n.peers.find(n.nodeId) == null)
+            assertTrue("${n.name} holds a ratchet session with itself", n.db.ratchetDao().session(n.nodeId) == null)
             assertTrue(
                 "${n.name} custodies frames a sender addressed to themselves: ${n.selfAddressedCustody()}",
                 n.selfAddressedCustody().isEmpty(),

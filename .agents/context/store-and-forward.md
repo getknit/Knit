@@ -231,8 +231,10 @@ self shapes are refused *after* custody, at the type dispatch, and both must sta
   flooded, custodied by every carrier for 24 h, and carried over LoRa airtime as DM-form traffic. Found
   through the Your mesh screen's custody count (51 "for others" on the P9, 15 of them X→X). Pinned by
   `InboundPipelineTest.ourOwnProfileLoopingBackIsCustodiedButNeverPinnedAndFlushesNothing` and the
-  no-self-row check in `MeshLab.assertConverged`; `PeerRepository.forgetSelf` sweeps the row at mesh start
-  on a device that already has one.
+  no-self-row check in `MeshLab.assertConverged`; at mesh start `PeerRepository.forgetSelf` sweeps the row
+  on a device that already has one, `RatchetSessions.forget(me)` the session the ratchet opened with
+  ourselves behind it, and `GroupRepository.forgetSelf` the seed-outbox rows the group flush wrote toward
+  us — the ratchet dump walks `peers`, so neither of the latter shows once the row is gone.
 - **A DM from us to us is dropped before the decrypt** (`handleChat`): no thread has that shape and every
   sealed ctl DM is addressed to someone else, so the only ones in existence are that loop's residue, and
   opening one is what fed the reset heuristic. Our own broadcast posts and group frames carry no recipient

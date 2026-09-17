@@ -36,6 +36,7 @@ import app.getknit.knit.mesh.crypto.TinkInit
 import app.getknit.knit.mesh.crypto.b64
 import app.getknit.knit.mesh.crypto.ratchet.GroupRatchetSessions
 import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
+import app.getknit.knit.mesh.crypto.ratchet.RatchetEngine
 import app.getknit.knit.mesh.crypto.ratchet.RatchetSessions
 import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.ChatContent
@@ -1954,6 +1955,45 @@ class MeshManagerTest {
         const val AWAIT_MS = 10_000L
         const val POLL_MS = 5L
     }
+
+    // --- self hygiene at start ---
+
+    /**
+     * What the self-pin loop (`45763fb6`) left behind on a phone that ran it: the `peers` row is gone since
+     * 2.6.0's first start, but the session the ratchet opened with ourselves and the seed-outbox rows the
+     * group flush wrote toward us are keyed on our own id and nothing else removes them — the ratchet dump
+     * walks `peers`, so they do not even show. Start sweeps all three, and only for our own id: another
+     * peer's session survives untouched.
+     */
+    @Test
+    fun startForgetsTheSessionAndOutboxRowsADeviceHeldWithItself() =
+        runTest(UnconfinedTestDispatcher()) {
+            val rig = Rig(backgroundScope)
+            val store = RatchetRepository(rig.db.ratchetDao(), clock = { rig.now })
+            store.upsertSession(selfSession(rig.me.nodeId))
+            store.upsertSession(selfSession(rig.bob.nodeId))
+
+            rig.manager.start()
+
+            rig.await(1) { if (runBlocking { store.session(rig.me.nodeId) } == null) 1 else 0 }
+            assertNotNull("another peer's session is not the sweep's business", store.session(rig.bob.nodeId))
+            coVerify { rig.peers.forgetSelf(rig.me.nodeId) }
+            coVerify { rig.groups.forgetSelf(rig.me.nodeId) }
+        }
+
+    private fun selfSession(peerId: String) =
+        RatchetEngine.SessionState(
+            peerId = peerId,
+            confirmed = false,
+            weAreInitiator = true,
+            root = ByteArray(32) { 1 },
+            establishedAt = 1L,
+            sendEpoch = 4,
+            sendEpochPub = ByteArray(32) { 2 },
+            sendChainKey = ByteArray(32) { 3 },
+            sendEpochStartedAt = 1L,
+            highestPeAcked = 0,
+        )
 
     // --- people met ---
 

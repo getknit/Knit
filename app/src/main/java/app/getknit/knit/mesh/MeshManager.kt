@@ -2101,8 +2101,15 @@ class MeshManager(
     private fun seedOwnProfileCustody(session: CoroutineScope): Job =
         session.launch {
             // Hygiene for a device whose own profile once pinned a `peers` row for itself (the self-addressed
-            // seed loop, fixed in InboundPipeline.handleProfile): the row is what made us a sealable "peer".
-            if (peers.forgetSelf(identity.nodeId())) Log.w(TAG, "dropped the peer row this device had pinned for itself")
+            // seed loop, fixed in InboundPipeline.handleProfile): the row is what made us a sealable "peer",
+            // and behind it sit the session the ratchet opened with ourselves and the seed-outbox rows the
+            // group flush wrote toward us. The row went with 2.6.0's first start; the rest is invisible from
+            // outside (the ratchet dump walks `peers`) and nothing else removes it, so each sweep runs on its
+            // own — a no-op once clean.
+            val me = identity.nodeId()
+            if (peers.forgetSelf(me)) Log.w(TAG, "dropped the peer row this device had pinned for itself")
+            if (ratchet.forget(me)) Log.w(TAG, "dropped the ratchet session this device held with itself")
+            groups.forgetSelf(me).takeIf { it > 0 }?.let { Log.w(TAG, "dropped $it group seed-outbox rows addressed to ourselves") }
             // Rotation check BEFORE seeding, so a due prekey mints now and the seeded frame (and any
             // first-contact push) already carries it; also the startup ratchet retention sweep.
             rotatePrekeyIfDue()

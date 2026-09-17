@@ -15,10 +15,10 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Drives [DraftRepository] against a counting fake DAO on a virtual clock — plain JVM, no Room: the SQL
- * here is three generated one-row statements, and what is worth pinning is the scheduling around them
- * (one write per typing pause, blank deletes rather than stores, and a [DraftRepository.clear] that a
- * write already in the queue cannot undo).
+ * Drives [DraftRepository] against a counting fake DAO on a virtual clock — plain JVM, no Room: what is
+ * worth pinning here is the scheduling around three one-row statements (one write per typing pause, blank
+ * deletes rather than stores, and a [DraftRepository.clear] that a write already in the queue cannot undo).
+ * The hand-written upsert SQL itself runs for real in [DraftDaoTest].
  */
 class DraftRepositoryTest {
     private class FakeDraftDao : DraftDao {
@@ -33,9 +33,13 @@ class DraftRepositoryTest {
 
         override fun observeAll(): Flow<List<DraftEntity>> = stored.map { it.values.toList() }
 
-        override suspend fun upsert(row: DraftEntity) {
+        override suspend fun upsert(
+            conversationId: String,
+            text: String,
+            updatedAt: Long,
+        ) {
             upserts++
-            stored.value = stored.value + (row.conversationId to row)
+            stored.value = stored.value + (conversationId to DraftEntity(conversationId, text, updatedAt))
         }
 
         override suspend fun deleteFor(conversationId: String) {

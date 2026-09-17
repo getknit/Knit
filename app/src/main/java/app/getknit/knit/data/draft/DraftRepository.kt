@@ -63,7 +63,7 @@ class DraftRepository(
                 if (text.isBlank()) {
                     dao.deleteFor(conversationId)
                 } else {
-                    dao.upsert(DraftEntity(conversationId, text, now()))
+                    dao.upsert(conversationId, text, now())
                 }
             }
     }

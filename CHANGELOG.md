@@ -20,6 +20,12 @@ document:
 
 ## Unreleased
 
+### Added
+
+- On a phone a parent or an organisation manages, Settings and Diagnostics now say so, and a permission they
+  turned off names who can allow it instead of sending you to a switch you can't flip. Voice notes get the
+  same Open settings dialog as the location pin.
+
 ### Fixed
 
 - Your phone could still upload a photo to your relay right after the phone next to you passed it over

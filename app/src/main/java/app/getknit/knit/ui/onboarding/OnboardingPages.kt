@@ -53,6 +53,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import app.getknit.knit.R
 import app.getknit.knit.identity.displayNameFor
+import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.MeshPermissionTier
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.DisplayNameField
@@ -280,6 +281,7 @@ internal fun PermissionsPage(
                 onAllow = onRequestRadio,
                 onOpenSettings = onOpenSettings,
                 actionTag = "onboarding_grant",
+                settingsHint = deniedHint(supervisedHint(rows.supervision, tier, GrantRow.Radio)),
             )
             Text(
                 text = stringResource(R.string.onboarding_optional),
@@ -296,6 +298,7 @@ internal fun PermissionsPage(
                     onAllow = onRequestNotifications,
                     onOpenSettings = onOpenSettings,
                     actionTag = "onboarding_notifications",
+                    settingsHint = deniedHint(supervisedHint(rows.supervision, tier, GrantRow.Notifications)),
                 )
             }
             PermissionRow(
@@ -315,6 +318,20 @@ internal fun PermissionsPage(
 }
 
 private enum class RowState { Granted, Ask, OpenSettings }
+
+/**
+ * The "Open settings" line for a permission row: Android's own "won't ask again", or — on a phone somebody
+ * else administers, where that same instant refusal may be theirs — the line that says who and where.
+ */
+@Composable
+private fun deniedHint(holder: DeviceSupervision?): String =
+    stringResource(
+        when (holder) {
+            null, DeviceSupervision.None -> R.string.onboarding_perm_denied_hint
+            DeviceSupervision.FamilyLink -> R.string.onboarding_perm_denied_hint_family_link
+            DeviceSupervision.Managed -> R.string.onboarding_perm_denied_hint_managed
+        },
+    )
 
 private fun rowState(
     granted: Boolean,
@@ -525,6 +542,21 @@ fun PermissionsPageUnsupportedPreview() =
             rows = PermissionRows.FRESH,
             tier = MeshPermissionTier.NEARBY_DEVICES,
             meshSupported = false,
+            onRequestRadio = {},
+            onRequestNotifications = {},
+            onAllowBattery = {},
+            onOpenSettings = {},
+        )
+    }
+
+@Preview(showBackground = true)
+@Composable
+fun PermissionsPageFamilyLinkPreview() =
+    KnitPreview {
+        PermissionsPage(
+            rows = PermissionRows.FRESH.copy(radioNeedsSettings = true, supervision = DeviceSupervision.FamilyLink),
+            tier = MeshPermissionTier.LOCATION_AND_BLUETOOTH,
+            meshSupported = true,
             onRequestRadio = {},
             onRequestNotifications = {},
             onAllowBattery = {},

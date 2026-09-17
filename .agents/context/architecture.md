@@ -24,6 +24,10 @@ custody, and on-device content moderation.
 ui/            Compose screens (onboarding, chatlist, chat, contacts, addcontact, verify, settings,
                profile, group, diagnostics, blocked, share, donate) + ViewModels (Koin koinViewModel()) · KnitApp (Navigation
                Compose; the `getknit.app/c` / `knit://c` contact-link deep links land in ui/addcontact)
+               · BackgroundBattery / DeviceSupervision (the two phone-policy probes the permission rows,
+               Settings and Diagnostics read on resume; DeviceSupervision is the ONLY android.app.admin /
+               UserManager importer — ADR 2026-09.a8ud) · components/PermissionDeniedDialog (the shared
+               "won't ask again" dialog of the location and mic gates)
 contacts/      ContactCards (mints this device's signed contact link) · ContactImporter (the import rules:
                pin + accept, never verify; relay hints shown, never applied) — docs/CONTACT_CARD.md
 mesh/          MeshTransport (interface) · CompositeMeshTransport (runs the radios below simultaneously)

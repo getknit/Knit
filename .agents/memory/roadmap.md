@@ -6,6 +6,17 @@ doc). **Don't start a deferred item without explicit direction.**
 
 ## Already shipped (was deferred)
 
+- **Supervised and managed phones are named SHIPPED** (2026-09-16, ADR 2026-09.a8ud) —
+  `ui/DeviceSupervision.kt` reads Family Link's supervision profile owner or any other management signal
+  into one enum; the onboarding
+  rows, the location / mic / camera gates (one shared `PermissionDeniedDialog`), Settings and Diagnostics say
+  who may hold a greyed-out grant and where. Built on a Pixel 8 trial that showed Family Link's pauses and
+  downtime leave the running foreground service alone, so no restart machinery was needed. Device-verified
+  the same day (Settings, Diagnostics, the pin's dialog on the Location-denied Pixel 8), and the ATF suite
+  passed 25/25 on a rooted API 34 `aosp_atd` AVD given a user restriction (`adb root` + `pm
+  set-user-restriction no_config_date_time 1`) so the Managed lines rendered — the Play-store AVDs refuse
+  that command. No finding on the new rows.
+
 - **A Restricted battery setting is shown for what it is SHIPPED** (2026-09-14, ADR 2026-09.gc3m, the
   follow-up ADR 2026-09.f69x deferred) — `ui/BackgroundBattery.kt` reads the three-position setting
   (`ActivityManager.isBackgroundRestricted()` over the exemption), Settings' battery line says allowed /
@@ -61,6 +72,18 @@ doc). **Don't start a deferred item without explicit direction.**
   committed: spool / scope / `ScopeSync` / `knit-spool` (AGPL-3.0).
 
 ## Still deferred (by design)
+
+- **Process recovery after a Family Link pause** (ADR 2026-09.a8ud, 2026-09-16). An
+  `ACTION_MY_PACKAGE_UNSUSPENDED` receiver that restarts the mesh, with a "tap to reconnect" notification
+  as the battery-Optimized fallback, was designed and then dropped: the trial showed `setPackagesSuspended`
+  never stops a running foreground service and a kill while suspended comes back on the sticky restart.
+  Revisit only with evidence of a suspended Knit staying dark — `dumpsys activity exit-info` is the oracle.
+
+- **A BLE-only mesh under a parent-held Location grant on API 31–32** (ADR 2026-09.a8ud). Family Link can
+  deny Location, which sits in `requiredRadioPermissions` on 29–32; on 31–32 BLE needs no location, so the
+  composite *could* run one plane. ADR 2026-09.nzpr's objection stands — the transports are not
+  permission-safe per plane — and the population is Android 12 kids' phones; the onboarding row names the
+  parent instead.
 
 - **A custodied frame whose delivery was cut short is never delivered here** (lab finding, 2026-09-16, GitLab
   job 4494; work item knit/knit-next#56). `InboundPipeline.onDeliver` custodies before it dispatches, on purpose (a decrypt failure still

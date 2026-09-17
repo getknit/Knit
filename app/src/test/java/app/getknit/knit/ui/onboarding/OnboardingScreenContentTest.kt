@@ -1,11 +1,13 @@
 package app.getknit.knit.ui.onboarding
 
 import android.content.Context
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -15,6 +17,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.R
+import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.MeshPermissionTier
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
@@ -184,6 +187,54 @@ class OnboardingScreenContentTest {
         compose.onNodeWithTag("onboarding_grant_settings").performClick()
         assertEquals(1, calls.settings)
         assertEquals(0, calls.radio)
+    }
+
+    /**
+     * On a Family Link phone the same instant refusal may be a parent's, but only where a parent can hold
+     * that grant: the radio row on the Location tiers names them and where they allow it; on the Nearby
+     * devices tier the generic "won't ask again" line stays (ADR 2026-09.a8ud).
+     */
+    @Test
+    fun aFamilyLinkPhoneNamesTheParentOnlyWhereLocationGatesTheRadios() {
+        render(
+            OnboardingStep.PERMISSIONS,
+            rows = PermissionRows.FRESH.copy(radioNeedsSettings = true, supervision = DeviceSupervision.FamilyLink),
+            tier = MeshPermissionTier.LOCATION_AND_BLUETOOTH,
+        )
+        compose.onNodeWithText(context.getString(R.string.onboarding_perm_denied_hint_family_link)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.onboarding_perm_denied_hint)).assertDoesNotExist()
+    }
+
+    @Test
+    fun aFamilyLinkPhoneKeepsTheGenericHintOnTheNearbyDevicesTier() {
+        val calls =
+            render(
+                OnboardingStep.PERMISSIONS,
+                rows = PermissionRows.FRESH.copy(radioNeedsSettings = true, supervision = DeviceSupervision.FamilyLink),
+                tier = MeshPermissionTier.NEARBY_DEVICES,
+            )
+        compose.onNodeWithText(context.getString(R.string.onboarding_perm_denied_hint)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.onboarding_perm_denied_hint_family_link)).assertDoesNotExist()
+        // Still the same row: Open settings still opens settings, and Start still ignores it.
+        compose.onNodeWithTag("onboarding_grant_settings").performClick()
+        assertEquals(1, calls.settings)
+    }
+
+    @Test
+    fun aManagedPhoneNamesTheAdministratorOnEveryTier() {
+        render(
+            OnboardingStep.PERMISSIONS,
+            rows =
+                PermissionRows.FRESH.copy(
+                    radioNeedsSettings = true,
+                    notificationsNeedSettings = true,
+                    supervision = DeviceSupervision.Managed,
+                ),
+            tier = MeshPermissionTier.NEARBY_DEVICES,
+        )
+        // Both the radio and the notifications row carry it.
+        compose.onAllNodesWithText(context.getString(R.string.onboarding_perm_denied_hint_managed)).assertCountEquals(2)
+        compose.onNodeWithText(context.getString(R.string.onboarding_perm_denied_hint)).assertDoesNotExist()
     }
 
     @Test

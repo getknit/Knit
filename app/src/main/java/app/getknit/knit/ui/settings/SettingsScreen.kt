@@ -40,7 +40,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,19 +53,19 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.R
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.BackgroundBattery
+import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.backgroundBattery
 import app.getknit.knit.ui.camera.openAppSettings
 import app.getknit.knit.ui.components.Avatar
+import app.getknit.knit.ui.deviceSupervision
 import app.getknit.knit.ui.preview.KnitPreview
+import app.getknit.knit.ui.rememberOnResume
 import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
 import app.getknit.knit.ui.theme.DYNAMIC_COLOR_SUPPORTED
 import app.getknit.knit.ui.theme.THEME_MODE_SUPPORTED
@@ -118,7 +117,8 @@ fun SettingsScreen(
                 relay = relay,
                 lora = lora,
             ),
-        battery = rememberBackgroundBattery(),
+        battery = rememberOnResume { backgroundBattery(context) },
+        supervision = rememberOnResume { deviceSupervision(context) },
         onBack = onBack,
         onOpenProfile = onOpenProfile,
         onToggleContentFiltering = viewModel::setContentFilteringEnabled,
@@ -162,6 +162,9 @@ internal fun SettingsScreenContent(
     showThemeMode: Boolean = THEME_MODE_SUPPORTED,
     onAllowBattery: () -> Unit,
     onOpenBatterySettings: () -> Unit = {},
+    // Who else holds this phone's switches (a Family Link parent, an administrator). Read in the stateful
+    // wrapper like `battery`, so the preview and the content test can show either phone.
+    supervision: DeviceSupervision = DeviceSupervision.None,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Scaffold(
@@ -266,6 +269,7 @@ internal fun SettingsScreenContent(
             if (showLoraRadio) LoraRadioRow(summary = form.lora, onClick = onOpenLora)
 
             BatteryOptimizationRow(battery = battery, onAllow = onAllowBattery, onOpenSettings = onOpenBatterySettings)
+            SupervisionRow(supervision = supervision)
         }
     }
 }
@@ -537,31 +541,6 @@ private fun loraConnectedSubtitle(
     }
 
 /**
- * Which position the app's battery setting is in, refreshed on every screen resume — the exemption prompt
- * and the app-info page are both other activities. Lives in the stateful wrapper (not
- * [BatteryOptimizationRow]) because the `PowerManager` / `ActivityManager` reads are not available to the
- * preview renderer.
- */
-@Composable
-private fun rememberBackgroundBattery(): BackgroundBattery {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var battery by remember { mutableStateOf(backgroundBattery(context)) }
-
-    DisposableEffect(lifecycleOwner) {
-        val observer =
-            LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME) {
-                    battery = backgroundBattery(context)
-                }
-            }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    return battery
-}
-
-/**
  * The app's battery position and what it means for the mesh, with the one action that can move it:
  * the exemption prompt from Optimized, the app-info page from Restricted (no prompt of ours lifts that one —
  * ADR 2026-09.f69x is what a Restricted install used to crash on).
@@ -614,6 +593,28 @@ private fun BatteryOptimizationRow(
     }
 }
 
+/**
+ * One quiet line on a phone somebody else administers — a Family Link parent, an organisation — saying so,
+ * and what it means for Knit. Nothing to press: the switches it talks about live in the parent app or the
+ * EMM, not in Settings. A plain consumer phone renders nothing here. ADR 2026-09.a8ud.
+ */
+@Composable
+private fun SupervisionRow(supervision: DeviceSupervision) {
+    val text =
+        when (supervision) {
+            DeviceSupervision.None -> return
+            DeviceSupervision.FamilyLink -> R.string.settings_supervised_family_link
+            DeviceSupervision.Managed -> R.string.settings_supervised_managed
+        }
+    Text(
+        text = stringResource(text),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp).testTag("settings_supervised"),
+    )
+}
+
 @Preview(showBackground = true)
 @Composable
 fun ToggleRowPreview() =
@@ -652,6 +653,16 @@ fun BatteryOptimizationRowPreview() =
             BatteryOptimizationRow(battery = BackgroundBattery.Unrestricted, onAllow = {}, onOpenSettings = {})
             BatteryOptimizationRow(battery = BackgroundBattery.Optimized, onAllow = {}, onOpenSettings = {})
             BatteryOptimizationRow(battery = BackgroundBattery.Restricted, onAllow = {}, onOpenSettings = {})
+        }
+    }
+
+@Preview(showBackground = true)
+@Composable
+fun SupervisionRowPreview() =
+    KnitPreview {
+        Column {
+            SupervisionRow(supervision = DeviceSupervision.FamilyLink)
+            SupervisionRow(supervision = DeviceSupervision.Managed)
         }
     }
 

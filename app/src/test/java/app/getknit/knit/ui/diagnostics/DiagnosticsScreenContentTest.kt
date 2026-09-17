@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
@@ -16,6 +17,7 @@ import app.getknit.knit.mesh.TransportHealth
 import app.getknit.knit.mesh.TransportKind
 import app.getknit.knit.mesh.TransportStatus
 import app.getknit.knit.mesh.lora.LoraPlane
+import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -61,6 +63,34 @@ class DiagnosticsScreenContentTest {
         }
 
         compose.onNodeWithText("Ada Lovelace").assertIsDisplayed()
+        // A plain phone has nobody administering it, so the self section has no such line.
+        compose.onNodeWithTag("diagnostics_supervised").assertDoesNotExist()
+    }
+
+    /** An administered phone is named in the self section — the line a "greyed-out permission" report needs. */
+    @Test
+    fun aFamilyLinkPhoneIsNamedInTheSelfSection() {
+        compose.setContent {
+            KnitTheme {
+                DiagnosticsScreenContent(
+                    state = state(),
+                    health = TransportHealth.Healthy,
+                    lastCrash = null,
+                    now = 0L,
+                    supervision = DeviceSupervision.FamilyLink,
+                    snackbarHostState = SnackbarHostState(),
+                    onBack = {},
+                    onRestartMesh = {},
+                    onScan = {},
+                    onOpenCrashLog = {},
+                    moderationLatched = false,
+                    onResetModeration = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("diagnostics_supervised").assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.diagnostics_supervised_family_link)).assertIsDisplayed()
     }
 
     @Test

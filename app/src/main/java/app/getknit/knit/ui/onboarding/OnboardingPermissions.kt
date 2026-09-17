@@ -19,8 +19,11 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.getknit.knit.ui.BackgroundBattery
+import app.getknit.knit.ui.DeviceSupervision
+import app.getknit.knit.ui.MeshPermissionTier
 import app.getknit.knit.ui.backgroundBattery
 import app.getknit.knit.ui.camera.openAppSettings
+import app.getknit.knit.ui.deviceSupervision
 import app.getknit.knit.ui.optionalNotificationPermission
 import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
 import app.getknit.knit.ui.requiredRadioPermissions
@@ -43,6 +46,11 @@ data class PermissionRows(
      * with its own hint. Wins over [batteryExempt], which can still read true underneath it.
      */
     val batteryRestricted: Boolean = false,
+    /**
+     * Who else administers this phone. Decides which "Open settings" hint a row shows — the one that names
+     * the parent or the administrator where they can actually hold that grant ([supervisedHint]).
+     */
+    val supervision: DeviceSupervision = DeviceSupervision.None,
 ) {
     companion object {
         /** A fresh install: nothing asked, nothing held. */
@@ -90,6 +98,40 @@ internal fun needsSettings(
     canAskAgain: (String) -> Boolean,
 ): Boolean = asked && missing.any { !canAskAgain(it) }
 
+/** The two rows whose grants somebody other than the user can hold; the battery row is never one. */
+internal enum class GrantRow { Radio, Notifications }
+
+/**
+ * Which "Open settings" hint the row shows on a phone somebody else administers, or `null` for Android's
+ * own "won't ask again" line. A policy-denied grant is indistinguishable from "don't ask again" from
+ * inside the app (ADR 2026-09.a8ud), so the hint can only be shown where that policy *could* be the cause:
+ *
+ * - **Family Link** offers a parent only the classic groups — Location, Camera, Microphone… — never
+ *   Nearby devices or Notifications. So the radio row can be parent-held only on the tiers that put
+ *   Location in it (API 29–32); on 33+ the generic line stays, and the notifications row is never theirs.
+ * - **Managed** (an EMM) can deny any runtime permission, so both rows name the administrator on every tier.
+ */
+internal fun supervisedHint(
+    supervision: DeviceSupervision,
+    tier: MeshPermissionTier,
+    row: GrantRow,
+): DeviceSupervision? =
+    when (supervision) {
+        DeviceSupervision.None -> {
+            null
+        }
+
+        DeviceSupervision.Managed -> {
+            DeviceSupervision.Managed
+        }
+
+        DeviceSupervision.FamilyLink -> {
+            DeviceSupervision.FamilyLink.takeIf {
+                row == GrantRow.Radio && tier != MeshPermissionTier.NEARBY_DEVICES
+            }
+        }
+    }
+
 /**
  * The permissions page's state: the three probes (radio set, notification grant, battery position), the two
  * permission launchers, and the battery / app-settings intents. Everything that needs an `Activity` or a
@@ -121,6 +163,7 @@ internal fun rememberOnboardingPermissions(sdkInt: Int = Build.VERSION.SDK_INT):
         val missingRadio = radioSet.filter { !context.holds(it) }
         val missingNotifications = listOfNotNull(notificationPermission).filter { !context.holds(it) }
         val battery = backgroundBattery(context)
+        val supervision = deviceSupervision(context)
         return PermissionRows(
             radioGranted = missingRadio.isEmpty(),
             radioNeedsSettings = needsSettings(radioAsked, missingRadio, ::canAskAgain),
@@ -128,6 +171,7 @@ internal fun rememberOnboardingPermissions(sdkInt: Int = Build.VERSION.SDK_INT):
             notificationsNeedSettings = needsSettings(notificationsAsked, missingNotifications, ::canAskAgain),
             batteryExempt = battery == BackgroundBattery.Unrestricted,
             batteryRestricted = battery == BackgroundBattery.Restricted,
+            supervision = supervision,
         )
     }
     var rows by remember { mutableStateOf(probe()) }

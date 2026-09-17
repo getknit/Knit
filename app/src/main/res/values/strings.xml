@@ -95,6 +95,8 @@
     <string name="onboarding_perm_battery_title">Background battery use</string>
     <string name="onboarding_perm_battery_body">Keeps the mesh running with the screen off. Without it, Android may pause Knit until you open it again.</string>
     <string name="onboarding_perm_denied_hint">Android won\'t ask again — allow it in Settings.</string>
+    <string name="onboarding_perm_denied_hint_family_link">Android won\'t ask again — allow it in Settings. If Settings greys it out as \"Disabled by admin\", a parent turned it off in Family Link; they can allow it under Controls › Signed-in devices › App permissions.</string>
+    <string name="onboarding_perm_denied_hint_managed">Android won\'t ask again — allow it in Settings. If Settings greys it out as \"Disabled by admin\", whoever manages this phone turned it off, and only they can allow it.</string>
     <string name="onboarding_perm_battery_restricted_hint">Knit is currently set to Restricted, so the mesh stops when you leave Knit. Pick Optimized or Unrestricted under App battery usage.</string>
     <string name="onboarding_optional">Optional</string>
     <string name="onboarding_allow">Allow</string>
@@ -241,6 +243,8 @@
     <string name="chat_voice_record_failed">Couldn\'t record that voice message</string>
     <string name="chat_voice_too_short">Hold the button to record</string>
     <string name="chat_voice_mic_denied">Knit needs microphone access to record a voice message.</string>
+    <string name="chat_voice_mic_denied_title">Microphone access is off</string>
+    <string name="chat_voice_mic_denied_settings">Turn on the microphone for Knit in Settings to record voice messages. Knit uses it only while you\'re recording.</string>
     <string name="chat_voice_play">Play voice message</string>
     <string name="chat_voice_pause">Pause voice message</string>
     <string name="chat_voice_loading">Voice message appears once a device that has it is reachable</string>
@@ -264,6 +268,9 @@
     <string name="chat_location_denied">Knit needs location access to send where you are.</string>
     <string name="chat_location_denied_title">Location access is off</string>
     <string name="chat_location_denied_settings">Turn on location for Knit in Settings to send where you are. Knit reads it only when you tap the pin.</string>
+    <!-- Appended to a permission's "Open settings" copy on a phone somebody else administers (ADR 2026-09.a8ud). -->
+    <string name="perm_denied_hint_family_link">If Settings greys it out as \"Disabled by admin\", a parent turned it off in Family Link — they can allow it under Controls › Signed-in devices › App permissions.</string>
+    <string name="perm_denied_hint_managed">If Settings greys it out as \"Disabled by admin\", whoever manages this phone turned it off, and only they can allow it.</string>
     <string name="chat_location_not_ready">Still finding your location</string>
     <string name="chat_location_card_label">Location</string>
     <string name="chat_location_card_desc">Location: %1$s, %2$s</string>
@@ -496,6 +503,8 @@
     <string name="battery_optimized">Background battery use: optimized — Android may pause the mesh while the screen is off.</string>
     <string name="battery_restricted">Background battery use: restricted — the mesh stops as soon as you leave Knit. Choose Optimized or Unrestricted to keep it running.</string>
     <string name="battery_allow_button">Allow background battery use</string>
+    <string name="settings_supervised_family_link">This phone is supervised with Family Link. Knit keeps meshing through app pauses and downtime; which permissions it can have is up to a parent.</string>
+    <string name="settings_supervised_managed">This phone is managed. Which permissions Knit can have is up to whoever manages it.</string>
     <string name="profile_avatar_crop_hint">Drag and pinch to adjust</string>
     <string name="profile_avatar_crop_desc">Adjust profile photo</string>
     <string name="profile_change_photo_desc">Change profile photo</string>
@@ -610,6 +619,8 @@
     <!-- Diagnostics -->
     <string name="diagnostics_title">Diagnostics</string>
     <string name="diagnostics_self">This device</string>
+    <string name="diagnostics_supervised_family_link">Supervised with Family Link</string>
+    <string name="diagnostics_supervised_managed">Managed phone</string>
     <string name="diagnostics_metrics">Mesh metrics</string>
     <string name="diagnostics_directly_connected">Directly connected (%1$d)</string>
     <string name="diagnostics_via_relay">Reachable via relay (%1$d)</string>

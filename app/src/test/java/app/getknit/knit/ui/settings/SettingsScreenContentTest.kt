@@ -19,6 +19,7 @@ import app.getknit.knit.R
 import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.BackgroundBattery
+import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.theme.KnitTheme
 import app.getknit.knit.ui.theme.ThemeMode
 import org.junit.Assert.assertEquals
@@ -63,6 +64,7 @@ class SettingsScreenContentTest {
         onOpenBatterySettings: () -> Unit = {},
         onOpenAbout: () -> Unit = {},
         onOpenLicenses: () -> Unit = {},
+        supervision: DeviceSupervision = DeviceSupervision.None,
     ) {
         compose.setContent {
             KnitTheme {
@@ -78,6 +80,7 @@ class SettingsScreenContentTest {
                             lora = lora,
                         ),
                     battery = battery,
+                    supervision = supervision,
                     onBack = {},
                     onOpenProfile = onOpenProfile,
                     onToggleContentFiltering = onToggleContentFiltering,
@@ -275,6 +278,30 @@ class SettingsScreenContentTest {
         compose.onNodeWithTag("settings_battery_settings").performScrollTo().performClick()
         assertEquals(1, opened)
         assertEquals(0, allowed)
+    }
+
+    /** A plain phone has nobody to name, so the supervision line is not there at all. */
+    @Test
+    fun aPlainPhoneShowsNoSupervisionLine() {
+        render()
+        compose.onNodeWithTag("settings_supervised").assertDoesNotExist()
+    }
+
+    /**
+     * A Family Link phone says so under the battery row, in the words the trial earned: the mesh keeps
+     * running through a pause, and a parent holds the permissions (ADR 2026-09.a8ud).
+     */
+    @Test
+    fun aFamilyLinkPhoneSaysSoUnderTheBatteryRow() {
+        render(supervision = DeviceSupervision.FamilyLink)
+        compose.onNodeWithTag("settings_supervised").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.settings_supervised_family_link)).assertIsDisplayed()
+    }
+
+    @Test
+    fun aManagedPhoneNamesItsAdministrator() {
+        render(supervision = DeviceSupervision.Managed)
+        compose.onNodeWithText(context.getString(R.string.settings_supervised_managed)).performScrollTo().assertIsDisplayed()
     }
 
     /** About and the licenses list sit behind the overflow: neither is a setting, so neither is a row. */

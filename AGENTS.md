@@ -88,6 +88,16 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   The battery row (here and in Settings) reads `ui/BackgroundBattery.kt`'s three-position enum, not the bare
   exemption — READ ADR 2026-09.gc3m before touching it: Restricted wins over a stale exemption, and no prompt
   of ours can lift it, so that state always lands on "Open settings".
+- **When touching `ui/DeviceSupervision.kt`, `ui/components/PermissionDeniedDialog`, the `settingsHint` of a
+  permission row, or the location / mic / camera gates' denial copy:** READ ADR 2026-09.a8ud. A parent's or
+  an administrator's denial (`POLICY_FIXED`) is indistinguishable from "don't ask again" from inside the
+  app, so the only signal is *who administers the phone* — Family Link by its pinned profile-owner package,
+  else any management signal — and every hint is conditional ("if Settings greys it out as Disabled by
+  admin", the platform's own wording). Family Link
+  can hold only the classic groups (never Nearby devices), so `supervisedHint` names a parent on the radio
+  row only where Location is in it; a managed phone is named everywhere. Family Link's pauses and downtime
+  leave the running foreground service alone (device-verified 2026-09-16) — don't add restart machinery
+  for them; `android.app.admin.*` / `UserManager` stay confined to that one file (detekt).
 - **When touching `data/draft/`, what the composer keeps between visits, or the chat list's `Draft: …`
   preview:** READ ADR 2026-09.qtg9. An unsent draft is a row in the encrypted DB (never the DataStore —
   it is message text), written debounced on the *application* scope, and handed to the composer exactly

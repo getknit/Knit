@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -34,6 +35,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import app.getknit.knit.R
+import app.getknit.knit.ui.DeviceSupervision
+import app.getknit.knit.ui.components.permissionDeniedHint
+import app.getknit.knit.ui.components.rememberDeviceSupervision
 import app.getknit.knit.ui.preview.KnitPreview
 
 /*
@@ -88,10 +92,13 @@ internal fun CameraGate(
             }
 
             asked -> {
+                // The gate can't tell a first refusal from a permanent one, so the administered-phone line
+                // is worded as a conditional ("if the switch is greyed out") and reads right either way.
                 CameraMessage(
                     message = deniedMessage,
                     onCancel = onCancel,
                     onOpenSettings = { openAppSettings(context) },
+                    hint = permissionDeniedHint(rememberDeviceSupervision()),
                 )
             }
 
@@ -102,12 +109,16 @@ internal fun CameraGate(
     }
 }
 
-/** Non-camera states (no hardware, permission refused, camera failed to open) — all previewable. */
+/**
+ * Non-camera states (no hardware, permission refused, camera failed to open) — all previewable. [hint] is
+ * the extra line a refusal carries on a phone somebody else administers (ADR 2026-09.a8ud).
+ */
 @Composable
 internal fun CameraMessage(
     message: String,
     onCancel: () -> Unit,
     onOpenSettings: (() -> Unit)? = null,
+    hint: String? = null,
 ) {
     Column(
         modifier =
@@ -123,6 +134,15 @@ internal fun CameraMessage(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+        if (hint != null) {
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.testTag("camera_denied_hint"),
+            )
+        }
         if (onOpenSettings != null) {
             Button(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.action_open_settings))
@@ -155,6 +175,18 @@ fun CameraDeniedPreview() =
             message = "Knit needs camera access to take a photo.",
             onCancel = {},
             onOpenSettings = {},
+        )
+    }
+
+@Preview(showBackground = true)
+@Composable
+fun CameraDeniedFamilyLinkPreview() =
+    KnitPreview {
+        CameraMessage(
+            message = "Knit needs camera access to take a photo.",
+            onCancel = {},
+            onOpenSettings = {},
+            hint = permissionDeniedHint(DeviceSupervision.FamilyLink),
         )
     }
 

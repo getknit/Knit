@@ -66,10 +66,13 @@ import app.getknit.knit.mesh.TransportStatus
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.mesh.spool.SpoolStatus
 import app.getknit.knit.mesh.spool.SpoolUrl
+import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.Reach
 import app.getknit.knit.ui.components.SectionHeader
+import app.getknit.knit.ui.deviceSupervision
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.preview.PREVIEW_NOW
+import app.getknit.knit.ui.rememberOnResume
 import app.getknit.knit.ui.theme.knitColors
 import app.getknit.knit.ui.util.compactTimeAgo
 import app.getknit.knit.ui.util.rememberCurrentTimeMillis
@@ -101,6 +104,8 @@ fun DiagnosticsScreen(
     // A ticking clock so each node's "profile updated N ago" label recomposes as time passes; a bare
     // System.currentTimeMillis() read would freeze at first composition (see rememberCurrentTimeMillis).
     val now by rememberCurrentTimeMillis()
+    val context = LocalContext.current
+    val supervision = rememberOnResume { deviceSupervision(context) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     // Resolve the action-feedback strings at composition (lint forbids LocalContext.getString here),
@@ -126,6 +131,7 @@ fun DiagnosticsScreen(
         lastCrash = lastCrash,
         moderationLatched = moderationLatched,
         now = now,
+        supervision = supervision,
         snackbarHostState = snackbarHostState,
         onBack = onBack,
         onRestartMesh = viewModel::restartMesh,
@@ -157,6 +163,8 @@ internal fun DiagnosticsScreenContent(
     moderationLatched: Boolean,
     now: Long,
     snackbarHostState: SnackbarHostState,
+    // Who else administers this phone (ADR 2026-09.a8ud); read in the stateful wrapper like `now`.
+    supervision: DeviceSupervision = DeviceSupervision.None,
     onBack: () -> Unit,
     onRestartMesh: () -> Unit,
     onScan: () -> Unit,
@@ -184,7 +192,7 @@ internal fun DiagnosticsScreenContent(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
-            item { SelfSection(name = state.myName, nodeId = state.myNodeId) }
+            item { SelfSection(name = state.myName, nodeId = state.myNodeId, supervision = supervision) }
 
             // Only when something was actually captured — the same conditional-row idiom MetricsSection
             // uses, so a phone that has never crashed sees this screen exactly as it was. It sits above
@@ -267,6 +275,7 @@ internal fun DiagnosticsScreenContent(
 private fun SelfSection(
     name: String,
     nodeId: String,
+    supervision: DeviceSupervision = DeviceSupervision.None,
 ) {
     SectionHeader(stringResource(R.string.diagnostics_self))
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
@@ -276,6 +285,22 @@ private fun SelfSection(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // Only on a phone somebody else administers — the line a "why is this permission greyed out"
+        // report needs, and nothing on the plain phone.
+        val supervisionLabel =
+            when (supervision) {
+                DeviceSupervision.None -> null
+                DeviceSupervision.FamilyLink -> R.string.diagnostics_supervised_family_link
+                DeviceSupervision.Managed -> R.string.diagnostics_supervised_managed
+            }
+        if (supervisionLabel != null) {
+            Text(
+                text = stringResource(supervisionLabel),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("diagnostics_supervised"),
+            )
+        }
     }
 }
 

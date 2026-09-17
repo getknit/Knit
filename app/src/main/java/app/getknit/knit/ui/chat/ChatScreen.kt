@@ -214,12 +214,12 @@ import app.getknit.knit.mesh.protocol.LinkPreviewBlob
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ReplyRef
 import app.getknit.knit.ui.camera.PhotoCapture
-import app.getknit.knit.ui.camera.openAppSettings
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.ConnectionStatusRow
 import app.getknit.knit.ui.components.GroupAvatar
 import app.getknit.knit.ui.components.KnitStitchIndicator
 import app.getknit.knit.ui.components.PeerNameText
+import app.getknit.knit.ui.components.PermissionDeniedDialog
 import app.getknit.knit.ui.components.RoomAvatar
 import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.components.skeletonBlockColor
@@ -407,22 +407,11 @@ fun ChatScreen(
         viewModel.locationPermissionNeeded.collect { locationGate.runOrRequest(viewModel::startLocation) }
     }
     if (locationDeniedForGood) {
-        AlertDialog(
-            onDismissRequest = { locationDeniedForGood = false },
-            icon = { Icon(Icons.Filled.LocationOn, contentDescription = null) },
-            title = { Text(stringResource(R.string.chat_location_denied_title)) },
-            text = { Text(stringResource(R.string.chat_location_denied_settings)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        locationDeniedForGood = false
-                        openAppSettings(context)
-                    },
-                ) { Text(stringResource(R.string.action_open_settings)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { locationDeniedForGood = false }) { Text(stringResource(R.string.action_cancel)) }
-            },
+        PermissionDeniedDialog(
+            icon = Icons.Filled.LocationOn,
+            title = R.string.chat_location_denied_title,
+            body = R.string.chat_location_denied_settings,
+            onDismiss = { locationDeniedForGood = false },
         )
     }
 
@@ -4170,7 +4159,27 @@ private fun MicButton(
 ) {
     val context = LocalContext.current
     val micDeniedMessage = stringResource(R.string.chat_voice_mic_denied)
-    val gate = rememberMicGate(onDenied = { Toast.makeText(context, micDeniedMessage, Toast.LENGTH_LONG).show() })
+    // A refusal Android will still ask about again is a toast; one it won't gets the settings dialog, the
+    // same split as the location pin above.
+    var micDeniedForGood by remember { mutableStateOf(false) }
+    val gate =
+        rememberMicGate(
+            onDenied = { permanently ->
+                if (permanently) {
+                    micDeniedForGood = true
+                } else {
+                    Toast.makeText(context, micDeniedMessage, Toast.LENGTH_LONG).show()
+                }
+            },
+        )
+    if (micDeniedForGood) {
+        PermissionDeniedDialog(
+            icon = Icons.Filled.Mic,
+            title = R.string.chat_voice_mic_denied_title,
+            body = R.string.chat_voice_mic_denied_settings,
+            onDismiss = { micDeniedForGood = false },
+        )
+    }
     if (!gate.hasMicrophone) return
 
     val holdLabel = stringResource(R.string.chat_voice_record)

@@ -57,6 +57,8 @@ style:
       - '**/linkpreview/OkHttpPreviewFetcher.kt' # the link-preview fetch (rules/mesh.md)
       - '**/location/AndroidLocationSource.kt'   # the one android.location importer (shares the list, so also exempt from the two bans above)
       - '**/transfer/AndroidDirectWifi.kt'       # the one android.net.wifi.p2p importer (direct file transfer)
+      - '**/ui/DeviceSupervision.kt'             # the one android.app.admin / UserManager importer (ADR 2026-09.a8ud)
+      - '**/ui/DeviceSupervisionTest.kt'         # ...and its Robolectric test, which sets the shadows up
     forbiddenImports:
       - value: 'android.graphics.BitmapFactory'
         reason: >-
@@ -78,6 +80,14 @@ style:
           The device's position is read in location/AndroidLocationSource.kt and nowhere else, behind the
           LocationSource seam: the only collector is the composer's staged tile, between the pin tap and the
           send, so a second importer would be a second place the app could read where the user is.
+      - value: 'android.app.admin.*'
+        reason: >-
+          Who administers the phone is read in ui/DeviceSupervision.kt and nowhere else, as one three-position
+          enum: the answer only ever names a parent or an administrator in copy, and a second reader would be a
+          second place to get the policy question subtly wrong. ADR 2026-09.a8ud.
+      - value: 'android.os.UserManager'
+        reason: >-
+          Same file, same reason as android.app.admin.* — the user-restriction read is half of that probe.
   MagicNumber:
     ignorePropertyDeclaration: true        # theme/Color.kt + Type.kt literals
     ignoreLocalVariableDeclaration: true

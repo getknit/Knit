@@ -36,6 +36,14 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   convergence), `.agents/context/e2e-encryption.md` (crypto). If a change can only be made by *breaking*
   the wire, don't — park it in `docs/NEXT_WIRE_BREAK.md` (the staging list, so a future break carries them
   all at once) and find the additive route per `docs/WIRE_COMPAT.md`.
+- **When touching `mesh/bluetooth/BleSideChannel`, `SideCarousel`, `SideScanPolicy`, `SideCapableTracker`,
+  `BleFastRoutePolicy`, `BleAdvertPayload`'s flags byte, or `BluetoothMeshTransport.fastFanout`/`fastSend`:**
+  READ ADR 2026-09.sjaa and the "page carousel" section of `.agents/context/mesh-transport.md`. The BLE side
+  channel carries `shouldFastFanout` frames on non-connectable extended-advertising pages — one
+  `FastFrameCodec` unit per 236-B page, never a chain, never presence, never a DM-form frame — gated per
+  peer on the advert's flags byte and dark in release behind `BuildConfig.BLE_SIDE_PLANE` until its device
+  trial (CHECK `.agents/memory/roadmap.md`). `hasFastPlane` is now true for Bluetooth: the link copy the
+  composite used to send lives inside the transport's `fastFanout`/`fastSend`; don't add it back upstream.
 - **When touching `mesh/lora/` or `mesh/bluetooth/meshtastic/` (the LoRa/Meshtastic bridge):** READ
   `.agents/context/lora-bridge.md` — a Meshtastic board over BLE GATT extends the **Nearby room and 1:1
   DMs** over LoRa as a fast-plane-only `MeshTransport` child, shipped visible since 2.5.0 behind

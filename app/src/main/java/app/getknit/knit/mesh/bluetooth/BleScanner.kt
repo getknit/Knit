@@ -1,11 +1,13 @@
 package app.getknit.knit.mesh.bluetooth
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.os.ParcelUuid
 
 /**
  * Thin wrapper over [BluetoothLeScanner]: a service-data-filtered scan whose results are forwarded to
@@ -25,6 +27,11 @@ internal class BleScanner(
     private val scannerProvider: () -> BluetoothLeScanner?,
     private val onResult: (ScanResult) -> Unit,
     private val log: (String) -> Unit,
+    private val serviceUuid: ParcelUuid = BleConstants.SERVICE_UUID,
+    // The side channel's scan ([BleSideChannel]): extended results (`setLegacy(false)` — a legacy scan cannot
+    // decode an ADV_EXT_IND) on the 1M PHY only (PHY_LE_ALL_SUPPORTED would time-share the window with Coded).
+    private val extended: Boolean = false,
+    private val onFailed: (Int) -> Unit = {},
 ) {
     private val callback =
         object : ScanCallback() {
@@ -42,11 +49,15 @@ internal class BleScanner(
             override fun onScanFailed(errorCode: Int) {
                 scanning = false
                 log("scan failed: $errorCode")
+                onFailed(errorCode)
             }
         }
 
     @Volatile
     private var scanning = false
+
+    /** Whether a scan is registered right now (false again after `onScanFailed` or [stop]). */
+    val isScanning: Boolean get() = scanning
 
     // The scanner instance the live scan was started on, so [stop] targets the same one even if the provider
     // would now hand back a different (post-toggle) instance.
@@ -60,6 +71,7 @@ internal class BleScanner(
                 .Builder()
                 .setScanMode(scanMode)
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                .apply { if (extended) setLegacy(false).setPhy(BluetoothDevice.PHY_LE_1M) }
                 .build()
         // Filter on the presence of service data for our UUID, not a service-UUID list AD — the advert carries
         // no such list AD (it was dropped to make budget room for the 16-byte raw nodeId; see [BleAdvertiser]).
@@ -69,7 +81,7 @@ internal class BleScanner(
             listOf(
                 ScanFilter
                     .Builder()
-                    .setServiceData(BleConstants.SERVICE_UUID, byteArrayOf(), byteArrayOf())
+                    .setServiceData(serviceUuid, byteArrayOf(), byteArrayOf())
                     .build(),
             )
         runCatching { s.startScan(filters, settings, callback) }

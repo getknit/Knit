@@ -102,7 +102,13 @@ if one ever happens they all ride it together and no single item has to justify 
 > needs **no** `SERVICE_NAME` bump; old builds count-and-drop unknown non-printable tags. The compact
 > form's preset deflate dictionary `DICT_V1` is frozen (golden-hash-pinned); tuning mints `DICT_V2` under a
 > fresh dictId, never edits V1. The transcoder's schema 1 is frozen the same way (golden vectors + label
-> map): a richer schema is a new tag.
+> map): a richer schema is a new tag. The **BLE side channel** (`mesh/bluetooth/BleSideChannel`, ADR
+> 2026-09.sjaa) carries the same `0x03`/`0x04`/`0x05` units, one per extended-advertising page under
+> `BleConstants.SIDE_SERVICE_UUID` (`0xFE38`; page UUIDs count up from there, presence UUIDs from `0xFE30`).
+> Its gate is not a capability bit but the BLE-local **flags byte** the presence advert grew
+> (`BleAdvertPayload` 23 → 24 B, `FLAG_SIDE_CHANNEL`): additive, because the older parser ignores trailing
+> bytes and the older scan filter matches service data of any length, and an older build's legacy scan
+> cannot decode an extended advert at all.
 
 > **Pre-1.0 alpha history.** The precedents below (DB v19 / v21 / v22) document the coordinated wire/discovery
 > breaks taken *during pre-release alpha*, when the app had no installed base and every schema bump wiped

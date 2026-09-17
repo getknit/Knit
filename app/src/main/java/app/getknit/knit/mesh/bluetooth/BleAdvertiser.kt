@@ -1,11 +1,13 @@
 package app.getknit.knit.mesh.bluetooth
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertisingSet
 import android.bluetooth.le.AdvertisingSetCallback
 import android.bluetooth.le.AdvertisingSetParameters
 import android.bluetooth.le.BluetoothLeAdvertiser
+import android.os.ParcelUuid
 
 /**
  * Thin wrapper over [BluetoothLeAdvertiser] for the coordination plane: connectable advertising of the
@@ -23,10 +25,12 @@ import android.bluetooth.le.BluetoothLeAdvertiser
  * and its L2CAP connect silently timed out, indefinitely (a linked peer holds its socket, so it never noticed).
  * The set API's atomic data update closes that divergence: the advertised PSM can never lag the server socket.
  *
- * [setLegacyMode] is required, not incidental: extended advertising is invisible to legacy-only scanners
- * (e.g. the API-30 lab device), and legacy mode keeps the payload on the same 31-byte budget [BleAdvertPayload]
- * is sized for. Permission is gated at onboarding and the transport self-degrades on denial, so the radio calls
- * are [SuppressLint] "MissingPermission".
+ * For the presence advert ([presenceParams]) `setLegacyMode` is required, not incidental: extended advertising
+ * is invisible to legacy-only scanners (e.g. the API-30 lab device), and legacy mode keeps the payload on the
+ * same 31-byte budget [BleAdvertPayload] is sized for. The same wrapper also raises the side channel's sets
+ * ([sideParams], [BleSideChannel]): non-connectable, non-scannable **extended** sets under their own
+ * [serviceUuid], whose payload is swapped in place exactly as the presence cue is. Permission is gated at
+ * onboarding and the transport self-degrades on denial, so the radio calls are [SuppressLint] "MissingPermission".
  */
 @SuppressLint("MissingPermission")
 internal class BleAdvertiser(
@@ -35,6 +39,11 @@ internal class BleAdvertiser(
     // advertising survive an adapter toggle / BT-stack restart without a process restart.
     private val advertiserProvider: () -> BluetoothLeAdvertiser?,
     private val log: (String) -> Unit,
+    private val serviceUuid: ParcelUuid = BleConstants.SERVICE_UUID,
+    private val params: AdvertisingSetParameters = presenceParams(),
+    // The start outcome (`AdvertisingSetCallback.ADVERTISE_SUCCESS` or the failure code), for a caller that
+    // degrades on it — the side channel drops a slot on TOO_MANY_ADVERTISERS and goes dark on FEATURE_UNSUPPORTED.
+    private val onStartStatus: (Int) -> Unit = {},
 ) {
     // All mutable state below is guarded by [lock]: [update]/[stop] run on the mesh scope while the callback
     // fires on a binder thread, and they race over the set handle + the start-in-flight bookkeeping.
@@ -66,8 +75,10 @@ internal class BleAdvertiser(
                         advertisingSet = null
                         current = null
                         pendingData = null
+                        onStartStatus(status)
                         return
                     }
+                    onStartStatus(status)
                     advertisingSet = set
                     log("advertising")
                     // Apply the newest payload that arrived while we were mid-start (a fresher cue/PSM), so the
@@ -123,25 +134,22 @@ internal class BleAdvertiser(
         adv: BluetoothLeAdvertiser,
         serviceData: ByteArray,
     ) {
-        val params =
-            AdvertisingSetParameters
-                .Builder()
-                .setLegacyMode(true) // legacy PDUs so legacy-only scanners (e.g. the API-30 device) can see us
-                .setConnectable(true) // an initiator opens the L2CAP channel to us
-                .setScannable(true) // legacy connectable adverts are inherently scannable
-                .setInterval(AdvertisingSetParameters.INTERVAL_HIGH) // ~1s: always-on, low power (was LOW_POWER)
-                .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
-                .build()
         starting = true
         pendingData = null
         current = adv
+        // Throws synchronously for a payload past the controller's advertising-data maximum (an extended set on
+        // a controller without the feature reads that maximum as 31), so the failure is reported like any other.
         runCatching { adv.startAdvertisingSet(params, dataFor(serviceData), null, null, null, callback) }
             .onFailure {
                 starting = false
                 current = null
                 log("advertising set start threw: ${it.message}")
+                onStartStatus(AdvertisingSetCallback.ADVERTISE_FAILED_INTERNAL_ERROR)
             }
     }
+
+    /** Whether a set is up or coming up — the side channel reads it to count its live slots. */
+    val active: Boolean get() = synchronized(lock) { advertisingSet != null || starting }
 
     fun stop() {
         val adv = current ?: return
@@ -161,6 +169,38 @@ internal class BleAdvertiser(
     private fun dataFor(serviceData: ByteArray): AdvertiseData =
         AdvertiseData
             .Builder()
-            .addServiceData(BleConstants.SERVICE_UUID, serviceData)
+            .addServiceData(serviceUuid, serviceData)
             .build()
+
+    companion object {
+        /** The always-on presence cue: legacy, connectable, slow. */
+        fun presenceParams(): AdvertisingSetParameters =
+            AdvertisingSetParameters
+                .Builder()
+                .setLegacyMode(true) // legacy PDUs so legacy-only scanners (e.g. the API-30 device) can see us
+                .setConnectable(true) // an initiator opens the L2CAP channel to us
+                .setScannable(true) // legacy connectable adverts are inherently scannable
+                .setInterval(AdvertisingSetParameters.INTERVAL_HIGH) // ~1s: always-on, low power (was LOW_POWER)
+                .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
+                .build()
+
+        /**
+         * A side-channel page set ([BleSideChannel]): extended (the page is past the legacy 31-byte budget),
+         * non-connectable and non-scannable (the presence cue is what an initiator dials; a page carries no PSM),
+         * 1M on both PHYs (2M would reach less far than the presence advert at the same power, so a peer could be
+         * sighted with the flag and never hear a page), ~250 ms so a LOW_POWER scanner's 512 ms window sees
+         * about two events, MEDIUM power so a page reaches no further than the sighting that gated it.
+         */
+        fun sideParams(): AdvertisingSetParameters =
+            AdvertisingSetParameters
+                .Builder()
+                .setLegacyMode(false)
+                .setConnectable(false)
+                .setScannable(false)
+                .setPrimaryPhy(BluetoothDevice.PHY_LE_1M)
+                .setSecondaryPhy(BluetoothDevice.PHY_LE_1M)
+                .setInterval(AdvertisingSetParameters.INTERVAL_MEDIUM)
+                .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
+                .build()
+    }
 }

@@ -7,8 +7,8 @@ import java.util.zip.Inflater
 
 /**
  * Compact re-encoding of a fast-path [WireEnvelope] for a size-capped side channel (the Wi-Fi Aware
- * coordination-plane `sendMessage`, ~255 B/message; the planned BLE extended-advertising analogue rides
- * the same format — knit/knit-next#13). **Transport-local, not a wire change**: only the outer envelope
+ * coordination-plane `sendMessage`, ~255 B/message; the BLE extended-advertising page,
+ * `mesh/bluetooth/BleSideChannel`, 236 B/page — knit/knit-next#13). **Transport-local, not a wire change**: only the outer envelope
  * (whose `ttl`/`hops`/`relay` are unsigned, mutable routing metadata every relayer already rewrites) is
  * re-framed; [WireEnvelope.sig] and [WireEnvelope.signed] pass through **byte-for-byte**, so the
  * originator's Ed25519 signature verifies unchanged at the endpoint. Senders emit these tags only

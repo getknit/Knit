@@ -4,6 +4,7 @@ import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.DmAckCoalescer
 import app.getknit.knit.mesh.INLINE_ACK_BYTES
 import app.getknit.knit.mesh.MAX_INLINE_ACKS
+import app.getknit.knit.mesh.bluetooth.BleSideChannel
 import app.getknit.knit.mesh.crypto.MessageContent
 import app.getknit.knit.mesh.crypto.MessageCrypto
 import app.getknit.knit.mesh.crypto.PublicKeyBundle
@@ -56,6 +57,7 @@ import kotlin.random.Random
  * plane and what silently no-ops — not hand-derived CBOR arithmetic. Prints a size table so codec/dict
  * work (`mesh/link/FastFrameCodec`) can be tuned against the same fixtures.
  */
+@Suppress("LargeClass") // one fixture set (party/sealer/frames) pinned against every size-capped plane; splitting would scatter it
 class CoordinationPlaneSizeBudgetTest {
     /** A device identity: its cipher (private keys), its public bundle, and the nodeId it derives to. */
     private class Party(
@@ -864,6 +866,47 @@ class CoordinationPlaneSizeBudgetTest {
                     attachmentKey = "k".repeat(44),
                 ),
             ),
+        )
+    }
+
+    // --- budgets: the BLE side channel (one extended-advertising page = one AUX PDU, <= 3 fragments; #13) ---
+
+    /** Page count for [wire] on the BLE side channel (the transcoded form), or null when nothing fits <= 3. */
+    private fun sidePages(wire: WireEnvelope): Int? {
+        val best = FastFrameCodec.encodeBest(wire, transcode = true) ?: return null
+        if (best.frame.size <= BleSideChannel.PAGE_BYTES) return 1
+        return FastFrameCodec.fragment(best.frame, BleSideChannel.PAGE_BYTES, fragId = 1)?.size
+    }
+
+    /**
+     * What `shouldFastFanout` admits — the plaintext room, the cleartext metadata, the profile, plus the room
+     * typing cue — is what the page carries; DM-form frames (the sealed tick, a DM) never ride it. Pin that the
+     * interactive set is one page each and the bootstrap profile stays inside the fragment ceiling, so a change
+     * to the frame shapes or the page budget shows up here before it shows up as a silent `bleSideTooBig`.
+     */
+    @Test
+    fun theInteractiveSetRidesOneSidePageEachAndTheProfileFitsTheCeiling() {
+        val alice = party()
+        val receipt = checkNotNull(sidePages(cleartextReceipt(alice)))
+        val reaction = checkNotNull(sidePages(cleartextReaction(alice, "👍")))
+        val typing = checkNotNull(sidePages(typingGroup(alice)))
+        val short = checkNotNull(sidePages(broadcastChat(alice, "See you at the north gate")))
+        val long = checkNotNull(sidePages(broadcastChat(alice, "x".repeat(200))))
+        val profile = checkNotNull(sidePages(fullProfile(alice, RatchetCrypto.generateKeyPair())))
+        println(
+            "side-budget: receipt=$receipt reaction=$reaction typing=$typing post40=$short post200=$long " +
+                "profile=$profile (page ${BleSideChannel.PAGE_BYTES}B, ceiling " +
+                "${FastFrameCodec.MAX_PARTS * (BleSideChannel.PAGE_BYTES - FastFrameCodec.FRAG_HEADER_BYTES)}B)",
+        )
+        assertEquals("a cleartext receipt is one page", 1, receipt)
+        assertEquals("a cleartext reaction is one page", 1, reaction)
+        assertEquals("a typing cue is one page", 1, typing)
+        assertEquals("a 40-char room post is one page", 1, short)
+        assertTrue("a 200-char room post fits the ceiling", long <= FastFrameCodec.MAX_PARTS)
+        assertTrue("the profile bootstrap fits the ceiling (was $profile)", profile <= FastFrameCodec.MAX_PARTS)
+        assertTrue(
+            "a page is one AUX PDU: under the 251-B HCI fragment and the 252-B AD structure",
+            BleSideChannel.PAGE_BYTES + BleSideChannel.AD_OVERHEAD <= 251,
         )
     }
 

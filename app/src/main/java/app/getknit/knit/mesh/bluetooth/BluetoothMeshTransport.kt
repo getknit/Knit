@@ -17,6 +17,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import app.getknit.knit.identity.Identity
+import app.getknit.knit.mesh.BleSideDrop
 import app.getknit.knit.mesh.ConnectFailReason
 import app.getknit.knit.mesh.FileMeta
 import app.getknit.knit.mesh.InboundFrame
@@ -36,6 +37,7 @@ import app.getknit.knit.mesh.link.LinkHandshake
 import app.getknit.knit.mesh.power.PowerPolicy
 import app.getknit.knit.mesh.power.PowerStateSource
 import app.getknit.knit.mesh.protocol.Protocol
+import app.getknit.knit.mesh.protocol.RelayEnvelope
 import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.CoroutineScope
@@ -63,15 +65,21 @@ import java.util.concurrent.atomic.AtomicBoolean
  * whole point (the dense-venue case): peers who stay near each other get responsive, always-on messaging
  * without data-path churn. It also serves as a legacy plane for phones lacking Wi-Fi Aware hardware.
  *
- * Two planes, like NAN but simpler:
- * - **Coordination** — BLE advertising ([BleAdvertiser]) of a 16-byte [BleAdvertPayload] (nodeId + caps +
- *   digest cue + L2CAP PSM) and duty-cycled scanning ([BleScanner]); every scan hit feeds [BlePresenceTracker]
- *   (smoothed RSSI, dwell, linger). Identity is the advertised nodeId, so a rotated BLE random address is
- *   transparent.
+ * Three planes, like NAN's two plus one:
+ * - **Coordination** — BLE advertising ([BleAdvertiser]) of the 24-byte [BleAdvertPayload] (nodeId + caps +
+ *   digest cue + L2CAP PSM + flags) and duty-cycled scanning ([BleScanner]); every scan hit feeds
+ *   [BlePresenceTracker] (smoothed RSSI, dwell, linger). Identity is the advertised nodeId, so a rotated BLE
+ *   random address is transparent.
  * - **Data** — an L2CAP CoC socket per linked peer. The [PromotionPolicy] promotes a peer to a persistent link
  *   once it has dwelled long enough and is close enough (RSSI), bounded by a connection budget with
  *   weakest-first eviction. Each socket feeds the shared [FramedLink] (frames + files + store-and-forward
  *   digests, identical to NAN).
+ * - **Side channel** ([BleSideChannel], optional — null while the build keeps it dark) — the fast plane
+ *   ([hasFastPlane]): small floodable frames on non-connectable extended-advertising pages, connectionless,
+ *   so they bypass a file transfer head-of-line-blocking a stream and reach a sighted-but-unlinked peer.
+ *   [fastFanout] keeps the link copy the composite used to send for us and adds the page; [fastSend] is the
+ *   link only — nothing DM-form rides a broadcast carrier. Gated per peer on the advert flag
+ *   ([SideCapableTracker]); the receive scan runs only while such a peer is around ([SideScanPolicy]).
  *
  * Insecure/pairless L2CAP (no system pairing dialog): real authentication is the per-frame Ed25519 signature +
  * E2E layer above the transport, so link-layer bonding is redundant. Permissions are gated at onboarding and
@@ -89,6 +97,9 @@ class BluetoothMeshTransport(
     // Lets the Meshtastic board dial (a GATT connect on this same controller) pause our scan for its short
     // connect window, exactly as our own in-flight L2CAP connects do. Shared Koin singleton.
     private val arbiter: BleConnectArbiter = BleConnectArbiter(),
+    // The side channel, or null while `BuildConfig.BLE_SIDE_PLANE` keeps it dark — the one seam; nothing
+    // downstream gates on the flag again.
+    private val sideChannel: BleSideChannel? = null,
 ) : MeshTransport {
     private val appContext = context.applicationContext
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
@@ -101,8 +112,8 @@ class BluetoothMeshTransport(
     // crash/auto-restart) without a process restart. Caching the handles once — as this used to — silently
     // detached the plane from the stack after any such flap (zero scanner/advertiser registration, reach=[]
     // forever) until the app was killed.
-    private val advertiser = BleAdvertiser({ adapter?.bluetoothLeAdvertiser }) { Log.d(TAG, it) }
-    private val scanner = BleScanner({ adapter?.bluetoothLeScanner }, ::onScanResult) { Log.d(TAG, it) }
+    private val advertiser = BleAdvertiser({ adapter?.bluetoothLeAdvertiser }, log = { Log.d(TAG, it) })
+    private val scanner = BleScanner({ adapter?.bluetoothLeScanner }, ::onScanResult, log = { Log.d(TAG, it) })
 
     // Live L2CAP links, keyed by peer nodeId (many, unlike NAN's ≤1).
     private val links = ConcurrentHashMap<String, FramedLink>()
@@ -144,6 +155,10 @@ class BluetoothMeshTransport(
 
     override val kind = TransportKind.Bluetooth
 
+    // The fast path is routed here (not turned into a plain send by the composite): [fastFanout]/[fastSend]
+    // replicate the link copy the composite sent and add the side-channel page where it applies.
+    override val hasFastPlane = true
+
     // Diagnostic-only: reflects A2DP-audio activity so the Diagnostics BLE row can flag a contended radio.
     override val radioContended = audioMonitor.contended
 
@@ -172,6 +187,13 @@ class BluetoothMeshTransport(
 
     @Volatile private var scanFloored: Boolean? = null
 
+    // Side channel: which sighted/linked peers advertise the flag, the loop that keeps its scan tier right,
+    // and the tier last logged. [sideWake] is its own conflated channel for the same reason [scanWake] is.
+    private val sideCapable = SideCapableTracker()
+    private val sideWake = Channel<Unit>(Channel.CONFLATED)
+
+    @Volatile private var sideTierLogged: SideScanPolicy.Tier? = null
+
     private var acceptJob: Job? = null
     private var scanJob: Job? = null
     private var connectJob: Job? = null
@@ -180,6 +202,29 @@ class BluetoothMeshTransport(
     private var diagJob: Job? = null
     private var audioJob: Job? = null
     private var arbiterJob: Job? = null
+    private var sideJob: Job? = null
+
+    // A frame heard off a side-channel page enters exactly where a link frame does; the author is the hop
+    // (a page carries no hop identity), which is the LoRa plane's rule too. Our own frame relayed back is dropped.
+    private val sideListener =
+        object : BleSideChannel.Listener {
+            override fun onFrame(
+                wire: WireEnvelope,
+                env: RelayEnvelope,
+            ) {
+                if (env.senderId == localNodeIdOrEmpty()) {
+                    metrics.onBleSideDropped(BleSideDrop.OWN_ECHO)
+                    return
+                }
+                Log.i(TAG, "ble-side heard ${env.type} id=${env.id} from=${env.senderId}")
+                _inbound.tryEmit(InboundFrame(wire, env, env.senderId))
+            }
+
+            override fun onAvailabilityChanged() {
+                readvertise() // the flag follows `live`
+                wakeSide()
+            }
+        }
 
     // Forwards a live link's decoded records into our flows and its teardown into [teardownLink].
     private val linkCallbacks =
@@ -237,6 +282,10 @@ class BluetoothMeshTransport(
             audioJob = scope.launch { audioMonitor.contended.drop(1).collect { wakeScan() } }
             // The board dial holds an arbiter slot; wake the scan on release so it resumes without waiting out the gap.
             arbiterJob = scope.launch { arbiter.busy.drop(1).collect { wakeScan() } }
+            sideChannel?.let {
+                it.bind(sideListener)
+                sideJob = scope.launch { sideScanLoop(it) }
+            }
         }
     }
 
@@ -248,6 +297,8 @@ class BluetoothMeshTransport(
         diagJob?.cancel()
         audioJob?.cancel()
         arbiterJob?.cancel()
+        sideJob?.cancel()
+        sideCapable.clear()
         unregisterAvailability()
         audioMonitor.stop()
         tearDownRadio()
@@ -286,6 +337,35 @@ class BluetoothMeshTransport(
         targets.forEach { it.send(bytes) } // FramedLink.send accounts the bytes
     }
 
+    /**
+     * The fan-out arm of the fast path: the link copy to every linked peer (what [app.getknit.knit.mesh.CompositeMeshTransport]
+     * sent on our behalf while this plane declared no fast plane — a typing cue is never flooded, so this is how
+     * it reaches a linked peer), plus a side-channel page when the channel is live and a flagged peer is around.
+     * Eligibility is the caller's `shouldFastFanout`; the page never widens or narrows it. `FramedLink.send` is
+     * a non-suspending enqueue, so no launch is needed.
+     */
+    override fun fastFanout(wire: WireEnvelope) {
+        val env = WireCodec.decodeEnvelope(wire.signed) ?: return
+        val side = sideChannel
+        val sideAvailable = side != null && side.live && sideCapable.anyCapable(elapsed(), links.keys)
+        val route = BleFastRoutePolicy.fanout(env, links.keys, sideAvailable)
+        val bytes = WireCodec.encodeWire(wire)
+        route.linkTargets.forEach { links[it]?.send(bytes) }
+        val offer = route.side ?: return
+        if (side?.offer(wire, env, offer.kind, offer.coalesceKey) == null) metrics.onBleSideTooBig()
+    }
+
+    /** The targeted arm: the linked addressee over its link, never a page (a DM-form frame has one recipient). */
+    override fun fastSend(
+        wire: WireEnvelope,
+        to: Peer,
+    ) {
+        val route = BleFastRoutePolicy.send(to.nodeId, links.keys)
+        if (route.linkTargets.isEmpty()) return
+        val bytes = WireCodec.encodeWire(wire)
+        route.linkTargets.forEach { links[it]?.send(bytes) }
+    }
+
     override suspend fun sendFile(
         file: java.io.File,
         to: Peer,
@@ -307,8 +387,10 @@ class BluetoothMeshTransport(
 
     private fun bringUp() {
         openServer()
+        sideChannel?.bringUp() // probes the controller first, so the advert below already carries its flag
         readvertise()
         _health.value = TransportHealth.Healthy
+        wakeSide()
     }
 
     private fun openServer() {
@@ -336,13 +418,15 @@ class BluetoothMeshTransport(
     private fun tearDownRadio() {
         advertiser.stop()
         scanner.stop()
+        sideChannel?.tearDown()
         closeServer()
     }
 
     private fun readvertise() {
         if (adapter?.isEnabled != true || currentPsm == 0 || !::localNodeId.isInitialized) return
+        val flags = if (sideChannel?.live == true) BleAdvertPayload.FLAG_SIDE_CHANNEL else 0
         advertiser.update(
-            BleAdvertPayload.encode(localNodeId, Protocol.LOCAL_CAPABILITIES, storeDigest.current(), currentPsm),
+            BleAdvertPayload.encode(localNodeId, Protocol.LOCAL_CAPABILITIES, storeDigest.current(), currentPsm, flags),
         )
     }
 
@@ -432,6 +516,11 @@ class BluetoothMeshTransport(
             elapsed(),
         )
         publishReachable()
+        if (sideChannel != null) {
+            val before = sideCapable.anyCapable(elapsed(), links.keys)
+            sideCapable.note(parsed.nodeId, parsed.sideChannel, elapsed())
+            if (sideCapable.anyCapable(elapsed(), links.keys) != before) wakeSide()
+        }
         healSignal.trySend(Unit) // connectLoop: react to every sighting to drive promotion
         // scanLoop: wake ONLY for a genuine boost trigger. Waking on every sighting (incl. already-linked peers)
         // is what keeps a settled clique scanning continuously — gating here is what lets the floor engage.
@@ -655,13 +744,17 @@ class BluetoothMeshTransport(
         var nextAt: Long = 0L,
     )
 
-    private fun beginConnect(nodeId: String): Boolean =
-        synchronized(lock) {
-            if (nodeId in links.keys || nodeId in inFlight) return false
-            backoffs[nodeId]?.let { if (elapsed() < it.nextAt) return false }
-            inFlight.add(nodeId)
-            true
-        }
+    private fun beginConnect(nodeId: String): Boolean {
+        val begun =
+            synchronized(lock) {
+                if (nodeId in links.keys || nodeId in inFlight) return false
+                backoffs[nodeId]?.let { if (elapsed() < it.nextAt) return false }
+                inFlight.add(nodeId)
+                true
+            }
+        if (begun) wakeSide() // the side scan stops for the connect window (scanning starves connects)
+        return begun
+    }
 
     private fun failConnect(
         nodeId: String,
@@ -742,6 +835,7 @@ class BluetoothMeshTransport(
                             tearDownRadio()
                             presence.clear()
                             deviceFor.clear()
+                            sideCapable.clear()
                             synchronized(lock) {
                                 inFlight.clear()
                                 backoffs.clear()
@@ -798,11 +892,44 @@ class BluetoothMeshTransport(
     private fun wake() {
         healSignal.trySend(Unit)
         scanWake.trySend(Unit)
+        sideWake.trySend(Unit)
     }
 
     /** Wake only the scan loop — a scan-cadence event (a boost trigger sighted, a foreign peer, an audio change). */
     private fun wakeScan() {
         scanWake.trySend(Unit)
+        sideWake.trySend(Unit)
+    }
+
+    /** Wake the side channel's loop — its inputs changed (a flagged peer came or went, availability flipped). */
+    private fun wakeSide() {
+        sideWake.trySend(Unit)
+    }
+
+    /**
+     * Keeps the side channel's scan at the tier [SideScanPolicy] wants. Its own loop, not [scanLoop]'s: that
+     * one sleeps for minutes at the floor, while this one must react to a connect starting (scanning starves
+     * connects) and to a flagged peer appearing. Re-asks every [SIDE_TICK_MS] regardless, which is also how a
+     * start deferred by the shared scan budget gets retried and the periodic restart lands.
+     */
+    private suspend fun sideScanLoop(side: BleSideChannel) {
+        while (scope.isActive) {
+            val inputs =
+                SideScanPolicy.Inputs(
+                    live = side.live && adapter?.isEnabled == true,
+                    capableNearby = sideCapable.anyCapable(elapsed(), links.keys),
+                    connectBusy = inFlightSnapshot().isNotEmpty() || arbiter.busy.value,
+                    audioContended = audioMonitor.contended.value,
+                    power = powerState.state.value,
+                )
+            val tier = SideScanPolicy.decide(inputs)
+            side.applyScanTier(tier)
+            if (sideTierLogged != tier) {
+                sideTierLogged = tier
+                Log.d(TAG, "ble-side want=$tier applied=${side.scanTier} capable=${inputs.capableNearby} busy=${inputs.connectBusy}")
+            }
+            withTimeoutOrNull(SIDE_TICK_MS) { sideWake.receive() }
+        }
     }
 
     /**
@@ -848,7 +975,8 @@ class BluetoothMeshTransport(
         Log.d(
             TAG,
             "bt state links=${links.keys} reach=${_reachable.value.map { it.nodeId }} " +
-                "inFlight=${inFlightSnapshot()} backoff=[$backoffStr] a2dp=${audioMonitor.state.value} psm=$currentPsm",
+                "inFlight=${inFlightSnapshot()} backoff=[$backoffStr] a2dp=${audioMonitor.state.value} psm=$currentPsm" +
+                (sideChannel?.let { " ${it.diag()}" } ?: ""),
         )
     }
 
@@ -900,6 +1028,10 @@ class BluetoothMeshTransport(
         private const val CUE_READVERTISE_DEBOUNCE_MS = 1_500L
 
         private const val MS_PER_S = 1_000L
+
+        // How often the side channel's loop re-asks its scan policy when nothing woke it (also the retry cadence
+        // for a start the shared scan budget deferred).
+        private const val SIDE_TICK_MS = 10_000L
 
         // RSSI stand-in for a link whose peer is no longer being sighted (so it sorts as the weakest to evict).
         private const val ABSENT_LINK_RSSI = -127.0

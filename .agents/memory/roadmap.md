@@ -44,6 +44,12 @@ doc). **Don't start a deferred item without explicit direction.**
   unused**, it is the replacement for the symptom this removed (a wedge now presents as "works, slightly
   worse" rather than stopping DMs). Group-form chat and the spool plane are deliberately untouched.
 
+- **The BLE side channel is BUILT** (2026-09-16, ADR 2026-09.sjaa; knit/knit-next#13) — the BLE analogue of
+  the NAN coordination plane's fast fan-out: `shouldFastFanout` frames plus room typing on non-connectable
+  extended-advertising pages (`mesh/bluetooth/BleSideChannel`, one `FastFrameCodec` unit per 236-B page,
+  two sets, 12 s dwell), gated per peer on the flags byte the presence advert grew (`BleAdvertPayload`
+  23 → 24 B). Internal to `BluetoothMeshTransport`, which now declares `hasFastPlane`. Debug-only until the
+  trial below runs.
 - **The Bluetooth LE plane is implemented** (`mesh/bluetooth/`) and runs *simultaneously* with Wi-Fi Aware
   behind `CompositeMeshTransport` (wired in `di/MeshModule.kt`): BLE advertise/scan presence + persistent
   L2CAP CoC data links, *preferred* over NAN's ephemeral NDP, with per-peer escalating connect backoff and
@@ -485,15 +491,15 @@ doc). **Don't start a deferred item without explicit direction.**
   a few seconds of local speaker playback that contends for nothing. Harmless while the flag is
   instrumentation-only; gating connects on it as-is would stall the mesh every time someone listens to a
   message. The gate needs to distinguish a real A2DP route from any active stream.
-- **Connectionless BLE side-channel for small frames** — the BLE analogue of the NAN coordination/fast-fanout
-  plane: carry small floodable frames (broadcast chat, receipts, reactions, typing) over BLE **extended
-  advertising** so they bypass an in-flight L2CAP file transfer entirely instead of head-of-line-queuing
-  behind it on the one ordered stream. The shipped `TransferPacePolicy` feed-cap (`FramedLink.paceBytesPerSec`)
-  *mitigates* the stall by pacing the blob feed below link capacity; this would *structurally* split
-  interactive frames from bulk. DMs stay on L2CAP. See knit/knit-next#13. The frame-codec half now
-  exists (2026-08-21): `mesh/link/FastFrameCodec` (compact `0x03` / fragment `0x04`, ADR 030) is
-  transport-neutral by design — this item still needs the ext-adv carrier plus its cap gate (BLE
-  adverts carry the low 8 capability bits, which covers `CAP_FAST_COMPACT = 0x20`).
+- **BLE side channel: the release flag** — the carrier is BUILT (2026-09-16, ADR 2026-09.sjaa;
+  knit/knit-next#13) and device-trialled on three lab phones (2026-09-17: every controller 1650-B extended
+  advertising, 20/20 and 12/12 pages caught screen-on, 11/12 screen-off, the #13 case delivering the
+  bystander's posts off a page while the sender's link copies lagged, no link slowdown from airing pages —
+  numbers in the ADR). Still dark in a shipped artifact (`BuildConfig.BLE_SIDE_PLANE`, debug on / release off)
+  until: one night's battery on a settled clique against the dark build, and a sighted-but-unlinked peer
+  (this lab links everyone — needs a link budget saturated or a phone in connect backoff). Trial knobs
+  deferred with it: a third slot (two saturate at one part per 6 s), a shorter dwell for screen-on rooms,
+  2M secondary PHY, hold-until-echoed dwell, DM-form frames on a page (issue scope: DMs stay on L2CAP).
 - **Frame compaction: what round 2 (ADR 060, the `0x05` transcoder) left** — round 1 (ADR 059, crypto v3)
   and round 2 (ADR 060: a schema-aware re-encoding of `signed` the receiver rebuilds byte-exact before
   verifying) both landed 2026-08-29; measured after: signed v3 ✓✓ tick **221 B, one packet at 228/231/255**,

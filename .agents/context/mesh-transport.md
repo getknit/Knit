@@ -202,4 +202,29 @@ BLE `reachable` is fed only from scan presence (90 s linger), so once the floor 
 linked peer it would vanish from the "nearby" UI while still linked — `publishReachable` unions live
 links back in (`_reachable` only, never `_neighbors`, which routes sends). Verify on-device via the
 `bt scan → floor/boost` logcat lines and that a linked peer stays in `…debug.STATE` reachable while the
-scan is floored.
+scan is floored. The side channel below runs a **second** scan with its own policy (`SideScanPolicy`):
+continuous at LOW_POWER/BALANCED while a flagged peer is around, Off during a connect, and rationed to
+one start per 30 s because Android's five-starts-per-30 s budget is per app and this scan shares it.
+
+## The BLE side channel is a page carousel, not a message queue (ADR 2026-09.sjaa)
+
+`mesh/bluetooth/BleSideChannel` is the BLE analogue of the NAN coordination plane's fast fan-out
+(knit/knit-next#13): the `shouldFastFanout` frames — room chat, reactions, receipts, group meta, profiles,
+plus the room typing cue — ride **non-connectable extended-advertising pages** under
+`BleConstants.SIDE_SERVICE_UUID` (`0xFE38`), connectionless and scheduled by the controller apart from the
+ACL, so they bypass a blob head-of-line-blocking the L2CAP stream and reach a sighted-but-unlinked peer.
+It lives *inside* `BluetoothMeshTransport` (which now declares `hasFastPlane`; `fastFanout` keeps the link
+copy the composite used to send and adds the page, `fastSend` is the link only — nothing DM-form rides a
+broadcast carrier), gated by `BuildConfig.BLE_SIDE_PLANE` (debug on, release off) through one seam: the
+`BleSideChannel?` DI hands the transport. A page is **one** `FastFrameCodec` unit (`0x03`/`0x05`, or one
+`0x04` fragment) ≤ `PAGE_BYTES` = 236 B — one AUX PDU, because an AD structure caps at 252 B, an in-place
+update on a live set must be one HCI operation, and a chained page is lost whole. `SideCarousel` (pure)
+rotates the queue through `SLOTS` = 2 sets: a 12 s dwell from first air (one screen-off scan interval),
+a 30 s linger when nothing waits, fewer-part frames first, a started frame finishes first, typing
+coalesced per sender, 30 s freshness, capacity 32. The gate is a BLE-local **flags byte** the presence
+advert grew (`BleAdvertPayload` 23 → 24 B, the last byte of the 31-byte budget; `FLAG_SIDE_CHANNEL` set
+only while the controller passed its extended-advertising probe), tracked by `SideCapableTracker` with a
+10-min linger *or* a live link, since presence prunes at 90 s. A page carries no hop id and is never
+presence (each set has its own RPA; `fromNodeId` is the author, ADR 038's rule); fragments reassemble by
+fragment id, seeded at random per process. Grep `ble-side` (bring-up probe, `offer`, `heard`, `rx →`);
+counters `bleSide*` on `…debug.STATE`. Device trial owed before the release flag flips — the ADR lists it.

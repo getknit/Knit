@@ -189,8 +189,9 @@ The BLE plane runs **simultaneously** with Wi-Fi Aware behind `CompositeMeshTran
 **many** links at once, so it needs no single-slot cue dance; it is also the mesh plane for phones with
 no Wi-Fi Aware hardware.
 
-- **Presence** — connectable BLE advertising of a fixed 23-byte service-data payload
-  (`BleAdvertPayload`: capabilities, the nodeId's raw 16 bytes, digest cue, L2CAP PSM) under a versioned
+- **Presence** — connectable BLE advertising of a fixed 24-byte service-data payload
+  (`BleAdvertPayload`: capabilities, the nodeId's raw 16 bytes, digest cue, L2CAP PSM, a BLE-local flags
+  byte) under a versioned
   16-bit service UUID (`BleConstants.SERVICE_UUID`, bumped on every breaking wire change to hard-partition
   at discovery; the layout/version is implied by the UUID, so there is no format-version byte). The advert
   carries **only** the service-data AD — no separate service-UUID-list AD — so the 16 raw id bytes still
@@ -208,6 +209,14 @@ no Wi-Fi Aware hardware.
   `CompositeMeshTransport.onForeignReachable`, BLE boosts its scan to chase a peer another plane already
   sees onto the cheaper persistent link. `BluetoothAudioMonitor` flags A2DP-audio contention
   (diagnostic-only today; the connect-time gate is deferred — §18).
+- **Side channel** (`BleSideChannel`, ADR 2026-09.sjaa; `BuildConfig.BLE_SIDE_PLANE`, debug-only until its
+  device trial) — the BLE analogue of NAN's fast fan-out: small floodable frames on non-connectable
+  extended-advertising pages (one `FastFrameCodec` unit per page, ≤ 236 B, under a second service UUID),
+  connectionless so they bypass a blob head-of-line-blocking the L2CAP stream and reach a sighted-but-unlinked
+  peer. `SideCarousel` schedules two advertising sets (12 s dwell, fewer-part frames first, typing coalesced);
+  `SideScanPolicy` runs the second, filtered scan only while a peer advertising the flags byte is around.
+  The transport declares `hasFastPlane`: `fastFanout` keeps the link copy and adds the page; `fastSend` never
+  uses a page.
 
 ### 3.3 Routing, dedup & duplicate-suppressed flooding (`mesh/MeshRouter.kt`, `mesh/SeenSet.kt`)
 

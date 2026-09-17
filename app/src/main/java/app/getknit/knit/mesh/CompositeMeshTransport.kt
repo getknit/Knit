@@ -32,9 +32,9 @@ import java.io.File
  *   downstream by `MeshRouter`'s `SeenSet` (10-min TTL), so simultaneous multi-path delivery is safe and free.
  * - [send]: for a specific peer, route to the preferred child holding a live link to it; for a broadcast
  *   (`to == null`), reach each merged neighbor once over its preferred child.
- * - [fastFanout]/[fastSend]: the coordination-plane fast path goes to children that have one ([hasFastPlane],
- *   Wi-Fi Aware); a link-based child (Bluetooth) instead gets a normal [send] over its persistent links, which
- *   already reaches every live neighbor at once.
+ * - [fastFanout]/[fastSend]: the coordination-plane fast path goes to children that have one ([hasFastPlane]:
+ *   Wi-Fi Aware, Bluetooth with its side channel, LoRa); a link-based child without one instead gets a normal
+ *   [send] over its persistent links, which already reaches every live neighbor at once.
  *
  * A 0- or 1-child list is handled gracefully (empty ⇒ inert + Degraded; single ⇒ transparent pass-through),
  * so DI can gate each plane on hardware support and hand over whatever is present.

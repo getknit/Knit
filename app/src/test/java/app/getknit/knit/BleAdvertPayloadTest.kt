@@ -4,6 +4,7 @@ import app.getknit.knit.identity.NodeId
 import app.getknit.knit.mesh.bluetooth.BleAdvertPayload
 import app.getknit.knit.mesh.protocol.Protocol
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,20 +50,35 @@ class BleAdvertPayloadTest {
 
     @Test
     fun payloadFitsALegacyAdvertisementBudget() {
-        // 23-byte service data + Flags(3) + Service-Data-16bit AD header(4) = 30/31. There is NO separate
-        // service-UUID-list AD — it was dropped to free the 4 bytes the 16 raw id bytes need; the scanner
-        // filters on the service data instead.
-        assertEquals(1 + NodeId.BYTES + 4 + 2, BleAdvertPayload.SIZE)
-        assertEquals(23, BleAdvertPayload.SIZE)
+        // 24-byte service data + Flags(3) + Service-Data-16bit AD header(4) = 31/31: the flags byte took the
+        // last spare byte. There is NO separate service-UUID-list AD — it was dropped to free the 4 bytes the
+        // 16 raw id bytes need; the scanner filters on the service data instead.
+        assertEquals(1 + NodeId.BYTES + 4 + 2, BleAdvertPayload.SIZE_V1)
+        assertEquals(23, BleAdvertPayload.SIZE_V1)
+        assertEquals(24, BleAdvertPayload.SIZE)
         val advOverhead = 3 + 4 // Flags + service-data AD header (16-bit UUID)
         assertTrue("payload + AD overhead must fit 31 bytes", BleAdvertPayload.SIZE + advOverhead <= 31)
+    }
+
+    @Test
+    fun theFlagsByteRoundTripsAndAnOlderAdvertReadsAsUnflagged() {
+        val flagged = BleAdvertPayload.encode(nodeA, 0L, 0L, 1, flags = BleAdvertPayload.FLAG_SIDE_CHANNEL)
+        assertEquals(BleAdvertPayload.SIZE, flagged.size)
+        assertTrue(BleAdvertPayload.parse(flagged)!!.sideChannel)
+        assertFalse(BleAdvertPayload.parse(BleAdvertPayload.encode(nodeA, 0L, 0L, 1))!!.sideChannel)
+        // A build before the flags byte advertises 23 bytes: the same fields, no flag — never a parse failure.
+        val older = flagged.copyOf(BleAdvertPayload.SIZE_V1)
+        val p = BleAdvertPayload.parse(older)!!
+        assertEquals(nodeA, p.nodeId)
+        assertEquals(0, p.flags)
+        assertFalse(p.sideChannel)
     }
 
     @Test
     fun shortOrNullDataDecodesToNull() {
         assertNull(BleAdvertPayload.parse(null))
         assertNull(BleAdvertPayload.parse(ByteArray(10)))
-        assertNull(BleAdvertPayload.parse(ByteArray(BleAdvertPayload.SIZE - 1)))
+        assertNull(BleAdvertPayload.parse(ByteArray(BleAdvertPayload.SIZE_V1 - 1)))
     }
 
     @Test

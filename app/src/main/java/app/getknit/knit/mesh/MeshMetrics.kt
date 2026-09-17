@@ -158,6 +158,36 @@ enum class FastPathDrop {
 }
 
 /**
+ * Why the BLE side channel (`mesh/bluetooth/BleSideChannel`, the extended-advertising page carrier) discarded
+ * a frame. Surfaced in [MeshMetrics.Snapshot.bleSideDropsByReason]: STALE/OVERFLOW climbing means the pages
+ * cannot keep up with what is offered (two slots at a ~12 s dwell is the whole capacity); FRAG_TIMEOUT means
+ * a part of a multi-part frame was never heard (range edge, a scanner window that missed it); DECODE_FAILED
+ * with volume means a framing mismatch, or two senders' fragments with one id were assembled together.
+ */
+enum class BleSideDrop {
+    /** A queued frame outlived its freshness before a slot freed up. */
+    STALE,
+
+    /** The bounded queue shed its oldest unstarted frame for a newer one. */
+    OVERFLOW,
+
+    /** A page whose first byte is no tag this build knows. */
+    UNKNOWN_TAG,
+
+    /** A page (or a reassembled set) failed to decode into a frame. */
+    DECODE_FAILED,
+
+    /** A fragment set never completed inside the reassembly window. */
+    FRAG_TIMEOUT,
+
+    /** The bounded reassembly store evicted the oldest incomplete entry for a newer one. */
+    FRAG_OVERFLOW,
+
+    /** A page carrying our own frame came back (a relay of it) — never delivered to ourselves. */
+    OWN_ECHO,
+}
+
+/**
  * Thread-safe counters for mesh transmission, so the effect of flood suppression and the CBOR wire
  * format is measurable in the field. Pure JVM (no Android dependencies) so it can live in [mesh] and
  * be asserted from the same unit tests as [MeshRouter].
@@ -232,6 +262,13 @@ class MeshMetrics {
     private val fastTranscodedSent = AtomicLong()
     private val transcodeFallbacks = AtomicLong()
     private val fastDrops: Map<FastPathDrop, AtomicLong> = FastPathDrop.entries.associateWith { AtomicLong() }
+    private val bleSideOffered = AtomicLong()
+    private val bleSidePartsAired = AtomicLong()
+    private val bleSideTooBig = AtomicLong()
+    private val bleSideHeard = AtomicLong()
+    private val bleSideReassembled = AtomicLong()
+    private val bleSideDeduped = AtomicLong()
+    private val bleSideDrops: Map<BleSideDrop, AtomicLong> = BleSideDrop.entries.associateWith { AtomicLong() }
     private val spoolPushed = AtomicLong()
     private val spoolPulled = AtomicLong()
     private val spoolBridged = AtomicLong()
@@ -600,6 +637,41 @@ class MeshMetrics {
         fastDrops.getValue(reason).incrementAndGet()
     }
 
+    /** A fast frame was accepted onto the BLE side channel's queue (`BleSideChannel.offer`). */
+    fun onBleSideOffered() {
+        bleSideOffered.incrementAndGet()
+    }
+
+    /** A page (one frame, or one fragment of one) went on air on a side-channel advertising set. */
+    fun onBleSidePartAired() {
+        bleSidePartsAired.incrementAndGet()
+    }
+
+    /** A frame offered to the side channel fit no page even fragmented — it rides the links and the flood only. */
+    fun onBleSideTooBig() {
+        bleSideTooBig.incrementAndGet()
+    }
+
+    /** A frame was heard off a side-channel page and handed to the router (after the channel's own dedup). */
+    fun onBleSideHeard() {
+        bleSideHeard.incrementAndGet()
+    }
+
+    /** A multi-part side-channel frame reassembled completely. */
+    fun onBleSideReassembled() {
+        bleSideReassembled.incrementAndGet()
+    }
+
+    /** A page or frame the channel had already heard inside its window (the same part airs for its whole dwell). */
+    fun onBleSideDeduped() {
+        bleSideDeduped.incrementAndGet()
+    }
+
+    /** The side channel discarded a frame — see [BleSideDrop] for how to read each reason. */
+    fun onBleSideDropped(reason: BleSideDrop) {
+        bleSideDrops.getValue(reason).incrementAndGet()
+    }
+
     /**
      * A file (avatar/attachment) was accepted onto a live link on [transport]'s plane — the per-radio split
      * that shows whether large blobs are riding the NAN fast path or falling back to BLE.
@@ -964,6 +1036,13 @@ class MeshMetrics {
             fastTranscodedSent = fastTranscodedSent.get(),
             transcodeFallbacks = transcodeFallbacks.get(),
             fastDropsByReason = fastDrops.mapValues { it.value.get() }.filterValues { it > 0 },
+            bleSideOffered = bleSideOffered.get(),
+            bleSidePartsAired = bleSidePartsAired.get(),
+            bleSideTooBig = bleSideTooBig.get(),
+            bleSideHeard = bleSideHeard.get(),
+            bleSideReassembled = bleSideReassembled.get(),
+            bleSideDeduped = bleSideDeduped.get(),
+            bleSideDropsByReason = bleSideDrops.mapValues { it.value.get() }.filterValues { it > 0 },
             spoolPushed = spoolPushed.get(),
             spoolPulled = spoolPulled.get(),
             spoolBridged = spoolBridged.get(),
@@ -1072,6 +1151,13 @@ class MeshMetrics {
         val fastTranscodedSent: Long = 0,
         val transcodeFallbacks: Long = 0,
         val fastDropsByReason: Map<FastPathDrop, Long> = emptyMap(),
+        val bleSideOffered: Long = 0,
+        val bleSidePartsAired: Long = 0,
+        val bleSideTooBig: Long = 0,
+        val bleSideHeard: Long = 0,
+        val bleSideReassembled: Long = 0,
+        val bleSideDeduped: Long = 0,
+        val bleSideDropsByReason: Map<BleSideDrop, Long> = emptyMap(),
         val spoolPushed: Long = 0,
         val spoolPulled: Long = 0,
         val spoolBridged: Long = 0,

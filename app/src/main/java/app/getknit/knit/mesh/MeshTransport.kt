@@ -172,9 +172,10 @@ interface MeshTransport {
 
     /**
      * True if this transport has a **coordination plane** — a small best-effort message channel that reaches
-     * neighbors with no data path (Wi-Fi Aware cues) — so [CompositeMeshTransport] routes the fast path
-     * ([fastFanout]/[fastSend]) here. A transport whose reliable [send] already rides persistent links
-     * (Bluetooth) leaves this false: for it, a normal [send] over its live links *is* the fast path.
+     * neighbors with no data path (Wi-Fi Aware cues, the BLE side channel's advertising pages) — so
+     * [CompositeMeshTransport] routes the fast path ([fastFanout]/[fastSend]) here rather than turning it
+     * into a plain [send]. A transport whose reliable [send] rides persistent links and declares this
+     * (Bluetooth) sends that link copy itself inside [fastFanout]/[fastSend], side channel or not.
      */
     val hasFastPlane: Boolean get() = false
 

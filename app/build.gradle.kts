@@ -88,6 +88,14 @@ val loraPlane = (project.findProperty("loraPlane") as? String)?.toBoolean()
 // when the feature is introduced, the way ADR 064 and ADR 2026-09.6gtm did for the two planes.
 val commons = (project.findProperty("commons") as? String)?.toBoolean()
 
+// The BLE side channel (small floodable frames on non-connectable extended-advertising pages, knit/knit-next#13)
+// — the same kind of visibility switch at the start of its life: ON in debug, OFF in a shipped artifact,
+// overridable with `-PbleSidePlane=true|false`. It gates the one seam, the `BleSideChannel` the DI hands
+// `BluetoothMeshTransport` (null while dark: no page is ever aired or listened for, and the presence advert
+// carries no flag). Not a code strip (R8 prunes the `if (BLE_SIDE_PLANE)` branch), and the defaults live in
+// source so F-Droid's -P-free rebuild stays identical. Flip the release default after the device trial.
+val bleSidePlane = (project.findProperty("bleSidePlane") as? String)?.toBoolean()
+
 // ABIs packaged into the **debug** APK. Debug is unminified and carries both tflite models, so it is
 // ~150 MB before native libs; the four-ABI default adds ~28 MB more, of which the two 32-bit slices are
 // dead weight — every lab Pixel is arm64-v8a and every Gradle-managed emulator image is x86_64, so
@@ -219,6 +227,8 @@ android {
         buildConfigField("boolean", "LORA_PLANE", (loraPlane ?: true).toString())
         // The commons is ON here so the unit suite and the lab run the real thing; see `commons` above.
         buildConfigField("boolean", "COMMONS", (commons ?: true).toString())
+        // The BLE side channel is ON in debug so a lab build airs and hears pages; see `bleSidePlane` above.
+        buildConfigField("boolean", "BLE_SIDE_PLANE", (bleSidePlane ?: true).toString())
         // Fault injection for the model poison-pill's acceptance test (ADR 037):
         // `-PmodelFaultOnLoad=segv` raises SIGSEGV, `=kill` sends SIGKILL, inside ModelLoadGuard right
         // after the in-flight marker is durably written. They test opposite things: only `segv` produces
@@ -310,6 +320,8 @@ android {
             // The commons is not introduced yet: a shipped artifact hides it (`-Pcommons=true` lights it
             // for a maintainer build). Staging and nonMinifiedRelease inherit this through initWith.
             buildConfigField("boolean", "COMMONS", (commons ?: false).toString())
+            // The BLE side channel is not introduced yet: dark in a shipped artifact until its device trial.
+            buildConfigField("boolean", "BLE_SIDE_PLANE", (bleSidePlane ?: false).toString())
             // Never ship a fault injector, whatever `-PmodelFaultOnLoad` said.
             buildConfigField("String", "MODEL_FAULT_ON_LOAD", "\"\"")
             // Unsigned when no keystore.properties / KNIT_UPLOAD_* creds are present (see signingConfigs).

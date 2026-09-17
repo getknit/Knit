@@ -26,6 +26,7 @@ import app.getknit.knit.mesh.ProfileFrameSource
 import app.getknit.knit.mesh.PublicChannelSink
 import app.getknit.knit.mesh.StoreDigest
 import app.getknit.knit.mesh.bluetooth.BleConnectArbiter
+import app.getknit.knit.mesh.bluetooth.BleSideChannel
 import app.getknit.knit.mesh.bluetooth.BluetoothMeshTransport
 import app.getknit.knit.mesh.bluetooth.meshtastic.BondedBoardDirectory
 import app.getknit.knit.mesh.bluetooth.meshtastic.MeshtasticGatt
@@ -101,7 +102,14 @@ val meshModule =
                     buildList {
                         // Descending send-preference: Bluetooth (persistent links) first, then Wi-Fi Aware (ephemeral).
                         if (BluetoothMeshTransport.isSupported(ctx)) {
-                            add(BluetoothMeshTransport(ctx, get(), get(), get(), get(), get(), get()))
+                            // The side channel is the one seam its flag gates: null keeps every page dark.
+                            val sideChannel =
+                                if (BuildConfig.BLE_SIDE_PLANE) {
+                                    BleSideChannel(ctx, get(), get(), log = { msg -> Log.d("BleSideChannel", msg) })
+                                } else {
+                                    null
+                                }
+                            add(BluetoothMeshTransport(ctx, get(), get(), get(), get(), get(), get(), sideChannel))
                         }
                         // WifiAwareTransport is @RequiresApi(31) (its NDP accept-any responder is API 31). The
                         // explicit SDK_INT guard — redundant with isSupported()'s own — is what lint reads to

@@ -19,6 +19,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.R
 import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.MeshPermissionTier
+import app.getknit.knit.ui.UnusedAppPause
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -47,6 +48,7 @@ class OnboardingScreenContentTest {
         var notifications = 0
         var battery = 0
         var settings = 0
+        var unused = 0
         var ready = 0
         var typed = ""
     }
@@ -78,6 +80,7 @@ class OnboardingScreenContentTest {
                     onAllowBattery = { calls.battery++ },
                     onOpenSettings = { calls.settings++ },
                     onReady = { calls.ready++ },
+                    onOpenUnusedPauseSettings = { calls.unused++ },
                 )
             }
         }
@@ -177,6 +180,37 @@ class OnboardingScreenContentTest {
         assertEquals(0, calls.battery)
         // Still optional: Start does not care.
         compose.onNodeWithTag("onboarding_start").assertIsEnabled()
+    }
+
+    /** Android 10 has no unused-app switch, so a phone that reports none draws no row for it. */
+    @Test
+    fun theUnusedAppRowIsAbsentWhereThePlatformHasNoSwitch() {
+        render(OnboardingStep.PERMISSIONS, rows = PermissionRows.ALL)
+        compose.onNodeWithText(context.getString(R.string.onboarding_perm_unused_title)).assertDoesNotExist()
+    }
+
+    /**
+     * The unused-app switch has no dialog: while it is on (the platform default, so nothing is coloured as
+     * an error) the row offers only its own settings page, through its own callback — not the generic
+     * app-settings one, since Android 11 keeps the switch on a page of its own — and Start does not care.
+     */
+    @Test
+    fun theUnusedAppRowOffersItsOwnSettingsWhileTheSwitchIsOn() {
+        val calls = render(OnboardingStep.PERMISSIONS, rows = PermissionRows.ALL.copy(unusedPause = UnusedAppPause.On))
+        compose.onNodeWithTag("onboarding_unused").assertDoesNotExist()
+        compose.onNodeWithTag("onboarding_unused_granted", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.onboarding_perm_unused_hint)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("onboarding_unused_settings").performScrollTo().performClick()
+        assertEquals(1, calls.unused)
+        assertEquals(0, calls.settings)
+        compose.onNodeWithTag("onboarding_start").assertIsEnabled()
+    }
+
+    @Test
+    fun theUnusedAppRowShowsTheCheckOnceTheSwitchIsOff() {
+        render(OnboardingStep.PERMISSIONS, rows = PermissionRows.ALL.copy(unusedPause = UnusedAppPause.Off))
+        compose.onNodeWithTag("onboarding_unused_granted", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("onboarding_unused_settings").assertDoesNotExist()
     }
 
     @Test

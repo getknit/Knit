@@ -98,6 +98,9 @@
     <string name="onboarding_perm_denied_hint_family_link">Android won\'t ask again — allow it in Settings. If Settings greys it out as \"Disabled by admin\", a parent turned it off in Family Link; they can allow it under Controls › Signed-in devices › App permissions.</string>
     <string name="onboarding_perm_denied_hint_managed">Android won\'t ask again — allow it in Settings. If Settings greys it out as \"Disabled by admin\", whoever manages this phone turned it off, and only they can allow it.</string>
     <string name="onboarding_perm_battery_restricted_hint">Knit is currently set to Restricted, so the mesh stops when you leave Knit. Pick Optimized or Unrestricted under App battery usage.</string>
+    <string name="onboarding_perm_unused_title">Keep permissions while unused</string>
+    <string name="onboarding_perm_unused_body">Android takes an app\'s permissions back after a few months without use. Meshing counts as use, so this only matters if you stop the mesh and leave Knit alone for a while.</string>
+    <string name="onboarding_perm_unused_hint">Turn off \"Pause app activity if unused\" on Knit\'s app info page.</string>
     <string name="onboarding_optional">Optional</string>
     <string name="onboarding_allow">Allow</string>
     <!-- Screen-reader labels for the per-row buttons; %1$s is the row title ("Allow, Nearby devices") -->
@@ -504,6 +507,8 @@
     <string name="battery_optimized">Background battery use: optimized — Android may pause the mesh while the screen is off.</string>
     <string name="battery_restricted">Background battery use: restricted — the mesh stops as soon as you leave Knit. Choose Optimized or Unrestricted to keep it running.</string>
     <string name="battery_allow_button">Allow background battery use</string>
+    <string name="unused_pause_off">Permissions while unused: kept.</string>
+    <string name="unused_pause_on">Permissions while unused: Android takes them back after a few months without use. Meshing counts as use; turn off \"Pause app activity if unused\" to keep them regardless.</string>
     <string name="settings_supervised_family_link">This phone is supervised with Family Link. Knit keeps meshing through app pauses and downtime; which permissions it can have is up to a parent.</string>
     <string name="settings_supervised_managed">This phone is managed. Which permissions Knit can have is up to whoever manages it.</string>
     <string name="profile_avatar_crop_hint">Drag and pinch to adjust</string>

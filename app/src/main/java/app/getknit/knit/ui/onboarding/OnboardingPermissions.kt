@@ -21,12 +21,15 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.getknit.knit.ui.BackgroundBattery
 import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.MeshPermissionTier
+import app.getknit.knit.ui.UnusedAppPause
 import app.getknit.knit.ui.backgroundBattery
 import app.getknit.knit.ui.camera.openAppSettings
 import app.getknit.knit.ui.deviceSupervision
+import app.getknit.knit.ui.openUnusedAppPauseSettings
 import app.getknit.knit.ui.optionalNotificationPermission
 import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
 import app.getknit.knit.ui.requiredRadioPermissions
+import app.getknit.knit.ui.unusedAppPause
 
 /**
  * What the permissions page draws. SDK-free on purpose: the holder below resolves the API tier, so the page
@@ -51,6 +54,12 @@ data class PermissionRows(
      * the parent or the administrator where they can actually hold that grant ([supervisedHint]).
      */
     val supervision: DeviceSupervision = DeviceSupervision.None,
+    /**
+     * Android's "Pause app activity if unused" switch, which takes the grants back after months without
+     * use; `null` where the platform has no such switch (Android 10) and the row is not drawn. Its only
+     * action is "Open settings" — there is no dialog for it — and it never touches Start.
+     */
+    val unusedPause: UnusedAppPause? = null,
 ) {
     companion object {
         /** A fresh install: nothing asked, nothing held. */
@@ -75,7 +84,7 @@ data class PermissionRows(
     }
 }
 
-/** The rows plus the four things a row can do. Handed to the page by [rememberOnboardingPermissions]. */
+/** The rows plus the five things a row can do. Handed to the page by [rememberOnboardingPermissions]. */
 @Stable
 class OnboardingPermissions(
     val rows: PermissionRows,
@@ -83,6 +92,7 @@ class OnboardingPermissions(
     val requestNotifications: () -> Unit,
     val requestBattery: () -> Unit,
     val openSettings: () -> Unit,
+    val openUnusedPauseSettings: () -> Unit,
 )
 
 /**
@@ -133,9 +143,10 @@ internal fun supervisedHint(
     }
 
 /**
- * The permissions page's state: the three probes (radio set, notification grant, battery position), the two
- * permission launchers, and the battery / app-settings intents. Everything that needs an `Activity` or a
- * `Context` lives here rather than in the ViewModel, in the `rememberLocationGate` / `MicGate` idiom.
+ * The permissions page's state: the four probes (radio set, notification grant, battery position, the
+ * unused-app switch), the two permission launchers, and the battery / app-settings intents. Everything
+ * that needs an `Activity` or a `Context` lives here rather than in the ViewModel, in the
+ * `rememberLocationGate` / `MicGate` idiom.
  *
  * The probes are re-read on every launcher result **and** on every resume: the system permission dialog,
  * the battery dialog and the app-info Settings page are all separate activities, so coming back from any of
@@ -172,6 +183,7 @@ internal fun rememberOnboardingPermissions(sdkInt: Int = Build.VERSION.SDK_INT):
             batteryExempt = battery == BackgroundBattery.Unrestricted,
             batteryRestricted = battery == BackgroundBattery.Restricted,
             supervision = supervision,
+            unusedPause = unusedAppPause(context),
         )
     }
     var rows by remember { mutableStateOf(probe()) }
@@ -199,6 +211,7 @@ internal fun rememberOnboardingPermissions(sdkInt: Int = Build.VERSION.SDK_INT):
         requestNotifications = { notificationPermission?.let(notificationLauncher::launch) },
         requestBattery = { requestIgnoreBatteryOptimizations(context) },
         openSettings = { openAppSettings(context) },
+        openUnusedPauseSettings = { openUnusedAppPauseSettings(context) },
     )
 }
 

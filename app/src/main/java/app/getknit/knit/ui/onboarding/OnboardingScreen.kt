@@ -92,6 +92,7 @@ fun OnboardingScreen(
         onRequestRadio = permissions.requestRadio,
         onRequestNotifications = permissions.requestNotifications,
         onAllowBattery = permissions.requestBattery,
+        onOpenUnusedPauseSettings = permissions.openUnusedPauseSettings,
         onOpenSettings = permissions.openSettings,
         onReady = onReady,
     )
@@ -122,6 +123,7 @@ internal fun OnboardingScreenContent(
     onAllowBattery: () -> Unit,
     onOpenSettings: () -> Unit,
     onReady: () -> Unit,
+    onOpenUnusedPauseSettings: () -> Unit = {},
 ) {
     BackHandler(enabled = step != OnboardingStep.WELCOME, onBack = onBack)
     val enterForward = KnitMotion.enterStep(forward = true)
@@ -179,6 +181,7 @@ internal fun OnboardingScreenContent(
                         onRequestNotifications = onRequestNotifications,
                         onAllowBattery = onAllowBattery,
                         onOpenSettings = onOpenSettings,
+                        onOpenUnusedPauseSettings = onOpenUnusedPauseSettings,
                     )
                 }
             }

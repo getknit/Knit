@@ -20,6 +20,7 @@ import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.BackgroundBattery
 import app.getknit.knit.ui.DeviceSupervision
+import app.getknit.knit.ui.UnusedAppPause
 import app.getknit.knit.ui.theme.KnitTheme
 import app.getknit.knit.ui.theme.ThemeMode
 import org.junit.Assert.assertEquals
@@ -65,6 +66,8 @@ class SettingsScreenContentTest {
         onOpenAbout: () -> Unit = {},
         onOpenLicenses: () -> Unit = {},
         supervision: DeviceSupervision = DeviceSupervision.None,
+        unusedPause: UnusedAppPause? = null,
+        onOpenUnusedPauseSettings: () -> Unit = {},
     ) {
         compose.setContent {
             KnitTheme {
@@ -96,6 +99,8 @@ class SettingsScreenContentTest {
                     onOpenBatterySettings = onOpenBatterySettings,
                     onOpenAbout = onOpenAbout,
                     onOpenLicenses = onOpenLicenses,
+                    unusedPause = unusedPause,
+                    onOpenUnusedPauseSettings = onOpenUnusedPauseSettings,
                 )
             }
         }
@@ -278,6 +283,30 @@ class SettingsScreenContentTest {
         compose.onNodeWithTag("settings_battery_settings").performScrollTo().performClick()
         assertEquals(1, opened)
         assertEquals(0, allowed)
+    }
+
+    /** Android 10 has no unused-app switch, so a phone that reports none gets no line about it. */
+    @Test
+    fun theUnusedAppRowIsAbsentWhereThePlatformHasNoSwitch() {
+        render(unusedPause = null)
+        compose.onNodeWithTag("settings_unused").assertDoesNotExist()
+    }
+
+    @Test
+    fun theUnusedAppRowIsQuietOnceTheSwitchIsOff() {
+        render(unusedPause = UnusedAppPause.Off)
+        compose.onNodeWithText(context.getString(R.string.unused_pause_off)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("settings_unused_settings").assertDoesNotExist()
+    }
+
+    /** The switch has no prompt of its own, so the only action while it is on is its settings page. */
+    @Test
+    fun theUnusedAppRowSendsTheDefaultToSettings() {
+        var opened = 0
+        render(unusedPause = UnusedAppPause.On, onOpenUnusedPauseSettings = { opened++ })
+        compose.onNodeWithText(context.getString(R.string.unused_pause_on)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("settings_unused_settings").performScrollTo().performClick()
+        assertEquals(1, opened)
     }
 
     /** A plain phone has nobody to name, so the supervision line is not there at all. */

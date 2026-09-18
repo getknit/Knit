@@ -96,6 +96,10 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   The battery row (here and in Settings) reads `ui/BackgroundBattery.kt`'s three-position enum, not the bare
   exemption — READ ADR 2026-09.gc3m before touching it: Restricted wins over a stale exemption, and no prompt
   of ours can lift it, so that state always lands on "Open settings".
+  The unused-app row beside it reads `ui/UnusedAppPause.kt` (`isAutoRevokeWhitelisted`, API 30+, null below
+  so the row hides) — READ ADR 2026-09.54xg: it has no prompt, its default is not an error (`quietHint`), and
+  its callback is `openUnusedAppPauseSettings`, not `openSettings`, because Android 11 keeps the switch on a
+  page of its own.
 - **When touching `ui/DeviceSupervision.kt`, `ui/components/PermissionDeniedDialog`, the `settingsHint` of a
   permission row, or the location / mic / camera gates' denial copy:** READ ADR 2026-09.a8ud. A parent's or
   an administrator's denial (`POLICY_FIXED`) is indistinguishable from "don't ask again" from inside the

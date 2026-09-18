@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.Bluetooth
+import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.LocationOn
@@ -55,6 +56,7 @@ import app.getknit.knit.R
 import app.getknit.knit.identity.displayNameFor
 import app.getknit.knit.ui.DeviceSupervision
 import app.getknit.knit.ui.MeshPermissionTier
+import app.getknit.knit.ui.UnusedAppPause
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.components.DisplayNameField
 import app.getknit.knit.ui.preview.KnitPreview
@@ -223,10 +225,10 @@ internal fun NamePage(
 
 /**
  * Page 3: one row per thing Android will ask about — not per Android permission, since the radio set is
- * one dialog sequence to the user. The first row is the gate (Start needs it); notifications (33+ only) and
- * the battery exemption sit under an "Optional" header and never block. [meshSupported] false puts a notice
- * above the rows so the user knows why granting won't find anyone; Start stays available regardless, so a
- * phone with neither radio can still open the app and read what it has.
+ * one dialog sequence to the user. The first row is the gate (Start needs it); notifications (33+ only), the
+ * battery exemption and the unused-app switch (11+ only) sit under an "Optional" header and never block.
+ * [meshSupported] false puts a notice above the rows so the user knows why granting won't find anyone; Start
+ * stays available regardless, so a phone with neither radio can still open the app and read what it has.
  */
 @Composable
 internal fun PermissionsPage(
@@ -238,6 +240,7 @@ internal fun PermissionsPage(
     onAllowBattery: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenUnusedPauseSettings: () -> Unit = {},
 ) {
     // Centred when it fits, scrolling when it doesn't — the Box/scroll pairing is what makes both true.
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -313,6 +316,22 @@ internal fun PermissionsPage(
                 actionTag = "onboarding_battery",
                 settingsHint = stringResource(R.string.onboarding_perm_battery_restricted_hint),
             )
+            if (rows.unusedPause != null) {
+                PermissionRow(
+                    icon = Icons.Outlined.HourglassEmpty,
+                    title = stringResource(R.string.onboarding_perm_unused_title),
+                    rationale = stringResource(R.string.onboarding_perm_unused_body),
+                    // A switch, not a grant: there is no dialog to ask with, so the only action is the
+                    // app-info page, and the hint names the switch. Its default position is nothing to
+                    // alarm anyone about, so the hint keeps the rationale's colour.
+                    state = rowState(granted = rows.unusedPause == UnusedAppPause.Off, needsSettings = true),
+                    onAllow = {},
+                    onOpenSettings = onOpenUnusedPauseSettings,
+                    actionTag = "onboarding_unused",
+                    settingsHint = stringResource(R.string.onboarding_perm_unused_hint),
+                    quietHint = true,
+                )
+            }
         }
     }
 }
@@ -362,6 +381,9 @@ private fun PermissionRow(
     // What the row says under its rationale once it lands on "Open settings"; the permission rows share
     // Android's "won't ask again", the battery row names the setting that put it there.
     settingsHint: String = stringResource(R.string.onboarding_perm_denied_hint),
+    // The hint reads as an error by default, because "Open settings" usually means something went wrong;
+    // a row whose settings state is the platform's own default says it in the rationale's colour instead.
+    quietHint: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).semantics(mergeDescendants = true) {},
@@ -385,7 +407,7 @@ private fun PermissionRow(
                 Text(
                     text = settingsHint,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = if (quietHint) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }

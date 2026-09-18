@@ -91,6 +91,7 @@ carries; never renumber an old one.
 | [2026-09.2v2t](decisions/2026-09-2v2t-a-phone-s-mesh-contribution-is-counted-at-the-hand-off.md) | A phone's mesh contribution is counted at the hand-off, once per message, and stays on the phone | ui, custody, privacy |
 | [2026-09.37ce](decisions/2026-09-37ce-a-direct-transfer-s-bytes-are-sealed.md) | A direct transfer's bytes are sealed, not just sent over WPA2 | transfer, crypto |
 | [2026-09.3yje](decisions/2026-09-3yje-the-open-to-chat-cue-introduces-strangers-only.md) | The open-to-chat cue introduces strangers only, gated on a two-way exchange | notifications, presence, data |
+| [2026-09.54xg](decisions/2026-09-54xg-the-unused-app-switch-is-shown-where-the-battery-exemption-is.md) | The unused-app switch is shown where the battery exemption is | ui, onboarding, settings, permissions |
 | [2026-09.5bqu](decisions/2026-09-5bqu-the-lora-plane-is-fully-quiescent-until-a-board-is-configured.md) | The LoRa plane is fully quiescent until a board is configured | lora, mesh, performance |
 | [2026-09.5dt2](decisions/2026-09-5dt2-a-queued-lora-frame-is-re-asked-the-gates-it-passed-at-enqueue.md) | A queued LoRa frame is re-asked the gates it passed at enqueue | lora, airtime |
 | [2026-09.66cw](decisions/2026-09-66cw-a-spool-bearer-token-is-stored-in-the-clear.md) | A spool bearer token is stored in the clear, and one canonical URL is what gets stored | spool, privacy, settings, data |

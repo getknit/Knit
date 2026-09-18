@@ -60,16 +60,19 @@ import app.getknit.knit.mesh.lora.BoardBattery
 import app.getknit.knit.mesh.lora.LoraPlane
 import app.getknit.knit.ui.BackgroundBattery
 import app.getknit.knit.ui.DeviceSupervision
+import app.getknit.knit.ui.UnusedAppPause
 import app.getknit.knit.ui.backgroundBattery
 import app.getknit.knit.ui.camera.openAppSettings
 import app.getknit.knit.ui.components.Avatar
 import app.getknit.knit.ui.deviceSupervision
+import app.getknit.knit.ui.openUnusedAppPauseSettings
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.rememberOnResume
 import app.getknit.knit.ui.requestIgnoreBatteryOptimizations
 import app.getknit.knit.ui.theme.DYNAMIC_COLOR_SUPPORTED
 import app.getknit.knit.ui.theme.THEME_MODE_SUPPORTED
 import app.getknit.knit.ui.theme.ThemeMode
+import app.getknit.knit.ui.unusedAppPause
 import org.koin.androidx.compose.koinViewModel
 
 /** UI-local projection of [SettingsViewModel]'s per-setting flows for the stateless content. */
@@ -118,6 +121,7 @@ fun SettingsScreen(
                 lora = lora,
             ),
         battery = rememberOnResume { backgroundBattery(context) },
+        unusedPause = rememberOnResume { unusedAppPause(context) },
         supervision = rememberOnResume { deviceSupervision(context) },
         onBack = onBack,
         onOpenProfile = onOpenProfile,
@@ -131,6 +135,7 @@ fun SettingsScreen(
         onOpenLicenses = onOpenLicenses,
         onAllowBattery = { requestIgnoreBatteryOptimizations(context) },
         onOpenBatterySettings = { openAppSettings(context) },
+        onOpenUnusedPauseSettings = { openUnusedAppPauseSettings(context) },
     )
 }
 
@@ -165,6 +170,9 @@ internal fun SettingsScreenContent(
     // Who else holds this phone's switches (a Family Link parent, an administrator). Read in the stateful
     // wrapper like `battery`, so the preview and the content test can show either phone.
     supervision: DeviceSupervision = DeviceSupervision.None,
+    // Android's "Pause app activity if unused" switch, read the same way; null where the platform has none.
+    unusedPause: UnusedAppPause? = null,
+    onOpenUnusedPauseSettings: () -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Scaffold(
@@ -269,6 +277,7 @@ internal fun SettingsScreenContent(
             if (showLoraRadio) LoraRadioRow(summary = form.lora, onClick = onOpenLora)
 
             BatteryOptimizationRow(battery = battery, onAllow = onAllowBattery, onOpenSettings = onOpenBatterySettings)
+            UnusedAppPauseRow(unusedPause = unusedPause, onOpenSettings = onOpenUnusedPauseSettings)
             SupervisionRow(supervision = supervision)
         }
     }
@@ -588,6 +597,41 @@ private fun BatteryOptimizationRow(
                 TextButton(onClick = onOpenSettings, modifier = Modifier.testTag("settings_battery_settings")) {
                     Text(stringResource(R.string.action_open_settings))
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Android's "Pause app activity if unused" switch and what it means for the grants, in the battery row's
+ * shape: a status line, and "Open settings" while the switch is on — no prompt of ours flips it, and its
+ * default is not a fault, so the line keeps the quiet colour. Absent where the platform has no switch.
+ */
+@Composable
+private fun UnusedAppPauseRow(
+    unusedPause: UnusedAppPause?,
+    onOpenSettings: () -> Unit,
+) {
+    if (unusedPause == null) return
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("settings_unused"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text =
+                stringResource(
+                    when (unusedPause) {
+                        UnusedAppPause.Off -> R.string.unused_pause_off
+                        UnusedAppPause.On -> R.string.unused_pause_on
+                    },
+                ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        if (unusedPause == UnusedAppPause.On) {
+            TextButton(onClick = onOpenSettings, modifier = Modifier.testTag("settings_unused_settings")) {
+                Text(stringResource(R.string.action_open_settings))
             }
         }
     }

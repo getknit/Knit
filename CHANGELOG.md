@@ -27,6 +27,9 @@ document:
   same Open settings dialog as the location pin.
 - Scroll up through a chat and a small arrow now sits in the bottom corner to take you straight back to the
   newest message. It shows once you are a few messages up and goes away when you reach the bottom.
+- Android takes an app's permissions back after a few months without use, and Knit would then have to ask
+  for them again. The permissions page and Settings now show that switch beside the battery row, with a
+  button to the page where it turns off.
 
 ### Fixed
 

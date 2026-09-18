@@ -390,9 +390,12 @@ doc). **Don't start a deferred item without explicit direction.**
   two-island device trial the group half is waiting on. **Lab (2026-09-14):** `InternetPlaneLabTest` pins the
   two-island group with a departure (the scope *rotation* waits on the six-hour mint grace, a clock-tier
   scenario), ADR 032's receive-only DM scope, the §9.3 quarantine, a relay dropping every socket and ADR 020
-  over the relay; a group *founded* while a member is relay-only never delivers its roster to them (root
-  adoption needs the row, the roster rides the scope the root derives) — an ignored scenario awaits that
-  design decision.
+  over the relay; a group *founded* while a member is relay-only never delivered its roster to them (root
+  adoption needs the row, the roster rides the scope the root derives) — **fixed 2026-09-18** (work item
+  #47, ADR 2026-09.mjaj): the seed carries the founding roster (`GroupKeyPayload.group`, spec C-3.2-16),
+  the member pins the group from it through `reconcileGroup`, and the scenario is un-ignored and is the
+  acceptance test. **Device-verified the same day** (Pixel 9 → Moto G with Bluetooth off over the public
+  relay, Pixel 3 by radio): pinned from the root gossip, message across in 26 s, receipt back over the relay.
 
 - **Attachment uploads are deferred while the radios carry them, SHIPPED 2026-08-17** (ADR 021,
   `mesh/spool/AttachmentDeferPolicy`, spec §9.5's MAY + §10): an attachment a short-range radio already

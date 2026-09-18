@@ -128,6 +128,7 @@ carries; never renumber an old one.
 | [2026-09.m7vn](decisions/2026-09-m7vn-settings-and-your-profile-are-two-screens.md) | Settings and your profile are two screens | ui, navigation, settings, profile |
 | [2026-09.m9h8](decisions/2026-09-m9h8-material-you-is-opt-in.md) | Material You is opt-in, and green stays green | ui, theme, settings |
 | [2026-09.mhs5](decisions/2026-09-mhs5-a-lora-packet-is-padded-past-the-firmware-s-signature-cliff.md) | A LoRa packet is padded past the firmware's signature cliff | lora, airtime, link |
+| [2026-09.mjaj](decisions/2026-09-mjaj-the-group-seed-carries-the-founding-roster.md) | The group seed carries the founding roster | groups, roster, spool, wire |
 | [2026-09.n752](decisions/2026-09-n752-a-link-preview-is-a-sender-fetched-card-riding-the-photo-path.md) | A link preview is a sender-fetched card riding the photo path | attachments, ui, wire, privacy, moderation, network |
 | [2026-09.nzpr](decisions/2026-09-nzpr-onboarding-gates-on-the-radio-permissions-only.md) | Onboarding gates on the radio permissions only | ui, onboarding, permissions |
 | [2026-09.p7j8](decisions/2026-09-p7j8-a-missing-ack-is-not-evidence-until-an-ack-could-have-arrived.md) | A missing ack is not evidence until an ack could have arrived, and it is read from both ends of the DM | spool, attachments |

@@ -231,6 +231,7 @@ control payload (`GroupKeyPayload.gr`, `CTL_GROUP_KEY`, pairwise-sealed ctl DMs)
 | **C-3.2-5** | Every seed send and key-request response from a member that holds a root MUST carry the newest root that member holds.            |
 | **C-3.2-6** | A member receiving a distribution that carries a root older than its own, or none while it holds one, SHOULD answer with its own. |
 | **C-3.2-7** | A member SHOULD NOT echo a root straight back to the member it just learned it from.                                              |
+| **C-3.2-16** | Every seed send and key-request response MUST carry the group's founding roster (`GroupKeyPayload.group`: id, members, departed, creator, name). A member holding no row for the group pins it from the seed, under the same derivation check as a group frame, before applying C-3.2-8..13. |
 
 > **Why C-3.2-6.** The root has no acknowledgment, so a stale gossip is the only evidence that an
 > earlier
@@ -243,6 +244,14 @@ control payload (`GroupKeyPayload.gr`, `CTL_GROUP_KEY`, pairwise-sealed ctl DMs)
 > system, so root healing costs no new mechanism, and a wiped minter passively recovers the current
 > root
 > from the first seed DM it receives.
+>
+> **Why the roster rides too (C-3.2-16).** C-3.2-9 and C-3.2-10 vet the sender and the minter against the
+> founding roster, so a member that holds no row cannot adopt the root. Its DM scope carries the seed; the
+> roster rides only the group's own frames, which only the group scope admits (§4.4); and that scope derives
+> from the very root it could not adopt. A group founded while a member was reachable only over the relay
+> therefore never reached them until they met by radio. The founding roster is pinned at founding anyway,
+> so carrying it on the seed trusts nothing new: the receiver verifies that the id is the hash of the
+> founding set exactly as it does for a group frame.
 
 #### Adoption
 

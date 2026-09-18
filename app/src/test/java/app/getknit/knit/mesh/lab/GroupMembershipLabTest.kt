@@ -144,12 +144,14 @@ class GroupMembershipLabTest {
 
     /**
      * `8e041ba9`: a rejoiner's fresh seed floods ahead of the frame that rejoins them. To Bob the seed comes
-     * from a departed member, and "sender departed" has to park it exactly as "group unknown" does — a seed
-     * the ratchet consumed is gone for good. The hold delivers every DM (the seed among them) before the
-     * group frame; the oracle then checks the park replayed.
+     * from a departed member; it used to park under "sender departed" exactly as "group unknown" does — a
+     * seed the ratchet consumed is gone for good — and wait for the rejoin frame. Since work item #47 the
+     * seed carries its founding roster, and that is Alice's own signed frame listing her: it rejoins her
+     * itself and adopts on the same pass, so nothing parks. The hold delivers every DM (the seed among them)
+     * before the group frame; the rejoin is then asserted before the frame is let through.
      */
     @Test
-    fun aRejoinersSeedThatOutrunsTheRejoinFrameStaysParkedThenReplays() =
+    fun aRejoinersSeedThatOutrunsTheRejoinFrameRejoinsThemItself() =
         runBlocking {
             val alice = lab.node("alice").apply { setDisplayName("Alice") }
             val bob = lab.node("bob").apply { setDisplayName("Bob") }
@@ -164,21 +166,18 @@ class GroupMembershipLabTest {
             alice.transport.hold(bob.transport)
             alice.createGroup(bob)
             assertTrue(alice.sendGroup(groupId, "i am back"))
-            val released = alice.transport.release(bob.transport) { batch -> batch.sortedBy { it.isGroupFrame() } }
+            // Only the DMs (the seed among them) through first; the group frame stays held on the link.
+            alice.transport.release(bob.transport) { batch -> batch.filterNot { it.isGroupFrame() } }
             assertTrue(
-                "the batch carried a seed then the group frame: ${released.map { it.isGroupFrame() }}",
-                !released.first().isGroupFrame() && released.last().isGroupFrame(),
+                "alice's seed never rejoined her on bob's phone",
+                lab.await(1) { if (bob.groupShape(groupId)?.departed == emptySet<String>()) 1 else 0 },
             )
+            assertEquals(0L, bob.metrics.snapshot().groupSeedsHeld)
 
-            assertTrue(
-                "bob never parked the departed sender's seed",
-                lab.await(1) {
-                    bob.metrics
-                        .snapshot()
-                        .groupSeedsHeld
-                        .toInt()
-                },
-            )
+            // The held group frame is gone with the release; a fresh link's digest exchange re-serves it from
+            // Alice's custody, and it opens on its first pass under the chain the seed already adopted.
+            lab.unlink(alice, bob)
+            lab.link(alice, bob)
             lab.assertConverged(listOf(bob), atLeast = 2, carriers = listOf(alice)) { groupId }
             assertEquals(setOf("i am back"), alice.decrypted(groupId).map { it.second }.toSet())
             assertEquals(emptySet<String>(), bob.groupShape(groupId)?.departed)

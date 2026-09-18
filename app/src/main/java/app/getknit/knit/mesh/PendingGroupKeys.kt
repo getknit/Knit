@@ -10,6 +10,11 @@ package app.getknit.knit.mesh
  * `RATCHET_DUPLICATE`; the group's first message then sits at `GROUP_RATCHET_NO_KEY` until a re-send
  * trigger the sender may never hit.
  *
+ * Since work item #47 a seed carries its founding roster (`GroupKeyPayload.group`) and a receiver pins the
+ * group from the seed itself (`InboundPipeline.pinRosterFromSeed`), so what parks here is a seed from a
+ * build that predates the field, or one whose roster was refused — the fallback, no longer the founding
+ * path.
+ *
  * The pipeline parks the frame here **before the ratchet commit** (the lock-free peek decides), so the
  * chain never advances past it; when the group is first reconciled, `reconcileGroup` releases the parked
  * frames and re-runs them through the deliver path, where the same open now succeeds (a later frame from

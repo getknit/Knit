@@ -14,7 +14,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -108,16 +107,15 @@ class InternetPlaneLabTest {
         }
 
     /**
-     * FINDING #47 (2026-09-14, first run): a group founded while one member is reachable only over the relay
-     * never reaches that member. The seed rides Carol's DM scope and parks (`PendingGroupKeys`, group
-     * unknown) with the group root inside it; the roster rides only the group scope, which derives from
-     * that root, which `adoptGroupRoot` refuses without the group row — so the roster can never be pulled,
-     * the parked seed expires after an hour, and Carol holds nothing. The radio equivalent
-     * (`CustodyLabTest.groupCreatedWhileAMemberWasAwayArrivesThroughACarrier`) works because custody
-     * carries the roster frame itself. Ignored until the design decides how a founding roster crosses a
-     * relay (the seed carrying the roster, or the founding frame riding the members' DM scopes).
+     * Work item #47 (found here 2026-09-14, fixed by ADR 2026-09.mjaj): a group founded while one member is
+     * reachable only over the relay reaches that member. The seed rides Carol's DM scope carrying the founding
+     * roster (`GroupKeyPayload.group`), so she pins the group from the seed itself, adopts the seed and the
+     * root on the same pass, derives the group scope and pulls the founding frame — all before any radio
+     * re-link. Before the field the seed parked (`PendingGroupKeys`, group unknown) with the root inside it,
+     * the roster rode only the group scope that root derives, and Carol held nothing until the park expired.
+     * The re-link at the end serves the oracle's custody leg alone: a relay carries only your own scopes, so
+     * Alice→Bob's seed DM and Bob's ack can never reach Carol's custody (see the two-island case above).
      */
-    @Ignore("#47: a group founded across the relay never delivers its roster to the relay-only member")
     @Test
     fun aGroupFoundedAcrossTheRelayReachesTheRelayOnlyMember() =
         runBlocking {
@@ -130,6 +128,18 @@ class InternetPlaneLabTest {
 
             val groupId = alice.createGroup(bob, carol)
             assertTrue(alice.sendGroup(groupId, "founded across the relay"))
+
+            // The acceptance, while Carol is still relay-only: the seed pinned the group (nothing parked), the
+            // scope derived from the root it carried, and the founding frame crossed the relay.
+            lab.awaitGroupScope(carol, groupId, alice, bob)
+            assertTrue(
+                "carol never read the founding message over the relay",
+                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { carol.decrypted(groupId).size },
+            )
+            assertEquals(alice.groupShape(groupId), carol.groupShape(groupId))
+            assertEquals(0L, carol.metrics.snapshot().groupSeedsHeld)
+
+            lab.linkAll(alice to carol, bob to carol)
             lab.assertConverged(listOf(alice, bob, carol), atLeast = 1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { groupId }
         }
 

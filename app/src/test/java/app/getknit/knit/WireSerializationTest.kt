@@ -6,8 +6,11 @@ import app.getknit.knit.mesh.protocol.DEFAULT_TTL
 import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
+import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupLeaveContent
 import app.getknit.knit.mesh.protocol.GroupRatchetHeader
+import app.getknit.knit.mesh.protocol.GroupRootPayload
+import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.PrekeyInfo
 import app.getknit.knit.mesh.protocol.ProfileContent
@@ -402,6 +405,37 @@ class WireSerializationTest {
         assertEquals(EncEnvelope.VERSION_RATCHET, seenWithoutG?.v)
         assertTrue(requireNotNull(seenWithoutG).keys.isEmpty())
         assertNull(seenWithoutG.r)
+    }
+
+    /** The pre-roster [GroupKeyPayload] shape, exactly as a build before work item #47 compiled it. */
+    @Serializable
+    private class GroupKeyPayloadPreRosterShape(
+        val groupId: String,
+        val keys: List<GroupSeed> = emptyList(),
+        val ackEpoch: Int? = null,
+        val gr: GroupRootPayload? = null,
+    )
+
+    @Test
+    fun aPreRosterShapedDecoderIgnoresTheSeedsFoundingRoster() {
+        // What an older receiver does with a roster-carrying seed: `ignoreUnknownKeys` drops `group`, the
+        // seeds and the root still decode, and the seed parks exactly as before — never a parse failure.
+        val withRoster =
+            WireCodec.encodePayload(
+                GroupKeyPayload(
+                    groupId = "g-1",
+                    keys = listOf(GroupSeed(epoch = 3, seed = ByteArray(32) { 7 }, mintedAt = 1234L)),
+                    gr = GroupRootPayload(root = ByteArray(32) { 9 }, version = 1, minter = "aa"),
+                    group = GroupInfo(id = "g-1", members = listOf("aa", "bb"), createdBy = "aa"),
+                ),
+            )
+        val seenByOldBuild = requireNotNull(WireCodec.decodePayload<GroupKeyPayloadPreRosterShape>(withRoster))
+        assertEquals("g-1", seenByOldBuild.groupId)
+        assertEquals(3, seenByOldBuild.keys.single().epoch)
+        assertEquals(1, seenByOldBuild.gr?.version)
+        // And the reverse: an older sender's roster-less seed decodes on this build with `group` null.
+        val withoutRoster = WireCodec.encodePayload(GroupKeyPayloadPreRosterShape(groupId = "g-1"))
+        assertNull(requireNotNull(WireCodec.decodePayload<GroupKeyPayload>(withoutRoster)).group)
     }
 
     @Test

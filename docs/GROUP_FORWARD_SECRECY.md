@@ -111,6 +111,18 @@ row (`MeshManager.replayCustodiedSeedDms`, the DM analogue of `replayCustodiedGr
 stops at the exists-gate, a consumed ctl DM drops as a duplicate, and the lost seed opens because a parked
 frame never advanced the chain. Found by the `mesh/lab` restart-with-a-parked-seed scenario (2026-09-11).
 
+Since 2026-09-18 (ADR 2026-09.mjaj, work item #47) **the seed carries the founding roster itself** —
+`GroupKeyPayload.group`, the roster half of the row (id, members, departed, creator, name; never the photo),
+on every distribution — so a member with no row pins the group *from the seed* before the park decision
+(`InboundPipeline.pinRosterFromSeed`), through `reconcileGroup` and `vetRoster` exactly as a group frame
+would, and adopts the seed and the root on the same pass. The relay is why: a member reachable only over
+the Internet plane has a DM scope that carries the seed and a group scope that derives from the root inside
+it, and the roster rode only that group scope — three refusals in a ring, and the park expired. The park and
+the custody replay above remain as the fallback for a seed from a build without the field, or one whose
+roster was refused. One trap: the seed is already custodied when the pin runs, so the first-sight replay is
+told to skip it (`replayExcept`), or it re-enters the seed nested under its own pin and the outer commit
+silently finds its chain index consumed.
+
 The **outbox** (`group_key_sends`, one row per (group, member)) tracks `sentEpoch/sentAt/ackedAt`.
 Receivers acknowledge adoption with `ctl = CTL_GROUP_KEY_ACK` (`gk` carrying the groupId + epoch),
 which stamps `ackedAt` and stops re-sends. Re-send triggers: an inbound key-request (§7), the
@@ -238,7 +250,9 @@ fan seeds out on each turn. Leave and rejoin are last-writer-wins on the member'
 two deterministic notice rows (`leave:`/`rejoin:` + group + member) are the clocks, so a custody
 re-serve of a pre-leave frame cannot rejoin them and a re-served old leave cannot evict them again.
 The rejoiner's seed usually floods ahead of the frame that rejoins them — the seed-before-roster race
-in its second shape — and is parked in `PendingGroupKeys` under "sender departed" until it does.
+in its second shape. Since the seed carries the founding roster (§3) it is itself the rejoiner's own signed
+frame listing them, so it rejoins them and adopts on its first pass; a roster-less seed from an older build
+is parked in `PendingGroupKeys` under "sender departed" until the frame that rejoins them arrives.
 
 Rekey triggers **only** on a signed leave or rejoin — never on roster shrinkage carried by a frame
 (vetRoster ignores those; anything else would let a forged roster remotely trigger rekey fan-out). The claim is

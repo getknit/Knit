@@ -517,8 +517,9 @@ class MeshMetrics {
 
     /**
      * One `CTL_GROUP_KEY` parked because it named a group we did not hold yet ([PendingGroupKeys]) — the
-     * seed that outran its group's first frame. Paired with [onGroupSeedReplayed]: a held count that never
-     * turns into a replay is a member that heard a seed and then never saw the roster.
+     * seed that outran its group's first frame and carried no roster of its own (an older build's), or one
+     * whose roster was refused. Paired with [onGroupSeedReplayed]: a held count that never turns into a
+     * replay is a member that heard a seed and then never saw the roster.
      */
     fun onGroupSeedHeld() {
         groupSeedsHeld.incrementAndGet()

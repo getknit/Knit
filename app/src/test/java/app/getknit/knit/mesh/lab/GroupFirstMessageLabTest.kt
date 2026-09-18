@@ -4,6 +4,7 @@ import app.getknit.knit.mesh.protocol.WireCodec
 import app.getknit.knit.mesh.protocol.WireEnvelope
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -89,13 +90,15 @@ class GroupFirstMessageLabTest {
         }
 
     /**
-     * The parked seed is in memory only. Bob receives the seed, parks it for a group he does not hold yet,
-     * and his app dies before the roster arrives; on relaunch and re-link the roster comes in from Alice's
-     * custody, but the parked seed is gone — the message must still land through whatever recovers a
-     * missing sender key.
+     * Bob receives the seed for a group he does not hold yet and his app dies before the group frame arrives.
+     * Since work item #47 the seed carries its founding roster, so what he holds at the restart is the row
+     * and the adopted chain — both committed with the seed — not an in-memory park (the park, and the
+     * custody replay that healed a park lost to a process death, remain for a seed from a build without the
+     * field; `InboundPipelineTest` pins them). On relaunch and re-link the group frame comes in from Alice's
+     * custody and opens on its first pass.
      */
     @Test
-    fun firstGroupMessageLandsWhenTheMemberRestartsWithTheSeedParked() =
+    fun firstGroupMessageLandsWhenTheMemberRestartsBetweenTheSeedAndTheFrame() =
         runBlocking {
             val alice = lab.node("alice").apply { setDisplayName("Alice") }
             val bob = lab.node("bob").apply { setDisplayName("Bob") }
@@ -108,16 +111,12 @@ class GroupFirstMessageLabTest {
             // Let only the DMs (the seed among them) through; the group frame stays parked on the link.
             alice.transport.release(bob.transport) { batch -> batch.filterNot { it.isGroupFrame() } }
             assertTrue(
-                "bob never parked the seed",
-                lab.await(1) {
-                    bob.metrics
-                        .snapshot()
-                        .groupSeedsHeld
-                        .toInt()
-                },
+                "bob never pinned the group from the seed",
+                lab.await(1) { if (bob.groupShape(groupId) != null) 1 else 0 },
             )
+            assertEquals(0L, bob.metrics.snapshot().groupSeedsHeld)
 
-            bob.restart() // drops the link and, with it, the parked seed and the still-held group frame
+            bob.restart() // drops the link and, with it, the still-held group frame
             lab.link(alice, bob)
 
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { groupId }

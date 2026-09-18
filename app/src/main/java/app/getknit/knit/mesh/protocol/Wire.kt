@@ -507,6 +507,15 @@ class GroupRootPayload(
  * [gr] is the shared group root gossiped on this same channel (docs/SPOOL_PROTOCOL.md §3.2) — additive,
  * and deliberately **independent of [keys]**: a root-only distribution carries [keys] empty, so a
  * receiver must adopt [gr] outside whatever short-circuit its seed path applies to an empty key list.
+ *
+ * [group] is the group's **founding roster** — [GroupInfo.id], [GroupInfo.members], [GroupInfo.departed],
+ * [GroupInfo.createdBy] and the [GroupInfo.name], never the photo (a blob to pull, which rides the group's
+ * own frames) — carried on every distribution so a member holding no row for the group can pin it from
+ * the seed itself, through the same door and derivation check a group frame goes through. Without it a
+ * member reachable only over a relay never learns the roster at all: the seed rides their DM scope, the
+ * roster rides only the group scope, and that scope derives from the root inside the seed they could not
+ * adopt without the roster (work item #47). Additive (docs/WIRE_COMPAT.md rule 1): an older receiver
+ * ignores it and parks the seed as before; an older sender omits it and the receiver parks as before.
  */
 @Serializable
 data class GroupKeyPayload(
@@ -514,6 +523,7 @@ data class GroupKeyPayload(
     val keys: List<GroupSeed> = emptyList(),
     val ackEpoch: Int? = null,
     val gr: GroupRootPayload? = null,
+    val group: GroupInfo? = null,
 )
 
 /**

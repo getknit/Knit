@@ -208,8 +208,9 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   `ForwardRepository`'s constructor) and the LoRa Trickle interval (`loraGossipMinMs` / `loraGossipMaxMs`).
   Give every node in a scenario the same custody numbers — the digest is folded over what they keep.
 - **The second batch of classes** (2026-09-14, 45 scenarios): `GroupMembershipLabTest` (leave-rekey, the
-  self-rejoin of ADR 2026-09.v6fu, the departed sender's parked seed, the `left:` notice as an LWW clock, a
-  member who missed the leave, concurrent renames), `ReactionLabTest` (DM / group / room forms, a retraction
+  self-rejoin of ADR 2026-09.v6fu, the rejoiner's seed rejoining them itself since ADR 2026-09.mjaj — it used
+  to park under "sender departed" — the `left:` notice as an LWW clock, a member who missed the leave,
+  concurrent renames), `ReactionLabTest` (DM / group / room forms, a retraction
   crossing its reaction, a reaction ahead of its DM, a group reaction founding the group), `ProfileUpdateLabTest`
   (rename to a contact and a stranger, a re-served older profile, status + flag surviving a sealed update, an
   avatar), `AttachmentLabTest` (image DM, carried bytes, room image screening, group photo),
@@ -217,18 +218,22 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   `SessionLabTest` (both-initiate in both orders, a forced reset, old-era custody after a reset, the group
   key request), `RestartLabTest` (sender / carrier / recipient-with-a-park / both sides), `TopologyLabTest`
   (diamond, five-node line, ring partition, eight in a room), `CustodyQuotaLabTest` (per-sender, per-group,
-  full store), `InternetPlaneLabTest` (the two-island group + departure, ADR 032's receive-only scope, spec
-  §9.3 quarantine, ADR 042's card intro, a relay dropping every socket, ADR 020 over the relay) and
+  full store), `InternetPlaneLabTest` (the two-island group + departure, a group founded while a member is relay-only
+  (#47, ADR 2026-09.mjaj), ADR 032's receive-only scope, spec §9.3 quarantine, ADR 042's card intro, a relay
+  dropping every socket, ADR 020 over the relay) and
   `LoraPocketLabTest` (two pockets, ADR 054's gate, y8pu's backfill, the election, a DM through the bridge).
 - **A scenario that fails on HEAD for a reason that is a design decision, not a bug, stays in the suite
   under `@Ignore("#NN: …")`**, naming its GitLab work item, with the finding in its KDoc, so the acceptance
-  test exists before the decision does. Three sit there as of 2026-09-14: the attachment deferral judged in
+  test exists before the decision does. Three sat there as of 2026-09-14: the attachment deferral judged in
   the round the send itself triggers, before the ack it needs can exist (#46); a group founded across the
   relay never delivering its roster to the relay-only member — root adoption needs the row, and the roster
-  rides the scope the root derives (#47); and a far pocket's room tick stopping at the gateway's board (#48).
+  rides the scope the root derives (#47, decided 2026-09-18 as ADR 2026-09.mjaj: the seed carries the
+  roster, and its scenario now runs); and a far pocket's room tick stopping at the gateway's board (#48).
   The first one decided, #45 (a blocker refusing custody of the blocked sender's frames), became ADR
   2026-09.bts9 and its scenario now runs; #49 (a `relay = false` key-request-served profile deduping its own
-  custody re-serve for the seen window) closed in the clock tier.
+  custody re-serve for the seen window) closed in the clock tier. Un-ignoring one can retire a park another
+  scenario waited on: #47 reshaped two (`GroupMembershipLabTest`'s rejoiner seed, `GroupFirstMessageLabTest`'s
+  restart), because the lab runs the real `MeshManager` and every seed it emits now carries the roster.
 - **Neither long-range plane carries a third party's DM-form frames** — alice↔bob's ticks and seeds are in
   no scope of carol's, and a DM-form frame to a linked peer never rides the board — so custody agrees across
   a relay or across two pockets only once the parties meet by radio again. A spool scenario with three nodes

@@ -42,6 +42,9 @@ document:
   before the preview had loaded. Sending now waits a few seconds for it.
 - With a LoRa board paired, Nearby and direct messages never got a link preview at all. They now attach
   one the way they attach a photo, and someone reading over the board alone sees the link without it.
+- A group started while one of its members could only be reached through your relay never showed up on
+  their phone until they met someone by radio. Now the group and its first message arrive over the relay
+  like any other chat.
 
 ## [2.6.0](https://github.com/getknit/knit/releases/tag/v2.6.0) — 2026-09-16T07:24:35Z
 

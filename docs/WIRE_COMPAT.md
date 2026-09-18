@@ -591,6 +591,24 @@ null — every member shares the room key, so there is nobody to seal for, exact
 *Metadata cost:* none on the radios, which never see one; to the spool, one more opaque blob in a scope it
 already cannot read.
 
+**Precedent — the spool plane's second mesh-wire field (`GroupKeyPayload.group`, the founding roster on the
+seed, ADR 2026-09.mjaj, 2026-09-18).** The `gr` precedent above, applied once more to the same payload:
+`GroupKeyPayload` gained the nullable `group: GroupInfo?` — the roster half of the row (`toFoundingInfo`: id,
+members, departed, creator, name; never the photo) — on every `CTL_GROUP_KEY` the one builder emits. It exists
+because a member reachable only over a relay has a DM scope that carries the seed and a group scope that
+derives from the root inside the seed, and the roster rode only the group scope: the seed parked for want of
+the row, the root was refused for want of the roster, and the roster could not be pulled for want of the root
+(work item #47). Now a member with no row pins the group from the seed through `reconcileGroup`'s one door,
+with `vetRoster`'s derivation check unchanged. Rule 1: `GroupInfo` is a plain data class with no `@ByteString`,
+so it nests as a nullable field; elided when absent, so every existing fixture stayed put and `GoldenVectorTest`
+gained `groupKeyPayloadRoster` (seeds, root and roster together); an older receiver ignores it and parks the
+seed as before (`WireSerializationTest.aPreRosterShapedDecoderIgnoresTheSeedsFoundingRoster`), and an older
+sender's seed decodes here with `group` null. No discovery marker, no `EncEnvelope.v`, no `MessageContent.v`,
+no ctl value, no capability bit, no DB change — the compact v3 layout never carries `gk`, so it needed nothing.
+*Metadata cost:* none — the roster rides inside the DM ratchet ciphertext, so a carrier or spool sees roughly
+330 more bytes of ciphertext at the roster cap, and the one reader is the member the seed is addressed to, who
+is in the roster it names.
+
 **When you bump a version layer:** add a round-trip test plus an "unknown higher version drops locally
 but is counted" test. New crypto scheme ⇒ bump `EncEnvelope.MAX_SUPPORTED_VERSION` + every branch that
 tests the version (`InboundPipeline.decryptAndDeliver`, `MeshManager`'s inline-ack give-back,

@@ -448,6 +448,24 @@ class GoldenVectorTest {
                             ),
                     ),
                 ),
+            // The seed's founding roster (work item #47): the additive `group` beside `keys` and `gr`. The
+            // roster half of GroupInfo only — no photo fields — which is what GroupEntity.toFoundingInfo emits.
+            "groupKeyPayloadRoster" to
+                WireCodec.encodePayload(
+                    GroupKeyPayload(
+                        groupId = "g-1",
+                        keys = listOf(GroupSeed(epoch = 3, seed = bytes(32, 7), mintedAt = 1234L)),
+                        gr = GroupRootPayload(root = bytes(32, 13), version = 2, minter = "aa"),
+                        group =
+                            GroupInfo(
+                                id = "g-1",
+                                name = "Team",
+                                members = listOf("aa", "bb"),
+                                createdBy = "aa",
+                                departed = listOf("cc"),
+                            ),
+                    ),
+                ),
         )
 
     private fun compact(content: MessageContent): ByteArray =
@@ -675,6 +693,12 @@ class GoldenVectorTest {
                     "6f7874666e71646e616d6563416e6e677265706c79546fa4696d65737361676549647642673055477949704d44632d525578" +
                     "54576d466f627768617574686f724964781a616d66626367613765797774696f32636a6669666f7874666e7166617574686f" +
                     "7263416e6e67736e69707065746773656520796f75",
+                "groupKeyPayloadRoster" to
+                    "a46767726f7570496463672d31646b65797381a36565706f63680364736565645820070e151c232a31383f464d545b626970" +
+                    "777e858c939aa1a8afb6bdc4cbd2d9e0686d696e74656441741904d2626772a364726f6f7458200d141b222930373e454c53" +
+                    "5a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe66776657273696f6e02666d696e7465726261616567726f7570a5626964" +
+                    "63672d31646e616d65645465616d676d656d6265727382626161626262696372656174656442796261616864657061727465" +
+                    "6481626363",
             )
 
         const val BUNDLE_ENCODED =

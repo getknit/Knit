@@ -1,5 +1,6 @@
 package app.getknit.knit.mesh.crypto
 
+import app.getknit.knit.mesh.protocol.GroupInfo
 import app.getknit.knit.mesh.protocol.GroupKeyPayload
 import app.getknit.knit.mesh.protocol.GroupRootPayload
 import app.getknit.knit.mesh.protocol.GroupSeed
@@ -106,8 +107,64 @@ class MessageContentTest {
         // An ordinary message carries no gk (encodeDefaults = false keeps it off the wire entirely).
         assertNull(MessageContent.decode(MessageContent(body = "hi").encode())!!.gk)
 
-        // A seed distribution carries no root unless one is gossiped alongside it.
+        // A seed distribution carries no root unless one is gossiped alongside it, and no roster unless the
+        // sender attached its founding one.
         assertNull(dist.gk.gr)
+        assertNull(dist.gk.group)
+    }
+
+    @Test
+    fun theFoundingRosterRidesTheKeyCtlBesideSeedsAndRoot() {
+        // Work item #47: the roster half of GroupInfo (no photo) on the same ctl DM as the seeds and the
+        // root, so a member holding no row can pin the group from the seed itself.
+        val roster =
+            GroupInfo(
+                id = "g-1",
+                name = "Team",
+                members = listOf("aaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbb"),
+                createdBy = "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+                departed = listOf("cccccccccccccccccccccccccc"),
+            )
+        val dist =
+            MessageContent.decode(
+                MessageContent(
+                    body = "",
+                    ctl = MessageContent.CTL_GROUP_KEY,
+                    gk =
+                        GroupKeyPayload(
+                            "g-1",
+                            keys = listOf(GroupSeed(epoch = 4, seed = ByteArray(32) { 1 }, mintedAt = 88L)),
+                            gr = GroupRootPayload(root = ByteArray(32) { 9 }, version = 1, minter = "aaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                            group = roster,
+                        ),
+                ).encode(),
+            )!!
+        assertEquals(roster, dist.gk?.group)
+        assertEquals(
+            4,
+            dist.gk
+                ?.keys
+                ?.single()
+                ?.epoch,
+        )
+        assertEquals(1, dist.gk?.gr?.version)
+
+        // A root-only gossip carries it too: the shape a member with a root but no send chain emits.
+        val rootOnly =
+            MessageContent.decode(
+                MessageContent(
+                    body = "",
+                    ctl = MessageContent.CTL_GROUP_KEY,
+                    gk =
+                        GroupKeyPayload(
+                            "g-1",
+                            gr = GroupRootPayload(root = ByteArray(32) { 9 }, version = 1, minter = "aaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                            group = roster,
+                        ),
+                ).encode(),
+            )!!
+        assertTrue(rootOnly.gk!!.keys.isEmpty())
+        assertEquals(roster, rootOnly.gk.group)
     }
 
     @Test

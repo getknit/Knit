@@ -15,6 +15,7 @@ import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.crypto.SignedPrekey
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.group.toFoundingInfo
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MentionStore
@@ -45,6 +46,8 @@ import app.getknit.knit.mesh.protocol.EncEnvelope
 import app.getknit.knit.mesh.protocol.FrameId
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.protocol.GroupInfo
+import app.getknit.knit.mesh.protocol.GroupKeyPayload
+import app.getknit.knit.mesh.protocol.GroupSeed
 import app.getknit.knit.mesh.protocol.LinkPreviewBlob
 import app.getknit.knit.mesh.protocol.Mention
 import app.getknit.knit.mesh.protocol.ProfileContent
@@ -1611,6 +1614,64 @@ class MeshManagerTest {
             assertEquals(1L, rig.metrics.snapshot().groupSealedRatchet)
             assertEquals(1L, rig.metrics.snapshot().groupSeedsSent)
             assertFalse("the stored group row is never pendingKey", rig.saved.single().pendingKey)
+        }
+
+    @Test
+    fun theSeedDmCarriesTheGroupsFoundingRosterWhenTheRowIsHeld() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Work item #47: every CTL_GROUP_KEY carries the roster half of the row (toFoundingInfo — the
+            // founding set, the creator, the name; never the photo), so a member holding no row can pin the
+            // group from the seed. The rig cannot open bob's DM (his prekey private is discarded), so the
+            // pin is the plaintext's growth: AES-GCM keeps `ct` at plaintext + tag, and the same content
+            // sealed with and without the row differs by exactly the founding info's CBOR.
+            suspend fun seedCtSize(withRow: Boolean): Int {
+                val rig = Rig(backgroundScope)
+                rig.pinRatchetCapable(rig.bob, RatchetCrypto.generateKeyPair().pub)
+                val group = GroupInfo(id = "g-1", members = listOf(rig.me.nodeId, rig.bob.nodeId), createdBy = rig.me.nodeId)
+                // Explicit either way: the relaxed mock would otherwise hand back a blank entity, not null.
+                coEvery { rig.groups.find("g-1") } returns
+                    if (withRow) {
+                        GroupEntity(
+                            groupId = "g-1",
+                            name = "Team",
+                            members = GroupMembersStore.encode(group.members),
+                            createdBy = rig.me.nodeId,
+                            createdAt = 1L,
+                            photoHash = "ph1",
+                            photoUpdatedAt = 42L,
+                        )
+                    } else {
+                        null
+                    }
+                assertTrue(rig.manager.sendChat("mint", group = group))
+                advanceUntilIdle()
+                val seedDm = rig.sentChatFrames().single { it.recipientId == rig.bob.nodeId }
+                return WireCodec
+                    .decodePayload<ChatContent>(seedDm.payload)!!
+                    .enc!!
+                    .ct.size
+            }
+            // Node ids are fixed-width, so any two stand in for the rigs' own when sizing the roster.
+            val a = "a".repeat(NodeId.LENGTH)
+            val b = "b".repeat(NodeId.LENGTH)
+            val bare = GroupKeyPayload("g-1", keys = listOf(GroupSeed(epoch = 1, seed = ByteArray(32), mintedAt = 1L)))
+            val founding =
+                GroupEntity(
+                    groupId = "g-1",
+                    name = "Team",
+                    members = GroupMembersStore.encode(listOf(a, b)),
+                    createdBy = a,
+                    createdAt = 1L,
+                    photoHash = "ph1",
+                    photoUpdatedAt = 42L,
+                ).toFoundingInfo()
+            assertEquals(GroupInfo(id = "g-1", name = "Team", members = listOf(a, b), createdBy = a), founding)
+            val rosterBytes =
+                WireCodec.encodePayload(bare.copy(group = founding)).size - WireCodec.encodePayload(bare).size
+
+            val without = seedCtSize(withRow = false)
+            val with = seedCtSize(withRow = true)
+            assertEquals("without=$without with=$with roster=$rosterBytes", without + rosterBytes, with)
         }
 
     @Test

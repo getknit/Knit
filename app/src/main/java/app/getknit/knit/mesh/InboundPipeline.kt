@@ -161,8 +161,9 @@ class InboundPipeline(
     private val replayGroupCustody: suspend (String?, String?) -> Unit = { _, _ -> },
     // The DM half of the same heal (MeshManager.replayCustodiedSeedDms): on first sight of a group, re-enters
     // our own custody's undelivered chat DMs from its roster, so a seed that was parked in memory and lost
-    // with the process is adopted from the copy custody kept.
-    private val replaySeedCustody: suspend (String) -> Unit = {},
+    // with the process is adopted from the copy custody kept. The second argument is the frame id to skip —
+    // the seed whose own roster is creating the row (pinRosterFromSeed), already custodied and still mid-flight.
+    private val replaySeedCustody: suspend (groupId: String, except: String?) -> Unit = { _, _ -> },
     // Adopts a gossiped shared group root (MeshManager.adoptGroupRoot, docs/SPOOL_PROTOCOL.md §3.2).
     // Called INSIDE the ctl commit so the root lands atomically with the DM chain advance that carried
     // it; returns whether anything was adopted. Lambda-mediated like redistributeGroupKey, so this
@@ -964,9 +965,10 @@ class InboundPipeline(
             return
         }
         if (unsignedButNotATick(signed, plain)) return
-        // Decided on the peek, before anything commits: a seed for a group we do not hold yet is parked
-        // whole and the chain is left where it was, so the replay after the roster lands opens it again.
-        if (source != null && holdGroupKeyForUnknownGroup(source, plain)) return
+        // Decided on the peek, before anything commits: a seed for a group we do not hold yet pins the
+        // roster it carries (so the commit below adopts it), or — carrying none — is parked whole with the
+        // chain left where it was, so the replay after the roster lands opens it again.
+        if (source != null && holdGroupKeyForUnknownGroup(source, plain, me)) return
         val commit: suspend (suspend () -> Unit) -> Boolean = { onOpened ->
             val committed =
                 db.withWriteTransaction {
@@ -1347,30 +1349,67 @@ class InboundPipeline(
     /**
      * The seed-before-roster race ([PendingGroupKeys]): a `CTL_GROUP_KEY` naming a group we hold no row
      * for — the creator distributes the seed *before* the first group frame carries the roster, and custody
-     * serves the two in either order — is parked verbatim and reported held (true), so the caller skips the
-     * ratchet commit that would otherwise consume the frame with its seeds unadopted. The same race in its
-     * second shape: a sender we hold as *departed* ([rejoinBy]), whose seed for the re-created group floods
-     * ahead of the frame that rejoins them — released by that rejoin alone, never by another member's
-     * frame ([replayHeldGroupKeys]). [adoptGroupSeeds]'s other gates (left, a non-member) are not
-     * pre-judged here — the frame takes the ordinary path. A group with a full hold (the per-group cap)
-     * also takes the ordinary path — the pre-existing behaviour — rather than being refused outright.
+     * serves the two in either order. A seed that carries its founding roster (`GroupKeyPayload.group`) pins
+     * the group from the seed itself first ([pinRosterFromSeed]), so the ordinary commit that follows adopts
+     * it on this pass; one that carries none — an older build's — or whose roster is refused is parked
+     * verbatim and reported held (true), so the caller skips the ratchet commit that would otherwise consume
+     * the frame with its seeds unadopted. The same race in its second shape: a sender we hold as *departed*
+     * ([rejoinBy]), whose seed for the re-created group floods ahead of the frame that rejoins them — a
+     * roster-carrying seed is that member's own signed frame listing them and rejoins them itself; a
+     * roster-less one is released by the rejoin frame alone, never by another member's
+     * ([replayHeldGroupKeys]). [adoptGroupSeeds]'s other gates (left, a non-member) are not pre-judged here —
+     * the frame takes the ordinary path. A group with a full hold (the per-group cap) also takes the ordinary
+     * path — the pre-existing behaviour — rather than being refused outright.
      */
     private suspend fun holdGroupKeyForUnknownGroup(
         source: InboundFrame,
         plain: MessageContent,
+        me: String,
     ): Boolean {
         if (plain.ctl != MessageContent.CTL_GROUP_KEY) return false
-        val groupId = plain.gk?.groupId ?: return false
+        val gk = plain.gk ?: return false
+        val groupId = gk.groupId
+        val senderId = source.envelope.senderId
+        val departed = { row: GroupEntity -> senderId in GroupMembersStore.decode(row.departed) }
+        val before = groups.find(groupId)
+        if (before == null || departed(before)) pinRosterFromSeed(source, gk, me)
         val group = groups.find(groupId)
         val why =
             when {
                 group == null -> "not held yet"
-                source.envelope.senderId in GroupMembersStore.decode(group.departed) -> "sender departed"
+                departed(group) -> "sender departed"
                 else -> return false
             }
         if (!pendingGroupKeys.hold(groupId, source)) return false
-        Log.i(TAG, "holding group key ${source.envelope.id} from ${source.envelope.senderId}: group $groupId $why")
+        Log.i(TAG, "holding group key ${source.envelope.id} from $senderId: group $groupId $why")
         return true
+    }
+
+    /**
+     * Pins the group a seed carries the founding roster of (`GroupKeyPayload.group`, work item #47), through
+     * the one door every roster goes through — [reconcileGroup], so [vetRoster]'s derivation check (the id
+     * *is* the hash of the founding set, we and the sender are in it, at most [GroupInfo.MAX_MEMBERS]) and
+     * [rejoinBy]'s `sentAt > leftAt` guard apply exactly as they do to a group frame. Called only for the two
+     * shapes that would otherwise park: no row, or the sender held as departed. For a departed sender whose
+     * seed is a re-served *pre-leave* one the row is still reconciled (within the pin, no rejoin — what that
+     * member's pre-leave chat frame already does through [handleChat]) and the caller then parks the seed as
+     * before. A roster naming another group, or an over-cap one, is malformed and ignored (the seed parks).
+     *
+     * The seed is already in custody when this runs (`onDeliver` custodies before it dispatches), so the
+     * first-sight custody replay inside [reconcileGroup] is told to skip it: the adopt, the ack and the root
+     * gossip must come from this pass's own commit, not from a nested re-entry under the pin.
+     */
+    private suspend fun pinRosterFromSeed(
+        source: InboundFrame,
+        gk: GroupKeyPayload,
+        me: String,
+    ) {
+        val roster = gk.group ?: return
+        if (roster.id != gk.groupId || roster.members.size > GroupInfo.MAX_MEMBERS) return
+        val env = source.envelope
+        if (reconcileGroup(roster, env.senderId, clampFuture(env.sentAt), me, replayExcept = env.id)) {
+            Log.i(TAG, "pinned group ${gk.groupId} from the seed ${env.id} of ${env.senderId}")
+        }
     }
 
     /**
@@ -1944,6 +1983,7 @@ class InboundPipeline(
         senderId: String,
         sentAt: Long,
         me: String,
+        replayExcept: String? = null,
     ): Boolean {
         // DataStore read hoisted out of the transaction: it can't enroll in a Room transaction, and holding the
         // exclusive DB lock across a DataStore suspend would stall every other writer.
@@ -2003,8 +2043,9 @@ class InboundPipeline(
         // The park is in memory: a seed that arrived, was parked, and was lost to a process death before this
         // row existed is still in our custody store, and nothing else will hand it to us again (see
         // MeshManager.replayCustodiedSeedDms). First sight only — the park can only have held a seed for a
-        // group we did not hold — so a group's ordinary frames never pay for it.
-        if (firstSight) replaySeedCustody(group.id)
+        // group we did not hold — so a group's ordinary frames never pay for it. [replayExcept] is the seed
+        // whose own roster this sight came from (pinRosterFromSeed): custodied already, still mid-flight.
+        if (firstSight) replaySeedCustody(group.id, replayExcept)
         return true
     }
 

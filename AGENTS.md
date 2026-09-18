@@ -163,11 +163,13 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   people glyph on a disc tinted by the group id) laid out by `clusterCells`, which the shade draws from the
   same cells; renderers never re-sort — READ ADR 2026-09.zapp.
 - **When touching a group's roster — `reconcileGroup`/`vetRoster`, `groupleave`, `GroupRepository.recordDeparture`
-  / `recordRejoin`, `PendingGroupKeys`, or how a member learns of a new group:** READ
-  `docs/GROUP_FORWARD_SECRECY.md` §1 (the pinned founding roster) and §6.1 (leave-rekey), then ADR
-  2026-09.v6fu. A group's id is the hash of its member set, so "the same people" is always the same group;
-  membership shrinks only by your own signed leave and grows only by your own signed rejoin — nobody can add
-  or remove anyone else — and the seed a creator floods *before* the roster is parked, never consumed.
+  / `recordRejoin`, `PendingGroupKeys`, `GroupKeyPayload.group` / `pinRosterFromSeed`, or how a member learns
+  of a new group:** READ `docs/GROUP_FORWARD_SECRECY.md` §1 (the pinned founding roster) and §6.1
+  (leave-rekey), then ADR 2026-09.v6fu and ADR 2026-09.mjaj. A group's id is the hash of its member set, so
+  "the same people" is always the same group; membership shrinks only by your own signed leave and grows only
+  by your own signed rejoin — nobody can add or remove anyone else. The seed carries the founding roster, so a
+  member with no row pins the group from the seed through `reconcileGroup`'s one door (the relay-only case,
+  #47); a seed without one (an older build's) is parked, never consumed.
 - **When touching contact cards, the Add-by-link / share-link flow, deep links (`getknit.app/c`,
   `knit://`), or `mesh/IntroSync`:** READ `docs/CONTACT_CARD.md` (the card layout + golden vectors, the
   intro driver's rules, the assetlinks prerequisite) and `docs/SPOOL_PROTOCOL.md` §3.5 (the pair scope);

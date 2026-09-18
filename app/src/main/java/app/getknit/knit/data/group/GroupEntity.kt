@@ -73,6 +73,14 @@ fun GroupEntity.toGroupInfo(): GroupInfo =
     )
 
 /**
+ * The roster half of [toGroupInfo], for the `CTL_GROUP_KEY` seed (`GroupKeyPayload.group`): the founding
+ * set, the creator and the name — what a member holding no row needs to pin the group and title it — and
+ * never the photo, which is a blob to pull and rides the group's own frames once the roster has let the
+ * receiver read them.
+ */
+fun GroupEntity.toFoundingInfo(): GroupInfo = toGroupInfo().copy(photoHash = null, photoUpdatedAt = null)
+
+/**
  * Encodes/decodes the [GroupEntity.members] JSON column. Its own [Json] instance (WireCodec's is
  * private); a malformed/legacy value decodes to an empty list rather than crashing rendering — mirrors
  * [app.getknit.knit.data.message.MentionStore].

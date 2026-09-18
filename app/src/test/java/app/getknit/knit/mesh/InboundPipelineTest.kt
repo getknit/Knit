@@ -302,6 +302,9 @@ class InboundPipelineTest {
         val redistributed = mutableListOf<Pair<String, String>>()
         val groupKeysFlushed = mutableListOf<Pair<String, Boolean>>()
         val custodyReplays = mutableListOf<Pair<String?, String?>>()
+
+        /** `(groupId, except)` for every first-sight seed-custody replay the pipeline asked for. */
+        val seedCustodyReplays = mutableListOf<Pair<String, String?>>()
         var failClassify = false
 
         /** When armed, records the `isRoom` scope each inbound classification ran under. */
@@ -397,6 +400,7 @@ class InboundPipelineTest {
                     redistributeGroupKey = { groupId, requester -> redistributed += groupId to requester },
                     flushGroupKeys = { member, force -> groupKeysFlushed += member to force },
                     replayGroupCustody = { groupId, senderId -> custodyReplays += groupId to senderId },
+                    replaySeedCustody = { groupId, except -> seedCustodyReplays += groupId to except },
                     onTransferCtl = { sender, xf, at ->
                         transferSignals += Triple(sender, xf, at)
                         admitTransfer
@@ -4410,7 +4414,7 @@ class InboundPipelineTest {
     /** Drives a real [GroupRatchetEngine] as one group member authoring group-form frames toward the rig. */
     private inner class GroupRatchetAuthor(
         val party: Party,
-        private val groupId: String,
+        val groupId: String,
         at: Long = 5L,
     ) {
         private val engine = GroupRatchetEngine()
@@ -6004,6 +6008,220 @@ class InboundPipelineTest {
             assertEquals(0L, rig.metrics.snapshot().groupSeedsHeld)
             assertEquals(1L, rig.metrics.snapshot().groupSeedsAdopted)
             assertTrue(rig.pendingGroupKeys.release(group.id).isEmpty())
+        }
+
+    // --- the seed carries its founding roster (work item #47) ---
+
+    /** A `CTL_GROUP_KEY` from [author]'s party carrying the seed and [roster], as a #47-era sender emits it. */
+    private fun Rig.rosterSeed(
+        author: GroupRatchetAuthor,
+        roster: GroupInfo,
+        id: String,
+        sentAt: Long = 5L,
+    ) = V2Author(author.party, this).dm(
+        id,
+        "",
+        ctl = MessageContent.CTL_GROUP_KEY,
+        gk = GroupKeyPayload(author.groupId, keys = listOf(author.seed()), group = roster),
+        sentAt = sentAt,
+    )
+
+    @Test
+    fun aSeedCarryingItsRosterPinsTheGroupAndAdoptsOnItsFirstPass() =
+        runTest {
+            // The relay-only member of work item #47: the seed is the only frame their DM scope can carry,
+            // so the roster it now carries is what creates the row — through reconcileGroup, exactly as a
+            // group frame would — and the same pass then adopts the seed and the root.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.unknownRatchetGroup(alice).copy(name = "Team")
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(alice, rig.rosterSeed(author, group, "seed-roster", sentAt = 7L))
+
+            // Pinned from the seed: the founding roster, the creator, the name — and no photo to pull.
+            val row = checkNotNull(rig.groupMap[group.id])
+            assertEquals(group.members.toSet(), GroupMembersStore.decode(row.members).toSet())
+            assertEquals(alice.nodeId, row.createdBy)
+            assertEquals("Team", row.name)
+            assertEquals(7L, row.createdAt)
+            assertNull(row.photoHash)
+            assertEquals(MessageEntity.KIND_GROUP_CREATED, rig.msgMap["created:${group.id}"]?.kind)
+            // Adopted on this pass, nothing parked, the ack rode back, custody replayed as for any seed.
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsAdopted)
+            assertEquals(1, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
+            assertTrue(rig.originated.any { it.type == FrameType.CHAT && it.recipientId == alice.nodeId })
+            assertEquals(listOf<Pair<String?, String?>>(group.id to alice.nodeId), rig.custodyReplays)
+            assertEquals(0L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
+            // The first-sight custody replay ran once and was told to skip the seed itself: it is already
+            // custodied when the pipeline dispatches it, and re-entering it nested under its own pin would
+            // move the adopt, the ack and the root gossip out of this pass.
+            assertEquals(listOf(group.id to "seed-roster"), rig.seedCustodyReplays)
+            // The seed frame kept the ctl contract: never a message row, never a receipt.
+            assertFalse(rig.msgMap.containsKey("seed-roster"))
+            assertFalse(rig.originated.any { it.type == FrameType.RECEIPT })
+
+            // The founding frame then opens on its own first pass — no NO_KEY, no replay needed.
+            rig.deliver(alice, author.groupFrame(group, "g-first", "founded across the relay", sentAt = 8L))
+            assertEquals("founded across the relay", rig.msgMap["g-first"]?.body)
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+            assertEquals(0L, rig.drops(DropReason.RATCHET_DUPLICATE))
+        }
+
+    @Test
+    fun aSeedWhoseRosterDoesNotDeriveToItsIdIsParkedNotPinned() =
+        runTest {
+            // vetRoster's first-sight rule applies to a seed exactly as to a frame: an id that is not the
+            // hash of the founding set is refused, counted, and the seed parks as a roster-less one would.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val forged = rig.unknownRatchetGroup(alice).copy(id = "g-forged")
+            val author = GroupRatchetAuthor(alice, forged.id)
+
+            rig.deliver(alice, rig.rosterSeed(author, forged, "seed-forged"))
+
+            assertNull(rig.groupMap["g-forged"])
+            assertEquals(1L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsAdopted)
+            assertTrue(rig.seedCustodyReplays.isEmpty())
+        }
+
+    @Test
+    fun aSeedWhoseRosterOmitsUsIsParkedSilently() =
+        runTest {
+            // Not our group (the roster derives, but we are not in it): nothing to vet, nothing to count —
+            // the seed is parked, as any seed naming a group we do not hold.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pin(alice)
+            val theirs = rig.group(members = listOf(alice.nodeId, bob.nodeId), createdBy = alice.nodeId)
+            val author = GroupRatchetAuthor(alice, theirs.id)
+
+            rig.deliver(alice, rig.rosterSeed(author, theirs, "seed-theirs"))
+
+            assertNull(rig.groupMap[theirs.id])
+            assertEquals(0L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+        }
+
+    @Test
+    fun aSeedWhoseRosterNamesAnotherGroupIsParkedWithTheRosterIgnored() =
+        runTest {
+            // `group.id` must be the seed's own `groupId`: a roster for some other group is malformed and
+            // ignored outright — never reconciled under either id.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pin(alice)
+            rig.pin(bob)
+            val ours = rig.unknownRatchetGroup(alice)
+            val other = rig.unknownRatchetGroup(alice, bob)
+            val author = GroupRatchetAuthor(alice, ours.id)
+
+            rig.deliver(alice, rig.rosterSeed(author, other, "seed-mismatch"))
+
+            assertNull(rig.groupMap[ours.id])
+            assertNull(rig.groupMap[other.id])
+            assertEquals(0L, rig.drops(DropReason.GROUP_ROSTER_REFUSED))
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+        }
+
+    @Test
+    fun aSeedWhoseRosterNamesABlockedCreatorIsParkedNotPinned() =
+        runTest {
+            // groupFrameRefused's new-group rule, the proxy case: a non-blocked member's seed carries a
+            // roster whose creator we blocked. A group a blocked user starts is never created here,
+            // whichever frame carries its roster (the blocked creator's own frames never reach delivery).
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            val bob = party()
+            rig.pin(alice)
+            rig.pin(bob)
+            rig.settings.blocked.value = setOf(alice.nodeId)
+            val group = rig.unknownRatchetGroup(alice, bob)
+            val author = GroupRatchetAuthor(bob, group.id)
+
+            rig.deliver(bob, rig.rosterSeed(author, group, "seed-blocked"))
+
+            assertNull(rig.groupMap[group.id])
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsAdopted)
+        }
+
+    @Test
+    fun aDepartedSendersRosterCarryingSeedRejoinsThemAndAdopts() =
+        runTest {
+            // The second park shape, retired for a #47-era sender: the rejoiner's seed is their own signed
+            // frame listing them as a member, so it rejoins them (sentAt beats the leave), rekeys, and
+            // adopts on the same pass — no park, no wait for the frame that follows.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            rig.depart(group, alice, leftAt = 10L)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(alice, rig.rosterSeed(author, group, "seed-rejoin", sentAt = 20L))
+
+            assertEquals(setOf(rig.self.nodeId, alice.nodeId), rig.members(group.id))
+            assertTrue(rig.departed(group.id).isEmpty())
+            coVerify(exactly = 1) { rig.groups.recordRejoin(group.id, alice.nodeId, 20L, rekey = true) }
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsAdopted)
+            assertEquals(1, rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).size)
+            // Not a first sight: the row existed, so no seed-custody replay was asked for.
+            assertTrue(rig.seedCustodyReplays.isEmpty())
+
+            rig.deliver(alice, author.groupFrame(group, "g-back", "back again", sentAt = 21L))
+            assertEquals("back again", rig.msgMap["g-back"]?.body)
+            assertEquals(0L, rig.drops(DropReason.GROUP_RATCHET_NO_KEY))
+        }
+
+    @Test
+    fun aReServedPreLeaveRosterCarryingSeedStaysParked() =
+        runTest {
+            // Custody re-serves a seed alice sent BEFORE she left: it lists her, but the rejoin needs a frame
+            // newer than the recorded departure, so the tombstone stands and the seed parks as before.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            rig.depart(group, alice, leftAt = 10L)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(alice, rig.rosterSeed(author, group, "seed-preleave", sentAt = 5L))
+
+            assertEquals(setOf(rig.self.nodeId), rig.members(group.id))
+            assertEquals(setOf(alice.nodeId), rig.departed(group.id))
+            coVerify(exactly = 0) { rig.groups.recordRejoin(any(), any(), any(), any()) }
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsAdopted)
+            assertTrue(rig.groupRatchetStore.recvChains(group.id, alice.nodeId, 1).isEmpty())
+        }
+
+    @Test
+    fun aRosterCarryingSeedForAGroupWeHoldTakesTheOrdinaryPathUntouched() =
+        runTest {
+            // The pin runs only for the two shapes that would otherwise park. A seed for a group we hold,
+            // from a member, adopts inline and its roster is never reconciled — not even a newer name.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            rig.pin(alice)
+            val group = rig.seedRatchetGroup(alice)
+            val author = GroupRatchetAuthor(alice, group.id)
+
+            rig.deliver(alice, rig.rosterSeed(author, group.copy(name = "Renamed"), "seed-held", sentAt = 99L))
+
+            assertEquals("", rig.groupMap[group.id]?.name)
+            assertEquals(0L, rig.metrics.snapshot().groupSeedsHeld)
+            assertEquals(1L, rig.metrics.snapshot().groupSeedsAdopted)
+            assertTrue(rig.seedCustodyReplays.isEmpty())
+            coVerify(exactly = 0) { rig.groups.upsert(any()) }
         }
 
     private companion object {

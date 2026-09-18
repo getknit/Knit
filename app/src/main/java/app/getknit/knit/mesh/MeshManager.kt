@@ -14,6 +14,7 @@ import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.forward.ForwardRepository
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.group.toFoundingInfo
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
@@ -1180,6 +1181,12 @@ class MeshManager(
      * re-send flush, the key-request answer, the root gossip) cannot drift on whether the root rides
      * along. The spec's rule is simply "on **every** seed send and key-request response from any member
      * who holds a root", which is exactly what routing them all through here enforces.
+     *
+     * The founding roster rides on the same rule (`GroupKeyPayload.group`, spec C-3.2-16): every
+     * distribution carries it, so a member holding no row for the group — one reachable only over a
+     * relay, whose DM scope carries the seed and whose group scope cannot derive without the root the seed
+     * carries — pins the group from the seed itself (`InboundPipeline.pinRosterFromSeed`, work item #47).
+     * The roster half only ([GroupEntity.toFoundingInfo]): the photo is a blob and rides the group frames.
      */
     private suspend fun groupKeyPayload(
         groupId: String,
@@ -1194,6 +1201,7 @@ class MeshManager(
                     groupId = groupId,
                     keys = keys,
                     gr = held?.let { GroupRootPayload(root = checkNotNull(it.root), version = it.version, minter = it.minter) },
+                    group = groups.find(groupId)?.toFoundingInfo(),
                 ),
         )
     }
@@ -1307,6 +1315,10 @@ class MeshManager(
         adopted: Boolean,
     ) {
         if (adopted) {
+            // A root just landed, so a group scope may exist that the table does not derive yet: re-derive
+            // it now rather than on the 15 s tick (the same reason a pasted invite subscribes at once) — for
+            // a member whose only plane is the relay, this is the pull that fetches the founding frame.
+            scopeSync?.onScopeTableChanged()
             scopeSync?.onCustodyChanged()
             gossipGroupRoot(gk.groupId, skip = senderId)
             return
@@ -1443,8 +1455,17 @@ class MeshManager(
      * DM the ratchet already consumed drops as a duplicate, and the lost seed opens because a parked frame
      * never advanced the chain. Bounded by the roster and the custody TTL; oldest first so the chain walks
      * forward.
+     *
+     * [except] is the frame whose roster is creating the row right now (a seed carrying `GroupKeyPayload.group`,
+     * `InboundPipeline.pinRosterFromSeed`): it is already in custody by the time the pipeline dispatches it, so
+     * without the exclusion this replay would re-enter it nested inside its own pin — the nested pass would
+     * adopt, ack and gossip from under the pin, and the outer pass's commit would then silently find its chain
+     * index consumed. The outer pass is the one that must do the work; the frame is still being processed.
      */
-    private suspend fun replayCustodiedSeedDms(groupId: String) {
+    private suspend fun replayCustodiedSeedDms(
+        groupId: String,
+        except: String?,
+    ) {
         val me = identity.nodeId()
         val group = groups.find(groupId) ?: return
         val senders = GroupMembersStore.decode(group.members).toSet() - GroupMembersStore.decode(group.departed).toSet() - me
@@ -1452,7 +1473,11 @@ class MeshManager(
             .liveFrames(clock())
             .filter { frame ->
                 val env = frame.envelope
-                env.type == FrameType.CHAT && env.recipientId == me && env.group == null && env.senderId in senders
+                env.id != except &&
+                    env.type == FrameType.CHAT &&
+                    env.recipientId == me &&
+                    env.group == null &&
+                    env.senderId in senders
             }
             // Ratchet-form only: the duplicate drop is what makes re-entering a consumed DM a no-op, and a seed
             // is never anything else. A legacy envelope has no such guard and must not be re-delivered.

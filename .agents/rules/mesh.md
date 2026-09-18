@@ -179,6 +179,17 @@ free). Two invariants that are easy to break:
   lineages. Refusing to *adopt* a strictly-greater root is the failure mode: the device keeps gossiping
   a root everyone else ignores and never converges again. Bound outbound chatter (the per-(group,
   member) seed-send floor), never adoption.
+- **The seed carries the founding roster, and a row it creates goes through `reconcileGroup`** (spec
+  C-3.2-16, ADR 2026-09.mjaj). Every `CTL_GROUP_KEY` the one builder `MeshManager.groupKeyPayload` emits
+  carries `GroupKeyPayload.group` — the roster half of the row (`toFoundingInfo`: id, members, departed,
+  creator, name; never the photo, a blob that rides the group frames) — because a relay-only member's DM
+  scope carries the seed while the roster rode only the group scope the seed's own root derives. A member
+  holding no row (or holding the sender as departed) pins the group from the seed *before* the park
+  decision (`InboundPipeline.pinRosterFromSeed`), through `reconcileGroup` and `vetRoster` like every other
+  roster — never by a second door, never without the derivation check. Two traps: the seed is already
+  custodied when the pin runs, so the first-sight custody replay must skip it (`replayExcept`) or the outer
+  commit silently finds its chain consumed; and `PendingGroupKeys` is now the fallback for a roster-less
+  (older-build) or refused seed, not the founding path — don't make a scenario wait on `groupSeedsHeld`.
 
 ## The DB transaction is taken BEFORE the ratchet mutex — always
 

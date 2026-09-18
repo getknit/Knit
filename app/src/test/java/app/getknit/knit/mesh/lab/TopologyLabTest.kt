@@ -55,7 +55,7 @@ class TopologyLabTest {
 
             val groupId = alice.createGroup(bob, carol, dave)
             assertTrue(alice.sendGroup(groupId, "all four"))
-            assertTrue(lab.await(1) { dave.decrypted(groupId).size })
+            assertTrue(lab.tryAwait(1) { dave.decrypted(groupId).size })
             assertTrue(dave.sendGroup(groupId, "from the far corner"))
             lab.assertConverged(listOf(alice, bob, carol, dave), atLeast = 2) { groupId }
 
@@ -93,7 +93,7 @@ class TopologyLabTest {
 
             val groupId = alice.createGroup(carol, erin)
             assertTrue(alice.sendGroup(groupId, "the odd ones"))
-            assertTrue(lab.await(1) { erin.decrypted(groupId).size })
+            assertTrue(lab.tryAwait(1) { erin.decrypted(groupId).size })
             assertTrue(erin.sendGroup(groupId, "heard at the far end"))
             lab.assertConverged(listOf(alice, carol, erin), atLeast = 2, carriers = listOf(bob, dave)) { groupId }
         }

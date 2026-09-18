@@ -66,7 +66,7 @@ class GroupMembershipLabTest {
             alice.leaveGroup(groupId)
             assertTrue(
                 "bob never recorded the departure",
-                lab.await(1) {
+                lab.tryAwait(1) {
                     if (bob.groupShape(groupId)?.departed ==
                         setOf(alice.nodeId)
                     ) {
@@ -100,7 +100,7 @@ class GroupMembershipLabTest {
             val carol = lab.node("carol").apply { setDisplayName("Carol") }
             val groupId = triangleWithAGroup(alice, bob, carol)
             alice.leaveGroup(groupId)
-            assertTrue(lab.await(1) { if (carol.groupShape(groupId)?.departed == setOf(alice.nodeId)) 1 else 0 })
+            assertTrue(lab.tryAwait(1) { if (carol.groupShape(groupId)?.departed == setOf(alice.nodeId)) 1 else 0 })
             assertTrue(bob.sendGroup(groupId, "while alice was out"))
             lab.assertConverged(listOf(bob, carol), atLeast = 2, carriers = listOf(alice)) { groupId }
 
@@ -112,7 +112,7 @@ class GroupMembershipLabTest {
             assertTrue(bob.sendGroup(groupId, "welcome back"))
             assertTrue(
                 "alice never read bob's post-rejoin message",
-                lab.await(1) {
+                lab.tryAwait(1) {
                     alice.decrypted(groupId).count {
                         it.second ==
                             "welcome back"
@@ -161,7 +161,7 @@ class GroupMembershipLabTest {
             assertTrue(alice.sendGroup(groupId, "founded"))
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { groupId }
             alice.leaveGroup(groupId)
-            assertTrue(lab.await(1) { if (bob.groupShape(groupId)?.departed == setOf(alice.nodeId)) 1 else 0 })
+            assertTrue(lab.tryAwait(1) { if (bob.groupShape(groupId)?.departed == setOf(alice.nodeId)) 1 else 0 })
 
             alice.transport.hold(bob.transport)
             alice.createGroup(bob)
@@ -170,7 +170,7 @@ class GroupMembershipLabTest {
             alice.transport.release(bob.transport) { batch -> batch.filterNot { it.isGroupFrame() } }
             assertTrue(
                 "alice's seed never rejoined her on bob's phone",
-                lab.await(1) { if (bob.groupShape(groupId)?.departed == emptySet<String>()) 1 else 0 },
+                lab.tryAwait(1) { if (bob.groupShape(groupId)?.departed == emptySet<String>()) 1 else 0 },
             )
             assertEquals(0L, bob.metrics.snapshot().groupSeedsHeld)
 
@@ -235,7 +235,7 @@ class GroupMembershipLabTest {
             lab.unlink(bob, carol)
             lab.unlink(alice, carol)
             alice.leaveGroup(groupId)
-            assertTrue(lab.await(1) { if (bob.groupShape(groupId)?.departed == setOf(alice.nodeId)) 1 else 0 })
+            assertTrue(lab.tryAwait(1) { if (bob.groupShape(groupId)?.departed == setOf(alice.nodeId)) 1 else 0 })
             assertTrue(bob.sendGroup(groupId, "while carol was out"))
             lab.assertConverged(listOf(bob), atLeast = 2, carriers = listOf(alice)) { groupId }
 

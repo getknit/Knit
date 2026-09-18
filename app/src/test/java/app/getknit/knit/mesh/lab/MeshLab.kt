@@ -205,9 +205,11 @@ class MeshLab {
     /**
      * Polls [have] until it reaches [count] or [timeoutMs] elapses, on a real dispatcher (the session scopes
      * run on `Dispatchers.Default`, so virtual time can't see them). Returns whether it got there; the caller
-     * asserts, with a message that says what the node actually holds.
+     * asserts, with a message that says what the node actually holds. For a wait whose failure needs no
+     * bespoke wording — the DM that must land before its reply, the post a node must hear before the next
+     * step — use [await], which fails the scenario itself.
      */
-    suspend fun await(
+    suspend fun tryAwait(
         count: Int,
         timeoutMs: Long = AWAIT_MS,
         have: suspend () -> Int,
@@ -218,6 +220,22 @@ class MeshLab {
                 true
             } == true
         }
+
+    /**
+     * [tryAwait] that fails the scenario where the wait ran out, with every node's counters and sends. A
+     * bare wait whose result was dropped used to let the scenario carry on — a reply sent before the first
+     * DM had landed became the both-initiate race the fixture was written to avoid, and the failure that
+     * surfaced was the oracle's, a step or two later and with the wrong name on it.
+     */
+    suspend fun await(
+        count: Int,
+        timeoutMs: Long = AWAIT_MS,
+        have: suspend () -> Int,
+    ) {
+        if (!tryAwait(count, timeoutMs, have)) {
+            throw AssertionError("never reached $count within $timeoutMs ms (have ${have()})\n${report(nodes)}")
+        }
+    }
 
     /**
      * What a failed wait reads next: every node's router and pipeline counters, every frame each transport
@@ -272,7 +290,7 @@ class MeshLab {
     ) {
         val names = nodes.map { it.name }
         val landed =
-            await(1, timeoutMs) {
+            tryAwait(1, timeoutMs) {
                 val sets = nodes.map { it.decrypted(conversation(it)) }
                 if (sets.all { it.size >= atLeast } && sets.distinct().size == 1) 1 else 0
             }
@@ -300,7 +318,7 @@ class MeshLab {
         assertAttachmentsAgree(nodes, ids, timeoutMs, conversation)
         assertGroupAgrees(nodes, conversation(nodes.first()), timeoutMs)
 
-        val ticked = await(1, timeoutMs) { if (nodes.all { n -> n.missingAcks(conversation(n), nodes).isEmpty() }) 1 else 0 }
+        val ticked = tryAwait(1, timeoutMs) { if (nodes.all { n -> n.missingAcks(conversation(n), nodes).isEmpty() }) 1 else 0 }
         val owed = nodes.map { n -> "  ${n.name}: ${n.missingAcks(conversation(n), nodes)}" }.joinToString("\n")
         assertTrue(
             "delivery ticks did not converge across $names within ${timeoutMs}ms (message → who never acked):\n$owed\n${report(nodes)}",
@@ -308,7 +326,7 @@ class MeshLab {
         )
 
         val stores = nodes + carriers
-        val custodied = await(1, timeoutMs) { if (stores.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
+        val custodied = tryAwait(1, timeoutMs) { if (stores.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
         val rows = stores.map { n -> "  ${n.name}: ${n.custodyIds().sorted()}" }.joinToString("\n")
         assertTrue("custody did not converge across ${stores.map { it.name }} within ${timeoutMs}ms:\n$rows\n${report(stores)}", custodied)
 
@@ -336,7 +354,7 @@ class MeshLab {
         ids: List<String>,
         timeoutMs: Long,
     ) {
-        val reacted = await(1, timeoutMs) { if (ids.all { id -> nodes.map { it.reactions(id) }.distinct().size == 1 }) 1 else 0 }
+        val reacted = tryAwait(1, timeoutMs) { if (ids.all { id -> nodes.map { it.reactions(id) }.distinct().size == 1 }) 1 else 0 }
         assertTrue(
             "reactions did not converge across ${nodes.map { it.name }} within ${timeoutMs}ms (message → per-node sets):\n" +
                 ids.map { id -> "  $id: ${nodes.map { "${it.name}=${it.reactions(id)}" }}" }.joinToString("\n"),
@@ -350,7 +368,7 @@ class MeshLab {
         timeoutMs: Long,
         conversation: (LabNode) -> String,
     ) {
-        val held = await(1, timeoutMs) { if (nodes.all { n -> ids.all { n.attachmentHeld(conversation(n), it) } }) 1 else 0 }
+        val held = tryAwait(1, timeoutMs) { if (nodes.all { n -> ids.all { n.attachmentHeld(conversation(n), it) } }) 1 else 0 }
         assertTrue(
             "attachment bytes did not land on every node within ${timeoutMs}ms:\n" +
                 nodes.map { n -> "  ${n.name}: missing ${ids.filterNot { n.attachmentHeld(conversation(n), it) }}" }.joinToString("\n"),
@@ -372,7 +390,7 @@ class MeshLab {
         timeoutMs: Long,
     ) {
         if (!thread.startsWith(Conversations.GROUP_ID_PREFIX)) return
-        val agreed = await(1, timeoutMs) { if (nodes.map { it.groupShape(thread) }.distinct().size == 1) 1 else 0 }
+        val agreed = tryAwait(1, timeoutMs) { if (nodes.map { it.groupShape(thread) }.distinct().size == 1) 1 else 0 }
         assertTrue(
             "the group's roster, name or photo did not converge across ${nodes.map { it.name }} within ${timeoutMs}ms:\n" +
                 nodes.map { "  ${it.name}: ${it.groupShape(thread)}" }.joinToString("\n"),
@@ -385,7 +403,7 @@ class MeshLab {
         timeoutMs: Long,
     ) {
         val pairs = nodes.flatMap { a -> nodes.filter { it !== a }.map { b -> a to b } }
-        val presented = await(1, timeoutMs) { if (pairs.all { (a, b) -> a.presentationOf(b) == b.ownPresentation() }) 1 else 0 }
+        val presented = tryAwait(1, timeoutMs) { if (pairs.all { (a, b) -> a.presentationOf(b) == b.ownPresentation() }) 1 else 0 }
         assertTrue(
             "profiles did not converge across ${nodes.map { it.name }} within ${timeoutMs}ms:\n" +
                 pairs
@@ -400,7 +418,7 @@ class MeshLab {
         timeoutMs: Long,
     ) {
         val unordered = nodes.indices.flatMap { i -> (i + 1 until nodes.size).map { j -> nodes[i] to nodes[j] } }
-        val oneSession = await(1, timeoutMs) { if (unordered.all { (a, b) -> sessionsAgree(a.session(b), b.session(a)) }) 1 else 0 }
+        val oneSession = tryAwait(1, timeoutMs) { if (unordered.all { (a, b) -> sessionsAgree(a.session(b), b.session(a)) }) 1 else 0 }
         assertTrue(
             "DM sessions disagree across ${nodes.map { it.name }} within ${timeoutMs}ms:\n" +
                 unordered
@@ -457,7 +475,7 @@ class MeshLab {
         label: String,
         vararg peers: LabNode,
     ) {
-        val ok = await(1, timeoutMs = SPOOL_AWAIT_MS) { if (node.scopeStatus(label)?.converged == true) 1 else 0 }
+        val ok = tryAwait(1, timeoutMs = SPOOL_AWAIT_MS) { if (node.scopeStatus(label)?.converged == true) 1 else 0 }
         if (ok) return
         val peer = peers.firstOrNull() ?: node
         // A scope that will not converge is nearly always one frame id held as two byte-variants (the
@@ -518,7 +536,7 @@ class MeshLab {
         peer: LabNode,
     ) {
         // The scope is derived on the 15 s reconcile once the session is confirmed, then the profiles cross.
-        val ok = await(1, timeoutMs = SPOOL_AWAIT_MS) { if (node.spoolPresent(peer)) 1 else 0 }
+        val ok = tryAwait(1, timeoutMs = SPOOL_AWAIT_MS) { if (node.spoolPresent(peer)) 1 else 0 }
         assertTrue("${node.name} never saw ${peer.name} on the spool", ok)
     }
 
@@ -528,7 +546,7 @@ class MeshLab {
         messageId: String,
         acker: LabNode,
     ): DeliveryPlane {
-        val ok = await(1) { if (author.receiptPlanes(messageId).containsKey(acker.nodeId)) 1 else 0 }
+        val ok = tryAwait(1) { if (author.receiptPlanes(messageId).containsKey(acker.nodeId)) 1 else 0 }
         assertTrue("${author.name} never got ${acker.name}'s tick for $messageId", ok)
         return author.receiptPlanes(messageId).getValue(acker.nodeId)
     }
@@ -540,7 +558,7 @@ class MeshLab {
      * again); this stays for the fixtures that settle the stores at other points.
      */
     suspend fun awaitCustodyParity(vararg nodes: LabNode) {
-        val ok = await(1) { if (nodes.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
+        val ok = tryAwait(1) { if (nodes.map { it.custodyFingerprint() }.distinct().size == 1) 1 else 0 }
         assertTrue(
             "custody never settled among ${nodes.map { it.name }}:\n" +
                 nodes.map { "  ${it.name}: ${it.custodyIds().sorted()}" }.joinToString("\n") + "\n${report(nodes.toList())}",
@@ -557,7 +575,7 @@ class MeshLab {
      */
     suspend fun awaitAcquainted(vararg nodes: LabNode) {
         val pairs = nodes.flatMap { a -> nodes.filter { it !== a }.map { b -> a to b } }
-        val ok = await(1) { if (pairs.all { (a, b) -> a.knows(b) }) 1 else 0 }
+        val ok = tryAwait(1) { if (pairs.all { (a, b) -> a.knows(b) }) 1 else 0 }
         val missing = pairs.filterNot { (a, b) -> a.knows(b) }.map { (a, b) -> "${a.name}→${b.name}" }
         assertTrue("profiles never exchanged among ${nodes.map { it.name }}; missing $missing\n${report(nodes.toList())}", ok)
         awaitCustodyParity(*nodes)

@@ -76,7 +76,7 @@ class AttachmentLabTest {
             assertTrue(alice.sendImage(picture, "for carol", to = carol))
             val id = alice.ownMessageId(alice.dmWith(carol), "for carol")
             val hash = checkNotNull(alice.attachmentHash(alice.dmWith(carol), id))
-            assertTrue("bob never pulled the bytes he carries the frame for", lab.await(1) { if (bob.blobs.exists(hash)) 1 else 0 })
+            assertTrue("bob never pulled the bytes he carries the frame for", lab.tryAwait(1) { if (bob.blobs.exists(hash)) 1 else 0 })
             lab.unlink(alice, bob)
 
             lab.link(bob, carol)
@@ -126,7 +126,7 @@ class AttachmentLabTest {
             lab.assertConverged(listOf(alice, bob, carol), atLeast = 1) { groupId }
             val hash = checkNotNull(bob.group(groupId)?.photoHash)
             listOf(bob, carol).forEach { n ->
-                assertTrue("${n.name} never pulled the group photo", lab.await(1) { if (n.blobs.exists(hash)) 1 else 0 })
+                assertTrue("${n.name} never pulled the group photo", lab.tryAwait(1) { if (n.blobs.exists(hash)) 1 else 0 })
                 assertTrue(photo.contentEquals(n.blobs.bytes(hash)))
             }
         }
@@ -153,7 +153,7 @@ class AttachmentLabTest {
             val picture = Random(5).nextBytes(4_096)
             assertTrue(alice.sendImage(picture, "from the trail"))
             val id = alice.ownMessageId(Conversations.NEARBY, "from the trail")
-            assertTrue("bob never heard the post", lab.await(1) { bob.roomPosts()[alice.nodeId].orEmpty().size })
+            assertTrue("bob never heard the post", lab.tryAwait(1) { bob.roomPosts()[alice.nodeId].orEmpty().size })
             assertEquals(DeliveryPlane.LoRa, bob.receivedVia(Conversations.NEARBY, id))
             assertFalse("a board carries a frame, never its bytes", bob.attachmentHeld(Conversations.NEARBY, id))
 
@@ -165,7 +165,7 @@ class AttachmentLabTest {
             lab.link(alice, bob)
             assertTrue(
                 "the picture was never fetched once a holder linked",
-                lab.await(1) { if (bob.attachmentHeld(Conversations.NEARBY, id)) 1 else 0 },
+                lab.tryAwait(1) { if (bob.attachmentHeld(Conversations.NEARBY, id)) 1 else 0 },
             )
             assertTrue(picture.contentEquals(bob.attachmentPlain(Conversations.NEARBY, id)))
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { Conversations.NEARBY }

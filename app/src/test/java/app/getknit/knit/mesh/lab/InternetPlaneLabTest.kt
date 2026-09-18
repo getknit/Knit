@@ -86,7 +86,7 @@ class InternetPlaneLabTest {
             carol.leaveGroup(groupId)
             assertTrue(
                 "alice never learned of the departure",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     if (alice.groupShape(groupId)?.departed ==
                         setOf(carol.nodeId)
                     ) {
@@ -135,7 +135,7 @@ class InternetPlaneLabTest {
             lab.awaitGroupScope(carol, groupId, alice, bob)
             assertTrue(
                 "carol never read the founding message over the relay",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { carol.decrypted(groupId).size },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { carol.decrypted(groupId).size },
             )
             assertEquals(alice.groupShape(groupId), carol.groupShape(groupId))
             assertEquals(0L, carol.metrics.snapshot().groupSeedsHeld)
@@ -199,7 +199,7 @@ class InternetPlaneLabTest {
             lab.assertConverged(listOf(alice, bob), atLeast = 3) { alice.dmThreadWith(bob)(it) }
             assertTrue(
                 "the upload was never deferred",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     alice.metrics
                         .snapshot()
                         .spoolAttachDeferred
@@ -223,7 +223,7 @@ class InternetPlaneLabTest {
             lab.clock.advance(AttachmentDeferPolicy.RADIO_WINDOW_MS + 60_000L)
             assertTrue(
                 "the upload never happened after they parted",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
             )
         }
 
@@ -254,7 +254,7 @@ class InternetPlaneLabTest {
             val id = alice.ownMessageId(alice.dmWith(bob), "relay first")
             assertTrue(
                 "bob never got the frame off the relay\n${lab.report(listOf(alice, bob))}",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { bob.decrypted(bob.dmWith(alice)).count { it.first == id } },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { bob.decrypted(bob.dmWith(alice)).count { it.first == id } },
             )
             assertEquals(DeliveryPlane.Internet, bob.receivedVia(bob.dmWith(alice), id))
             // The radio catches up: its copy of the frame is a duplicate, and the bytes Bob asks for cross it.
@@ -265,7 +265,7 @@ class InternetPlaneLabTest {
             assertTrue(bob.sendDm(alice, "got it"))
             assertTrue(
                 "bob never judged the bytes\n${lab.report(listOf(alice, bob))}",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     bob.metrics.snapshot().let { (it.spoolAttachDeferred + it.spoolAttachPushed).toInt() }
                 },
             )
@@ -303,7 +303,7 @@ class InternetPlaneLabTest {
             lab.clock.advance(AttachmentDeferPolicy.RADIO_WINDOW_MS + 60_000L)
             assertTrue(
                 "bob never got the bytes over the relay",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.blobs.exists(hash)) 1 else 0 },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.blobs.exists(hash)) 1 else 0 },
             )
 
             // Everything so far crossed the spool; from here only the link-up's own frames are on the radio.
@@ -354,7 +354,7 @@ class InternetPlaneLabTest {
             val hash = checkNotNull(alice.attachmentHash(alice.dmWith(bob), id))
             assertTrue(
                 "bob never got the frame over the relay",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     bob.decrypted(bob.dmWith(alice)).count { it.second == "off the relay" }
                 },
             )
@@ -362,7 +362,7 @@ class InternetPlaneLabTest {
             // neighbour she has — who cannot serve her, because the bytes are still Alice's alone.
             assertTrue(
                 "carol never asked bob for the picture: ${carol.transport.sent}",
-                lab.await(1) { carol.transport.sent.count { it.contains(" ${FrameType.BLOB_REQ} ") } },
+                lab.tryAwait(1) { carol.transport.sent.count { it.contains(" ${FrameType.BLOB_REQ} ") } },
             )
             assertTrue("the bytes reached the relay after all: ${spool.chunksPut}", spool.chunksPut.isEmpty())
             assertFalse("bob held the picture before carol asked for it", bob.blobs.exists(hash))
@@ -373,14 +373,14 @@ class InternetPlaneLabTest {
             bob.heal()
             assertTrue(
                 "bob never got the bytes over the relay",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.blobs.exists(hash)) 1 else 0 },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.blobs.exists(hash)) 1 else 0 },
             )
 
             // No new link and no restart, so nothing can make Carol ask again inside the wait: the only way
             // she holds the picture is Bob serving the wanter he recorded when the bytes were not his yet.
             assertTrue(
                 "carol was never served the picture bob pulled off the relay",
-                lab.await(1) { if (carol.blobs.exists(hash)) 1 else 0 },
+                lab.tryAwait(1) { if (carol.blobs.exists(hash)) 1 else 0 },
             )
             // Carol carries the sealed blob and cannot read it; Bob, the addressee, is who the picture is for.
             assertArrayEquals(bob.blobs.bytes(hash), carol.blobs.bytes(hash))
@@ -420,7 +420,7 @@ class InternetPlaneLabTest {
             alice.setAvatar(Random(520).nextBytes(2_048))
             assertTrue(
                 "the avatar never reached the spool, so no round sighted bob",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
             )
             lab.unlink(alice, bob)
             spool.chunksPut.clear()
@@ -434,7 +434,7 @@ class InternetPlaneLabTest {
             val sent = alice.ownMessageId(thread, "only the relay carried this")
             assertTrue(
                 "bob's receipt has to land before the attachment pass can weigh it",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     if (alice.receivedVia(thread, sent) == DeliveryPlane.Internet) 1 else 0
                 },
             )
@@ -442,7 +442,7 @@ class InternetPlaneLabTest {
             lab.clock.advance(AttachmentDeferPolicy.ACK_GRACE_MS)
             assertTrue(
                 "an ack that only crossed the spool is not evidence the radios carried the bytes",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { spool.chunksPut.size },
             )
         }
 
@@ -467,7 +467,7 @@ class InternetPlaneLabTest {
                 "the garbage was never quarantined; spool holds ${spool.liveIds(
                     scope,
                 )}, alice=${alice.dmScopeStatus(bob)?.invalidCount} bob=${bob.dmScopeStatus(alice)?.invalidCount}",
-                lab.await(2, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(2, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     (
                         alice.metrics.snapshot().spoolInvalid +
                             bob.metrics.snapshot().spoolInvalid
@@ -500,13 +500,13 @@ class InternetPlaneLabTest {
 
             assertTrue(
                 "no intro ever went out",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     minOf(alice.metrics.snapshot().introsSent, bob.metrics.snapshot().introsSent).toInt()
                 },
             )
             assertTrue(
                 "the sessions never confirmed",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     if (alice.session(bob)?.confirmed == true &&
                         bob.session(alice)?.confirmed == true
                     ) {
@@ -557,12 +557,12 @@ class InternetPlaneLabTest {
             // The room pins its members to each other (§7.4): Bob learns Alice from her profile in the room.
             assertTrue(
                 "the room never introduced them",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.peers.find(alice.nodeId)?.pubKey != null) 1 else 0 },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { if (bob.peers.find(alice.nodeId)?.pubKey != null) 1 else 0 },
             )
             assertTrue(alice.postCommons(room, "welcome to the house"))
             assertTrue(
                 "the post never reached Bob",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { bob.decrypted(room).count { it.second == "welcome to the house" } },
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { bob.decrypted(room).count { it.second == "welcome to the house" } },
             )
             // Applying the same invite again changes nothing: still one relay, still one room.
             bob.applyInvite(alice.mintInvite())
@@ -597,7 +597,7 @@ class InternetPlaneLabTest {
             val alice = lab.node("alice", spool = spool).apply { setDisplayName("Alice") }
             assertTrue(
                 "the dead route never read as unreachable: ${alice.manager.spoolStatus().map { it.connected to it.lastError }}",
-                lab.await(1, timeoutMs = 20_000L) {
+                lab.tryAwait(1, timeoutMs = 20_000L) {
                     val statuses = alice.manager.spoolStatus()
                     assertTrue("a socket nothing answered counted as connected", statuses.none { it.connected })
                     statuses.count { it.lastError == ScopeSync.UNREACHABLE && it.dialFailures >= 2 }
@@ -636,7 +636,7 @@ class InternetPlaneLabTest {
             alice.setDisplayName("Alice, renamed")
             assertTrue(
                 "bob never saw the rename",
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     if (bob.peer(alice)?.name ==
                         "Alice, renamed"
                     ) {

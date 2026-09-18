@@ -90,16 +90,16 @@ class RoomFloodLabTest {
 
             (1..20).forEach { assertTrue(mallory.sendRoom("spam $it")) }
 
-            val refused = lab.await(15) { alice.drops(DropReason.INGRESS_REFUSED).toInt() }
+            val refused = lab.tryAwait(15) { alice.drops(DropReason.INGRESS_REFUSED).toInt() }
             assertTrue("Alice refused ${alice.drops(DropReason.INGRESS_REFUSED)} of the fifteen over-budget posts", refused)
-            assertTrue(lab.await(5) { bob.roomPosts()[mallory.nodeId]?.size ?: 0 })
+            assertTrue(lab.tryAwait(5) { bob.roomPosts()[mallory.nodeId]?.size ?: 0 })
             lab.settle()
             assertEquals("Alice delivered exactly the budget", 5, alice.roomPosts()[mallory.nodeId]?.size)
             assertEquals("Bob heard only what Alice admitted", 5, bob.roomPosts()[mallory.nodeId]?.size)
             assertEquals("the flood never reached Bob's meter", 0L, bob.drops(DropReason.INGRESS_REFUSED))
 
             assertTrue(bob.sendRoom("hello from bob"))
-            assertTrue(lab.await(1) { mallory.roomPosts()[bob.nodeId]?.size ?: 0 })
+            assertTrue(lab.tryAwait(1) { mallory.roomPosts()[bob.nodeId]?.size ?: 0 })
             lab.assertConverged(listOf(alice, bob), atLeast = 6) { Conversations.NEARBY }
         }
 }

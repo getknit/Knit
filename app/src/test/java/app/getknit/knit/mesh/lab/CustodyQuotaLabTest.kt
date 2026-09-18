@@ -60,7 +60,7 @@ class CustodyQuotaLabTest {
             // schedules each first-seen frame's relay after a 0–150 ms jitter, and under load that job can
             // run after the link comes up — it then hands Carol frames custody has already evicted (the first
             // runs flaked exactly so, delivering six or seven).
-            assertTrue("bob's relays never fired", lab.await(7) { (bob.metrics.snapshot().framesRelayed - relayedBefore).toInt() })
+            assertTrue("bob's relays never fired", lab.tryAwait(7) { (bob.metrics.snapshot().framesRelayed - relayedBefore).toInt() })
             assertEquals("bob keeps alice's newest five DMs, not seven", 5, bob.custodiedChatsFrom(alice, carol))
             assertEquals("alice's own store keeps the same five", 5, alice.custodiedChatsFrom(alice, carol))
 
@@ -90,7 +90,7 @@ class CustodyQuotaLabTest {
             lab.unlink(bob, carol)
             val relayedBefore = bob.metrics.snapshot().framesRelayed
             (1..7).forEach { assertTrue(alice.sendDm(carol, "apart $it")) }
-            assertTrue(lab.await(7) { (bob.metrics.snapshot().framesRelayed - relayedBefore).toInt() })
+            assertTrue(lab.tryAwait(7) { (bob.metrics.snapshot().framesRelayed - relayedBefore).toInt() })
             assertEquals(5, bob.custodiedChatsFrom(alice, carol))
 
             lab.link(bob, carol)
@@ -117,13 +117,13 @@ class CustodyQuotaLabTest {
             lab.unlink(bob, carol)
             val relayedBefore = bob.metrics.snapshot().framesRelayed
             (1..5).forEach { assertTrue(alice.sendGroup(groupId, "apart $it")) }
-            assertTrue(lab.await(5) { (bob.metrics.snapshot().framesRelayed - relayedBefore).toInt() })
+            assertTrue(lab.tryAwait(5) { (bob.metrics.snapshot().framesRelayed - relayedBefore).toInt() })
             assertEquals(3, bob.custodyIds().count { it in (1..5).map { n -> alice.ownMessageId(groupId, "apart $n") } })
 
             lab.link(bob, carol)
             assertTrue(
                 "carol never read the newest three",
-                lab.await(1) {
+                lab.tryAwait(1) {
                     if (carol.decrypted(groupId).map { it.second }.containsAll((3..5).map { "apart $it" })) 1 else 0
                 },
             )

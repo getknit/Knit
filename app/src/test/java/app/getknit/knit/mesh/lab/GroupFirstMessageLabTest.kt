@@ -112,7 +112,7 @@ class GroupFirstMessageLabTest {
             alice.transport.release(bob.transport) { batch -> batch.filterNot { it.isGroupFrame() } }
             assertTrue(
                 "bob never pinned the group from the seed",
-                lab.await(1) { if (bob.groupShape(groupId) != null) 1 else 0 },
+                lab.tryAwait(1) { if (bob.groupShape(groupId) != null) 1 else 0 },
             )
             assertEquals(0L, bob.metrics.snapshot().groupSeedsHeld)
 

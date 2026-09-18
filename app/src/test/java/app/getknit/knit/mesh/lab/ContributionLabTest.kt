@@ -51,8 +51,8 @@ class ContributionLabTest {
             // The credit is booked after the serve's `send` returns (`ForwardSync.onDigest` → `onServed`), so
             // Carol can hold the DM — and the oracle can pass — a moment before Bob's ledger moves; and the
             // met set is written by its own `neighbors` collector, not by the link.
-            assertTrue("bob was never credited", lab.await(1) { bob.contributions().deliveredToRecipient.toInt() })
-            assertTrue("bob never recorded meeting both", lab.await(2) { bob.peopleMet() })
+            assertTrue("bob was never credited", lab.tryAwait(1) { bob.contributions().deliveredToRecipient.toInt() })
+            assertTrue("bob never recorded meeting both", lab.tryAwait(2) { bob.peopleMet() })
             val bobs = bob.contributions()
             assertTrue("bob handed the DM straight to carol: $bobs", bobs.deliveredToRecipient >= 1)
             assertTrue("handed-straight-to is a subset of passed-along: $bobs", bobs.passedAlong >= bobs.deliveredToRecipient)
@@ -81,8 +81,8 @@ class ContributionLabTest {
             lab.link(bob, carol)
             lab.assertConverged(listOf(carol), atLeast = 1) { it.dmWith(alice) }
             // Carol's row is readable before Bob's ledger is credited (the credit follows the serve's `send`).
-            assertTrue("bob was never credited", lab.await(1) { bob.contributions().deliveredToRecipient.toInt() })
-            assertTrue("bob never recorded meeting both", lab.await(2) { bob.peopleMet() })
+            assertTrue("bob was never credited", lab.tryAwait(1) { bob.contributions().deliveredToRecipient.toInt() })
+            assertTrue("bob never recorded meeting both", lab.tryAwait(2) { bob.peopleMet() })
             val before = bob.contributions()
             assertTrue("bob was credited before the restart: $before", before.deliveredToRecipient >= 1)
 

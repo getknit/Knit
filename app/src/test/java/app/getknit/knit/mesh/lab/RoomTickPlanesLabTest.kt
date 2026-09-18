@@ -92,14 +92,14 @@ class RoomTickPlanesLabTest {
             // Alice reads the tick off the relay a moment before Bob's own bookkeeping of the ride lands.
             assertTrue(
                 "the ride was never counted",
-                lab.await(1) {
+                lab.tryAwait(1) {
                     bob.metrics
                         .snapshot()
                         .receiptsRidden
                         .toInt()
                 },
             )
-            assertTrue("the ride hold never cleared", lab.await(1) { if (bob.manager.ackSync.ridingFor(alice.nodeId) == 0) 1 else 0 })
+            assertTrue("the ride hold never cleared", lab.tryAwait(1) { if (bob.manager.ackSync.ridingFor(alice.nodeId) == 0) 1 else 0 })
 
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { Conversations.NEARBY }
             lab.assertConverged(listOf(alice, bob), atLeast = 5) { it.dmWith(if (it === alice) bob else alice) }
@@ -127,7 +127,7 @@ class RoomTickPlanesLabTest {
             // readable a beat before Bob's counters are.
             assertTrue(
                 "the spooled tick was never counted",
-                lab.await(1) {
+                lab.tryAwait(1) {
                     bob.metrics
                         .snapshot()
                         .receiptsSpooled
@@ -138,11 +138,11 @@ class RoomTickPlanesLabTest {
             assertEquals("no custody row for it", custodiedBefore, bob.custodiedChatsTo(alice))
             assertTrue(
                 "accounted instead, so bob's own heal loop never pulls it back",
-                lab.await(1) { if (bob.metrics.snapshot().spoolAccounted == accountedBefore + 1) 1 else 0 },
+                lab.tryAwait(1) { if (bob.metrics.snapshot().spoolAccounted == accountedBefore + 1) 1 else 0 },
             )
             assertEquals("and nothing on the air", 0, bob.loraTx("send:chat"))
             val settled =
-                lab.await(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
+                lab.tryAwait(1, timeoutMs = MeshLab.SPOOL_AWAIT_MS) {
                     if (bob.dmScopeStatus(alice)?.let {
                             it.converged &&
                                 it.accountedCount == 1

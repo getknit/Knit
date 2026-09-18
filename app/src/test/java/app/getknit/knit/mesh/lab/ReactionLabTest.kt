@@ -46,11 +46,11 @@ class ReactionLabTest {
             val dm = alice.ownMessageId(alice.dmWith(bob), "dm")
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { it.dmWith(if (it === alice) bob else alice) }
             bob.react(bob.dmWith(alice), dm, "👍")
-            assertTrue(lab.await(1) { alice.reactions(dm).size })
+            assertTrue(lab.tryAwait(1) { alice.reactions(dm).size })
             assertEquals(setOf(bob.nodeId to "👍"), alice.reactions(dm))
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { it.dmWith(if (it === alice) bob else alice) }
             bob.react(bob.dmWith(alice), dm, "👍")
-            assertTrue(lab.await(1) { if (alice.reactions(dm).isEmpty()) 1 else 0 })
+            assertTrue(lab.tryAwait(1) { if (alice.reactions(dm).isEmpty()) 1 else 0 })
             lab.assertConverged(listOf(alice, bob), atLeast = 1) { it.dmWith(if (it === alice) bob else alice) }
 
             // Group: the sealed group form under the sender-key chain.
@@ -59,11 +59,11 @@ class ReactionLabTest {
             val post = alice.ownMessageId(groupId, "group")
             lab.assertConverged(listOf(alice, bob, carol), atLeast = 1) { groupId }
             carol.react(groupId, post, "❤️")
-            assertTrue(lab.await(1) { bob.reactions(post).size })
+            assertTrue(lab.tryAwait(1) { bob.reactions(post).size })
             lab.assertConverged(listOf(alice, bob, carol), atLeast = 1) { groupId }
             assertEquals(setOf(carol.nodeId to "❤️"), alice.reactions(post))
             carol.react(groupId, post, "❤️")
-            assertTrue(lab.await(1) { if (alice.reactions(post).isEmpty()) 1 else 0 })
+            assertTrue(lab.tryAwait(1) { if (alice.reactions(post).isEmpty()) 1 else 0 })
             lab.assertConverged(listOf(alice, bob, carol), atLeast = 1) { groupId }
 
             // Room: cleartext, flooded, custodied like the post itself.
@@ -71,11 +71,11 @@ class ReactionLabTest {
             val room = bob.ownMessageId(Conversations.NEARBY, "room")
             lab.assertConverged(listOf(alice, bob, carol), atLeast = 1) { Conversations.NEARBY }
             alice.react(Conversations.NEARBY, room, "😂")
-            assertTrue(lab.await(1) { carol.reactions(room).size })
+            assertTrue(lab.tryAwait(1) { carol.reactions(room).size })
             lab.assertConverged(listOf(alice, bob, carol), atLeast = 1) { Conversations.NEARBY }
             assertEquals(setOf(alice.nodeId to "😂"), bob.reactions(room))
             alice.react(Conversations.NEARBY, room, "😂")
-            assertTrue(lab.await(1) { if (bob.reactions(room).isEmpty()) 1 else 0 })
+            assertTrue(lab.tryAwait(1) { if (bob.reactions(room).isEmpty()) 1 else 0 })
             lab.assertConverged(listOf(alice, bob, carol), atLeast = 1) { Conversations.NEARBY }
         }
 

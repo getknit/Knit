@@ -301,7 +301,11 @@ hop (fixed in `MeshRouter.countOverheard`, pinned by `MeshRouterTest`).
   in a loop, tallying the per-class XMLs; isolated classes flake less than the whole package, so validate
   with `app.getknit.knit.mesh.lab.*` three or four times over.
 - **Time is real.** `MeshManager.start` builds its session on `Dispatchers.Default`, so scenarios run under
-  `runBlocking` and poll (`MeshLab.await`), never virtual time. `node()` returns only once the router is
+  `runBlocking` and poll, never virtual time. `MeshLab.await` **fails the scenario** where the wait runs out
+  (with every node's counters and sends); `tryAwait` is the Boolean form for a site that words its own
+  `assertTrue` message. A bare `await` whose result was dropped used to let the scenario carry on — the
+  reply sent before the first DM landed became the both-initiate race the fixture was written to avoid,
+  and the failure surfaced as the oracle's, a step later and under the wrong name (2026-09-18). `node()` returns only once the router is
   collecting `inbound` — a `SharedFlow` with no replay drops what is emitted before that, and a link brought
   up too early would lose the profile push. Bring a multi-hop topology up with `linkAll` so no relay fires in
   the gap between two links. Boot costs ~1 s per node (Tink keygen + Room + DataStore); the scenarios

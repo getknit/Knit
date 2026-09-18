@@ -72,7 +72,7 @@ class LoraPocketLabTest {
 
             assertTrue(bob.sendRoom("from pocket a"))
             val post = bob.ownMessageId(Conversations.NEARBY, "from pocket a")
-            assertTrue("dave never heard bob's post", lab.await(1) { dave.roomPosts()[bob.nodeId]?.size ?: 0 })
+            assertTrue("dave never heard bob's post", lab.tryAwait(1) { dave.roomPosts()[bob.nodeId]?.size ?: 0 })
             assertTrue("alice's board carried it", alice.loraTx("fanout:chat") >= 1)
             assertTrue("carol's board heard it", carol.metrics.snapshot().loraReceived >= 1)
             assertEquals("bob has no board", 0L, bob.metrics.snapshot().loraSent)
@@ -106,7 +106,7 @@ class LoraPocketLabTest {
 
             assertTrue(bob.sendRoom("from pocket a"))
             val post = bob.ownMessageId(Conversations.NEARBY, "from pocket a")
-            assertTrue(lab.await(1) { carol.roomPosts()[bob.nodeId]?.size ?: 0 })
+            assertTrue(lab.tryAwait(1) { carol.roomPosts()[bob.nodeId]?.size ?: 0 })
             val via = lab.awaitReceipt(bob, post, carol)
             assertTrue("the tick came the last hop over the link, not the board: $via", via != DeliveryPlane.LoRa)
         }
@@ -147,10 +147,10 @@ class LoraPocketLabTest {
 
             air.lossy = { _, _ -> true }
             assertTrue(alice.sendRoom("into an empty sky"))
-            assertTrue("the fan-out never left", lab.await(1) { alice.loraTx("fanout:chat") })
+            assertTrue("the fan-out never left", lab.tryAwait(1) { alice.loraTx("fanout:chat") })
             air.lossy = { _, _ -> false }
 
-            assertTrue("the backfill never repaired it", lab.await(1) { carol.roomPosts()[alice.nodeId]?.size ?: 0 })
+            assertTrue("the backfill never repaired it", lab.tryAwait(1) { carol.roomPosts()[alice.nodeId]?.size ?: 0 })
             assertTrue("it came as a bridge serve", alice.metrics.snapshot().loraBridged >= 1)
             lab.assertConverged(listOf(alice, carol), atLeast = 1) { Conversations.NEARBY }
         }
@@ -165,13 +165,13 @@ class LoraPocketLabTest {
             val carol = lab.node("carol", quick, air = air).apply { setDisplayName("Carol") }
             meetThenSplit(listOf(alice, amber, carol), keep = listOf(alice to amber))
 
-            assertTrue("no board went passive", lab.await(1) { listOf(alice, amber).count { it.metrics.snapshot().loraPassive > 0 } })
+            assertTrue("no board went passive", lab.tryAwait(1) { listOf(alice, amber).count { it.metrics.snapshot().loraPassive > 0 } })
             val passive = listOf(alice, amber).single { it.metrics.snapshot().loraPassive > 0 }
             val active = listOf(alice, amber).single { it !== passive }
             val activeFanned = active.loraTx("fanout:chat")
 
             assertTrue(passive.sendRoom("from the passive board's phone"))
-            assertTrue("carol never heard it", lab.await(1) { carol.roomPosts()[passive.nodeId]?.size ?: 0 })
+            assertTrue("carol never heard it", lab.tryAwait(1) { carol.roomPosts()[passive.nodeId]?.size ?: 0 })
             assertTrue("the active board carried it", active.loraTx("fanout:chat") > activeFanned)
             assertEquals("the passive board fanned nothing", 0, passive.loraTx("fanout:chat"))
         }
@@ -194,10 +194,10 @@ class LoraPocketLabTest {
 
             air.lossy = { _, _ -> true }
             assertTrue(alice.sendDm(bob, "while your board was off"))
-            assertTrue("the DM never left", lab.await(1) { alice.loraTx("far:chat") })
+            assertTrue("the DM never left", lab.tryAwait(1) { alice.loraTx("far:chat") })
             air.lossy = { _, _ -> false }
 
-            assertTrue("the bridge never carried it", lab.await(3) { bob.decrypted(bob.dmWith(alice)).size })
+            assertTrue("the bridge never carried it", lab.tryAwait(3) { bob.decrypted(bob.dmWith(alice)).size })
             // A DM that arrived over the board is ticked through DmAckCoalescer's 45 s hold (ADR 054), which
             // the lab does not shorten yet; the oracle waits it out.
             lab.assertConverged(listOf(alice, bob), atLeast = 3, timeoutMs = 60_000) { it.dmWith(if (it === alice) bob else alice) }

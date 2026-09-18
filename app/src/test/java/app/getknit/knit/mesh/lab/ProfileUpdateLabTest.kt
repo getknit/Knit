@@ -42,7 +42,7 @@ class ProfileUpdateLabTest {
     ) {
         assertTrue(
             "${node.name}'s profile version never moved past $previous",
-            lab.await(1) {
+            lab.tryAwait(1) {
                 if (node.settings.profileVersion.first() >
                     previous
                 ) {
@@ -95,7 +95,7 @@ class ProfileUpdateLabTest {
         assertTrue(
             "$count profile frames were never parked on ${from.name}→${to.name}; held " +
                 from.transport.held(to.transport).map { WireCodec.decodeEnvelope(it.signed)?.let { e -> "${e.type} ${e.id}" } },
-            lab.await(count) { from.transport.held(to.transport).count { it.isProfileFrom(from.nodeId) } },
+            lab.tryAwait(count) { from.transport.held(to.transport).count { it.isProfileFrom(from.nodeId) } },
         )
     }
 
@@ -181,7 +181,7 @@ class ProfileUpdateLabTest {
             val hash = checkNotNull(bob.peer(alice)?.avatarHash)
             // The oracle's profile check is the row (name, version, hash); the bytes are a `blobreq` round
             // trip Bob starts when the row lands, still in flight when the row is first readable.
-            assertTrue("bob never pulled the avatar bytes", lab.await(1) { if (bob.blobs.exists(hash)) 1 else 0 })
+            assertTrue("bob never pulled the avatar bytes", lab.tryAwait(1) { if (bob.blobs.exists(hash)) 1 else 0 })
             assertTrue(picture.contentEquals(bob.blobs.bytes(hash)))
         }
 }

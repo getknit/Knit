@@ -116,7 +116,7 @@ class SessionLabTest {
             lab.unlink(alice, bob)
             lab.unlink(bob, dave)
             (1..3).forEach { assertTrue(alice.sendDm(bob, "apart $it")) }
-            assertTrue("dave carries the three", lab.await(3) { dave.custodiedChatsFrom(alice, bob) })
+            assertTrue("dave carries the three", lab.tryAwait(3) { dave.custodiedChatsFrom(alice, bob) })
             assertNull(alice.resetSession(bob))
             lab.unlink(alice, dave)
 
@@ -146,14 +146,14 @@ class SessionLabTest {
 
             assertTrue(
                 "bob never asked for the key",
-                lab.await(1) {
+                lab.tryAwait(1) {
                     bob.metrics
                         .snapshot()
                         .groupKeyRequestsSent
                         .toInt()
                 },
             )
-            val opened = lab.await(3) { bob.decrypted(groupId).size }
+            val opened = lab.tryAwait(3) { bob.decrypted(groupId).size }
             assertTrue(
                 "the three never opened: bob holds ${bob.decrypted(groupId).map { it.second }}\n" +
                     "  alice↔bob sessions: ${alice.session(bob)} / ${bob.session(alice)}\n${lab.report(listOf(alice, bob))}",

@@ -61,16 +61,16 @@ class KeyExchangeLabTest {
             assertTrue(alice.sendRoom("from a stranger"))
             assertTrue(
                 "bob never relayed alice's post",
-                lab.await(1) { bob.transport.held(carol.transport).count { it.isRoomPostFrom(alice.nodeId) } },
+                lab.tryAwait(1) { bob.transport.held(carol.transport).count { it.isRoomPostFrom(alice.nodeId) } },
             )
             bob.transport.lossy(carol.transport) { it.relay } // the flood relays from here on are the air's to lose
             val released = bob.transport.release(carol.transport) { batch -> batch.filter { it.isRoomPostFrom(alice.nodeId) } }
             assertEquals(1, released.size)
 
-            assertTrue("carol never refused the stranger's frame", lab.await(1) { carol.drops(DropReason.NO_SENDER_KEY).toInt() })
+            assertTrue("carol never refused the stranger's frame", lab.tryAwait(1) { carol.drops(DropReason.NO_SENDER_KEY).toInt() })
             assertTrue(
                 "carol never asked for the key",
-                lab.await(1) {
+                lab.tryAwait(1) {
                     carol.metrics
                         .snapshot()
                         .keyRequestsSent
@@ -79,14 +79,14 @@ class KeyExchangeLabTest {
             )
             assertTrue(
                 "bob never served it",
-                lab.await(1) {
+                lab.tryAwait(1) {
                     bob.metrics
                         .snapshot()
                         .keysServed
                         .toInt()
                 },
             )
-            assertTrue("carol never pinned alice", lab.await(1) { if (carol.knows(alice)) 1 else 0 })
+            assertTrue("carol never pinned alice", lab.tryAwait(1) { if (carol.knows(alice)) 1 else 0 })
 
             // Issue #49 (found here on 2026-09-14, fixed by ADR 2026-09.7bu7): the served profile is a
             // point-to-point `relay = false` frame, and the custody gate used to take flood frames only — so
@@ -97,8 +97,8 @@ class KeyExchangeLabTest {
             bob.transport.lossy(carol.transport) // a clean link again: the re-link's digest exchange repairs what the hold and the air ate
             lab.unlink(bob, carol)
             lab.link(bob, carol)
-            assertTrue(lab.await(1) { if (carol.roomPosts()[alice.nodeId]?.contains("from a stranger") == true) 1 else 0 })
-            assertTrue(lab.await(1) { if (bob.custodyIds().minus(carol.custodyIds()).isEmpty()) 1 else 0 })
+            assertTrue(lab.tryAwait(1) { if (carol.roomPosts()[alice.nodeId]?.contains("from a stranger") == true) 1 else 0 })
+            assertTrue(lab.tryAwait(1) { if (bob.custodyIds().minus(carol.custodyIds()).isEmpty()) 1 else 0 })
             val short = bob.custodyIds() - carol.custodyIds()
             assertTrue("carol is short nothing bob carries, got $short", short.isEmpty())
             val snap = carol.metrics.snapshot()

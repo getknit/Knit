@@ -108,7 +108,7 @@ class SideChannelLabTest {
             assertTrue(alice.sendRoom("to whoever is listening"))
             assertTrue(
                 "Erin never got the post with no link: ${erin.decrypted(Conversations.NEARBY)}\n${lab.report(listOf(alice, bob, erin))}",
-                lab.await(1) { erin.decrypted(Conversations.NEARBY).size },
+                lab.tryAwait(1) { erin.decrypted(Conversations.NEARBY).size },
             )
             val post = alice.decrypted(Conversations.NEARBY).single().first
             assertTrue(
@@ -140,7 +140,7 @@ class SideChannelLabTest {
             assertTrue(alice.sendRoom("from a stranger's phone"))
             assertTrue(
                 "Erin never parked the post she cannot verify: ${erin.heldForKey()} held\n${lab.report(listOf(erin))}",
-                lab.await(1) { erin.heldForKey() },
+                lab.tryAwait(1) { erin.heldForKey() },
             )
             assertTrue("Erin showed a post she could not verify", erin.decrypted(Conversations.NEARBY).isEmpty())
 

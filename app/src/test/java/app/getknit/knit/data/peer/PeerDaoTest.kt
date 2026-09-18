@@ -1,5 +1,6 @@
 package app.getknit.knit.data.peer
 
+import androidx.room3.useReaderConnection
 import app.getknit.knit.data.RoomDbTest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -80,6 +81,33 @@ class PeerDaoTest : RoomDbTest() {
             dao.upsert(PeerEntity(nodeId = "a", name = "Ada Renamed", updatedAt = 2L))
             assertEquals("Ada Renamed", dao.findByNodeId("a")!!.name)
             assertEquals(1, dao.observeAll().first().size)
+        }
+
+    /**
+     * [PeerDao.upsert] is a hand-written `INSERT … ON CONFLICT DO UPDATE`, not Room's `@Upsert` (the same fix
+     * as `DraftDao.upsert`, work item 60): this pins that a second profile for the same nodeId
+     * lands as an update of the row it found — same rowid, every column overwritten — never a delete-and-reinsert
+     * or a second row.
+     */
+    @Test
+    fun `a second profile for the same nodeId updates that row in place`() =
+        runTest {
+            dao.upsert(PeerEntity(nodeId = "a", name = "Ada", status = "away", updatedAt = 1L))
+            val rowid = rowidOf("a")
+
+            dao.upsert(PeerEntity(nodeId = "a", name = "Ada Renamed", status = "online", updatedAt = 2L))
+
+            assertEquals(PeerEntity(nodeId = "a", name = "Ada Renamed", status = "online", updatedAt = 2L), dao.findByNodeId("a"))
+            assertEquals("updated where it sat, not deleted and re-inserted", rowid, rowidOf("a"))
+        }
+
+    private suspend fun rowidOf(nodeId: String): Long =
+        db.useReaderConnection { connection ->
+            connection.usePrepared("SELECT rowid FROM peers WHERE nodeId = ?") { statement ->
+                statement.bindText(1, nodeId)
+                check(statement.step()) { "no peer row for $nodeId" }
+                statement.getLong(0)
+            }
         }
 
     @Test

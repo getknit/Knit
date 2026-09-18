@@ -175,6 +175,27 @@ class RelayReachTest {
     }
 
     @Test
+    fun `a missing attachment's second line names the connected relays only`() {
+        // Work item 50's shape: two relays configured, the one that carries photos down (or parked) and
+        // the frames-only one up. The line must say the connected relays carry messages only — never
+        // promise the photo relay that is not there — and flip to the relay wording once it is back.
+        val photoRelayDown = covered.copy(configured = 2, active = 2, connected = 1, maxAttachBytes = null)
+        assertEquals(AttachmentWait.RelayFramesOnly, attachmentWait("peer-a", photoRelayDown))
+        assertEquals(AttachmentWait.Relay, attachmentWait("peer-a", photoRelayDown.copy(connected = 2, maxAttachBytes = 1)))
+        assertEquals(AttachmentWait.RelayFramesOnly, attachmentWait("group-1", covered.copy(maxAttachBytes = null)))
+    }
+
+    @Test
+    fun `a missing attachment off the plane has nothing to add`() {
+        // The room is never covered, an outage stays silent, a pending thread has no scope to wait on,
+        // and the plane off is the user's own choice: in each the first line already says everything.
+        assertEquals(AttachmentWait.Nearby, attachmentWait(Conversations.NEARBY, covered))
+        assertEquals(AttachmentWait.Nearby, attachmentWait("peer-a", covered.copy(connected = 0)))
+        assertEquals(AttachmentWait.Nearby, attachmentWait("peer-unknown", covered))
+        assertEquals(AttachmentWait.Nearby, attachmentWait("peer-a", covered.copy(enabled = false)))
+    }
+
+    @Test
     fun `the default relay budget carries a maximal attachment`() {
         // 8 MiB is the app's own cap and 16 MiB the spec's default per-scope budget, so the stock
         // pairing must not mark every large photo nearby-only.

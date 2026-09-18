@@ -152,6 +152,13 @@
     <string name="chat_sending">Sending…</string>
     <string name="chat_attachment_image_desc">Photo attachment</string>
     <string name="chat_attachment_unavailable">Can\'t show this attachment</string>
+    <!--
+      Second line under a missing attachment's spinner (work item 50): whether the Internet plane can still
+      bring the bytes. The first line is always true, since the radios can always carry them; this one names
+      the connected relays only, so a photo relay that is down or switched off is never promised.
+    -->
+    <string name="chat_attachment_wait_relay">Can also arrive over the Internet through your relays</string>
+    <string name="chat_attachment_wait_frames_only">Your connected relays carry messages only</string>
     <!-- Link previews: the card a sender's phone fetched for a link and sent with the message -->
     <string name="chat_link_card_desc">Link preview: %1$s, %2$s</string>
     <string name="chat_open_link">Open link</string>

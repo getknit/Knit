@@ -37,10 +37,12 @@ import app.getknit.knit.data.message.receivedPlane
 import app.getknit.knit.data.message.replyRef
 import app.getknit.knit.data.reaction.ReactionEntity
 import app.getknit.knit.data.relay.AttachmentRelay
+import app.getknit.knit.data.relay.AttachmentWait
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.relay.RelayPlane
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.data.relay.attachmentReach
+import app.getknit.knit.data.relay.attachmentWait
 import app.getknit.knit.data.relay.noticeFor
 import app.getknit.knit.data.relay.planeFor
 import app.getknit.knit.data.relay.reachFor
@@ -168,6 +170,9 @@ data class ChatRow(
     // about delivery, which the ✓/✓✓ tick keeps to itself. Set only for our own sends; see the mapping
     // in [ChatViewModel].
     val attachmentRelay: AttachmentRelay = AttachmentRelay.Silent,
+    // While the bytes are missing, whether the Internet plane can still bring them — the placeholder's
+    // second line (work item 50). [AttachmentWait.Nearby] once they are here or when there is nothing to add.
+    val attachmentWait: AttachmentWait = AttachmentWait.Nearby,
     // The decoded link-preview card when this attachment is one ([attachmentMime] is the card MIME), its blob
     // is here, it decoded, and — the receiver's guard against a card attached to a link it does not describe —
     // its link is one the body actually contains. Null until then: the bubble draws nothing for a card that
@@ -956,6 +961,14 @@ class ChatViewModel(
                                 attachmentReach(conversationId, heldBytes, relay)
                             } else {
                                 AttachmentRelay.Silent
+                            },
+                        // The mirror image: only while the bytes are missing, and only for a bubble that
+                        // draws a placeholder — a link card never spins, so it has nothing to wait on.
+                        attachmentWait =
+                            if (m.attachmentHash != null && heldBytes == null && m.attachmentMime != LinkPreviewBlob.MIME) {
+                                attachmentWait(conversationId, relay)
+                            } else {
+                                AttachmentWait.Nearby
                             },
                         linkCard = linkCardFor(m, cards),
                         location = GeoUri.find(m.body),

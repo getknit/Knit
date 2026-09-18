@@ -88,6 +88,22 @@ enum class AttachmentRelay {
 }
 
 /**
+ * What to tell the reader of an attachment whose bytes are not here yet: whether the Internet plane is
+ * still able to bring them. The placeholder's first line — "appears once a device that has it is
+ * reachable" — is always true, since the radios can always carry them; this is the second line.
+ */
+enum class AttachmentWait {
+    /** Nothing to add: no connected relay covers this thread, or it is the room. */
+    Nearby,
+
+    /** A connected relay covers the thread and carries attachments, so the bytes can also arrive that way. */
+    Relay,
+
+    /** A connected relay covers the thread, but none of the connected relays carries attachments (spec §7.3). */
+    RelayFramesOnly,
+}
+
+/**
  * The [RelayPlane] for [facts].
  *
  * Configured-but-none-connected is [RelayPlane.Down] rather than folded into [RelayPlane.Off] because the
@@ -186,6 +202,26 @@ fun attachmentReach(
     val budget = facts.maxAttachBytes ?: return AttachmentRelay.Unsupported
     return if (sealedAttachmentBytes(sizeBytes) <= budget) AttachmentRelay.Relayable else AttachmentRelay.TooLarge
 }
+
+/**
+ * The second line under a missing attachment's spinner for [conversationId].
+ *
+ * Reads the **connected** relays only, and that is the point (work item 50). A relay that carries photos
+ * but is down or switched off is bringing nothing right now, so "your relays carry photos" would be a
+ * promise about a relay that is not there — and since `SpoolStatus.connected` requires a completed hello,
+ * a route that swallows the socket is not there either. The line names the connected set honestly and
+ * flips by itself the moment that relay is back. Anything short of [RelayReach.Covered] says nothing:
+ * an outage stays silent for the reason [reachFor] gives, and the room's exclusion has its own notice.
+ */
+fun attachmentWait(
+    conversationId: String,
+    facts: RelayFacts,
+): AttachmentWait =
+    when {
+        reachFor(conversationId, facts) != RelayReach.Covered -> AttachmentWait.Nearby
+        facts.maxAttachBytes != null -> AttachmentWait.Relay
+        else -> AttachmentWait.RelayFramesOnly
+    }
 
 /**
  * What [sizeBytes] of attachment ciphertext occupies at a spool once sealed: whole chunks, each grown by

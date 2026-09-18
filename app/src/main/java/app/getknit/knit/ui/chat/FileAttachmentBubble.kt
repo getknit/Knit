@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.getknit.knit.R
 import app.getknit.knit.data.FileTypes
+import app.getknit.knit.data.relay.AttachmentWait
 
 /**
  * The bubble for an arbitrary-file attachment (ADR 2026-09.qq2r): a type icon, the sender's own filename,
@@ -63,6 +65,8 @@ fun FileAttachmentBubble(
     flagged: Boolean,
     onSave: () -> Unit,
     onLongClick: () -> Unit,
+    // Which plane can still bring the bytes while [ready] is false (the placeholder's second line).
+    wait: AttachmentWait = AttachmentWait.Nearby,
 ) {
     val context = LocalContext.current
     val label = name ?: stringResource(R.string.chat_file_unnamed)
@@ -70,6 +74,7 @@ fun FileAttachmentBubble(
     // a claim. Before the blob lands the claim is all there is, which is what it is carried for.
     val sizeBytes = heldBytes?.toLong() ?: declaredSize
     val warning = if (flagged) stringResource(R.string.chat_file_flagged) else null
+    val waiting = if (ready) null else attachmentWaitHint(wait)
     val detail =
         listOfNotNull(
             sizeBytes?.let { Formatter.formatShortFileSize(context, it) },
@@ -98,7 +103,7 @@ fun FileAttachmentBubble(
                     // One node, one sentence: the icon is decorative and the lines are halves of the same label,
                     // so TalkBack reads "report.pdf, 1.4 MB · PDF" rather than walking three separate nodes.
                     .clearAndSetSemantics {
-                        contentDescription = listOfNotNull(label, detail.ifEmpty { null }, warning).joinToString(", ")
+                        contentDescription = listOfNotNull(label, detail.ifEmpty { null }, waiting, warning).joinToString(", ")
                     },
         ) {
             Box(
@@ -130,6 +135,15 @@ fun FileAttachmentBubble(
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (waiting != null) {
+                    Text(
+                        text = waiting,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("chat_attachment_wait"),
                     )
                 }
                 if (warning != null) {

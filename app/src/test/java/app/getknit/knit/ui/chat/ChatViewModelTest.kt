@@ -27,6 +27,7 @@ import app.getknit.knit.data.message.TransferPhase
 import app.getknit.knit.data.message.TransferRecord
 import app.getknit.knit.data.peer.PeerEntity
 import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.data.relay.AttachmentWait
 import app.getknit.knit.data.relay.RelayFacts
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.data.settings.SettingsStore
@@ -1811,6 +1812,46 @@ class ChatViewModelTest {
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { relaunched.state.collect {} }
             advanceUntilIdle()
             assertEquals(RelayReach.Silent, relaunched.state.value.relayReach)
+        }
+
+    @Test
+    fun aMissingAttachmentsWaitLineFollowsTheConnectedRelays() =
+        runTest {
+            // Work item 50: a DM photo whose bytes are not here. While a connected relay covering the
+            // thread carries photos the line says the Internet can bring it; when the only connected relay
+            // is frames-only it says so; once the bytes land there is nothing to wait on.
+            stubDm("ana")
+            relayFactsFlow.value =
+                RelayFacts(enabled = true, configured = 2, active = 2, connected = 2, coveredLabels = setOf("ana"), maxAttachBytes = 1)
+            val vm = vm("ana")
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            messagesFlow.value = listOf(msg(senderId = "ana", id = "m1", conversationId = "ana", attachmentHash = "h1"))
+            advanceUntilIdle()
+            assertEquals(
+                AttachmentWait.Relay,
+                vm.state.value.rows
+                    .single()
+                    .attachmentWait,
+            )
+
+            relayFactsFlow.value =
+                RelayFacts(enabled = true, configured = 2, active = 2, connected = 1, coveredLabels = setOf("ana"), maxAttachBytes = null)
+            advanceUntilIdle()
+            assertEquals(
+                AttachmentWait.RelayFramesOnly,
+                vm.state.value.rows
+                    .single()
+                    .attachmentWait,
+            )
+
+            sizesFlow.value = mapOf("h1" to 1_024)
+            advanceUntilIdle()
+            assertEquals(
+                AttachmentWait.Nearby,
+                vm.state.value.rows
+                    .single()
+                    .attachmentWait,
+            )
         }
 
     @Test

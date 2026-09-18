@@ -8,6 +8,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -49,6 +50,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import app.getknit.knit.R
 import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.relay.AttachmentWait
+import app.getknit.knit.ui.chat.attachmentWaitHint
 import app.getknit.knit.ui.preview.KnitPreview
 import app.getknit.knit.ui.theme.KnitMotion
 
@@ -146,6 +149,8 @@ fun VoiceNoteBubble(
     onSeek: (Float) -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    // Which plane can still bring the bytes while [ready] is false (the placeholder's second line).
+    wait: AttachmentWait = AttachmentWait.Nearby,
 ) {
     if (!ready) {
         Row(
@@ -154,11 +159,21 @@ fun VoiceNoteBubble(
         ) {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = accent)
             Spacer(Modifier.width(12.dp))
-            Text(
-                text = stringResource(R.string.chat_voice_loading),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Column {
+                Text(
+                    text = stringResource(R.string.chat_voice_loading),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                attachmentWaitHint(wait)?.let { hint ->
+                    Text(
+                        text = hint,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("chat_attachment_wait"),
+                    )
+                }
+            }
         }
         return
     }

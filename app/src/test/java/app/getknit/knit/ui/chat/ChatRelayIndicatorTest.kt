@@ -11,6 +11,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.getknit.knit.data.message.Conversations
 import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.relay.AttachmentRelay
+import app.getknit.knit.data.relay.AttachmentWait
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.ui.theme.KnitTheme
 import org.junit.Assert.assertEquals
@@ -36,6 +37,8 @@ class ChatRelayIndicatorTest {
         attachmentRelay: AttachmentRelay = AttachmentRelay.Silent,
         received: Boolean = false,
         deliveredVia: DeliveryPlane = DeliveryPlane.Unknown,
+        attachmentReady: Boolean = true,
+        attachmentWait: AttachmentWait = AttachmentWait.Nearby,
     ) = ChatRow(
         id = "m1",
         body = "look at this",
@@ -47,8 +50,9 @@ class ChatRelayIndicatorTest {
         received = received,
         deliveredVia = deliveredVia,
         attachmentHash = "h1",
-        attachmentReady = true,
+        attachmentReady = attachmentReady,
         attachmentRelay = attachmentRelay,
+        attachmentWait = attachmentWait,
     )
 
     private fun render(
@@ -161,6 +165,38 @@ class ChatRelayIndicatorTest {
         render(rows = listOf(row(attachmentRelay = AttachmentRelay.TooLarge)))
         compose.onNodeWithTag("chat_relay_marker").assertIsDisplayed()
         compose.onNodeWithText("Nearby only").assertIsDisplayed()
+    }
+
+    @Test
+    fun aMissingPhotoSaysTheInternetCanAlsoBringIt() {
+        render(rows = listOf(row(mine = false, attachmentReady = false, attachmentWait = AttachmentWait.Relay)))
+        compose.onNodeWithText(LOADING_PHOTO).assertIsDisplayed()
+        compose.onNodeWithText("Can also arrive over the Internet through your relays").assertIsDisplayed()
+    }
+
+    @Test
+    fun aMissingPhotoSaysWhenTheConnectedRelaysCarryMessagesOnly() {
+        // Work item 50: the photo relay is down and the frames-only one is up. The header says the plane is
+        // live, so without this line the reader waits on an Internet that is not bringing the picture.
+        render(rows = listOf(row(mine = false, attachmentReady = false, attachmentWait = AttachmentWait.RelayFramesOnly)))
+        compose.onNodeWithText(LOADING_PHOTO).assertIsDisplayed()
+        compose.onNodeWithText("Your connected relays carry messages only").assertIsDisplayed()
+        compose.onNodeWithText("Can also arrive over the Internet through your relays").assertDoesNotExist()
+    }
+
+    @Test
+    fun aMissingPhotoOffThePlaneKeepsItsOneLine() {
+        render(rows = listOf(row(mine = false, attachmentReady = false, attachmentWait = AttachmentWait.Nearby)))
+        compose.onNodeWithText(LOADING_PHOTO).assertIsDisplayed()
+        compose.onNodeWithTag("chat_attachment_wait").assertDoesNotExist()
+    }
+
+    @Test
+    fun aPhotoThatIsHereDrawsNoWaitLine() {
+        // The line is about bytes that are missing; a stale wait value on a loaded image must not show.
+        render(rows = listOf(row(mine = false, attachmentReady = true, attachmentWait = AttachmentWait.RelayFramesOnly)))
+        compose.onNodeWithText(LOADING_PHOTO).assertDoesNotExist()
+        compose.onNodeWithTag("chat_attachment_wait").assertDoesNotExist()
     }
 
     @Test
@@ -279,3 +315,5 @@ class ChatRelayIndicatorTest {
         compose.onNodeWithContentDescription("Delivered").assertDoesNotExist()
     }
 }
+
+private const val LOADING_PHOTO = "Photo appears once a device that has it is reachable"

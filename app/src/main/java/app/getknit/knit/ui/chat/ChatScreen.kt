@@ -204,6 +204,7 @@ import app.getknit.knit.data.message.DeliveryPlane
 import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.PeerRename
 import app.getknit.knit.data.relay.AttachmentRelay
+import app.getknit.knit.data.relay.AttachmentWait
 import app.getknit.knit.data.relay.RelayReach
 import app.getknit.knit.data.relay.dismissable
 import app.getknit.knit.demo.DemoComposeCommand
@@ -2228,6 +2229,7 @@ private fun MessageBubble(
                                 val live = voicePlayback?.takeIf { it.hash == row.attachmentHash }
                                 VoiceNoteBubble(
                                     ready = row.attachmentReady,
+                                    wait = row.attachmentWait,
                                     durationMs = row.voiceDurationMs,
                                     peaks = bars,
                                     positionMs = live?.positionMs,
@@ -2254,6 +2256,7 @@ private fun MessageBubble(
                                     declaredSize = row.attachmentSize,
                                     heldBytes = row.attachmentBytes,
                                     ready = row.attachmentReady,
+                                    wait = row.attachmentWait,
                                     flagged = row.attachmentFlagged,
                                     onSave = {
                                         onSaveFile(
@@ -2287,6 +2290,7 @@ private fun MessageBubble(
                                     row.attachmentKey,
                                     row.attachmentReady,
                                     row.attachmentFlagged,
+                                    row.attachmentWait,
                                     imageRatios = imageRatios,
                                     onImageClick = {
                                         onImageClick(
@@ -2900,6 +2904,7 @@ private fun AttachmentImage(
     key: String?,
     ready: Boolean,
     flagged: Boolean,
+    wait: AttachmentWait,
     imageRatios: MutableMap<String, Float>,
     onImageClick: (BlobImage) -> Unit,
     onLongClick: () -> Unit,
@@ -3055,6 +3060,18 @@ private fun AttachmentImage(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 12.dp),
                     )
+                    attachmentWaitHint(wait)?.let { hint ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            hint,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 12.dp).testTag("chat_attachment_wait"),
+                        )
+                    }
                 }
             }
         }

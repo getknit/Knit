@@ -47,6 +47,12 @@ enum class PublicPostRefusal {
      */
     ROOM_OFF,
 
+    /**
+     * The board is pinned to a dedicated RF slot (ADR 067, debug builds), where no public radio can hear it
+     * and the room is hidden. Like [ROOM_OFF], the net under a route that outlived the row.
+     */
+    DEDICATED,
+
     /** Slot 0 on this board *is* the Knit channel (the lab shape), so there is no primary to post on. */
     KNIT_ON_PRIMARY,
 

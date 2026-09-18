@@ -614,6 +614,14 @@ is `BuildConfig.DEBUG`, re-checked in the ViewModel so no route reaches it), and
   `channel_num` is recorded like every other prior value, and a restore of a board that was never pinned
   touches no radio config at all.
 - **What changes on the air** is in `LoraAirtime` below, not here.
+- **A pinned board has no Meshtastic room.** No public radio can hear it, so `LoraStatusRepository` folds
+  `AirtimeSnapshot.dedicated` into `LoraFacts.room` (the row goes, history and all; `canPost` with it) and
+  the transport closes both doors the way the room switch does (`MESH_POST_DEDICATED` inbound,
+  `PublicPostRefusal.DEDICATED` outbound). Read off the governor's **sticky** verdict, never the live
+  `LinkState.Ready.radio`: the setup ends in a board reboot, and the row must not come back — nor the setup
+  button (`LoraRadioUiState.dedicated`) or the room switch wake up — for the seconds the link is down. The
+  screen offers the button only while the board is *not* yet pinned; afterwards the line says so and
+  Restore is the way back (device-observed 2026-09-17: the button had kept showing over a pinned board).
 
 Drive it headlessly with `…debug.LORAPROV --es mode dedicated`; `--es mode restore` undoes either setup.
 

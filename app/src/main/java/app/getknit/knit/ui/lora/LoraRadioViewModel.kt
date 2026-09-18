@@ -154,7 +154,11 @@ data class LoraRadioUiState(
      * region — which is also what greys the action out rather than letting it fail at the board.
      */
     val dedicatedSlot: Int? = null,
-    /** The board is on a dedicated slot right now, so the airtime budget is off the politeness ceiling. */
+    /**
+     * The board is on a dedicated slot, so the airtime budget is off the politeness ceiling and the Meshtastic
+     * room is hidden. Read off the airtime governor's sticky answer rather than the live radio config, so it
+     * holds through the reboot the setup itself causes and the room switch does not wake up in between.
+     */
     val dedicated: Boolean = false,
     /** The open confirmation is the dedicated one, which is a different bargain and says so. */
     val confirmDedicated: Boolean = false,
@@ -272,7 +276,7 @@ internal class LoraRadioViewModel(
                 provisionOutcome = provision.outcome,
                 dedicatedOffered = BuildConfig.DEBUG,
                 dedicatedSlot = ready?.radio?.let { LoraSlot.forRegion(it.region, it.modemPreset) },
-                dedicated = ready?.radio?.dedicatedSlot == true,
+                dedicated = status.airtime?.dedicated == true,
                 confirmDedicated = provision.dedicated,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LoraRadioUiState())

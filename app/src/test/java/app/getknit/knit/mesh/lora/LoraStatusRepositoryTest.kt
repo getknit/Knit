@@ -90,6 +90,41 @@ class LoraStatusRepositoryTest {
         }
 
     @Test
+    fun `a board on a dedicated slot has no room, and the answer holds through its reboot`() =
+        runTest {
+            // ADR 067: no public radio can hear a pinned board, so there is no room to mirror on it — the row
+            // goes, history and all, and so does the posting verdict. The user's switch is untouched.
+            val air =
+                AirtimeSnapshot(
+                    ModemPreset.LONG_FAST,
+                    LoraRegion.US,
+                    known = true,
+                    liveUsedMs = 0,
+                    liveBudgetMs = 45_000,
+                    bridgeUsedMs = 0,
+                    bridgeBudgetMs = 13_500,
+                    bootstrapUsedMs = 0,
+                    bootstrapBudgetMs = 11_250,
+                    dedicated = true,
+                )
+            status.value = LoraStatus(state = ready, airtime = air)
+            val pinned = repo.facts.first()
+            assertFalse("no room on a dedicated slot", pinned.room)
+            assertFalse("so nothing to post from", pinned.canPost)
+            assertEquals(LoraPlane.Live, pinned.plane)
+
+            // Read off the governor's sticky answer, not the live radio: the setup ends in a board reboot,
+            // and the row must not come back for the seconds the link is down in between.
+            status.value = LoraStatus(state = LinkState.Disconnected("reboot", retryAtMs = 0, streak = 1), airtime = air)
+            assertFalse(repo.facts.first().room)
+
+            // A restore hands the slot back to the firmware and the room returns.
+            status.value = LoraStatus(state = ready, airtime = air.copy(dedicated = false))
+            assertTrue(repo.facts.first().room)
+            assertTrue(repo.facts.first().canPost)
+        }
+
+    @Test
     fun `status churn that leaves the facts unchanged emits nothing`() =
         runTest {
             val seen = mutableListOf<LoraFacts>()

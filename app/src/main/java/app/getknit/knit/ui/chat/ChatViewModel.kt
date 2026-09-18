@@ -1371,6 +1371,8 @@ class ChatViewModel(
             // Only reachable on a screen that outlived its own row (the switch flipped while the thread was
             // open); the row and its composer both go with the setting.
             PublicPostRefusal.ROOM_OFF -> R.string.chat_mesh_post_room_off
+
+            PublicPostRefusal.DEDICATED -> R.string.chat_mesh_post_dedicated
         }
 
     /**

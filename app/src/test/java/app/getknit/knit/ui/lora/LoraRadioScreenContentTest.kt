@@ -243,6 +243,28 @@ class LoraRadioScreenContentTest {
     }
 
     @Test
+    fun aBoardNotYetOnItsOwnFrequencyIsOfferedThatSetup() {
+        render(connected().copy(dedicatedOffered = true, dedicatedSlot = 5))
+        compose.onNodeWithTag("lora_setup_dedicated").performScrollTo().assertIsEnabled()
+        compose.onNodeWithText("Pins the radio to slot 5", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("lora_room_switch").performScrollTo().assertIsEnabled()
+    }
+
+    @Test
+    fun aBoardAlreadyOnItsOwnFrequencyIsNotOfferedItAgainAndSaysTheRoomIsHidden() {
+        // ADR 067: the setup ends in a reboot, and after it the button had kept showing over a board that
+        // was already pinned. Restore is the way back; the room switch is parked because no room exists.
+        var restored = 0
+        render(connected().copy(dedicatedOffered = true, dedicatedSlot = 5, dedicated = true), onRestore = { restored++ })
+        compose.onNodeWithTag("lora_setup_dedicated").assertDoesNotExist()
+        compose.onNodeWithText("The Meshtastic room is hidden while it stays there", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("lora_room_switch").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText("Hidden while this board is on a dedicated frequency", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("lora_restore").performScrollTo().performClick()
+        assertEquals(1, restored)
+    }
+
+    @Test
     fun aBoardStillUnderItsOldNameIsOfferedTheRename() {
         var setUp = 0
         render(connected().copy(needsRename = true, meshName = "Meshtastic 002a", knitName = "Knit 002a"), onSetUp = { setUp++ })

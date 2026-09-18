@@ -132,7 +132,12 @@ internal fun LoraRadioScreenContent(
             )
             DmSwitchRow(enabled = state.dmEnabled, active = state.enabled, onToggle = onToggleDms)
             BridgeSwitchRow(enabled = state.bridgeEnabled, active = state.enabled, onToggle = onToggleBridge)
-            RoomSwitchRow(enabled = state.roomEnabled, active = state.enabled, onToggle = onToggleRoom)
+            RoomSwitchRow(
+                enabled = state.roomEnabled,
+                active = state.enabled && !state.dedicated,
+                dedicated = state.dedicated,
+                onToggle = onToggleRoom,
+            )
 
             Text(
                 text = stringResource(R.string.lora_board_section),
@@ -294,6 +299,9 @@ private fun BridgeSwitchRow(
 private fun RoomSwitchRow(
     enabled: Boolean,
     active: Boolean,
+    // The board is pinned to a dedicated RF slot (ADR 067): there is no public channel to mirror, so the room
+    // is hidden whatever this switch says, and the subtitle says why instead of the switch pretending to act.
+    dedicated: Boolean,
     onToggle: (Boolean) -> Unit,
 ) {
     Row(
@@ -307,7 +315,7 @@ private fun RoomSwitchRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(stringResource(R.string.lora_room_title), style = MaterialTheme.typography.titleMedium)
             Text(
-                text = stringResource(R.string.lora_room_subtitle),
+                text = stringResource(if (dedicated) R.string.lora_room_subtitle_dedicated else R.string.lora_room_subtitle),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -486,10 +494,12 @@ private fun SetupSection(
  * and shown disabled — with the reason — where Knit will not place a slot in the board's region, because a
  * greyed action that says why is more use than one that fails at the board.
  *
- * Offered whether or not the board is already set up: the session applies the slot write to a board that
- * already carries the Knit channel, so making the user Restore first would be a limitation of this screen
- * rather than of the thing underneath it. The line below the button says which slot it would pin, and
- * [LoraRadioUiState.dedicated] says whether the board is already on one.
+ * Offered whether or not the board is already set up on the shared frequency: the session applies the slot
+ * write to a board that already carries the Knit channel, so making the user Restore first would be a
+ * limitation of this screen rather than of the thing underneath it. Once the board *is* on its slot
+ * ([LoraRadioUiState.dedicated]) the button has nothing left to do and goes — Restore is the way back — and
+ * only the line stays, saying so and that the Meshtastic room is hidden while it lasts. Otherwise the line
+ * says which slot the button would pin.
  */
 @Composable
 private fun DedicatedSetupAction(
@@ -497,12 +507,14 @@ private fun DedicatedSetupAction(
     onAskSetupDedicated: () -> Unit,
 ) {
     if (!state.dedicatedOffered) return
-    OutlinedButton(
-        onClick = onAskSetupDedicated,
-        enabled = !state.provisioning && state.dedicatedSlot != null,
-        modifier = Modifier.testTag("lora_setup_dedicated"),
-    ) {
-        Text(stringResource(R.string.lora_setup_dedicated_button))
+    if (!state.dedicated) {
+        OutlinedButton(
+            onClick = onAskSetupDedicated,
+            enabled = !state.provisioning && state.dedicatedSlot != null,
+            modifier = Modifier.testTag("lora_setup_dedicated"),
+        ) {
+            Text(stringResource(R.string.lora_setup_dedicated_button))
+        }
     }
     Text(
         text =

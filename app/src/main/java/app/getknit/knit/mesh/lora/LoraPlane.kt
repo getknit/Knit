@@ -31,7 +31,10 @@ data class LoraFacts(
      * **Default on, and deliberately not folded with [plane] the way [dms] is.** Whether a DM rides the board
      * is meaningless without one; whether the room exists is not, because its row outlives the radio — a
      * phone that read a channel for a week and then switched the plane off still has that history to show.
-     * So this carries the user's answer alone, and the row's own rule pairs it with the plane.
+     * So this carries the user's answer alone, and the row's own rule pairs it with the plane. The one
+     * thing folded in is a board pinned to a dedicated RF slot (ADR 067, `AirtimeSnapshot.dedicated`): no
+     * public radio can hear it, so there is no room on it to keep, and the row goes with it — history and
+     * all — until the board is restored.
      */
     val room: Boolean = true,
     /** The board's battery while [plane] is [LoraPlane.Live] (the Profile row shows it); never a reach input. */

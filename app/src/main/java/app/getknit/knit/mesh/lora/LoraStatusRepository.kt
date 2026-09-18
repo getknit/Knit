@@ -34,12 +34,17 @@ internal class LoraStatusRepository(
             ) { enabled, address, dms, room, status ->
                 val plane = loraPlaneFor(enabled, bound = address != null, state = status.state)
                 val ready = (status.state as? LinkState.Ready)?.takeIf { plane == LoraPlane.Live }
+                // A board pinned to a dedicated RF slot (ADR 067) hears no public channel, so there is no room
+                // to mirror on it: hidden, history and all, until the board is restored. Read off the airtime
+                // governor's sticky answer rather than the live radio config, so the row does not come back
+                // through the reboot the setup itself causes.
+                val roomHere = room && status.airtime?.dedicated != true
                 LoraFacts(
                     plane = plane,
                     dms = enabled && dms,
                     // Not `enabled && room`, unlike the line above: the room's row is drawn from history as
                     // well as from a live board, so switching the *plane* off must not hide it (see LoraFacts).
-                    room = room,
+                    room = roomHere,
                     battery = status.battery.takeIf { plane == LoraPlane.Live },
                     airtimeSpent = plane == LoraPlane.Live && status.airtime?.let(::saturated) == true,
                     // Both change only on a link transition (the channel table reloads after a setup
@@ -47,7 +52,7 @@ internal class LoraStatusRepository(
                     primaryChannel = ready?.let { PublicChannelPolicy.primaryName(it.channels, it.radio) },
                     // The room switch is folded in here rather than at every reader: a room the user has
                     // switched off has nothing to post from, and the transport refuses such a post anyway.
-                    canPost = room && ready != null && !PublicChannelPolicy.isKnitPrimary(ready.channels),
+                    canPost = roomHere && ready != null && !PublicChannelPolicy.isKnitPrimary(ready.channels),
                     // A board we cannot read the table of answers "public", which is the safe half of the
                     // claim rather than the accurate one — see the policy's own note.
                     primaryKeyIsPublic = ready == null || PublicChannelPolicy.primaryKeyIsPublic(ready.channels),

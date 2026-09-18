@@ -524,6 +524,9 @@ class LoraMeshTransportTest {
         primaryPsk: ByteArray = ByteArray(0),
         firmware: String = "2.5.0",
         room: Boolean = true,
+        // The board pinned to a dedicated RF slot (ADR 067), under a governor built the way a debug build
+        // builds it — the release governor reads every board as shared, pinned or not.
+        dedicated: Boolean = false,
     ): Rig {
         val r =
             rig(
@@ -533,13 +536,23 @@ class LoraMeshTransportTest {
                 backgroundScope,
                 config = MutableStateFlow(LoraConfig("AA:1", 1, room = room)),
                 firmware = firmware,
+                pace = LoraPacePolicy(minGapMs = 0, airtime = LoraAirtime(dedicatedUnlocksDuty = dedicated)),
                 onPublicPost = { posts += it },
             ) { testScheduler.currentTime }
         r.transport.start()
         // After runCurrent, not before: start() only *queues* the transport's jobs, and the link's own
         // start() then publishes the default single-Knit-channel Ready — which would overwrite this.
         runCurrent()
-        r.link.readyProvisioned(knitIndex = 1, primaryName = primaryName, primaryPsk = primaryPsk)
+        val radio =
+            LoraRadioConfig(
+                usePreset = true,
+                modemPreset = ModemPreset.LONG_FAST,
+                region = LoraRegion.US,
+                hopLimit = 3,
+                overrideDutyCycle = false,
+                channelNum = if (dedicated) 5 else 0,
+            )
+        r.link.readyProvisioned(knitIndex = 1, primaryName = primaryName, primaryPsk = primaryPsk, radio = radio)
         runCurrent()
         return r
     }
@@ -824,6 +837,45 @@ class LoraMeshTransportTest {
             assertTrue("nothing went on the air", r.link.sent.isEmpty())
             assertEquals(0L, r.metrics.snapshot().publicPostSent)
             r.transport.stop()
+        }
+
+    @Test
+    fun aBoardOnADedicatedSlotHasNoRoomToReadOrPostTo() =
+        runTest {
+            // ADR 067: the room is hidden on a pinned board, so both doors close the way the room switch
+            // closes them — a slot-0 post (only another pinned board's, never a public one) is dropped before
+            // it is judged, and a post cannot leave. Knit's own frames are untouched; a shared board is.
+            val air = FakeMeshtasticAir()
+            val posts = mutableListOf<MeshPost>()
+            val r = bridgeRig(air, posts, dedicated = true)
+            assertTrue(
+                "the governor read the pinned slot",
+                r.transport.status.value.airtime
+                    ?.dedicated == true,
+            )
+
+            r.link.deliverPublicText(from = 0xdeadbeefu, body = "anyone around?", id = 77u)
+            runCurrent()
+            assertTrue("nothing reached the room", posts.isEmpty())
+            val snap = r.metrics.snapshot()
+            assertEquals("the packet was never judged", 0L, snap.meshPostHeard)
+            assertEquals(1L, snap.meshPostRefusedByReason[MESH_POST_DEDICATED])
+
+            assertEquals(PublicPostRefusal.DEDICATED, r.transport.postToPublicChannel("meet at the trailhead"))
+            runCurrent()
+            assertTrue("nothing went on the air", r.link.sent.isEmpty())
+
+            r.transport.fastFanout(frame(FrameType.CHAT, "alice", body = "over the hill"))
+            runCurrent()
+            assertTrue("the Knit frame still went out", r.link.sent.isNotEmpty())
+            r.transport.stop()
+
+            // The same board under a shared slot — and under the release governor — keeps its room.
+            val shared = bridgeRig(air, posts, dedicated = false)
+            shared.link.deliverPublicText(from = 0xdeadbeefu, body = "anyone around?", id = 78u)
+            runCurrent()
+            assertEquals(1, posts.size)
+            shared.transport.stop()
         }
 
     // --- The LongFast bridge: posting on the foreign mesh's public primary. ---

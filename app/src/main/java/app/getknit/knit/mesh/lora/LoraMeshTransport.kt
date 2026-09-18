@@ -955,6 +955,9 @@ internal class LoraMeshTransport(
         // (the debug SEND intent, a screen still on the back stack) — the same net `MeshManager.sendTyping`
         // keeps under the room it must not cue.
         if (currentConfig?.room == false) return refusePublicPost(PublicPostRefusal.ROOM_OFF)
+        // A board on a dedicated RF slot (ADR 067) has no public channel under it: a post would go on the
+        // air where only other pinned Knit boards could hear it, into a room this phone no longer draws.
+        if (pace.airtime.dedicated()) return refusePublicPost(PublicPostRefusal.DEDICATED)
         val ready = link.state.value as? LinkState.Ready ?: return refusePublicPost(PublicPostRefusal.NOT_READY)
         // A board whose slot 0 is the Knit channel has no primary to post on — the debug-bridge shape the
         // receive half refuses to read for the same reason, decided off the same table.
@@ -1405,15 +1408,22 @@ internal class LoraMeshTransport(
         // still has a primary to mirror — the one shape with nothing to mirror (Knit itself at slot 0, the
         // debug bridge's lab binding) is refused inside, off the channel table.
         if (packet.channelIndex == PublicChannelPolicy.PRIMARY_INDEX && packet.portnum == MeshtasticProto.PORT_TEXT_MESSAGE) {
-            // The room is switched off: this packet has nowhere to go. Dropped here rather than later so the
-            // whole cost of a post the user asked not to see — the judge, the signature verify, the contact
-            // lookup, the moderator, the row and its notification — is never paid. Counted, so `…debug.LORA`
-            // can still tell "the channel is quiet" from "the channel is busy and Knit is ignoring it".
-            if (currentConfig?.room == false) {
-                metrics.onMeshPostRefused(MESH_POST_ROOM_OFF)
-                return
-            }
-            onPrimaryPacket(packet)
+            // The room is switched off, or hidden because the board is on a dedicated RF slot (ADR 067):
+            // this packet has nowhere to go. Dropped here rather than later so the whole cost of a post the
+            // user asked not to see — the judge, the signature verify, the contact lookup, the moderator, the
+            // row and its notification — is never paid. Counted by reason, so `…debug.LORA` can still tell
+            // "the channel is quiet" from "the channel is busy and Knit is ignoring it".
+            val closed =
+                when {
+                    currentConfig?.room == false -> MESH_POST_ROOM_OFF
+
+                    // A post on a pinned board's slot 0 is another pinned board's, never a public one, and
+                    // would land in a thread with no row and ring a notification for it.
+                    pace.airtime.dedicated() -> MESH_POST_DEDICATED
+
+                    else -> null
+                }
+            if (closed != null) metrics.onMeshPostRefused(closed) else onPrimaryPacket(packet)
             return
         }
         if (packet.portnum != MeshtasticProto.PORT_PRIVATE_APP) return
@@ -1782,6 +1792,12 @@ internal class LoraMeshTransport(
  * belongs in the same "heard on the primary and not delivered" tally the rest of the reasons share.
  */
 internal const val MESH_POST_ROOM_OFF = "ROOM_OFF"
+
+/**
+ * Its sibling for a board pinned to a dedicated RF slot (ADR 067): the room is hidden there, so a slot-0 chat
+ * packet has nowhere to go and is dropped at the same point.
+ */
+internal const val MESH_POST_DEDICATED = "DEDICATED"
 
 /**
  * What a board reports about itself when its session comes up, for the profile to advertise: its node number

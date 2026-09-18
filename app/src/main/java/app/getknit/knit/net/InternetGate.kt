@@ -1,6 +1,8 @@
 package app.getknit.knit.net
 
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 
 /**
  * Whether this phone has a route to the Internet right now — the question the mesh never had to ask, and
@@ -25,4 +27,13 @@ interface InternetGate {
 
     /** [isOnline] as a stream, so work skipped while offline can be re-armed when a route appears. */
     val online: StateFlow<Boolean>
+
+    /**
+     * One event each time the validated default network becomes a *different* network — never for the
+     * same one re-validating or changing capabilities, and never for losing it. A socket dialled over the
+     * old route says nothing about the new one, so a plane sitting out a reconnect backoff against a
+     * route that swallowed its socket can dial again the moment the phone has left it. Defaulted to
+     * silence so a fake need not model it.
+     */
+    val routeChanges: Flow<Unit> get() = emptyFlow()
 }

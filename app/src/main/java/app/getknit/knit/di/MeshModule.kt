@@ -48,6 +48,7 @@ import app.getknit.knit.mesh.power.PowerStateSource
 import app.getknit.knit.mesh.spool.OkHttpSpoolDialer
 import app.getknit.knit.mesh.spool.SpoolDialer
 import app.getknit.knit.mesh.wifiaware.WifiAwareTransport
+import app.getknit.knit.net.InternetGate
 import app.getknit.knit.transfer.AndroidDirectWifi
 import app.getknit.knit.transfer.AndroidTransferFiles
 import app.getknit.knit.transfer.DirectWifi
@@ -250,6 +251,9 @@ val meshModule =
                 // feature (`BuildConfig.COMMONS`), so no room is derived into the scope table, subscribed,
                 // posted to, or swept for members — the plane behaves exactly as it did before §7.4.
                 commons = if (BuildConfig.COMMONS) get() else null,
+                // The platform's validated-default-network stream (net/AndroidInternetGate): a new route
+                // re-dials a relay the plane is backing off from at once (work item 50).
+                routeChanges = get<InternetGate>().routeChanges,
                 publicChannel = { body -> get<PublicChannelSink>().postToPublicChannel(body) },
                 onTransferSignal = { sender, payload, sentAt -> get<TransferManager>().onSignal(sender, payload, sentAt) },
             )

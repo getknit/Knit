@@ -2,6 +2,7 @@ package app.getknit.knit.net
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkInfo
 import androidx.test.core.app.ApplicationProvider
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -34,11 +36,19 @@ class AndroidInternetGateTest {
     private val network = ShadowNetwork.newInstance(ConnectivityManager.TYPE_WIFI)
 
     @Suppress("DEPRECATION") // as above: ShadowNetworkInfo.newInstance takes the deprecated enums
-    private fun activate(vararg capabilities: Int) {
+    private fun activate(vararg capabilities: Int) = activate(ConnectivityManager.TYPE_WIFI, network, *capabilities)
+
+    // The shadow keys its networks by the legacy type, so a second default network is a second type.
+    @Suppress("DEPRECATION")
+    private fun activate(
+        type: Int,
+        net: Network,
+        vararg capabilities: Int,
+    ) {
         shadowOf(connectivity).setActiveNetworkInfo(
             ShadowNetworkInfo.newInstance(
                 NetworkInfo.DetailedState.CONNECTED,
-                ConnectivityManager.TYPE_WIFI,
+                type,
                 0,
                 true,
                 NetworkInfo.State.CONNECTED,
@@ -46,8 +56,22 @@ class AndroidInternetGateTest {
         )
         val caps = ShadowNetworkCapabilities.newInstance()
         capabilities.forEach { shadowOf(caps).addCapability(it) }
-        shadowOf(caps).addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-        shadowOf(connectivity).setNetworkCapabilities(network, caps)
+        val wifi = type == ConnectivityManager.TYPE_WIFI
+        shadowOf(caps).addTransportType(if (wifi) NetworkCapabilities.TRANSPORT_WIFI else NetworkCapabilities.TRANSPORT_CELLULAR)
+        shadowOf(connectivity).setNetworkCapabilities(net, caps)
+    }
+
+    private val validated =
+        intArrayOf(
+            NetworkCapabilities.NET_CAPABILITY_INTERNET,
+            NetworkCapabilities.NET_CAPABILITY_VALIDATED,
+            NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED,
+        )
+
+    private fun fireCapabilities(net: Network) {
+        shadowOf(connectivity).networkCallbacks.forEach {
+            it.onCapabilitiesChanged(net, requireNotNull(connectivity.getNetworkCapabilities(net)))
+        }
     }
 
     @Test
@@ -125,5 +149,40 @@ class AndroidInternetGateTest {
             shadowOf(connectivity).networkCallbacks.forEach { it.onLost(network) }
             assertFalse(seen.last())
             job.cancel()
+        }
+
+    @Test
+    @Suppress("DEPRECATION") // as above: the shadow keys a second network by the deprecated legacy type
+    fun aRouteChangeIsOnlyEverANewValidatedNetwork() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Work item 50: the Internet plane re-dials on a *new* default network, so the stream must stay
+            // quiet for everything that is not one — the same Wi-Fi re-validating or changing signal, and the
+            // loss of the route — or a relay in backoff would be dialled on every capability flicker.
+            activate(*validated)
+            val gate = AndroidInternetGate(context, backgroundScope)
+            var changes = 0
+            val online = backgroundScope.launch { gate.online.collect { } }
+            val routes = backgroundScope.launch { gate.routeChanges.collect { changes++ } }
+            assertEquals("one callback serves both readers", 1, shadowOf(connectivity).networkCallbacks.size)
+            assertEquals("subscribing is not an event", 0, changes)
+
+            fireCapabilities(network)
+            fireCapabilities(network)
+            assertEquals("the same network again is nothing", 0, changes)
+
+            shadowOf(connectivity).setActiveNetworkInfo(null)
+            shadowOf(connectivity).networkCallbacks.forEach { it.onLost(network) }
+            assertEquals("losing the route is nothing to dial on", 0, changes)
+
+            val cellular = ShadowNetwork.newInstance(ConnectivityManager.TYPE_MOBILE)
+            activate(ConnectivityManager.TYPE_MOBILE, cellular, *validated)
+            shadowOf(connectivity).networkCallbacks.forEach { it.onAvailable(cellular) }
+            fireCapabilities(cellular)
+            assertEquals("a different validated network is exactly one event", 1, changes)
+            fireCapabilities(cellular)
+            assertEquals(1, changes)
+
+            online.cancel()
+            routes.cancel()
         }
 }

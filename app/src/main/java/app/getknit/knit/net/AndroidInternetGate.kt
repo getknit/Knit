@@ -6,10 +6,16 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 
 /**
@@ -25,9 +31,9 @@ import kotlinx.coroutines.flow.stateIn
  * checked explicitly rather than through the blocked-status callback, which reports a foreground app as
  * unblocked — a preview is a convenience, and the user's byte preference wins.
  *
- * [online] registers its network callback only while collected and drops it when the last collector leaves,
- * so a phone that never turns link previews on never registers one. [isOnline] is the per-fetch snapshot and
- * needs no subscription at all.
+ * [online] and [routeChanges] share one network callback, registered only while either is collected and
+ * dropped when the last collector leaves, so a phone that never turns link previews or relays on never
+ * registers one. [isOnline] is the per-fetch snapshot and needs no subscription at all.
  */
 class AndroidInternetGate(
     context: Context,
@@ -50,48 +56,66 @@ class AndroidInternetGate(
         return cm.isActiveNetworkMetered && cm.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
     }
 
-    override val online: StateFlow<Boolean> =
+    /**
+     * The validated default network as a stream, re-read from the snapshot on every callback rather than
+     * trusting the callback's own arguments: VALIDATED usually lands in a later onCapabilitiesChanged than
+     * the onAvailable that announced the network, and onLost may precede the next default's onAvailable.
+     * One registered callback serves both [online] and [routeChanges]; it is registered while either has
+     * a collector and dropped [STOP_TIMEOUT_MS] after the last one leaves.
+     */
+    private val network: SharedFlow<Network?> =
         callbackFlow {
             val cm = connectivity
             if (cm == null) {
-                trySend(false)
+                trySend(null)
                 awaitClose { }
                 return@callbackFlow
             }
-            // Every event re-reads the snapshot rather than trusting its own arguments: VALIDATED usually lands
-            // in a later onCapabilitiesChanged than the onAvailable that announced the network, and onLost may
-            // precede the next default's onAvailable.
             val callback =
                 object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
-                        trySend(isOnline())
+                        trySend(currentNetwork())
                     }
 
                     override fun onCapabilitiesChanged(
                         network: Network,
                         networkCapabilities: NetworkCapabilities,
                     ) {
-                        trySend(isOnline())
+                        trySend(currentNetwork())
                     }
 
                     override fun onLost(network: Network) {
-                        trySend(isOnline())
+                        trySend(currentNetwork())
                     }
 
                     override fun onBlockedStatusChanged(
                         network: Network,
                         blocked: Boolean,
                     ) {
-                        trySend(isOnline())
+                        trySend(currentNetwork())
                     }
                 }
             // The registration can throw (too many callbacks in the process, or a build missing the permission);
             // the snapshot below still answers, and the stream simply stays at that value.
             val registered = runCatching { cm.registerDefaultNetworkCallback(callback) }.isSuccess
-            trySend(isOnline())
+            trySend(currentNetwork())
             awaitClose { if (registered) runCatching { cm.unregisterNetworkCallback(callback) } }
-        }.distinctUntilChanged()
+        }.shareIn(scope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), replay = 1)
+
+    override val online: StateFlow<Boolean> =
+        network
+            .map { it != null }
+            .distinctUntilChanged()
             .stateIn(scope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), isOnline())
+
+    // `Network` equality is its netId, so the same Wi-Fi re-validating or changing signal collapses under
+    // `distinctUntilChanged`; the replayed current network is dropped so subscribing is never an event.
+    override val routeChanges: Flow<Unit> =
+        network
+            .distinctUntilChanged()
+            .drop(1)
+            .filterNotNull()
+            .map { }
 
     private fun reachesTheInternet(capabilities: NetworkCapabilities): Boolean =
         capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&

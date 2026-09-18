@@ -1070,6 +1070,74 @@ class ScopeSyncTest {
         }
 
     @Test
+    fun `a new default network re-dials a failing relay at once and starts its backoff over`() =
+        runTest {
+            // Leaving the Wi-Fi that swallowed the socket used to recover only at the end of whatever
+            // backoff the dead route had earned — up to a minute — while the phone already had a good one.
+            val route = BlackHole(this, aliveMs = 1_500L)
+            val member = lone(route)
+
+            member.start(backgroundScope)
+            pump(rounds = 12) // dials at 0, 3.5 and 9 s; the third socket died at 10.5 s, the next dial is due at 18.5 s
+            assertEquals(3, route.dialedAt.size)
+
+            member.onRouteChanged()
+            pump(rounds = 1)
+            assertEquals("dialled on the nudge, not at the end of the 8 s wait", 12_000L, route.dialedAt.last())
+
+            pump(rounds = 6)
+            // That dial failed too, and the backoff that follows it is the *first* step again, not the fourth.
+            assertEquals(2_000L, route.gaps().last())
+            member.stop()
+        }
+
+    @Test
+    fun `a route change never shortens a spool's Retry-After`() =
+        runTest {
+            // A spool at its connection cap said 30 s. A new network changes nothing about its load, so the
+            // nudge that shortens our own backoff leaves its ask exactly where it was.
+            val log = DialLog(retryAfterMs = 30_000L)
+            val sync = busyRelay(log)
+
+            sync.start(backgroundScope)
+            pump(rounds = 5)
+            sync.onRouteChanged()
+            pump(rounds = 40)
+
+            assertEquals("the second dial waited out the floor", 30_250L, log.at[1] - log.at[0])
+            sync.stop()
+        }
+
+    @Test
+    fun `a route change while a relay is connected does not cost it an extra dial later`() =
+        runTest {
+            // A worker with a live session ignores the nudge; and when that session later ends on the
+            // spool's terms, the reconnect is the ordinary first backoff, not an instant re-dial with the
+            // backoff reset by a token that sat in the channel for the whole session.
+            val spool = FakeSpool()
+            val log = SessionLog(spool, testScheduler)
+            val member = member(spool, alice, bob, dialer = log)
+
+            member.sync.start(backgroundScope)
+            pump()
+            assertTrue(
+                member.sync
+                    .status()
+                    .single()
+                    .connected,
+            )
+            member.sync.onRouteChanged()
+            pump()
+            assertEquals("no re-dial while connected", 1, log.dialedAt.size)
+
+            spool.dropSockets()
+            pump(rounds = 5)
+            assertEquals(2, log.dialedAt.size)
+            assertEquals("a reached session reconnects after MIN_BACKOFF, untouched by the stale nudge", 1_000L, log.gaps().single())
+            member.sync.stop()
+        }
+
+    @Test
     fun `a frames-only relay that is up and a photo relay that is dead read as exactly that`() =
         runTest {
             // The field shape behind work item 50 and the chat's loading hint: two relays configured, the

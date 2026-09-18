@@ -89,6 +89,7 @@ import app.getknit.knit.presence.OpenToChatWatch
 import app.getknit.knit.transfer.TransferSignals
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -99,7 +100,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -160,6 +163,11 @@ class MeshManager(
     // without the Internet plane at all — which is what every unit test wants, and what keeps the mesh
     // seam free of any transitive knowledge of it. A plain parameter: only the [scopeSync] initializer reads it.
     spoolDialer: SpoolDialer? = null,
+    // One event per *new* validated default network (`InternetGate.routeChanges`): the Internet plane's
+    // cue to dial a relay it is backing off from again at once, because a socket the old route swallowed
+    // says nothing about this one. The default never fires, which is every test and every build without
+    // the plane; production wiring hands in the platform gate's stream.
+    private val routeChanges: Flow<Unit> = emptyFlow(),
     // The commons (docs/SPOOL_PROTOCOL.md §7.4): the joined rooms, their outbox and their members. Null —
     // every test, and a build with no Internet plane — derives no commons scope and refuses a commons send.
     private val commons: CommonsStore? = null,
@@ -604,6 +612,25 @@ class MeshManager(
         logMetricsPeriodically(session)
         session.launch { introSync.prime() }
         scopeSync?.start(session)
+        watchRoute(session)
+    }
+
+    /**
+     * Turns a new validated default network into an early re-dial of every relay the plane is backing off
+     * from (`ScopeSync.onRouteChanged`). Armed only while a relay is in use, so a phone with the plane off
+     * — or every relay parked — registers no connectivity callback for it; the session's cancellation in
+     * [stop] is what unregisters it.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun watchRoute(session: CoroutineScope) {
+        val sync = scopeSync ?: return
+        session.launch {
+            settings.activeSpoolUrls
+                .map { it.isNotEmpty() }
+                .distinctUntilChanged()
+                .flatMapLatest { armed -> if (armed) routeChanges else emptyFlow() }
+                .collect { sync.onRouteChanged() }
+        }
     }
 
     override fun stop() {

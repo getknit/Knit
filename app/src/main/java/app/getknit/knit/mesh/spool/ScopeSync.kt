@@ -302,6 +302,18 @@ class ScopeSync(
         workers.values.forEach { it.wake() }
     }
 
+    /**
+     * The validated default network became a different network: every worker that is not connected dials
+     * again now instead of sitting out the rest of a backoff earned against the old route — leaving a
+     * Wi-Fi that swallowed the socket recovers in a second, not at the 60 s ceiling. A worker with a live
+     * session is left alone; if the old route died under it, the socket's own ping notices and the
+     * ordinary reconnect runs on the new one. Never fired for the same network re-validating, and never a
+     * reason to bypass a spool's `Retry-After` (see [Worker.runLoop]).
+     */
+    fun onRouteChanged() {
+        workers.values.forEach { it.redialNow() }
+    }
+
     fun status(): List<SpoolStatus> {
         val current = scopes
         return workers.values.map { it.status(current) }
@@ -429,6 +441,10 @@ class ScopeSync(
         private val assemblies = ConcurrentHashMap<String, ScopeAttachments.Assembly>()
         private val wakeup = Channel<Unit>(Channel.CONFLATED)
 
+        // A route change asking for the next dial now rather than at the end of the backoff (see
+        // [onRouteChanged]). Conflated: two changes during one wait are one reason to dial.
+        private val redial = Channel<Unit>(Channel.CONFLATED)
+
         @Volatile
         private var job: Job? = null
 
@@ -476,6 +492,11 @@ class ScopeSync(
 
         fun wake() {
             wakeup.trySend(Unit)
+        }
+
+        /** Asks for the next dial now, unless this worker already has a spool talking to it. */
+        fun redialNow() {
+            if (connection?.isReady != true) redial.trySend(Unit)
         }
 
         /**
@@ -550,7 +571,14 @@ class ScopeSync(
                 // full spool turned away in the same instant — the exact population it was trying to shed.
                 val floor = retryFloorMs
                 retryFloorMs = 0L
-                delay(maxOf(backoff, floor) + jitter())
+                if (floor > 0) {
+                    // The spool's own ask is never shortened: a new network changes nothing about its load.
+                    delay(maxOf(backoff, floor) + jitter())
+                } else if (withTimeoutOrNull(backoff + jitter()) { redial.receive() } != null) {
+                    // A new default network is a new situation: the failures counted against the old route
+                    // say nothing about this one, so the backoff starts over as well.
+                    backoff = MIN_BACKOFF_MS
+                }
             }
         }
 
@@ -584,6 +612,10 @@ class ScopeSync(
             if (!ready && conn.isOpen && socket.closeReason == null) conn.abort(NO_HELLO)
             if (ready) {
                 dialFailures = 0
+                // A route change that landed during this handshake asked for a dial that this hello has
+                // now answered; left in the channel it would fire an immediate re-dial, with the backoff
+                // reset, whenever this session ends — hours from now, against a route that may be fine.
+                redial.tryReceive()
                 // A completed hello is the whole condition behind a dial verdict, so it retires here — not
                 // on an answered request like `unresponsive`, which an idle converged session never makes.
                 retireFault(NO_HELLO)

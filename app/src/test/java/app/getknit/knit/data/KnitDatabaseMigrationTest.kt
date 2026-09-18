@@ -48,9 +48,44 @@ class KnitDatabaseMigrationTest {
     @Test
     fun `the current schema (v14) creates and opens from the exported JSON`() =
         runTest {
-            val version = 14 // KnitDatabase @Database(version = 14) — bump alongside the DB (its retention is CLASS,
-            // so the version can't be read reflectively). A missing schemas/<db>/<version>.json fails here.
-            helper.createDatabase(version).close()
+            helper.createDatabase(CURRENT_VERSION).close()
+        }
+
+    @Test
+    fun `a v1 database walks the whole chain through ALL and carries its rows to the current schema`() =
+        runTest {
+            // The per-step cases each hand the helper one migration by name; this is the array the app hands
+            // Room. A step left out of ALL, or two steps in the wrong order, passes every case above and
+            // throws on the first device that opens an old database — which is what this pins on the host.
+            assertEquals("one migration per bump since the frozen v1", CURRENT_VERSION - 1, KnitMigrations.ALL.size)
+            KnitMigrations.ALL.forEachIndexed { i, m ->
+                assertEquals("ALL[$i] starts where the one before it ended", i + 1, m.startVersion)
+                assertEquals("ALL[$i] is one step", i + 2, m.endVersion)
+            }
+            helper.createDatabase(1).use { c ->
+                c.execSQL("INSERT INTO peers (nodeId, name, status, verified, updatedAt) VALUES ('n1','Ann','around',1,7)")
+                c.execSQL(
+                    "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, mentions, " +
+                        "replyToHasAttachment, moderation, pendingKey, kind) " +
+                        "VALUES ('m1','n1','c1','hello from v1',1,1,'[]',0,0,0,0)",
+                )
+            }
+            helper.runMigrationsAndValidate(CURRENT_VERSION, KnitMigrations.ALL.toList()).use { c ->
+                c.prepare("SELECT name FROM peers WHERE nodeId = 'n1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("Ann", s.getText(0))
+                }
+                c.prepare("SELECT body FROM messages WHERE id = 'm1'").use { s ->
+                    assertTrue(s.step())
+                    assertEquals("hello from v1", s.getText(0))
+                }
+                // The v1 row reached the FTS index the v12 step built over the existing table.
+                assertEquals(listOf("m1"), c.matches("hello*"))
+                c.prepare("PRAGMA user_version").use { s ->
+                    assertTrue(s.step())
+                    assertEquals(CURRENT_VERSION.toLong(), s.getLong(0))
+                }
+            }
         }
 
     @Test
@@ -582,6 +617,12 @@ class KnitDatabaseMigrationTest {
         }
 
     private companion object {
+        /**
+         * KnitDatabase `@Database(version = …)` — bump alongside the DB (its retention is CLASS, so the version
+         * can't be read reflectively). A missing schemas/<db>/<version>.json fails the smoke test.
+         */
+        const val CURRENT_VERSION = 14
+
         /** The v11 column list, as MIGRATION_10_11's test seeds it. */
         const val INSERT_V11 =
             "INSERT INTO messages (id, senderId, conversationId, body, sentAt, received, receivedVia, " +

@@ -14,6 +14,7 @@ import app.getknit.knit.data.MessageRepository
 import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.adts
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
 import app.getknit.knit.data.message.ConversationKind
@@ -545,14 +546,43 @@ class InboundPipelineTest {
             author: Party,
             id: String,
             attachmentHash: String,
+            mime: String? = null,
         ): RelayEnvelope =
             RelayEnvelope(
                 type = FrameType.CHAT,
                 id = id,
                 senderId = author.nodeId,
                 sentAt = 5L,
-                payload = WireCodec.encodePayload(ChatContent(body = "", attachmentHash = attachmentHash)),
+                payload = WireCodec.encodePayload(ChatContent(body = "", attachmentHash = attachmentHash, attachmentMime = mime)),
             )
+
+        /** A sealed DM carrying a file: the name rides inside the seal only, the hash is the cleartext hint. */
+        fun sealedFileDm(
+            author: Party,
+            id: String,
+            attachmentHash: String,
+            fileName: String,
+            body: String = "",
+        ): RelayEnvelope {
+            val header = MessageCrypto.header(id, author.nodeId, 5L, self.nodeId)
+            val sealed =
+                MessageContent(
+                    body = body,
+                    attachmentHash = attachmentHash,
+                    attachmentMime = "application/octet-stream",
+                    attachmentKey = "a2V5",
+                    attachmentName = fileName,
+                )
+            val enc = author.crypto.seal(sealed.encode(), header, mapOf(self.nodeId to self.bundle))!!
+            return RelayEnvelope(
+                type = FrameType.CHAT,
+                id = id,
+                senderId = author.nodeId,
+                sentAt = 5L,
+                recipientId = self.nodeId,
+                payload = WireCodec.encodePayload(ChatContent(enc = enc, attachmentHash = attachmentHash)),
+            )
+        }
 
         /** A DM whose encrypted envelope claims crypto-scheme version [v] (for the decrypt version gate). */
         fun dmWithEnvVersion(
@@ -2104,6 +2134,60 @@ class InboundPipelineTest {
 
             assertEquals("hello room", rig.msgMap["b1"]?.body)
             coVerify { rig.notifier.notify(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun anAttachmentOnlyMessageNotifiesWithAPlaceholderForItsKind() =
+        runTest {
+            // An attachment-only message has a blank body, and a blank body is one the notifier drops — so the
+            // pipeline draws a placeholder from what it knows: the sealed file name first, else the kind by
+            // mime. Get the fork wrong and every voice note on the lock screen reads as a photo.
+            val rig = Rig(backgroundScope)
+            val alice = party()
+            // Pinned and verified: a contact, so her DMs notify rather than land as a silent request.
+            rig.peerMap[alice.nodeId] =
+                PeerEntity(nodeId = alice.nodeId, pubKey = alice.bundle.encoded, verified = true, updatedAt = 1L)
+            val bodies = mutableListOf<String>()
+            coEvery { rig.notifier.notify(any(), any(), any(), any(), any()) } answers { bodies += firstArg<NotifMessage>().body }
+
+            rig.deliver(alice, rig.attachmentChat(alice, id = "p1", attachmentHash = "photo", mime = "image/jpeg"))
+            rig.deliver(alice, rig.attachmentChat(alice, id = "v1", attachmentHash = "note", mime = VoiceAudio.MIME))
+            rig.deliver(alice, rig.attachmentChat(alice, id = "l1", attachmentHash = "card", mime = LinkPreviewBlob.MIME))
+            rig.deliver(alice, rig.attachmentChat(alice, id = "u1", attachmentHash = "unknown", mime = null))
+            rig.deliver(alice, rig.sealedFileDm(alice, id = "f1", attachmentHash = "doc", fileName = "budget.xlsx"))
+            rig.deliver(
+                alice,
+                rig.sealedFileDm(alice, id = "f2", attachmentHash = "doc2", fileName = "with a caption", body = "here it is"),
+            )
+
+            assertEquals(
+                listOf("📷 Photo", "🎤 Voice message", "🔗 Link", "📷 Photo", "📎 budget.xlsx", "here it is"),
+                bodies,
+            )
+        }
+
+    @Test
+    fun aPulledVoiceNoteIsDescribedOnArrivalAndTheRowLearnsItsDuration() =
+        runTest {
+            // The receiving half of the voice-note symmetry: nothing about the duration rides the wire, so
+            // the bytes are read the moment the blob lands, and only for a blob a row calls audio. (The
+            // waveform needs the platform decoder, which the host has not got; the duration is header
+            // arithmetic and is what this pins.)
+            val rig = Rig(backgroundScope)
+            val note = adts(frames = 216)
+            coEvery { rig.messages.attachmentMimeForHash("note") } returns VoiceAudio.MIME
+            coEvery { rig.messages.attachmentKeyForHash("note") } returns null
+            coEvery { rig.blobs.bytes("note") } returns note
+            coEvery { rig.messages.attachmentMimeForHash("photo") } returns "image/jpeg"
+            coEvery { rig.blobs.bytes("photo") } returns note
+
+            rig.pipeline.onObtained("note")
+            rig.pipeline.onObtained("photo")
+            rig.pipeline.onObtained("nobody-claims-this")
+
+            coVerify(exactly = 1) { rig.messages.setVoiceMeta("note", VoiceAudio.durationMs(note)!!, null) }
+            coVerify(exactly = 0) { rig.messages.setVoiceMeta("photo", any(), any()) }
+            coVerify(exactly = 0) { rig.messages.setVoiceMeta("nobody-claims-this", any(), any()) }
         }
 
     /** A notification names its sender by the collision-aware label when another pinned peer shares the name (ADR 058). */

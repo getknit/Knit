@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -188,6 +189,47 @@ class ForwardRepositoryTest : RoomDbTest() {
 
             assertEquals(digestA.version.value, digestB.version.value)
             assertEquals(StoreDigest.fingerprint(listOf("f04", "f05", "f06", "f07", "f08")), digestB.version.value)
+        }
+
+    @Test
+    fun `remove drops the row and its digest entry together`() =
+        runTest {
+            // The digest is what the cue plane compares, so a row deleted from the table but left in the fold
+            // — or the reverse — is exactly the divergence the mutex exists to close. After a remove the store
+            // must read as a store that never held the frame, from either side.
+            val digest = StoreDigest()
+            val repo = repo(db, digest)
+            repo.store(dm("keep", sender = "peer", sentAt = 1L), ForwardStore.ORIGIN_RELAY, now = 0L)
+            repo.store(dm("gone", sender = "peer", sentAt = 2L), ForwardStore.ORIGIN_RELAY, now = 0L)
+
+            repo.remove("gone")
+
+            assertFalse(repo.has("gone"))
+            assertEquals(listOf("keep"), repo.liveIds(now = 0L))
+            assertEquals(StoreDigest.fingerprint(listOf("keep")), digest.version.value)
+            repo.remove("never-held") // idempotent: a re-serve's cleanup of an id nobody stored
+            assertEquals(StoreDigest.fingerprint(listOf("keep")), digest.version.value)
+        }
+
+    @Test
+    fun `frame returns the carried bytes by id while live and nothing once expired`() =
+        runTest {
+            val repo = repo(db, StoreDigest())
+            val carried = dm("f1", sender = "peer", sentAt = 1_000L)
+            repo.store(carried, ForwardStore.ORIGIN_RELAY, now = 1_000L)
+
+            val back = checkNotNull(repo.frame("f1", now = 1_000L))
+            assertEquals("f1", back.envelope.id)
+            assertTrue(
+                "the signed bytes are served verbatim — a re-encode would break the signature",
+                carried.signed.contentEquals(back.signed),
+            )
+            assertEquals(listOf("f1"), repo.liveFramesTo("peer", now = 1_000L, limit = 10).map { it.envelope.id })
+
+            val expired = 1_000L + ForwardRepository.DEFAULT_TTL_MS + 1
+            assertNull("past the frame-global expiry it is residue, not a frame", repo.frame("f1", now = expired))
+            assertEquals(emptyList<String>(), repo.liveFramesTo("peer", now = expired, limit = 10).map { it.envelope.id })
+            assertNull(repo.frame("unknown", now = 1_000L))
         }
 
     @Test

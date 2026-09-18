@@ -54,6 +54,7 @@ style:
     excludes:
       - '**/data/ImageDecode.kt'                 # the one file allowed to decode
       - '**/mesh/spool/OkHttpSpoolDialer.kt'     # the spool plane's socket (rules/mesh.md)
+      - '**/mesh/spool/OkHttpSpoolDialerSocketTest.kt' # ...and its MockWebServer test, whose fake spool is an okhttp3.WebSocketListener
       - '**/linkpreview/OkHttpPreviewFetcher.kt' # the link-preview fetch (rules/mesh.md)
       - '**/location/AndroidLocationSource.kt'   # the one android.location importer (shares the list, so also exempt from the two bans above)
       - '**/transfer/AndroidDirectWifi.kt'       # the one android.net.wifi.p2p importer (direct file transfer)

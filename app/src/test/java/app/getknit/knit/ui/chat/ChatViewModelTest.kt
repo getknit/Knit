@@ -1250,6 +1250,38 @@ class ChatViewModelTest {
         }
 
     @Test
+    fun deletingAMessageDropsItsRowsAndGcsItsBlobWithoutTouchingTheMesh() =
+        runTest {
+            // A local delete, and only local: the row, its reactions and its per-recipient ticks go, the blob
+            // goes if nothing else references it — resolved from the row *before* it is gone, since the hash
+            // is only readable there — and nothing is sent. A row with no attachment asks the GC about null,
+            // which it treats as a no-op.
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            val events = mutableListOf<Int>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.collect { events += it } }
+            messagesFlow.value =
+                listOf(
+                    msg(senderId = "bob", id = "m1", conversationId = Conversations.NEARBY, attachmentHash = "h1"),
+                    msg(senderId = "me", id = "m2", conversationId = Conversations.NEARBY),
+                )
+            advanceUntilIdle()
+
+            vm.deleteMessage("m1")
+            vm.deleteMessage("m2")
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { messages.delete("m1") }
+            coVerify(exactly = 1) { reactions.deleteForMessage("m1") }
+            coVerify(exactly = 1) { receipts.deleteForMessage("m1") }
+            coVerify(exactly = 1) { blobs.deleteIfUnreferenced("h1") }
+            coVerify(exactly = 1) { messages.delete("m2") }
+            coVerify(exactly = 1) { blobs.deleteIfUnreferenced(null) }
+            assertEquals(listOf(R.string.chat_message_deleted, R.string.chat_message_deleted), events)
+            assertTrue("nothing about a local delete reaches the mesh", mesh.sentChats.isEmpty() && mesh.sentReactions.isEmpty())
+        }
+
+    @Test
     fun attachmentReadinessAndFlaggingTrackTheBlobFlowsAndFilteringToggle() =
         runTest {
             val vm = vm()

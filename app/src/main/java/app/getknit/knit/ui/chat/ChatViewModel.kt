@@ -1196,8 +1196,7 @@ class ChatViewModel(
     /**
      * The composer's link-preview loop: the first eligible link in the draft, debounced, becomes a staged card
      * when every gate agrees — the setting is on, a validated route exists, nothing else is staged, the link
-     * was not dismissed or found empty in this draft, the thread does not ride LoRa (a card's reference costs
-     * body budget there and its bytes never cross), and the audience can render one. `collectLatest` cancels a
+     * was not dismissed or found empty in this draft, and the audience can render one. `collectLatest` cancels a
      * fetch the moment the link or the epoch changes, so a card can only ever land on the draft it was
      * fetched for.
      */
@@ -1235,12 +1234,29 @@ class ChatViewModel(
             return
         }
         if (!cardWanted(url, staged, online)) return
-        _linkPreviewLoading.value = true
-        try {
-            stageCard(url)
-        } finally {
-            _linkPreviewLoading.value = false
+        stageCard(url)
+    }
+
+    /**
+     * What [send] attaches: whatever is staged, else the card for the draft's first link when the composer
+     * would fetch one — waited for, up to [SEND_CARD_HOLD_MS]. A link handed in from the share sheet arrives
+     * whole, and Send is the next tap, well inside the debounce and the fetch (the page, the picture, and on a
+     * cold start the classifier's model load); without the hold a shared link never carried its card. The send
+     * button's spinner covers the wait, and past the bound the text goes alone as it always did. Joins a fetch
+     * the loop already has in flight rather than starting a second; [cardWanted] keeps the loop out of one
+     * started here.
+     */
+    private suspend fun attachmentForSend(body: String): AttachmentStore.Ingested? {
+        _pendingAttachment.value?.let { return it }
+        val url = LinkPreviewPolicy.firstEligible(body) ?: return null
+        withTimeoutOrNull(SEND_CARD_HOLD_MS) {
+            if (_linkPreviewLoading.value) {
+                _linkPreviewLoading.first { !it }
+            } else if (cardWanted(url, staged = null, online = linkPreviews.online.value)) {
+                stageCard(url)
+            }
         }
+        return _pendingAttachment.value
     }
 
     /** Every gate a fetch for [url] has to pass, cheapest first; the audience read comes last because it hits the DB. */
@@ -1250,34 +1266,42 @@ class ChatViewModel(
         online: Boolean,
     ): Boolean =
         staged == null &&
+            !_linkPreviewLoading.value &&
             url != dismissedUrl &&
             url !in failedUrls &&
             online &&
             settings.linkPreviewsEnabled.first() &&
             // A card is an attachment, and the bridged room takes none — see [stage]. Read from the id rather
             // than from `loraCarry`, which is None here precisely because the room's length rule is its own.
-            // A commons takes none either, in this revision.
+            // A commons takes none either, in this revision. A thread that rides LoRa takes a card exactly as
+            // it takes a photo (ADR 2026-09.7x8k): the frame carries its reference under the same body reserve
+            // and a board-only reader sees the bare link, which is what the bubble draws for a card it lacks.
             !isBridged &&
             !isCommons &&
-            state.value.loraCarry == LoraCarry.None &&
             !audienceCannotRenderCards()
 
+    /** One fetch for [url], flagged for the composer's "Loading preview…" line while it runs; stages what it yields. */
     private suspend fun stageCard(url: String) {
-        when (val result = linkPreviews.fetchCard(url, isRoom)) {
-            is LinkPreviewService.CardResult.Card -> {
-                // Re-check: a photo may have been staged, or the draft edited or sent, while the fetch ran.
-                if (_pendingAttachment.value == null && LinkPreviewPolicy.firstEligible(draft.value) == url) {
-                    stage(attachments.ingestLinkPreview(result.blob), notifyFailure = false)
+        _linkPreviewLoading.value = true
+        try {
+            when (val result = linkPreviews.fetchCard(url, isRoom)) {
+                is LinkPreviewService.CardResult.Card -> {
+                    // Re-check: a photo may have been staged, or the draft edited or sent, while the fetch ran.
+                    if (_pendingAttachment.value == null && LinkPreviewPolicy.firstEligible(draft.value) == url) {
+                        stage(attachments.ingestLinkPreview(result.blob), notifyFailure = false)
+                    }
+                }
+
+                LinkPreviewService.CardResult.NoCard -> {
+                    failedUrls += url
+                }
+
+                LinkPreviewService.CardResult.Offline, LinkPreviewService.CardResult.Restricted -> {
+                    // Not an answer about the link: retried when the route returns.
                 }
             }
-
-            LinkPreviewService.CardResult.NoCard -> {
-                failedUrls += url
-            }
-
-            LinkPreviewService.CardResult.Offline, LinkPreviewService.CardResult.Restricted -> {
-                // Not an answer about the link: retried when the route returns.
-            }
+        } finally {
+            _linkPreviewLoading.value = false
         }
     }
 
@@ -1581,9 +1605,8 @@ class ChatViewModel(
         replyTo: ReplyRef? = null,
     ) {
         val trimmed = text.trim().take(TextLimits.MESSAGE)
-        val attachment = _pendingAttachment.value
         val staged = _stagedLocation.value
-        if (trimmed.isEmpty() && attachment == null && staged == null) return
+        if (trimmed.isEmpty() && _pendingAttachment.value == null && staged == null) return
         // The Meshtastic room is not addressed to anybody: no recipient, no group, no attachment, no reply.
         // `sendChat` would read that shape as the Nearby room and put the post there, so it has its own path
         // to the board, with its own gate, disclosure and refusals.
@@ -1605,7 +1628,7 @@ class ChatViewModel(
             try {
                 // Normalize a self-quote's snapshotted author before it goes on the wire (see the helper).
                 val outgoingReply = normalizeSelfAuthor(replyTo)
-                val sent = route(body, attachment, mentions, outgoingReply)
+                val sent = route(body, attachmentForSend(body), mentions, outgoingReply)
                 // MeshManager applies block-on-send. Clear the input/attachment only once a message is
                 // accepted; a blocked message keeps the draft and surfaces a toast so the user can edit.
                 if (sent) {
@@ -2272,6 +2295,9 @@ class ChatViewModel(
     private companion object {
         /** How long the draft must rest on a link before its card is fetched. */
         const val PREVIEW_DEBOUNCE_MS = 600L
+
+        /** The most a send waits for its link's card ([attachmentForSend]); a slower site sends the text alone. */
+        const val SEND_CARD_HOLD_MS = 5_000L
 
         /** Send a typing cue at most this often while actively editing (< the receiver's ~12 s hold, so a peer
          *  who keeps typing re-cues before their indicator would expire). */

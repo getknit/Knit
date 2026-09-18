@@ -70,6 +70,7 @@ import io.mockk.slot
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -2346,6 +2347,103 @@ class ChatViewModelTest {
             vm.onDraftChanged("look https://example.com/a")
             advanceUntilIdle()
             coVerify(exactly = 1) { linkPreviews.fetchCard(cardUrl, isRoom = false) }
+        }
+
+    /** What the screen does on [ChatViewModel.clearInput]: empties the field (which the draft loop sees) and releases the guard. */
+    private fun TestScope.screenClearsTheFieldOnSend(vm: ChatViewModel) {
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            vm.clearInput.collect {
+                vm.onDraftChanged("")
+                vm.onInputCleared()
+            }
+        }
+    }
+
+    @Test
+    fun aSendWaitsForTheCardStillBeingFetchedAndCarriesIt() =
+        runTest {
+            aCardIsAvailable()
+            coEvery { linkPreviews.fetchCard(cardUrl, any()) } coAnswers {
+                delay(2_000)
+                LinkPreviewService.CardResult.Card(cardBlob)
+            }
+            val vm = vm()
+            screenClearsTheFieldOnSend(vm)
+            // The share-sheet shape: the link lands whole, and Send is the next tap — inside the fetch.
+            vm.onDraftChanged("https://example.com/a")
+            advanceTimeBy(1_000)
+            assertTrue(vm.linkPreviewLoading.value)
+            vm.send("https://example.com/a")
+            runCurrent()
+            assertTrue("nothing goes out while the card is on its way", mesh.sentChats.isEmpty())
+            assertTrue(vm.isSending.value)
+            advanceUntilIdle()
+            assertEquals(staged, mesh.sentChats.single().attachment)
+            coVerify(exactly = 1) { linkPreviews.fetchCard(cardUrl, isRoom = true) }
+        }
+
+    @Test
+    fun aSendBeforeTheDraftHasRestedFetchesTheCardItself() =
+        runTest {
+            aCardIsAvailable()
+            val vm = vm()
+            screenClearsTheFieldOnSend(vm)
+            vm.onDraftChanged("https://example.com/a")
+            vm.send("https://example.com/a")
+            advanceUntilIdle()
+            assertEquals(staged, mesh.sentChats.single().attachment)
+            coVerify(exactly = 1) { linkPreviews.fetchCard(cardUrl, isRoom = true) }
+        }
+
+    @Test
+    fun aSlowCardDoesNotHoldTheSendPastItsBound() =
+        runTest {
+            aCardIsAvailable()
+            coEvery { linkPreviews.fetchCard(cardUrl, any()) } coAnswers {
+                delay(60_000)
+                LinkPreviewService.CardResult.Card(cardBlob)
+            }
+            val vm = vm()
+            screenClearsTheFieldOnSend(vm)
+            vm.onDraftChanged("https://example.com/a")
+            vm.send("https://example.com/a")
+            advanceTimeBy(4_000)
+            assertTrue(mesh.sentChats.isEmpty())
+            advanceTimeBy(2_000)
+            assertNull("past the bound the text goes alone", mesh.sentChats.single().attachment)
+            advanceUntilIdle()
+            assertNull("the abandoned fetch stages nothing", vm.pendingAttachment.value)
+            assertFalse(vm.linkPreviewLoading.value)
+        }
+
+    @Test
+    fun aSendDoesNotWaitForACardTheUserRemoved() =
+        runTest {
+            aCardIsAvailable()
+            val vm = vm()
+            screenClearsTheFieldOnSend(vm)
+            vm.onDraftChanged("https://example.com/a")
+            advanceUntilIdle()
+            assertEquals(staged, vm.pendingAttachment.value)
+            vm.clearAttachment()
+            vm.send("https://example.com/a")
+            advanceUntilIdle()
+            assertNull(mesh.sentChats.single().attachment)
+            coVerify(exactly = 1) { linkPreviews.fetchCard(cardUrl, any()) }
+        }
+
+    @Test
+    fun aThreadThatRidesLoraTakesACardLikeAPhoto() =
+        runTest {
+            aCardIsAvailable()
+            loraFactsFlow.value = LoraFacts(plane = LoraPlane.Live, canPost = true)
+            val vm = vm()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect {} }
+            advanceUntilIdle()
+            assertEquals("the room rides the board", LoraCarry.Room, vm.state.value.loraCarry)
+            vm.onDraftChanged("https://example.com/a")
+            advanceUntilIdle()
+            assertEquals(staged, vm.pendingAttachment.value)
         }
 
     @Test

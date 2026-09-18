@@ -51,8 +51,10 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   2026-09.6gtm — it is no longer a gate that keeps anything out of shipped builds). `mesh/lora/` is
   pure/JVM-tested; the only `android.bluetooth.*` importer is `mesh/bluetooth/meshtastic/MeshtasticGatt`.
 - **When touching `linkpreview/`, `net/`, `mesh/protocol/LinkPreviewBlob`, or anything that opens an
-  Internet socket outside the spool plane:** READ ADR 2026-09.n752. A link preview is a card the **sender**
-  fetches and sends as an ordinary attachment under its own MIME (no wire field, no DB change); the receiver
+  Internet socket outside the spool plane:** READ ADR 2026-09.n752 (and 2026-09.7x8k: a send holds up to 5 s
+  for the card its link is fetching, or the share sheet never carries one; a LoRa thread takes a card exactly
+  as it takes a photo — no `loraCarry` gate on the fetch). A link preview is a card the
+  **sender** fetches and sends as an ordinary attachment under its own MIME (no wire field, no DB change); the receiver
   never fetches, both ends screen the card's picture and text into one verdict, and the fetch is gated on
   `net/InternetGate` (a validated route, never the NAN link), bound to that `Network`, https-only, with a
   private-address DNS guard. `okhttp3` stays confined to the two files `rules/mesh.md` names.

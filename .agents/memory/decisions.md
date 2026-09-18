@@ -105,6 +105,7 @@ carries; never renumber an old one.
 | [2026-09.7r4d](decisions/2026-09-7r4d-a-post-typed-in-the-bridged-room-is-the-same-frame-with-no-speaker.md) | A post typed in the bridged room is the same frame with no speaker | lora, meshtastic, mesh |
 | [2026-09.7svb](decisions/2026-09-7svb-a-lora-rate-limiter-that-resets-on-launch-is-not-a-rate-limiter.md) | A LoRa rate limiter that resets on launch is not a rate limiter | lora, airtime, reliability |
 | [2026-09.7uqe](decisions/2026-09-7uqe-a-file-offer-is-an-event-of-its-own.md) | A file offer is an event of its own, not a line in the chat | transfer, ui, notifications |
+| [2026-09.7x8k](decisions/2026-09-7x8k-a-send-waits-for-the-card-its-link-is-fetching.md) | A send waits for the card its link is fetching, and a LoRa thread takes one like a photo | attachments, ui, network |
 | [2026-09.9469](decisions/2026-09-9469-a-post-to-the-meshtastic-room-carries-no-author-name.md) | A post to the Meshtastic room carries no author name | lora, meshtastic, privacy |
 | [2026-09.995c](decisions/2026-09-995c-a-peer-rename-notice-stores-both-names.md) | A peer rename notice stores both names | ui, data |
 | [2026-09.9dnk](decisions/2026-09-9dnk-the-wedge-watchdog-s-tier-1-responder-refresh-is-capped-per-episode.md) | The wedge watchdog's Tier-1 responder refresh is capped per episode | mesh, nan, recovery |

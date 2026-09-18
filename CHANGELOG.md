@@ -38,6 +38,10 @@ document:
   until you are apart.
 - A name or status you set moments after meeting someone could show up blank, or as the old one, on their
   phone until the next day. It reaches them right away now, and a relay no longer gets stuck syncing on it.
+- A link shared into Knit from another app usually went out without its preview, because you tapped Send
+  before the preview had loaded. Sending now waits a few seconds for it.
+- With a LoRa board paired, Nearby and direct messages never got a link preview at all. They now attach
+  one the way they attach a photo, and someone reading over the board alone sees the link without it.
 
 ## [2.6.0](https://github.com/getknit/knit/releases/tag/v2.6.0) — 2026-09-16T07:24:35Z
 

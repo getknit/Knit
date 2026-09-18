@@ -48,6 +48,15 @@ semantics of its own: `InboundPipeline.canCarry` authenticates a pulled frame, a
 `MeshRouter.handleInbound` delivers it (dedup, custody, roster vetting, and the onward mesh relay come
 free). Two invariants that are easy to break:
 
+- **A spool is connected once it says hello, and only then** (`SpoolConnection.isReady`, ADR
+  2026-09.vej5). `SpoolStatus.connected` — and everything downstream of it: `RelayFacts`, coverage,
+  `planeFor`, `SpoolPresence` — means a completed hello on an open socket, never that a socket exists: a
+  route that swallows the upgrade hands out a socket for the whole connect timeout. A dial nothing answered
+  is the dialer's `unreachable` verdict (`failureReason`, no HTTP response), a socket that opened and never
+  said hello is dropped through `abort(NO_HELLO)` like every other client-side close (ADR 2026-09.amzn),
+  and both hold in `lastError` until a hello completes. A new validated default network
+  (`InternetGate.routeChanges`) re-dials a worker with no live hello at once, with its backoff reset — but
+  never inside a spool's `Retry-After`, which is the spool's ask about its own load.
 - **Only frames matching the scope frame-set rule may be sealed into a scope, in *both* directions**
   (`ScopeFrames.eligibleFor`, spec §4.4) — a scope is not a general-purpose upload channel. The group
   half has two traps: a `groupleave` carries its group id in the **payload** (never in

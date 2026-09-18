@@ -202,7 +202,10 @@ over cleverness. Start with `.agents/context/architecture.md` for the subsystem 
   scope digest on purpose. A group scope derives from the shared
   **group root** (`GroupKeyPayload.gr`, `mesh/spool/GroupRootPolicy`): any member may mint it, and its
   mint / gossip / adopt / departure-re-mint rules are spec §3.2 — read that before touching them. The
-  reference daemon lives in the separate `knit-spool` repo.
+  reference daemon lives in the separate `knit-spool` repo. Before touching `SpoolStatus.connected`,
+  `OkHttpSpoolDialer.failureReason`, the `no_hello` / `unreachable` verdicts, `InternetGate.routeChanges`,
+  or the chat placeholder's `attachmentWait` line: READ ADR 2026-09.vej5 — connected is a completed hello,
+  a route that swallows the socket is `unreachable`, and the chat names the *connected* relays only.
 - **When writing or running tests, or checking accessibility:** READ `.agents/context/testing.md` (unit +
   Robolectric Room + the **mesh-in-a-box** multi-node JVM scenarios in `mesh/lab/` + seeded UI / FTL +
   black-box UIAutomator + the accessibility/ATF suite that mirrors the Play pre-launch report). A change to

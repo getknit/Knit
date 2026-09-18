@@ -33,6 +33,12 @@ document:
 
 ### Fixed
 
+- A public Wi-Fi that Android accepted but that silently blocked your relay left it showing as connected
+  while nothing got through. The relay now reads as unreachable, and Knit reconnects as soon as your phone
+  moves to another network.
+- A photo waiting in a chat only ever said it would appear when a nearby device had it, even when your
+  relays were live. It now also says whether a relay can bring it, or that the connected relays carry
+  messages only.
 - Your phone could still upload a photo to your relay right after the phone next to you passed it over
   Bluetooth or Wi-Fi, depending on which arrived first, the message or the photo. It now holds that upload
   until you are apart.

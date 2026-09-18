@@ -70,3 +70,6 @@ second. Kept true by `ScopeSyncTest` (the garbage-event trio, the invalid-set ho
 trio, the park/quota/maxRecord/silent quartet) and `SpoolConnectionTest` (mismatched `ahas`/`list`, the
 strike counter and its reset, the commons pin clamp) over `FakeSpool`'s new hostile knobs: `announce`,
 `listingPadding`/`tombstonePadding`, `maxScopes`/`scopeQuota`/`quotaRetryMs`, `maxRecord`, `mute()`.
+ADR 2026-09.vej5 added the fourth client-side close — a handshake that never sees a hello aborts as
+`no_hello`, retired on the next completed hello rather than on an answered request — and the
+`ScopeSyncTest` black-hole and no-hello scenarios that keep it on this path.

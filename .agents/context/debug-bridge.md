@@ -72,9 +72,15 @@ silently not delivered (the receiver never runs, and you get `Broadcast complete
   `pow` and `rate` all otherwise present as a scope that simply never converges) — or the client's own
   verdict on the spool (ADR 2026-09.amzn): `unresponsive` (it stopped answering and was dropped),
   `overlong_list` (it listed more ids than a conforming spool can hold, and the round was refused), or
-  `too_large` with nothing subscribed (its `maxRecord` could not carry our SUB). A client-side verdict
-  stays through the next session, so a spool that answers the hello and nothing else reads as
-  `unresponsive` rather than flickering `connected`. `accounted` is how
+  `too_large` with nothing subscribed (its `maxRecord` could not carry our SUB), `unreachable` (nothing
+  answered the dial at all — a timeout, DNS, refused, reset, or an undialable URL; a captive Wi-Fi the
+  platform still calls validated looks exactly like this, ADR 2026-09.vej5), or `no_hello` (the socket
+  opened and the spool never said hello). A client-side verdict stays through the next session, so a spool
+  that answers the hello and nothing else reads as `unresponsive` rather than flickering `connected`, and
+  a dead route stays `unreachable` through the next dial. `connected` is a **completed hello** on an open
+  socket, never a socket that merely exists, and `dialFailures` counts the sessions in a row that never
+  reached one (0 once one does): twelve under `unreachable` is the dead-route signature, one is a missed
+  reconnect. `accounted` is how
   much of `local` is the §9.6 band — blobs the spool still holds that our custody has aged out, counted
   as held on purpose (ADR 062) so `local == spool` keeps meaning converged; a scope stuck unconverged
   with a large `accounted` means the fold or the prune is broken, not the network.

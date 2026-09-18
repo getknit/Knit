@@ -103,6 +103,23 @@ class FakeSpool(
     @Volatile
     private var muted = false
 
+    @Volatile
+    private var blackholed = false
+
+    /**
+     * From now on every dial is a route that swallows the socket — work item 50's validated-but-dead
+     * Wi-Fi (ADR 2026-09.vej5): the socket opens, nothing ever comes back, and after [BLACKHOLE_MS] it
+     * dies with the dialer's `unreachable` verdict, the way OkHttp's connect timeout ends it. On the wall
+     * clock, since the mesh-in-a-box lab is its user; [unblackhole] restores the relay for the next dial.
+     */
+    fun blackhole() {
+        blackholed = true
+    }
+
+    fun unblackhole() {
+        blackholed = false
+    }
+
     /**
      * From now on the spool completes the handshake and answers SUBs, and swallows every correlated
      * request after that — the spool that "accepts and never answers" (§7.3's stall, made permanent).
@@ -117,6 +134,7 @@ class FakeSpool(
     }
 
     override suspend fun dial(url: String): SpoolSocket {
+        if (blackholed) return BlackHoleSocket()
         val socket = FakeSocket()
         synchronized(sockets) { sockets.add(socket) }
         socket.emit(
@@ -279,6 +297,34 @@ class FakeSpool(
             ?.keys
             ?.toSet()
             .orEmpty()
+
+    /** A socket nothing answers: silent for [BLACKHOLE_MS], then closed as `unreachable`. */
+    private class BlackHoleSocket : SpoolSocket {
+        private val channel = Channel<ByteArray>(Channel.UNLIMITED)
+
+        @Volatile
+        private var dead = false
+
+        init {
+            Thread {
+                Thread.sleep(BLACKHOLE_MS)
+                dead = true
+                channel.close()
+            }.apply { isDaemon = true }.start()
+        }
+
+        override val incoming: ReceiveChannel<ByteArray> get() = channel
+        override val closeReason: String? get() = if (dead) ScopeSync.UNREACHABLE else null
+
+        override fun send(bytes: ByteArray): Boolean = !dead
+
+        override fun close(
+            code: Int,
+            reason: String,
+        ) {
+            channel.close()
+        }
+    }
 
     private inner class FakeSocket : SpoolSocket {
         private val channel = Channel<ByteArray>(Channel.UNLIMITED)
@@ -788,3 +834,6 @@ private fun carried(
     sig = ByteArray(ScopeCrypto.SIG_BYTES) { id.hashCode().toByte() },
     signed = WireCodec.encodeEnvelope(env),
 )
+
+/** How long a black-holed socket stays silent before the fake dialer gives up on it. */
+private const val BLACKHOLE_MS = 500L

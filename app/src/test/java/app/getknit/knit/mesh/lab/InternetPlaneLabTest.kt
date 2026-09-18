@@ -5,6 +5,7 @@ import app.getknit.knit.mesh.crypto.scope.ScopeCrypto
 import app.getknit.knit.mesh.protocol.FrameType
 import app.getknit.knit.mesh.spool.AttachmentDeferPolicy
 import app.getknit.knit.mesh.spool.FakeSpool
+import app.getknit.knit.mesh.spool.ScopeSync
 import app.getknit.knit.mesh.spool.SpoolCommonsInfo
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -580,6 +581,46 @@ class InternetPlaneLabTest {
 
             spool.dropSockets()
             assertTrue(alice.sendDm(bob, "after the relay restarted"))
+            lab.assertConverged(listOf(alice, bob), atLeast = 3, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { alice.dmThreadWith(bob)(it) }
+        }
+
+    /**
+     * Work item 50 / ADR 2026-09.vej5: a relay whose route swallows the socket — a captive Wi-Fi the platform
+     * still calls validated — is reported unreachable and never connected, and heals on its own once the
+     * route does. The lab's one oracle on connection state, over the real plane and the real backoff.
+     */
+    @Test
+    fun aRelayWhoseRouteSwallowsTheSocketIsUnreachableNotConnected() =
+        runBlocking {
+            val spool = FakeSpool()
+            spool.blackhole()
+            val alice = lab.node("alice", spool = spool).apply { setDisplayName("Alice") }
+            assertTrue(
+                "the dead route never read as unreachable: ${alice.manager.spoolStatus().map { it.connected to it.lastError }}",
+                lab.await(1, timeoutMs = 20_000L) {
+                    val statuses = alice.manager.spoolStatus()
+                    assertTrue("a socket nothing answered counted as connected", statuses.none { it.connected })
+                    statuses.count { it.lastError == ScopeSync.UNREACHABLE && it.dialFailures >= 2 }
+                },
+            )
+
+            spool.unblackhole()
+            val bob = lab.node("bob", spool = spool).apply { setDisplayName("Bob") }
+            lab.meetOnTheRelay(alice, bob)
+            assertTrue(
+                alice.manager
+                    .spoolStatus()
+                    .single()
+                    .connected,
+            )
+            assertEquals(
+                0,
+                alice.manager
+                    .spoolStatus()
+                    .single()
+                    .dialFailures,
+            )
+            assertTrue(alice.sendDm(bob, "once the route came back"))
             lab.assertConverged(listOf(alice, bob), atLeast = 3, timeoutMs = MeshLab.SPOOL_AWAIT_MS) { alice.dmThreadWith(bob)(it) }
         }
 

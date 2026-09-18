@@ -1244,9 +1244,14 @@ class DebugBridgeReceiver :
             spools.put(
                 JSONObject()
                     .put("url", spool.url)
+                    // A completed hello on an open socket — never a socket that merely exists, which a
+                    // validated-but-dead Wi-Fi hands out for the whole connect timeout (work item 50).
                     .put("connected", spool.connected)
                     .put("powBits", spool.powBits)
                     .put("lastError", spool.lastError ?: JSONObject.NULL)
+                    // Sessions in a row that never reached a hello; 0 once one does. Twelve of these under
+                    // `unreachable` is the dead-route signature, one is a missed reconnect.
+                    .put("dialFailures", spool.dialFailures)
                     // null ⇒ this spool advertised no attachment support at all (spec §7.3), which is
                     // also what makes the UI mark a photo "nearby only" — worth being able to confirm
                     // from the bridge when a field test sees that marker.

@@ -111,12 +111,24 @@ class ScopeStatus(
 
 /**
  * One spool's live state, for the Diagnostics screen, the relay settings screen and the debug bridge.
+ *
+ * [connected] means the hello exchange completed on a socket that is still open — not that a socket
+ * exists. The distinction is the whole difference between a relay and a route that swallows the
+ * upgrade: a captive or filtered Wi-Fi the platform still calls validated holds a socket for the entire
+ * connect timeout with nothing coming back, and counting that as connected made the plane, the chat
+ * header and every coverage rule say "live" about a relay that had never answered (work item 50).
+ *
  * [lastError] is the most recent `err` code this spool answered with — the difference between
  * "connected but idle" and "connected and refusing us", which is otherwise invisible and is exactly
  * what a field test needs (`quota`, `pow` and `rate` all present as a scope that simply never
- * converges) — or one of the client's own verdicts on it: [ScopeSync.UNREACHABLE],
- * [ScopeSync.OVERLONG_LISTING], [SpoolConnection.UNRESPONSIVE], and `too_large` when its `maxRecord`
- * could not carry our SUB.
+ * converges) — or one of the client's own verdicts on it: [ScopeSync.UNREACHABLE] (no response of any
+ * kind came back from the route, or the URL could not be dialled at all), [ScopeSync.NO_HELLO] (the
+ * socket opened and the spool never said hello), [ScopeSync.OVERLONG_LISTING],
+ * [SpoolConnection.UNRESPONSIVE], and `too_large` when its `maxRecord` could not carry our SUB.
+ *
+ * [dialFailures] counts the sessions in a row that ended without a completed hello, and is 0 the moment
+ * one completes. A relay that has failed twelve dials running is in a different state from one that
+ * missed a single reconnect, and the number is what tells a field log the two apart.
  *
  * [maxAttachBytes] is this spool's HELLO-advertised per-scope attachment budget, or **null** when it
  * advertised no attachment support at all (spec §7.3 — the three limits arrive together or not at all,
@@ -138,6 +150,7 @@ class SpoolStatus(
     // What this spool answered at `/source`, null until that lands and while disconnected: a build is a fact
     // about the live connection like every other field here, not a remembered one.
     val software: SpoolSoftware? = null,
+    val dialFailures: Int = 0,
 )
 
 /**
@@ -423,9 +436,15 @@ class ScopeSync(
         private var connection: SpoolConnection? = null
 
         // The most recent `err` code this spool answered with, for diagnostics. Cleared on a clean
-        // connect so a stale refusal doesn't outlive the condition that caused it.
+        // connect so a stale refusal doesn't outlive the condition that caused it — and only then, so a
+        // dial verdict (`unreachable`, `no_hello`) holds through the next attempt rather than flickering
+        // back to "connecting" for the seconds the socket is being tried again.
         @Volatile
         private var lastError: String? = null
+
+        // Sessions in a row that ended without a completed hello (see [SpoolStatus.dialFailures]).
+        @Volatile
+        private var dialFailures = 0
 
         // What this spool answered at `/source` during the current session (§13 offer, [SpoolSoftware]).
         // Fetched once per handshake rather than remembered across them, because a redeploy is exactly what
@@ -484,9 +503,11 @@ class ScopeSync(
         fun status(all: List<Scope>): SpoolStatus =
             SpoolStatus(
                 url = url,
-                connected = connection != null,
+                // The hello, not the socket: see [SpoolStatus.connected].
+                connected = connection?.isReady == true,
                 powBits = connection?.powBits ?: 0,
                 lastError = lastError,
+                dialFailures = dialFailures,
                 // Gated on the whole capability, not the single field: §7.3's three limits arrive
                 // together or not at all, and a partial set means we must send no attachment record.
                 maxAttachBytes = connection?.limits?.takeIf { it.attachments }?.maxAttachBytes,
@@ -539,6 +560,7 @@ class ScopeSync(
             val socket = dialer.dial(url)
             if (socket == null) {
                 lastError = UNREACHABLE
+                dialFailures++
                 return false
             }
             val conn = connect(socket)
@@ -554,7 +576,17 @@ class ScopeSync(
                 wake()
             }
             val ready = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { conn.awaitReady() } == true
+            // A socket that opened and never carried a hello is dropped as our own verdict, through
+            // `abort` like every client-side close (ADR 2026-09.amzn), so the backoff grows and the status
+            // says so instead of reading "connecting" forever. Both guards matter: the dialer writes
+            // `closeReason` before the pump's completion closes the connection, so `isOpen` alone would
+            // relabel a transport death as this fault.
+            if (!ready && conn.isOpen && socket.closeReason == null) conn.abort(NO_HELLO)
             if (ready) {
+                dialFailures = 0
+                // A completed hello is the whole condition behind a dial verdict, so it retires here — not
+                // on an answered request like `unresponsive`, which an idle converged session never makes.
+                retireFault(NO_HELLO)
                 // A fresh handshake clears a stale refusal — unless the refusal is still in force: a fault
                 // of our own carried from the last session, or a scope the spool refused and we parked.
                 if (carriedFault == null && refusedUntil.values.none { it > clock() }) lastError = null
@@ -569,6 +601,18 @@ class ScopeSync(
                 }
             }
             pump.cancel()
+            return endSession(socket, conn, ready)
+        }
+
+        /**
+         * The teardown half of [session]: files the diagnosis this connection produced, then drops every
+         * per-connection set. Returns whether the session counted as reached — that drives the backoff.
+         */
+        private fun endSession(
+            socket: SpoolSocket,
+            conn: SpoolConnection,
+            ready: Boolean,
+        ): Boolean {
             conn.onClosed()
             // A close code is the only explanation we get for auth/version/abuse rejections, and the
             // handshake itself never fails "loudly" — record it before the socket is discarded.
@@ -584,6 +628,7 @@ class ScopeSync(
             carriedFault = fault
             retryFloorMs = socket.retryAfterMs ?: 0L
             socket.close(SpoolCloseCode.NORMAL, "done")
+            if (!ready) dialFailures++
             connection = null
             republishPresence() // and a disconnected one covers nobody
             spoolDigests.clear()
@@ -595,7 +640,7 @@ class ScopeSync(
             accepted.clear()
             // A session we had to abort is not "reached": the backoff must grow, or an unresponsive spool
             // is dialled again a second later and the whole strike budget spent on it once a minute.
-            return ready && conn.fault == null
+            return ready && fault == null
         }
 
         private fun connect(socket: SpoolSocket) =
@@ -1640,8 +1685,19 @@ class ScopeSync(
         private const val INITIAL_CACHE_CAPACITY = 64
         private const val LOAD_FACTOR = 0.75f
 
-        /** [SpoolStatus.lastError] when the socket could not be opened at all (bad URL, DNS, refused). */
+        /**
+         * [SpoolStatus.lastError] when nothing answered: the URL could not be dialled at all, or the route
+         * returned no response of any kind (`OkHttpSpoolDialer`'s `failureReason` — a timeout, DNS, a
+         * refused or reset connection, no route). A validated-but-dead Wi-Fi presents exactly this way.
+         */
         const val UNREACHABLE = "unreachable"
+
+        /**
+         * [SpoolStatus.lastError] when the socket opened and the spool never said hello inside
+         * [HANDSHAKE_TIMEOUT_MS]. Client-minted, and distinct from [SpoolConnection.UNRESPONSIVE] on
+         * purpose: that one retires when a request is answered, this one the moment a hello completes.
+         */
+        const val NO_HELLO = "no_hello"
 
         /**
          * [SpoolStatus.lastError] when a spool's listing named more ids than a conforming one can hold

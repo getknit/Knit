@@ -210,6 +210,17 @@ class SpoolConnection(
     /** Whether the socket is still ours to write to — false once either side has closed it. */
     val isOpen: Boolean get() = !closed
 
+    @Volatile
+    private var ready = false
+
+    /**
+     * Whether the hello exchange completed on a socket that is still open — what "connected" means to
+     * everything that reads a spool's status. A socket exists from the dial, but a route that swallows
+     * the upgrade (a captive Wi-Fi the platform still calls validated) holds one for the whole connect
+     * timeout without a byte coming back; only the spool's hello proves there is a spool at the end of it.
+     */
+    val isReady: Boolean get() = ready && !closed
+
     /**
      * Whether this spool has answered a `q`-correlated request on this connection — a `digest` does not
      * count, since a spool that answers the SUB and then nothing else is exactly the one [UNRESPONSIVE]
@@ -409,6 +420,7 @@ class SpoolConnection(
         powBits = (hello.powBits ?: 0).coerceAtMost(SpoolPow.MAX_BITS)
         negotiated = true
         val sent = send(SpoolCodec.encode(SpoolHello(t = SpoolRecordType.HELLO, v = SPOOL_RECORD_VERSION)))
+        ready = sent
         handshake.complete(sent)
     }
 

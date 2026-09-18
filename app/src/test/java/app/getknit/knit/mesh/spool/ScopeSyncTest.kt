@@ -12,6 +12,8 @@ import app.getknit.knit.mesh.sha256Hex
 import com.google.crypto.tink.subtle.X25519
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -933,6 +935,167 @@ class ScopeSyncTest {
             pump()
 
             assertEquals(ScopeSync.UNREACHABLE, member.status().single().lastError)
+            member.stop()
+        }
+
+    /**
+     * A socket that opens and then dies before any hello, the way a validated-but-dead Wi-Fi ends every
+     * dial: open for [aliveMs], then closed with the dialer's `unreachable` verdict. Records when each
+     * dial happened and when each socket died, so the reconnect backoff is observable.
+     */
+    private inner class BlackHole(
+        private val scope: TestScope,
+        private val aliveMs: Long,
+    ) : SpoolDialer {
+        val dialedAt = mutableListOf<Long>()
+        val diedAt = mutableListOf<Long>()
+
+        override suspend fun dial(url: String): SpoolSocket {
+            dialedAt += scope.testScheduler.currentTime
+            val ch = Channel<ByteArray>(Channel.UNLIMITED)
+            var dead = false
+            scope.backgroundScope.launch {
+                delay(aliveMs)
+                dead = true
+                diedAt += scope.testScheduler.currentTime
+                ch.close()
+            }
+            return object : SpoolSocket {
+                override val incoming get() = ch
+                override val closeReason get() = if (dead) ScopeSync.UNREACHABLE else null
+
+                override fun send(bytes: ByteArray) = !dead
+
+                override fun close(
+                    code: Int,
+                    reason: String,
+                ) {
+                    ch.close()
+                }
+            }
+        }
+
+        /** Reconnect waits, in ms: each dial minus the death of the socket before it. */
+        fun gaps(): List<Long> = dialedAt.drop(1).mapIndexed { i, at -> at - diedAt[i] }
+    }
+
+    private fun TestScope.lone(
+        dialer: SpoolDialer,
+        urls: List<String> = listOf(url),
+    ): ScopeSync =
+        ScopeSync(
+            registry = ScopeRegistry({ alice }, { listOf(ScopeRoots(bob, pairwiseRoot)) }),
+            dialer = dialer,
+            store = FakeCustody(),
+            selfId = { alice },
+            urls = { urls },
+            canCarry = { _, _ -> true },
+            deliver = { _, _, _ -> },
+            clock = { now },
+            jitter = { 0L },
+        )
+
+    @Test
+    fun `a socket that dies before the hello is unreachable and never counts as connected`() =
+        runTest {
+            // Work item 50: the P7 sat on a public Wi-Fi Android had validated that black-holed the relay
+            // host. Each dial held a socket for the whole connect timeout, and "a socket exists" was what
+            // the status called connected — so the plane, the header and every coverage rule said live
+            // about a relay that had never said a word.
+            val route = BlackHole(this, aliveMs = 1_500L)
+            val member = lone(route)
+
+            member.start(backgroundScope)
+            repeat(40) {
+                pump(rounds = 1)
+                assertFalse("connected at t=${testScheduler.currentTime}", member.status().single().connected)
+            }
+
+            val status = member.status().single()
+            assertEquals(ScopeSync.UNREACHABLE, status.lastError)
+            assertTrue("failures keep counting: ${status.dialFailures}", status.dialFailures >= 3)
+            // Still a failed session each time, so the backoff still grows rather than dialling once a second.
+            assertEquals(listOf(2_000L, 4_000L, 8_000L), route.gaps().take(3))
+            member.stop()
+        }
+
+    @Test
+    fun `a socket that opens and never says hello is dropped as no_hello, and a real hello clears it`() =
+        runTest {
+            // A proxy that accepts the upgrade and forwards it nowhere. Before, the handshake timeout left
+            // `lastError` untouched, so the row read "Connecting…" for as long as the condition lasted.
+            var silent = true
+            val spool = FakeSpool()
+            val dialer =
+                object : SpoolDialer {
+                    override suspend fun dial(url: String): SpoolSocket {
+                        if (!silent) return spool.dial(url)
+                        val ch = Channel<ByteArray>(Channel.UNLIMITED)
+                        return object : SpoolSocket {
+                            override val incoming get() = ch
+
+                            override fun send(bytes: ByteArray) = true
+
+                            override fun close(
+                                code: Int,
+                                reason: String,
+                            ) {
+                                ch.close()
+                            }
+                        }
+                    }
+                }
+            val member = lone(dialer)
+
+            member.start(backgroundScope)
+            repeat(19) {
+                pump(rounds = 1)
+                assertFalse(member.status().single().connected)
+            }
+            pump(rounds = 3) // past the 20 s handshake timeout
+            val dropped = member.status().single()
+            assertFalse(dropped.connected)
+            assertEquals(ScopeSync.NO_HELLO, dropped.lastError)
+            assertEquals(1, dropped.dialFailures)
+
+            silent = false
+            // The dial already in flight is a second silent socket: it sits out its own 20 s, then the
+            // grown backoff, and only the dial after that meets a spool.
+            pump(rounds = 30)
+            val back = member.status().single()
+            assertTrue("reconnected to a spool that says hello", back.connected)
+            assertNull("a completed hello is the whole condition, no request needed", back.lastError)
+            assertEquals(0, back.dialFailures)
+            member.stop()
+        }
+
+    @Test
+    fun `a frames-only relay that is up and a photo relay that is dead read as exactly that`() =
+        runTest {
+            // The field shape behind work item 50 and the chat's loading hint: two relays configured, the
+            // one that carries photos black-holed, the frames-only one fine. The status must show one
+            // connected relay with no attachment budget and one unreachable — not two connected relays.
+            val framesOnly = FakeSpool(attachments = false)
+            val photos = "ws://photos.test/spool/v1"
+            val dead = BlackHole(this, aliveMs = 1_500L)
+            val dialer =
+                object : SpoolDialer {
+                    override suspend fun dial(url: String): SpoolSocket = if (url == photos) dead.dial(url) else framesOnly.dial(url)
+                }
+            val member = lone(dialer, urls = listOf(url, photos))
+
+            member.start(backgroundScope)
+            pump(rounds = 20)
+
+            val byUrl = member.status().associateBy { it.url }
+            val up = byUrl.getValue(url)
+            assertTrue(up.connected)
+            assertNull("a frames-only relay advertises no budget", up.maxAttachBytes)
+            assertNull(up.lastError)
+            val down = byUrl.getValue(photos)
+            assertFalse(down.connected)
+            assertEquals(ScopeSync.UNREACHABLE, down.lastError)
+            assertTrue(down.dialFailures >= 2)
             member.stop()
         }
 

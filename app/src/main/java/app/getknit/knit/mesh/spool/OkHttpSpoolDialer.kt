@@ -187,11 +187,34 @@ class OkHttpSpoolDialer(
  * and nothing else useful — `ProtocolException` names the layer that noticed, not what happened — so the
  * status becomes the reason. `101` is filtered out because it means the upgrade *succeeded* and the
  * socket died later; there the exception really is the whole story.
+ *
+ * With no response at all, a failure that names the network layer — a connect or read timeout, DNS, a
+ * refused or reset connection, no route — is the client's own [ScopeSync.UNREACHABLE] verdict rather
+ * than an exception name. That is the shape of a captive or filtered Wi-Fi the platform still calls
+ * validated: every dial times out and nothing distinguishes it from "not connected yet" (work item 50).
+ * A TLS or protocol failure keeps its name, because "the host answered and we refused it" is a different
+ * diagnosis from "nothing answered". The exception's name still reaches logcat from `onFailure`.
  */
 internal fun failureReason(
     throwableName: String,
     httpCode: Int?,
-): String = httpCode?.takeIf { it != HTTP_SWITCHING_PROTOCOLS }?.let { "http $it" } ?: throwableName
+): String =
+    when {
+        httpCode != null && httpCode != HTTP_SWITCHING_PROTOCOLS -> "http $httpCode"
+        httpCode == null && throwableName in NO_RESPONSE_FAILURES -> ScopeSync.UNREACHABLE
+        else -> throwableName
+    }
+
+/** The `java.net` failures that mean no response of any kind came back from the route. */
+private val NO_RESPONSE_FAILURES =
+    setOf(
+        "SocketTimeoutException",
+        "ConnectException",
+        "UnknownHostException",
+        "NoRouteToHostException",
+        "SocketException",
+        "EOFException",
+    )
 
 /**
  * `Retry-After` as milliseconds, or null when absent or unusable. Delta-seconds only: the HTTP-date form

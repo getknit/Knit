@@ -21,15 +21,32 @@ class OkHttpSpoolDialerTest {
     }
 
     @Test
-    fun `a socket that never reached HTTP keeps the exception name`() {
-        assertEquals("UnknownHostException", failureReason("UnknownHostException", null))
+    fun `a socket that got no response at all is unreachable`() {
+        // Work item 50: a captive or filtered Wi-Fi the platform still calls validated swallows every dial,
+        // and OkHttp reports that as a bare timeout. Left as an exception name it reached the relay row as
+        // "Refused a request (SocketTimeoutException)" — a refusal nobody made. The same for DNS, a refused
+        // or reset connection and no route: nothing answered, and that is the one thing worth saying.
+        assertEquals(ScopeSync.UNREACHABLE, failureReason("SocketTimeoutException", null))
+        assertEquals(ScopeSync.UNREACHABLE, failureReason("UnknownHostException", null))
+        assertEquals(ScopeSync.UNREACHABLE, failureReason("ConnectException", null))
+        assertEquals(ScopeSync.UNREACHABLE, failureReason("NoRouteToHostException", null))
+        assertEquals(ScopeSync.UNREACHABLE, failureReason("SocketException", null))
+        assertEquals(ScopeSync.UNREACHABLE, failureReason("EOFException", null))
+    }
+
+    @Test
+    fun `a socket the host answered and we refused keeps the exception name`() {
+        // A TLS failure is the host talking and us declining — a certificate problem, not a dead route —
+        // and the row should quote it rather than send the user to check their Wi-Fi.
         assertEquals("SSLHandshakeException", failureReason("SSLHandshakeException", null))
+        assertEquals("SSLPeerUnverifiedException", failureReason("SSLPeerUnverifiedException", null))
     }
 
     @Test
     fun `a socket that died after a successful upgrade is not reported as an HTTP failure`() {
         // 101 means the upgrade worked and the socket broke later, so the exception is the whole story;
-        // "http 101" in the relay row would name a success as the reason for a failure.
+        // "http 101" in the relay row would name a success as the reason for a failure. And with a status
+        // in hand it is not the no-response case either, so the name stays.
         assertEquals("SocketTimeoutException", failureReason("SocketTimeoutException", 101))
     }
 

@@ -60,6 +60,14 @@ class DeviceSupervisionTest {
     }
 
     @Test
+    fun `a restriction key held at false is not a restriction`() {
+        // A Pixel 9 with nobody managing it carried `no_record_audio=false` in the bundle (2026-09-17).
+        @Suppress("DEPRECATION")
+        users.setUserRestriction(Process.myUserHandle(), "no_record_audio", false)
+        assertEquals(DeviceSupervision.None, deviceSupervision(app))
+    }
+
+    @Test
     fun `a work profile is Managed`() {
         users.setManagedProfile(true)
         assertEquals(DeviceSupervision.Managed, deviceSupervision(app))

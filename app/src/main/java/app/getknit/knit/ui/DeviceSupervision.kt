@@ -61,6 +61,8 @@ private fun isManaged(context: Context): Boolean =
                     userManager?.isManagedProfile == true ||
                         devicePolicy?.isOrganizationOwnedDeviceWithManagedProfile == true
                 )
-        // A consumer phone reports no restrictions at all; anything here was set by an admin.
-        profileOrOrgOwned || userManager?.userRestrictions?.isEmpty == false
+        // A restriction is "in force" only when its value is true. The bundle also carries keys whose value is
+        // false — a Pixel 9 with nobody managing it reported `no_record_audio=false` — and `dumpsys user` hides
+        // those, so an emptiness check misnames a plain phone as Managed.
+        profileOrOrgOwned || userManager?.userRestrictions?.let { r -> r.keySet().any { r.getBoolean(it) } } == true
     }.getOrNull() == true

@@ -41,7 +41,10 @@ three-position enum: `FamilyLink` when `DevicePolicyManager.isProfileOwnerApp` n
 package (the one thing the trial verified, pinned by package because Android has no public "is this
 Family Link" API), else `Managed` when the user is a work profile, the device is organisation-owned with a
 managed profile, or any user restriction is in force (a consumer phone reports none; the Pixel 8's eleven
-were all Family Link's), else `None`. It is read where `backgroundBattery` is — the onboarding probe, and
+were all Family Link's), else `None`. "In force" means the key's value is `true`: `getUserRestrictions()`
+also returns keys held at `false` — the unmanaged Pixel 9 carried `no_record_audio=false` and read as
+Managed on 2026-09-17 — and `dumpsys user` prints only the true ones, so the bundle looks empty from the
+shell when it is not. It is read where `backgroundBattery` is — the onboarding probe, and
 `rememberOnResume` on Settings and Diagnostics, which is that screen's private resume-observer hoisted so
 three surfaces share it.
 

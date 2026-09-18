@@ -9,6 +9,9 @@ import app.getknit.knit.data.relay.RelayStatusRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.spool.RelayInvite
+import app.getknit.knit.mesh.spool.ScopeSync
+import app.getknit.knit.mesh.spool.SpoolStatus
+import app.getknit.knit.net.InternetGate
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -28,6 +31,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -76,7 +80,25 @@ class InternetRelayViewModelTest {
     @After
     fun tearDown() = Dispatchers.resetMain()
 
-    private fun vm() = InternetRelayViewModel(settings, relayStatus, commons, mesh, inbox = inbox, applier = applier)
+    private fun vm(gate: InternetGate? = null) =
+        InternetRelayViewModel(settings, relayStatus, commons, mesh, inbox = inbox, applier = applier, gate = gate)
+
+    /** A gate with a settable verdict; a relaxed mock's `online` would never emit and stall the combine. */
+    private class FakeGate(
+        online: Boolean,
+    ) : InternetGate {
+        override val online = MutableStateFlow(online)
+
+        override fun isOnline() = online.value
+
+        override fun isDataRestricted() = false
+    }
+
+    private fun TestScope.state(vm: InternetRelayViewModel): InternetRelayUiState {
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.collect { } }
+        advanceUntilIdle()
+        return vm.state.value
+    }
 
     @Test
     fun aLinkInTheInboxIsPreviewedAndConfirmAppliesIt() =
@@ -154,6 +176,55 @@ class InternetRelayViewModelTest {
             assertEquals(OTHER, bare.url)
             assertNull(bare.secret)
             assertNull(bare.name)
+        }
+
+    @Test
+    fun aRelaysLiveStatusIsMappedOntoItsRow() =
+        runTest {
+            // The dead-route shape of work item 50: not connected, the dialer's `unreachable` verdict
+            // standing, and nothing claimed about scopes or photos — a row must say exactly that, and a
+            // parked relay must read as parked whatever its worker last reported.
+            every { settings.spoolUrls } returns flowOf(setOf(TOKENED, OTHER))
+            every { settings.disabledSpoolUrls } returns flowOf(setOf(OTHER))
+            every { relayStatus.statuses } returns
+                flowOf(
+                    listOf(
+                        SpoolStatus(
+                            url = TOKENED,
+                            connected = false,
+                            powBits = 0,
+                            lastError = ScopeSync.UNREACHABLE,
+                            scopes = emptyList(),
+                            dialFailures = 4,
+                        ),
+                        SpoolStatus(url = OTHER, connected = true, powBits = 0, lastError = null, scopes = emptyList(), maxAttachBytes = 1),
+                    ),
+                )
+
+            val rows = state(vm()).relays.associateBy { it.url }
+            val dead = rows.getValue(TOKENED)
+            assertFalse(dead.connected)
+            assertEquals(ScopeSync.UNREACHABLE, dead.lastError)
+            assertNull(dead.scopeCount)
+            assertNull(dead.carriesPhotos)
+            assertTrue(dead.enabled)
+            val parked = rows.getValue(OTHER)
+            assertFalse(parked.enabled)
+            assertTrue(parked.connected)
+            assertEquals(true, parked.carriesPhotos)
+        }
+
+    @Test
+    fun thePhonesOwnRouteReachesTheStateAndNoRow() =
+        runTest {
+            assertFalse("no gate reads as online", state(vm()).offline)
+            assertTrue(state(vm(FakeGate(online = false))).offline)
+            val gate = FakeGate(online = true)
+            val vm = vm(gate)
+            assertFalse(state(vm).offline)
+            gate.online.value = false
+            advanceUntilIdle()
+            assertTrue(vm.state.value.offline)
         }
 
     private fun TestScope.collect(vm: InternetRelayViewModel): List<InternetRelayEvent> {

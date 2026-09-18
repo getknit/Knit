@@ -149,6 +149,7 @@ val uiModule =
                 get<MeshController>(),
                 inbox = get(),
                 applier = get(),
+                gate = get(),
             )
         }
         viewModel { LoraRadioViewModel(get(), get(), get(), get()) }

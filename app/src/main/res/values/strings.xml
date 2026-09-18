@@ -890,6 +890,8 @@
     <string name="relays_status_connecting">Connecting…</string>
     <string name="relays_status_off">Not in use</string>
     <string name="relays_status_paused">Turned off</string>
+    <!-- The phone has no validated Internet route at all — about the phone, never the relay, so no red dot. -->
+    <string name="relays_status_offline">No Internet connection</string>
     <!-- LoRa (Meshtastic-over-BLE) radio settings -->
     <string name="lora_title">LoRa radio</string>
     <string name="settings_lora_title">Use a LoRa radio</string>
@@ -987,6 +989,10 @@
     <string name="relays_error_quota">Full — it is holding all it can for this conversation</string>
     <string name="relays_error_rate">Asking us to slow down</string>
     <string name="relays_error_pow">Wants more setup work before it accepts this conversation</string>
+    <!-- The socket opened and the relay never spoke (no hello, or it went quiet after one) -->
+    <string name="relays_error_unresponsive">Not answering</string>
+    <!-- The relay's advertised limits cannot carry this app's records (its maxRecord, or an overlong listing) -->
+    <string name="relays_error_incompatible">Not compatible with this version of Knit</string>
     <string name="relays_error_other">Refused a request (%1$s)</string>
 
     <!-- First-enable consent -->

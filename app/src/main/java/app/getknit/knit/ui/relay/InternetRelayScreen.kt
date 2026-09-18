@@ -63,6 +63,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.getknit.knit.R
 import app.getknit.knit.data.relay.RelayInviteApplier
 import app.getknit.knit.mesh.spool.RelayInvite
+import app.getknit.knit.mesh.spool.ScopeSync
+import app.getknit.knit.mesh.spool.SpoolConnection
 import app.getknit.knit.mesh.spool.SpoolErrCode
 import app.getknit.knit.ui.components.noAutofillMenu
 import app.getknit.knit.ui.preview.KnitPreview
@@ -226,6 +228,7 @@ internal fun InternetRelayScreenContent(
                     RelayListRow(
                         relay = relay,
                         planeEnabled = state.enabled,
+                        offline = state.offline,
                         onSetEnabled = { onSetRelayEnabled(relay.url, it) },
                         onRemove = { pendingRemoval = relay },
                         onJoinCommons = { joining = relay },
@@ -383,6 +386,7 @@ private fun MasterSwitchRow(
 private fun RelayListRow(
     relay: RelayRow,
     planeEnabled: Boolean,
+    offline: Boolean,
     onSetEnabled: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onJoinCommons: () -> Unit = {},
@@ -391,7 +395,7 @@ private fun RelayListRow(
     onCopyInvite: () -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        RelayHeadRow(relay, planeEnabled, onSetEnabled, onRemove, onShareInvite, onCopyInvite)
+        RelayHeadRow(relay, planeEnabled, offline, onSetEnabled, onRemove, onShareInvite, onCopyInvite)
         // The relay's commons (§7.4), once its HELLO has advertised one: the room's name and one verb —
         // Join while this device is outside it, Leave once inside. Below the head row rather than in it, so
         // the switch and the delete button stay the two controls a screen reader already knows there.
@@ -423,9 +427,11 @@ private fun RelayListRow(
 }
 
 @Composable
+@Suppress("LongParameterList") // one row's facts and its verbs; a holder would only rename the list
 private fun RelayHeadRow(
     relay: RelayRow,
     planeEnabled: Boolean,
+    offline: Boolean,
     onSetEnabled: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onShareInvite: () -> Unit,
@@ -451,10 +457,12 @@ private fun RelayHeadRow(
             // Intent outranks liveness: a relay the user just parked keeps its worker for up to one
             // ScopeSync reconcile tick, and a row that still said "Connected" for those seconds would
             // read as the switch not having worked.
+            // And the phone's own lack of a route is not the relay's fault: no red dot for it.
             val dot =
                 when {
                     !planeEnabled || !relay.enabled -> MaterialTheme.colorScheme.outline
                     relay.connected -> MaterialTheme.knitColors.positive
+                    offline -> MaterialTheme.colorScheme.outline
                     relay.lastError != null -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.outline
                 }
@@ -470,7 +478,7 @@ private fun RelayHeadRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = relayStatusLine(relay, planeEnabled),
+                    text = relayStatusLine(relay, planeEnabled, offline),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -541,11 +549,18 @@ private fun RelayInviteMenu(
  * about the whole screen and repeats down every row, while "you turned this one off" is a fact about
  * this relay that only its own row can state. Collapsing them would leave a parked relay indistinguishable
  * from its neighbours the moment the master switch went off.
+ *
+ * [offline] — the platform reports no validated route at all — is tested after liveness and before the
+ * relay's own last error: a socket that is up outranks the platform's verdict for the seconds they
+ * disagree, and a phone with no Internet must not send its user to check a relay's address. It does not
+ * cover the black-hole case (a route the platform still calls validated that swallows the socket);
+ * that one arrives as `unreachable`, which is the relay's row saying "cannot be reached" honestly.
  */
 @Composable
 private fun relayStatusLine(
     relay: RelayRow,
     planeEnabled: Boolean,
+    offline: Boolean,
 ): String =
     when {
         !planeEnabled -> {
@@ -559,6 +574,10 @@ private fun relayStatusLine(
         relay.connected -> {
             stringResource(R.string.relays_status_connected) + " · " +
                 pluralStringResource(R.plurals.relays_scope_count, relay.scopeCount ?: 0, relay.scopeCount ?: 0)
+        }
+
+        offline -> {
+            stringResource(R.string.relays_status_offline)
         }
 
         relay.lastError != null -> {
@@ -579,12 +598,23 @@ private fun relayStatusLine(
  * The reason is not always an `err` code: a socket that never opened reports a transport failure
  * instead, and the one worth separating is a spool at its connection cap. "Busy, it will come back on
  * its own" and "broken, check the URL" ask opposite things of the user and would otherwise read alike.
+ * The client's own verdicts (`ScopeSync.NO_HELLO`, `SpoolConnection.UNRESPONSIVE`, and the two that say
+ * the relay's numbers do not fit this app) each get a sentence too, so none of them lands in the generic
+ * form as a refusal nobody made.
  */
 @Composable
 private fun relayErrorLabel(code: String): String =
     when (code) {
         UNREACHABLE -> {
             stringResource(R.string.relays_error_unreachable)
+        }
+
+        ScopeSync.NO_HELLO, SpoolConnection.UNRESPONSIVE -> {
+            stringResource(R.string.relays_error_unresponsive)
+        }
+
+        SpoolErrCode.TOO_LARGE, ScopeSync.OVERLONG_LISTING -> {
+            stringResource(R.string.relays_error_incompatible)
         }
 
         SpoolErrCode.QUOTA -> {
@@ -717,8 +747,8 @@ private fun JoinCommonsDialog(
     )
 }
 
-/** `SpoolStatus.lastError` when the socket could not be opened at all (`ScopeSync.UNREACHABLE`). */
-private const val UNREACHABLE = "unreachable"
+/** `SpoolStatus.lastError` when nothing answered the dial at all (`ScopeSync.UNREACHABLE`). */
+private const val UNREACHABLE = ScopeSync.UNREACHABLE
 
 /**
  * `SpoolStatus.lastError` when the spool refused the WebSocket upgrade because it is at its connection

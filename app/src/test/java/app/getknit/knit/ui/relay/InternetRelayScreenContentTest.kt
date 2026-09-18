@@ -199,6 +199,62 @@ class InternetRelayScreenContentTest {
     }
 
     @Test
+    fun aRelayThatNeverSpokeSaysSoInsteadOfQuotingACode() {
+        // The socket opened and no hello came (a proxy forwarding nowhere), or it went quiet after one:
+        // both are the client's own verdict, and "Refused a request (no_hello)" names a refusal nobody made.
+        render(
+            InternetRelayUiState(
+                enabled = true,
+                relays = listOf(relay(connected = false, scopeCount = null, carriesPhotos = null, lastError = "no_hello")),
+            ),
+        )
+        compose.onNodeWithText("Not answering").assertIsDisplayed()
+    }
+
+    @Test
+    fun aRelayThatWentQuietAfterItsHelloReadsTheSame() {
+        render(
+            InternetRelayUiState(
+                enabled = true,
+                relays = listOf(relay(connected = false, scopeCount = null, carriesPhotos = null, lastError = "unresponsive")),
+            ),
+        )
+        compose.onNodeWithText("Not answering").assertIsDisplayed()
+    }
+
+    @Test
+    fun aRelayWhoseNumbersDoNotFitThisAppSaysSo() {
+        render(
+            InternetRelayUiState(
+                enabled = true,
+                relays = listOf(relay(connected = false, scopeCount = null, carriesPhotos = null, lastError = "too_large")),
+            ),
+        )
+        compose.onNodeWithText("Not compatible with this version of Knit").assertIsDisplayed()
+    }
+
+    @Test
+    fun aPhoneWithNoInternetSaysSoInsteadOfBlamingTheRelay() {
+        // Work item 50's neighbour: with no validated route at all, "Cannot be reached" would send the
+        // user to check the relay's address for a fault that is the phone's. A relay that is somehow still
+        // connected outranks the platform's verdict for the seconds the two disagree.
+        render(
+            InternetRelayUiState(
+                enabled = true,
+                offline = true,
+                relays =
+                    listOf(
+                        relay(host = "dead.example", connected = false, scopeCount = null, carriesPhotos = null, lastError = "unreachable"),
+                        relay(host = "live.example", connected = true, scopeCount = 2),
+                    ),
+            ),
+        )
+        compose.onNodeWithText("No Internet connection").assertIsDisplayed()
+        compose.onNodeWithText("Cannot be reached").assertDoesNotExist()
+        compose.onNodeWithText("Connected · 2 conversations").assertIsDisplayed()
+    }
+
+    @Test
     fun anUnknownTransportFailureStillQuotesWhatHappened() {
         render(
             InternetRelayUiState(

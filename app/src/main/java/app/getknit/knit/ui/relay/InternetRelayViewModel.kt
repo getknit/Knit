@@ -11,6 +11,8 @@ import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.spool.CommonsInvite
 import app.getknit.knit.mesh.spool.RelayInvite
 import app.getknit.knit.mesh.spool.SpoolUrl
+import app.getknit.knit.net.InternetGate
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -58,6 +60,9 @@ data class RelayCommons(
 data class InternetRelayUiState(
     val enabled: Boolean = false,
     val relays: List<RelayRow> = emptyList(),
+    // The platform reports no validated route to the Internet at all (`InternetGate.online`): a fact about
+    // the phone, not any relay, which is why it lives here and not on the rows.
+    val offline: Boolean = false,
 )
 
 /** One-shot outcomes for the screen's snackbar and share sheet. */
@@ -105,8 +110,15 @@ class InternetRelayViewModel(
     // link arriving while the screen is up (`launchSingleTop`) still raises the sheet.
     private val inbox: RelayInviteInbox? = null,
     private val applier: RelayInviteApplier? = null,
+    // The phone's own route to the Internet, for the one line that is not about a relay. Null (the
+    // screen tests' rig) reads as online, so every row keeps saying what the relay said.
+    gate: InternetGate? = null,
 ) : ViewModel() {
     val state: StateFlow<InternetRelayUiState> =
+        combine(rows(relayStatus), gate?.online ?: MutableStateFlow(true)) { rows, online -> rows.copy(offline = !online) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), InternetRelayUiState())
+
+    private fun rows(relayStatus: RelayStatusRepository): Flow<InternetRelayUiState> =
         combine(
             settings.spoolEnabled,
             settings.spoolUrls,
@@ -140,7 +152,7 @@ class InternetRelayViewModel(
                         )
                     },
             )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), InternetRelayUiState())
+        }
 
     private val _showConsent = MutableStateFlow(false)
 
